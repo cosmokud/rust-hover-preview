@@ -1,32 +1,20 @@
 //! The list a pinned window's own previous/next buttons step through, and the order it is in.
 //!
 //! A pin that is up is a window of its own, and two of its caption buttons are a way through
-//! the folder it was taken up in: the file before this one and the file after it, in the order
-//! the listing is showing them. What this module is that list, and the one thing it is
-//! expensive about is the folder a pin sits in — a folder of a thousand files is a folder this
-//! app must not open a thousand of.
+//! the folder it was taken up in, in the order the listing is showing them. The one thing this
+//! is expensive about is the folder a pin sits in — a folder of a thousand files is a folder
+//! this app must not open a thousand of.
 //!
-//! **What a scan is allowed to do.** The directory read is one flat `read_dir`, with no
-//! recursion and no file opened. The filter is the name and nothing else: which kind claims a
-//! name (`routing::kind_of`) and whether a reader is installed for it
-//! (`routing::readers_for`). It is deliberately *not* `is_media_file_with_facts`, which
-//! sniffs a file's header by opening it — on a large folder that is a thousand opens and a
-//! thousand downloads if the folder is on OneDrive.
-//!
-//! **What a scan is not allowed to ask of a file.** `DirEntry::file_type()` is data the OS
-//! returned with the name anyway (see `document_cache`, which reads a folder the same way),
-//! and a reparse point is not asked again: `metadata()` on one of those hydrates a OneDrive
-//! placeholder and downloads the file — or, when a folder is full of them, the folder. Where
-//! the sort is by name, nothing is asked of a file at all.
-//!
-//! **What the scan is remembered as.** The map holds each entry's *kind* beside its path, so
-//! switching `All` to `Category` re-filters what is already in hand rather than reading the
-//! folder again. It is capped, because a hand that pins files in a thousand folders should
-//! not leave a thousand folders behind it; a pin in a folder not in the map reads it again,
-//! which is the cost of the cap and the whole of it.
+//! A scan is one flat `read_dir` filtered by name alone (`routing::kind_of` plus
+//! `routing::readers_for`): not `is_media_file_with_facts`, which opens each file, and not
+//! `metadata()`, which hydrates a OneDrive placeholder — a thousand downloads on a large
+//! folder. The map holds each entry's *kind* beside its path so switching `All` to `Category`
+//! re-filters in hand rather than reading the folder again, and it is capped at
+//! `FOLDER_LIMIT`: a pin in a folder not in the map reads it again, which is the cost of the cap.
 
 use crate::config::config::{AppConfig, PinNavFileTypes, PreviewType};
 use crate::formats::routing;
+use crate::paths::plain_path;
 use crate::shell::explorer_hook::{view_sort_of, SortKey, ViewSort};
 use once_cell::sync::Lazy;
 use std::cmp::Ordering;
@@ -37,19 +25,13 @@ use std::time::SystemTime;
 
 /// Every folder a pin has been asked to walk, and the files in each that a pin could be
 /// shown. One scan each, and a scan is a name list rather than a read of the files.
-static FOLDERS: Lazy<Mutex<HashMap<PathBuf, FolderEntries>>> =
+static FOLDERS: Lazy<Mutex<HashMap<PathBuf, Vec<NavEntry>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// How many folders are kept. A pin walks one folder at a time, so this is generous for
 /// what the app does and small enough that a machine swept across a whole drive does not
 /// grow the map by a folder per window.
 const FOLDER_LIMIT: usize = 32;
-
-/// What one folder holds for the walk: the files, already in the order the listing was
-/// showing them.
-struct FolderEntries {
-    entries: Vec<NavEntry>,
-}
 
 /// One file of the walk: where it is, what kind claimed it, and — only where the order needs
 /// them — the two facts of the file itself the order is read from. A name-ordered walk never
@@ -78,20 +60,28 @@ pub fn list_for(current: &Path, config: &AppConfig) -> Option<Vec<PathBuf>> {
 
     let entries = entries_for(folder, config)?;
 
-    let mode = config.pin_nav_file_types;
-    let wanted = routing::kind_of(current, config).map(routing::nav_category);
+    let wanted = wanted_category(current, config);
 
     Some(
         entries
             .iter()
-            .filter(|entry| {
-                mode == PinNavFileTypes::All
-                    || (wanted.is_some()
-                        && wanted == Some(routing::nav_category(entry.kind)))
-            })
+            .filter(|entry| walks(entry.kind, config, wanted))
             .map(|entry| entry.path.clone())
             .collect(),
     )
+}
+
+/// The category the walk is narrowed to for `current`, or `None` where nothing claims it — which
+/// is a file that is on no list of its own (see `walks`).
+fn wanted_category(current: &Path, config: &AppConfig) -> Option<routing::NavCategory> {
+    routing::kind_of(current, config).map(routing::nav_category)
+}
+
+/// Whether an entry of the walk's kind is one this walk steps through: everything under `All`,
+/// and under `Category` only the entries of the category the current file is in.
+fn walks(kind: PreviewType, config: &AppConfig, wanted: Option<routing::NavCategory>) -> bool {
+    config.pin_nav_file_types == PinNavFileTypes::All
+        || (wanted.is_some() && wanted == Some(routing::nav_category(kind)))
 }
 
 /// The file a step of `step` from `current` lands on, given the list the walk is made of.
@@ -133,7 +123,7 @@ pub fn step_to(current: &Path, list: &[PathBuf], step: i32) -> Option<PathBuf> {
 fn entries_for(folder: &Path, config: &AppConfig) -> Option<Vec<NavEntry>> {
     if let Ok(folders) = FOLDERS.lock() {
         if let Some(cached) = folders.get(folder) {
-            return Some(cached.entries.clone());
+            return Some(cached.clone());
         }
     }
 
@@ -157,12 +147,7 @@ fn entries_for(folder: &Path, config: &AppConfig) -> Option<Vec<NavEntry>> {
             folders.remove(&dropped);
         }
     }
-    folders.insert(
-        folder.to_path_buf(),
-        FolderEntries {
-            entries: ordered.clone(),
-        },
-    );
+    folders.insert(folder.to_path_buf(), ordered.clone());
 
     Some(ordered)
 }
@@ -322,11 +307,7 @@ fn order(entries: &mut [NavEntry], sort: Option<ViewSort>) {
         // sorted newest-first still reads its equal dates the same way round. Reversing
         // after the name is in has been decided would turn every pair of equal dates or
         // sizes upside down as well, which is a listing no file manager shows.
-        let by_key = if descending {
-            by_key.reverse()
-        } else {
-            by_key
-        };
+        let by_key = if descending { by_key.reverse() } else { by_key };
 
         by_key.then_with(|| natural_cmp(&a.path, &b.path))
     });
@@ -369,7 +350,10 @@ fn kind_rank(kind: PreviewType) -> u8 {
 /// that is all digits is compared as one number, so a folder of numbered screenshots is in
 /// order rather than in the order the digits happen to fall.
 fn natural_cmp(a: &Path, b: &Path) -> Ordering {
-    let left = a.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let left = a
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
     let right = b
         .file_name()
         .and_then(|name| name.to_str())
@@ -400,9 +384,11 @@ fn natural_str_cmp(a: &str, b: &str) -> Ordering {
                     let left_number = left_run.trim_start_matches('0');
                     let right_number = right_run.trim_start_matches('0');
 
-                    match left_number.len().cmp(&right_number.len()).then_with(|| {
-                        left_number.cmp(right_number)
-                    }) {
+                    match left_number
+                        .len()
+                        .cmp(&right_number.len())
+                        .then_with(|| left_number.cmp(right_number))
+                    {
                         Ordering::Equal => continue,
                         other => return other,
                     }
@@ -446,21 +432,6 @@ fn take_digits(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
 /// would send the first `Next` to the top of the folder rather than to the file beside it.
 fn same_file(a: &Path, b: &Path) -> bool {
     a == b || plain_path(a).eq_ignore_ascii_case(&plain_path(b))
-}
-
-/// A path with the verbatim prefix the Shell canonicalizes to taken off — the same
-/// adjustment `webview_preview` makes before it points a browser at a file and
-/// `office_render` makes before it hands a document to Office (see `plain_path` there).
-fn plain_path(path: &Path) -> String {
-    let text = path.to_string_lossy();
-
-    match text.strip_prefix(r"\\?\UNC\") {
-        Some(rest) => format!(r"\\{rest}"),
-        None => text
-            .strip_prefix(r"\\?\")
-            .unwrap_or(&text)
-            .to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -525,14 +496,12 @@ mod tests {
         let mut ordered = entries;
         order(&mut ordered, sort);
 
-        let wanted = routing::kind_of(current, &config).map(routing::nav_category);
+        // The same filter the walk itself applies, so a test cannot pass while production
+        // filters differently.
+        let wanted = wanted_category(current, &config);
         let walked: Vec<PathBuf> = ordered
             .iter()
-            .filter(|entry| {
-                mode == PinNavFileTypes::All
-                    || (wanted.is_some()
-                        && wanted == Some(routing::nav_category(entry.kind)))
-            })
+            .filter(|entry| walks(entry.kind, &config, wanted))
             .map(|entry| entry.path.clone())
             .collect();
 
@@ -547,7 +516,9 @@ mod tests {
             path: PathBuf::from(name),
             kind,
             facts: Some(Facts {
-                modified: Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(86_400 * days_ago)),
+                modified: Some(
+                    SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(86_400 * days_ago),
+                ),
                 bytes,
             }),
         }
@@ -582,7 +553,10 @@ mod tests {
         // A name is compared without regard to case first, so a mixed-case run sorts beside
         // the lower-case one rather than after every one of them.
         assert_eq!(natural_str_cmp("README.md", "readme.txt"), Ordering::Less);
-        assert_eq!(natural_str_cmp("notes.txt", "notes.txt.bak"), Ordering::Less);
+        assert_eq!(
+            natural_str_cmp("notes.txt", "notes.txt.bak"),
+            Ordering::Less
+        );
     }
 
     /// A folder of exported frames, walked the way a file manager walks one: `img2` before
@@ -653,8 +627,20 @@ mod tests {
                 vec!["clip.mp4", "atlas.pdf", "note.txt", "shot.png"],
             ),
         ] {
-            let up = ordered(entries(), Some(ViewSort { key, descending: false }));
-            let down = ordered(entries(), Some(ViewSort { key, descending: true }));
+            let up = ordered(
+                entries(),
+                Some(ViewSort {
+                    key,
+                    descending: false,
+                }),
+            );
+            let down = ordered(
+                entries(),
+                Some(ViewSort {
+                    key,
+                    descending: true,
+                }),
+            );
 
             assert_eq!(up, ascending, "{key:?} ascending");
 
@@ -679,12 +665,24 @@ mod tests {
             entry("a.png", PreviewType::Images, 10, 1),
         ];
         assert_eq!(
-            ordered(tied.clone(), Some(ViewSort { key: SortKey::Size, descending: false })),
+            ordered(
+                tied.clone(),
+                Some(ViewSort {
+                    key: SortKey::Size,
+                    descending: false
+                })
+            ),
             vec!["a.png", "b.png"],
             "equal sizes fall to the name, the way round it is read"
         );
         assert_eq!(
-            ordered(tied, Some(ViewSort { key: SortKey::Size, descending: true })),
+            ordered(
+                tied,
+                Some(ViewSort {
+                    key: SortKey::Size,
+                    descending: true
+                })
+            ),
             vec!["a.png", "b.png"],
             "and a descending column does not turn the names about under them"
         );
@@ -929,4 +927,3 @@ mod tests {
         assert_eq!(PinNavFileTypes::Category.as_str(), "category");
     }
 }
-

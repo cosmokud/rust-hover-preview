@@ -14,13 +14,9 @@
 //! preview thread.
 
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
-use std::time::Duration;
-use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    HC_ACTION, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT,
+    CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEHWHEEL, WM_MOUSEWHEEL,
 };
 
 /// Wheel messages seen since startup; the hook thread is the only writer.
@@ -44,57 +40,19 @@ pub fn take_text_scroll_delta() -> i32 {
     TEXT_SCROLL_DELTA.swap(0, Ordering::AcqRel)
 }
 
-/// Starts the hook thread and waits until it is ready to be stopped, so a
-/// shutdown racing with startup can still end it. `main` joins the returned
-/// handle after `request_stop`.
+/// Starts the hook thread; `main` joins the returned handle after `request_stop`.
 pub fn spawn_wheel_watcher() -> std::thread::JoinHandle<()> {
-    let handle = std::thread::spawn(run_wheel_watcher);
-
-    for _ in 0..200 {
-        if WHEEL_THREAD_ID.load(Ordering::SeqCst) != 0 || handle.is_finished() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-
-    handle
+    super::hook_thread::spawn(
+        &WHEEL_THREAD_ID,
+        WH_MOUSE_LL,
+        Some(wheel_hook_proc),
+        "mouse wheel",
+    )
 }
 
 /// Wakes the hook thread's message pump so `main` can join it.
 pub fn request_stop() {
-    let thread_id = WHEEL_THREAD_ID.load(Ordering::SeqCst);
-    if thread_id != 0 {
-        unsafe {
-            let _ = PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
-        }
-    }
-}
-
-/// Owns the low-level hook and the message pump it needs: the system calls the
-/// hook procedure on the thread that installed it, so that thread must keep
-/// dispatching messages for the life of the process.
-fn run_wheel_watcher() {
-    unsafe {
-        WHEEL_THREAD_ID.store(GetCurrentThreadId(), Ordering::SeqCst);
-
-        let module = GetModuleHandleW(None)
-            .map(|handle| HINSTANCE(handle.0))
-            .unwrap_or_default();
-        let hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(wheel_hook_proc), module, 0) {
-            Ok(hook) => hook,
-            Err(error) => {
-                eprintln!("Failed to install the mouse wheel hook: {:?}", error);
-                WHEEL_THREAD_ID.store(0, Ordering::SeqCst);
-                return;
-            }
-        };
-
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
-
-        let _ = UnhookWindowsHookEx(hook);
-        WHEEL_THREAD_ID.store(0, Ordering::SeqCst);
-    }
+    super::hook_thread::request_stop(&WHEEL_THREAD_ID)
 }
 
 unsafe extern "system" fn wheel_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

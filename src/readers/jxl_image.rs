@@ -3,34 +3,18 @@
 //!
 //! The codec Windows has for JPEG XL is not one Windows ships — it is the **JPEG XL
 //! Image Extension**, a Store package Windows 11 comes with and a Windows 10 machine
-//! usually has to be given — so a machine without it is a machine the codec path answers
-//! with nothing for. The codec is still asked first (see `wic_image`), and what reaches
-//! this module is the `.jxl` the codec has no answer for.
+//! usually has to be given — so the codec is still asked first (see `wic_image`) and what
+//! reaches this module is the `.jxl` it has no answer for. `jxl-oxide` answers that, and is
+//! a better fit than the codec would have been anyway: a JPEG XL file is not a picture, it
+//! is a sequence of frames in time, and a codec that reads one of them as a still has thrown
+//! away half of what the file is.
 //!
-//! What answers for it is `jxl-oxide`, which is in the binary already and is a far better
-//! fit than the codec would have been anyway: a JPEG XL file is not a picture, it is a
-//! sequence of frames in time — the format's own answer to a GIF, a WebP and an APNG
-//! alike — and a codec that reads one of them as a still has already thrown away half of
-//! what the file is. That the same crate can also play the `.jxl` that moves is the
-//! reason the file is read here rather than through `image`.
-//!
-//! The three questions a hover asks a picture are asked of this module in the cheapest
-//! form each has an answer in, and the first of them is the reason a real decoder is
-//! asked at all: **whether a file is one picture or a sequence** is not written anywhere a
-//! byte pattern can be read — the flag is in the codestream's own image header, which
-//! sits behind whatever container boxes the file carries in front of it, so a `.jxl` whose
-//! name says nothing has to be opened before it can be said what it is. The size is in
-//! the same header, so both are answered from the first sixty-four kilobytes of the file
-//! rather than from all of it; only the pixels need the whole codestream, and only the
-//! pixels are read under the budget a hover may ask for, exactly as every other reader is
-//! (see `webp_image`).
-//!
-//! Nothing here is allowed to take the app down with it. A file that is not a JPEG XL, a
-//! file that will not decode, a picture past the box the layout planned, a header that
-//! claims a shape nothing can be allocated for, and a frame past the budget are all one
-//! answer: no preview. The decoder is additionally handed that same budget as an
-//! allocation limit of its own, so a shape the header lies about is refused by the decode
-//! rather than by an allocation this side took at its word.
+//! Whether a file is one picture or a sequence is not written anywhere a byte pattern can be
+//! read — the flag is in the codestream's own image header, behind whatever container boxes
+//! the file carries — so a `.jxl` whose name says nothing has to be opened before it can be
+//! said what it is. The size is in the same header, so both are answered from the first
+//! sixty-four kilobytes rather than from all of it; only the pixels need the whole codestream,
+//! and only the pixels are read under a hover's budget.
 //!
 //! The one thing in here that is not obvious from the signatures, and the one a future
 //! reader will get wrong, is the timing. **A frame's duration is in ticks, not in
@@ -73,11 +57,10 @@ pub(crate) fn is_animated(path: &Path) -> bool {
 /// One decoded frame, full canvas, in the order a frame of this app is composed in: BGRA,
 /// top-down, four bytes to the pixel (see `rgba_to_bgra` in `preview_window`).
 ///
-/// `keyframe_index` counts keyframes, not frames: a JPEG XL animation may hold frames
-/// between them that are only ever blended into the one after. `max_width` and
-/// `max_height` are the box the layout planned, and a picture past it is answered with
-/// nothing rather than drawn smaller — there is no scaler to ask for a box the way
-/// libwebp has one (see `webp_image`), so JPEG XL is decoded whole or not at all.
+/// `keyframe_index` counts keyframes, not frames — a JPEG XL animation may hold frames
+/// between them that are only ever blended into the one after — and a picture past the box
+/// the layout planned is answered with nothing rather than drawn smaller, since there is no
+/// scaler to ask for a box the way libwebp has one (see `webp_image`).
 pub(crate) fn decode_frame(
     path: &Path,
     keyframe_index: usize,
@@ -105,16 +88,11 @@ pub(crate) fn decode_frame(
     compose(&image, &image.render_frame(keyframe_index).ok()?)
 }
 
-/// The number of keyframes in the file, and each keyframe's delay in **milliseconds**.
+/// The number of keyframes in the file, each keyframe's delay in **milliseconds**, and the
+/// size every frame of it is decoded at.
 ///
-/// The delays and the count are the whole of what the animation engine is told about the
-/// file's timing: it asks this for the delays, and it asks `decode_frame` for the frames.
-/// `None` is a file that is not one, one whose header carries no animation (which is what
-/// a still is), and one that holds a single keyframe — all three are the same answer, and
-/// the caller takes it as the cue to fall back to the still path.
-///
-/// The size beside the delays is the file's own, which is the size every frame of it is
-/// decoded at.
+/// `None` is a file that is not one, one whose header carries no animation, and one holding a
+/// single keyframe — one answer, and the cue to fall back to the still path.
 pub(crate) fn animation(path: &Path) -> Option<(Vec<u32>, (u32, u32))> {
     let bytes = read_within_budget(path)?;
     let image = open(&bytes)?;
@@ -200,9 +178,7 @@ fn read_head(path: &Path) -> Option<Vec<u8>> {
         .read_to_end(&mut head)
         .ok()?;
 
-    let begins = head.starts_with(&CODESTREAM_SIGNATURE) || head.starts_with(&CONTAINER_SIGNATURE);
-
-    begins.then_some(head)
+    begins_like_jxl(&head).then_some(head)
 }
 
 /// Whether the opening bytes given are those of a JPEG XL, in either of the two forms it

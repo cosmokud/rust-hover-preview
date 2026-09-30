@@ -21,65 +21,32 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 ## Supported Formats
 
-You can add or remove formats in `config.ini`. Unsupported formats show no preview, except text, which the app will try to force-read.
+Which files preview is a list per kind in `config.ini`, written on first run and read back, so you can add or remove a format without a rebuild. The lists are the built-in ones, and the gate modules beside them own them; open the file and the section a kind is under says what that kind covers. An unsupported format shows no preview, except text, which the app will try to force-read.
 
-Almost everything is previewed by **Windows 11 and this app alone** — a codec Windows ships, WebView2, the drawing layer that plays metafiles, the Windows PDF engine, or a reader written into the app. Six things are not, and they are the app’s largest optional dependencies:
+Almost everything is previewed by **Windows 11 and this app alone** — a codec Windows ships, WebView2, the drawing layer that plays metafiles, the Windows PDF engine, or a reader written into the app. Six things are not, and they are the app’s largest optional dependencies. Each is one section in the same file, so the section is the list:
 
-### Runs on Windows 11 alone
-
-
-| Kind | Extensions |
-| --- | --- |
-| Pictures | jpg jpeg jfif jpe png apng gif bmp ico tif tiff tga hdr exr ff qoi pnm pam pbm pgm ppm dds webp |
-| Stills through a Windows codec extension | heic heif avif avci jxl |
-| Videos Windows 11 plays itself | mp4 m4v mov qt avi wmv asf dvr-ms mkv webm ts m2ts mts m2t mpg mpeg mpe m2v m1v vob 3gp 3g2 3gpp |
-| Sounds Windows 11 plays itself | mp3 wav wave m4a m4b aac wma aif aifc aiff amr awb flac dsf |
-| Drawings | svg svgz (WebView2) · wmf emf (the drawing layer) · eps epsi epsf epi ept ept2 ept3 (the preview the file carries) |
-| Design documents | psd psb ai kra ora procreate sketch fig xd |
-| Fonts | ttf otf ttc woff woff2 (WebView2) |
-| Ebook | pdf pdfa epdf (the Windows PDF engine) · cbz cbr cbc |
-| Text and code | adb adoc ads asciidoc asm asp aspx astro awk bash bat bib bzl c cc cfg cg cjs clj cljc cljs cmake cmd comp conf cpp cs csh cshtml css csv csx cts cxx d dart diff diz edn ejs el elm env erb erl ex exs f f03 f77 f90 f95 fish for frag fs fsi fsx ftn fx geom glsl go gql gradle graphql groovy h haml hbs hcl hh hlsl hpp hrl hs htm html hxx inc ini ipynb java jl js json json5 jsonc jsonl jsp jsx ksh kt kts latex less lhs liquid lisp ll lock log lsp lua m mak man markdown md mdown metal mjs mk mkd ml mli mm mts mustache nasm nfo nim ninja nix njk org pas patch php phtml pl plist pm properties proto ps1 psd1 psm1 py pyi pyw r rake rb rkt rmd rs rst rtf s sass scala scm scss sh slim sol sql srt ss styl sv svelte svh swift tcl tex text tf tfvars toml ts tsv tsx twig txt v vbs vert vhd vhdl vtt vue wat wgsl xhtml xml xsd xsl xslt yaml yml zig zshExtensionless / Specific Files:authors .babelrc brewfile caddyfile changelog changes .clang-format .clang-tidy cmakelists.txt code_of_conduct containerfile contributing contributors copying copyright dockerfile .dockerignore .editorconfig .env .env.example .env.local .eslintignore .eslintrc gemfile .gitattributes .gitconfig .gitignore .gitkeep .gitmodules gnumakefile .golangci.yml history .htaccess install jenkinsfile justfile licence license .mailmap makefile makefile.am makefile.in notice .npmignore .prettierignore .prettierrc procfile rakefile readme .rustfmt.toml security .stylelintrc unlicense vagrantfile |
-| Archives | 7z apk jar rar tar tar.gz tgz xpi zip zipx |
-
-
-### Notes on the table
+| Section | What it needs | Installed by |
+| --- | --- | --- |
+| `[image]`, `[text]`, `[archive]`, `[font]`, `[vector]`, and the pictures the app reads itself | nothing | — |
+| `[image]` stills `heic` `heif` `avif` `avci` `jxl`, still `webp` | a Windows codec extension | [below](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs) |
+| `[video]`, `[audio]`, `[ffmpeg]` | FFmpeg for the names the machine cannot decode itself | [below](#optional-enable-video-preview-with-ffmpeg) |
+| `[office]` | Microsoft Office, or LibreOffice where Office is absent | [below](#needs-microsoft-office-or-libreoffice) |
+| `[libre]` | LibreOffice | [below](#optional-enable-coreldraw-and-other-documents-libreoffice) |
+| `[magick]` | ImageMagick | [below](#optional-enable-camera-raw-and-more-pictures-imagemagick) |
+| `[peazip]` | PeaZip | [below](#optional-enable-niche-archives-peazip) |
+| `[calibre]` | Calibre | [below](#optional-enable-ebooks-calibre) |
 
 Animated GIF, APNG and WebP play. `hdr` and `exr` are tone-mapped for preview. `dds` previews BC1–BC7, both BC6H variants and uncompressed textures — including packed HDR and depth — at the first face and the nearest-size mip.
 
-A **still** `heic`, `heif`, `avif` and `jxl` is decoded by a codec Windows provides rather than one shipped with the app, so each of those four needs its Store extension installed once. An **animated** JPEG XL is decoded by the app and needs none of them — a moving `.jxl` is read by a JPEG XL decoder compiled in. An **animated AVIF** and a **HEIF image sequence** are read as their first frame: the app asks the media engine Windows already has, and that engine has no demuxer for the `avis` and `msf1` image-sequence brands, so it declines the file and the still path draws what it always drew. A multi-image file that is not one of those — a HEIC burst, say — shows its first frame for the same reason.
-
-### Needs FFmpeg
-
-Videos the table does not already cover need FFmpeg, and these are all of them: `264` `265` `266` `apv` `av1` `avc` `avs` `avs2` `avs3` `bik` `bk2` `c93` `cavs` `cdg` `cdxl` `cin` `cpk` `dav` `dif` `divx` `drc` `dv` `evc` `f4v` `flm` `flv` `gxf` `h261` `h263` `h264` `h265` `h266` `h26l` `hevc` `ifv` `imx` `ismv` `ivf` `ivr` `kux` `m2p` `mj2` `mjpeg` `mjpg` `mk3d` `moflex` `mpv` `mve` `mvi` `mxf` `mxg` `nsv` `nut` `obu` `ogm` `ogv` `pmp` `psp` `rcv` `rm` `rmvb` `roq` `rsd` `smk` `str` `swf` `thp` `tod` `tp` `tr` `ty` `ty+` `usm` `vc1` `vc2` `viv` `vro` `vvc` `vw` `wtv` `xl` `xmv` `y4m` `yop`.
-
-Those names are `[ffmpeg] extensions` in `config.ini`, and the row above is `[video] extensions`: which of the two a name is in is which engine is asked for it first, so a name moved between them is the whole of asking the other engine. The tray's **Codecs** menu shows what this machine can play.
-
-Sounds Windows does not decode need FFmpeg as well, and these are all of them: `ac3` `ape` `au` `caf` `dff` `dts` `dtshd` `eac3` `mka` `mp2` `mpa` `mpc` `oga` `ogg` `ofr` `ofs` `opus` `ra` `shn` `snd` `spx` `tak` `tta` `voc` `wv`
-
-**Normalize** needs it too: what measures a sound's peak and what applies it are FFmpeg's, so on a machine without it the row is greyed and every sound plays as the file holds it.
+**Still and moving are different questions, and the four codec-dependent stills are the case where they differ.** A **still** `heic`, `heif`, `avif` or `jxl` is decoded by a codec Windows provides rather than one shipped with the app, so each of those four needs its Store extension installed once. An **animated** JPEG XL is decoded by the app and needs none of them, and a **moving** `.avif` or a **HEIF image sequence** is not decoded at all: the app asks the media engine Windows already has, and that engine has no demuxer for the `avis` and `msf1` image-sequence brands, so it declines the file and the still path draws what it always drew. A multi-image file that is not one of those — a HEIC burst, say — shows its first frame for the same reason, and `TODO.md` records what a decoder for the sequences would take.
 
 ### Needs Microsoft Office, or LibreOffice
 
-Office documents — `doc` `docm` `docx` `dot` `dotm` `dotx` `xls` `xlsb` `xlsm` `xlsx` `xlt` `xltm` `xltx` `ppt` `pptm` `pptx` `pps` `ppsm` `ppsx` `pot` `potm` `potx` — are drawn in the background by an installed Office so previews appear quickly after the first hover. Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough, and the Print Spooler service must be enabled; without one, Excel falls back to the sheet’s top-left corner. Where no Office is installed, an installed LibreOffice draws them instead. To have LibreOffice draw them all — with Microsoft Office installed as well — use **Engine → Select Engine → Office** and pick **LibreOffice**.
+Office documents are drawn in the background by an installed Office so previews appear quickly after the first hover; they are the `[office]` list. Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough, and the Print Spooler service must be enabled; without one, Excel falls back to the sheet’s top-left corner. Where no Office is installed, an installed LibreOffice draws them instead. To have LibreOffice draw them all — with Microsoft Office installed as well — use **Engine → Select Engine → Office** and pick **LibreOffice**.
 
-### Needs LibreOffice
+**Normalize** needs FFmpeg: what measures a sound's peak and what applies it are FFmpeg's, so on a machine without it the row is greyed and every sound plays as the file holds it.
 
-The documents this app has no reader of its own for, drawn by an installed LibreOffice and sharp at any size, all of them: `123` `602` `abw` `cdr` `cgm` `cmx` `cwk` `dbf` `dif` `dxf` `fodg` `fodp` `fodt` `gnm` `gnumeric` `hwp` `key` `lwp` `mcw` `met` `mw` `numbers` `odb` `odc` `odf` `odg` `odm` `odp` `ods` `odt` `oth` `otg` `otm` `otp` `ots` `ott` `pages` `pcd` `pct` `pcx` `pdb` `pm6` `pmd` `psw` `pub` `ras` `sda` `sdc` `sdd` `sdw` `slk` `stc` `std` `sti` `stw` `svm` `sxd` `sxg` `sxi` `sxm` `sxw` `vdx` `vsd` `vsdm` `vsdx` `vstx` `wb2` `wk1` `wk3` `wk4` `wks` `wpg` `wq1` `wq2` `wpd` `wps` `wri` `xlw` `zabw` `zmf`.
-
-### Needs ImageMagick
-
-ImageMagick previews otherwise-unopenable files—especially camera raws—at display size, rotated, decoded from memory. Raws/own-coder: `3fr` `arw` `cr2` `cr3` `crw` `cur` `dcm` `dcr` `dcx` `dng` `dpx` `erf` `fff` `fit` `fits` `fts` `iiq` `j2c` `j2k` `jng` `jp2` `jpc` `jpm` `jpt` `k25` `kdc` `mdc` `mef` `miff` `mng` `mos` `mrw` `nef` `nrw` `orf` `pef` `pfm` `raf` `raw` `rmf` `rw2` `rwl` `sgi` `sr2` `srf` `srw` `vicar` `wbmp` `x3f` `xbm` `xcf` `xpm`. Alternates/other engine names: `pict` (`pct`), `sun` (`ras`), `pcds` (`pcd`), `dxt1`/`dxt5` (`dds`), `icb` `vda` `vst`, `picon`, `group4`;
-Raw sample dumps: `rgb` `rgba` `gray` `cmyk` `ycbcr` `mono` `group4` and the rest; dimensions inferred by trying aspect ratios against file length—first exact divisor wins, else none; transpose ambiguity can make portrait landscape.
-
-### Needs PeaZip
-
-The archives this app has no reader of its own for, listed by an installed PeaZip and shown as the same page of contents a `.zip` is shown as, all of them: `001` `apfs` `ar` `arc` `arj` `bcm` `br` `bz2` `bzip2` `cab` `chm` `cpio` `cramfs` `deb` `dmg` `esd` `gz` `gzip` `hfs` `hfsx` `hxs` `iso` `lha` `lit` `lpaq8` `lzh` `lzma` `msi` `msp` `pkg` `ppkg` `qcow` `qcow2` `rpm` `squashfs` `swm` `taz` `tbz` `tbz2` `tpz` `txz` `tzst` `udf` `udeb` `vdi` `vhd` `vhdx` `vmdk` `wim` `xar` `xip` `xz` `z` `zpaq` `zst`. A `.tar.gz` and a `.tgz` are the archive list’s above and stay this app’s own.
-
-### Needs Calibre
-
-The ebooks this app has no reader of its own for, converted by an installed Calibre and drawn as a page of the PDF it wrote — the same kind, scale and backdrop a PDF this app reads itself gets, all of them: `azw` `azw3` `azw4` `djvu` `epub` `fb2` `htmlz` `lit` `lrf` `mobi` `pml` `prc` `snb` `tcr`.
-
-A book with DRM — an `.azw`, `.azw3` or `.azw4` bought from Amazon — cannot be converted by anything here and shows nothing. See `TODO.md` for the formats the engine reads that are not in the list, and why.
+See `TODO.md` for the names each engine can read that are deliberately not in its list, and why.
 
 ### Themes
 
@@ -107,7 +74,7 @@ No Rust toolchain is needed. If upgrading from an earlier version, the installer
 
 ### Optional: Enable Video Preview with FFmpeg
 
-Videos play through the media engine Windows ships with wherever it can decode the file, and through FFmpeg wherever it cannot. The engine is asked first because it can be paused, seeked and asked where it is, and because its frames are drawn by the app itself — so a pinned video it plays can be resized and dragged by its picture. FFmpeg adds the formats and codecs Windows does not decode; install it if you want those. `ffplay` and `ffprobe` need to be in your `PATH`.
+FFmpeg adds the video formats and the audio ones Windows does not decode — the `[ffmpeg]`, `[video]` and `[audio]` lists. `ffplay` and `ffprobe` need to be in your `PATH`.
 
 **Option A: winget**
 
@@ -159,9 +126,9 @@ A **still** `heic`, `heif`, `avif`, `jxl`, and still `webp` is decoded by a code
 
 All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is missing, hovering such a file shows no preview rather than an error.
 
-A **moving** JPEG XL is decoded by the app itself rather than by that codec, and so needs none of the packages above — an animated `.jxl` is read by the JPEG XL decoder compiled into the app. A **moving** `.avif` and a **HEIF image sequence** are not: the app asks the media engine Windows already has, and that engine declines both. This was measured rather than assumed — asked directly about an `avis` AVIF and an `msf1` HEIC, it refused both, while an AV1 `.mp4` and an HEVC `.mp4` through the same calls came back with frames on the same machine, so the codec is present and what is missing is a demuxer for the image-sequence brands. Both fall back to their first frame, which is what the app has always shown; `TODO.md` carries what a decoder for them would take. A **still** `.jxl` is the one that still needs its package, because a still is a still whichever way it arrived.
+Which of these a moving file needs is under [Supported Formats](#supported-formats) above.
 
-A `.webp` is the other exception: it needs none of them, because the app carries its own libwebp decoder, so WebP previews even on Windows 10. A multi-image file that moves but is not an animated JPEG XL — a HEIC burst, or an animated AVIF — still shows its first frame.
+A `.webp` is the exception: it needs none of them, because the app carries its own libwebp decoder, so WebP previews even on Windows 10.
 
 ### Optional: Enable CorelDRAW and Other Documents (LibreOffice)
 
@@ -215,8 +182,6 @@ Or download the official installer from [https://calibre-ebook.com/download\_win
 3. Or navigate with the keyboard — arrow keys, Tab, or a file's name typed to jump to it — to preview the focused item.
 4. Right-click the tray icon to configure behavior.
 
-Here is a concise, plain-language version:
-
 ## System Tray Menu
 
 A setting marked `(Default)` is what an untouched setting would be. The check or radio mark shows what is set now.
@@ -233,7 +198,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Nav File Types** — What **Previous** and **Next** on the caption step through. Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them. The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front. `Space` in a pinned sound pauses and resumes it, on the same terms, and `Escape` in a pinned window closes it.
     - **All** (`default`) — Every file this build can preview, in the folder the pin was taken up in and not any subfolder of it, in the order the Explorer listing is showing them. A video sits beside a sound.
     - **Category** — Only the files of the pinned file's own kind of thing: pictures, video, audio, documents, archives, text, fonts, or design. A camera raw is a picture and a book is a document, because that is what you call them. A kind switched off under **Preview Types**, or one with no engine installed on the machine, is not a step either way — and a file this build *could* preview but that will not open is a step the window steps over rather than one it stops on.
-- **Preview Types** — Choose which file kinds can preview: Images, Videos, Audio, Text, Ebook, Archives, Document, Vector, Fonts, Design. One switch covers both the original file and the engine-drawn preview. Examples: camera raw uses **Images**; LibreOffice document uses **Document**; PeaZip archive uses **Archives**; Calibre book uses **Ebook** — also the app-drawn PDF and comic pages.
+- **Preview Types** — Choose which file kinds can preview: Images, Videos, Audio, Text, Ebook, Archives, Document, Vector, Fonts, Design. A switch is a switch over behaviour, not over files: the lists deciding which files are previewed are untouched, so switching a kind off and back on restores what was configured. One switch covers both the original file and the engine-drawn preview — camera raw uses **Images**; a LibreOffice document uses **Document**; a PeaZip archive uses **Archives**; a Calibre book uses **Ebook**, as do the app-drawn PDF and comic pages.
 - **Text Preview**
   - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
   - **Font Size** — `400%` at the top down to `70%` at the bottom.
@@ -404,11 +369,8 @@ Here’s what this .INI does:
 **What can preview**
 
 - `*_preview_enabled`: turn each preview type on or off. File lists stay normal.
-- `extensions` / `names`: which files get text previews. Extensions have no dots. `names` matches files with no extension.
-- `image_extensions`, `video_extensions`, `archive_extensions`, `office_extensions`, `font_extensions`, `design_extensions`, `vector_extensions`: per-type preview filters. No dots. An entry with a dot, like `tar.gz`, matches the end of the file name.
-- `ffmpeg_extensions`: the video names only FFmpeg's player reads, beside the `video_extensions` a machine without it still plays. Which engine plays a file follows from which list its name is in — the media engine Windows has is asked about `video_extensions` and, where it can decode the file, plays it; everything else is FFmpeg's player's.
-- `audio_extensions`: which files are previewed as sounds. One list rather than two, because which engine plays a file is the machine's answer and not a setting: Windows' own decoders are asked first and an installed FFmpeg second.
-- `ebook_extensions`, `libre_extensions`, `magick_extensions`, `peazip_extensions`, `calibre_extensions`: pages this app draws itself — PDFs, comic covers, LibreOffice documents, ImageMagick pictures, PeaZip archives, and Calibre books.
+- `extensions` under each kind's section: which files that kind previews — `image`, `video`, `ffmpeg`, `audio`, `text` (which also carries a `names` key for files with no extension), `archive`, `office`, `font`, `design`, `vector`, `ebook`, `libre`, `magick`, `peazip`, `calibre`. No dots. An entry with a dot, like `tar.gz`, matches the end of the file name. A name two sections hold belongs to the earlier kind, so the kind decides which switch applies to it.
+- Which engine plays a video or a sound is the machine's answer rather than a setting: the media engine Windows has is asked first and an installed FFmpeg second, and the two lists only decide which engine is *asked* about a name first.
 
 **Memory and cache**
 

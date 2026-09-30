@@ -4,6 +4,7 @@ mod app;
 mod config;
 mod engines;
 mod formats;
+mod paths;
 mod readers;
 mod shell;
 mod text;

@@ -32,6 +32,7 @@ use crate::formats::office_formats;
 use crate::formats::peazip_formats;
 use crate::formats::vector_formats;
 use crate::formats::video_formats;
+use crate::paths::plain_path;
 use crate::readers::audio_seek;
 use crate::readers::audio_track::{self, Player, Probed};
 use crate::readers::comic_preview;
@@ -110,7 +111,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     EnumWindows, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
-MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
+    MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
     SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
     CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL,
@@ -120,10 +121,10 @@ MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCu
     SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
-    ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// The message the pin watchdog posts to the preview window when it gives up on a pin, so that
@@ -10049,10 +10050,9 @@ fn pinned_paint() -> Option<PinnedPaint> {
             hovered: pin.hovered,
             pressed: pin.pressed,
             tooltip: pin.tooltip.shown.and_then(|button| {
-                pin.tooltip.text_for(button).map(|text| PinTooltipPaint {
-                    kind: button,
-                    text,
-                })
+                pin.tooltip
+                    .text_for(button)
+                    .map(|text| PinTooltipPaint { kind: button, text })
             }),
             position: None,
             duration: None,
@@ -10462,19 +10462,19 @@ unsafe fn paint_pin_tooltip(
     paint: &PinnedPaint,
     caption_height: i32,
 ) {
-    let (Some(tooltip), Some(palette)) = (
-        paint.tooltip.as_ref(),
-        pin_chrome::ChromePalette::current(),
-    ) else {
+    let (Some(tooltip), Some(palette)) =
+        (paint.tooltip.as_ref(), pin_chrome::ChromePalette::current())
+    else {
         return;
     };
 
     // The buttons the caption was drawn with, so the name hangs off the button it belongs to
     // rather than off a box worked out a second time and a half a step out of step with it.
-    let Some(anchor) = pin_chrome::button_boxes(width, caption_height, paint.dpi, paint.maximizable)
-        .into_iter()
-        .find(|button| button.kind == tooltip.kind)
-        .map(|button| button.rect)
+    let Some(anchor) =
+        pin_chrome::button_boxes(width, caption_height, paint.dpi, paint.maximizable)
+            .into_iter()
+            .find(|button| button.kind == tooltip.kind)
+            .map(|button| button.rect)
     else {
         return;
     };
@@ -10510,9 +10510,14 @@ unsafe fn paint_pin_tooltip(
         blanked.fill(0);
 
         let text_width = pin_chrome::measure_caption_text(surface, &tooltip.text, paint.dpi);
-        let Some(panel) =
-            pin_chrome::tooltip_layout(width, height, caption_height, anchor, text_width, paint.dpi)
-        else {
+        let Some(panel) = pin_chrome::tooltip_layout(
+            width,
+            height,
+            caption_height,
+            anchor,
+            text_width,
+            paint.dpi,
+        ) else {
             return;
         };
 
@@ -12960,18 +12965,10 @@ struct PinnedPreview {
     /// different shapes would walk its way down to nothing with every file picked. What a swap
     /// writes is `content`; this stays the size the user gave the pin (see `pin_update_plan`).
     ///
-    /// One number rather than the box itself, because a box is a shape and the files a pin is shown
-    /// have shapes of their own: a pin taken up as a tall portrait would otherwise hand every
-    /// widescreen file that followed it a box no wider than the portrait was — the same preview,
-    /// a third of the size, for no reason the user could see. A side is what the user's own hand
-    /// asked for when it dragged an edge, so a side is what every shape gets to use.
-    ///
-    /// And a pin *starts* with none where the file it went up on is drawn to its own box rather than
-    /// laid out from a shape of its own — a page of text, a listing, a sound's card (see
-    /// `pin_keeps_its_box`): there is no size of that file in that box, and a two-line file's window
-    /// or a four-hundred-pixel card is no ceiling for the picture that follows it. The first file
-    /// with a shape of its own is laid out against the room the display has at the scale its kind
-    /// names, and the box that comes out of it is where the bound is taken from (`pin_bound_after`).
+    /// One number rather than the box, because the files a pin is shown have shapes of their own:
+    /// a pin taken up as a tall portrait would otherwise hand every widescreen file that followed
+    /// it a box no wider than the portrait was. A side is what the user's own hand asked for when
+    /// it dragged an edge, so a side is what every shape gets to use.
     bound: Option<i32>,
     /// The box a restore down puts back, and `None` while the pin is not maximized: the box the
     /// window had before it was maximized, kept in step with the hand while it is one — and given up
@@ -13086,19 +13083,17 @@ fn pin_transport_kind(kind: Option<MediaType>) -> bool {
 /// fallback and no more.
 #[derive(Clone, Default)]
 struct PinTooltip {
-    /// The program the Shell would open the pinned file with, as it names it — empty where the
+    /// The program the Shell would open the pinned file with, as it names it - empty where the
     /// machine has no answer to give.
     default_app: String,
-    /// The button the pointer has been resting on, and when it got there. A name is written
-    /// after a moment rather than at once, which is the delay every tooltip on the desktop has
-    /// and the only reason a pointer crossing a caption does not leave a trail of words.
+    /// The button the pointer is resting on, and when it got there. A name is written after a
+    /// moment rather than at once, which is the delay every tooltip has and the only reason a
+    /// pointer crossing a caption does not leave a trail of words.
     button: Option<pin_chrome::CaptionButton>,
     since: Option<Instant>,
-    /// The button whose name is on the caption right now, which is `button` once the wait is
-    /// over and nothing before it. It is kept so that asking again can tell a change worth a
-    /// repaint from the same answer twice — a pointer that has not moved is asked about on
-    /// every tick of the loop, and sixty repaints a second of an unchanged name is a window
-    /// burning a core to say the same thing.
+    /// The button whose name is on the caption right now: `button` once the wait is over, and
+    /// nothing before it. Kept so that asking again can tell a change worth a repaint from the
+    /// same answer twice.
     shown: Option<pin_chrome::CaptionButton>,
 }
 
@@ -13318,11 +13313,11 @@ struct PinVolume {
     dragging: bool,
 }
 
-/// Write an answer about the volume back into the pin, if there is still one.
-fn update_pin_volume(change: impl FnOnce(&mut PinVolume)) {
+/// Answer about the pin that is up with a change to it, where there is one.
+fn with_pin(change: impl FnOnce(&mut PinnedPreview)) {
     if let Ok(mut pinned) = PINNED.lock() {
         if let Some(pin) = pinned.as_mut() {
-            change(&mut pin.volume);
+            change(pin);
         }
     }
 }
@@ -13377,15 +13372,13 @@ fn close_pin_volume() -> bool {
 /// not the pointer is near it (see `PIN_CHROME_ARRIVAL_SECONDS`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct PinChrome {
-    /// Whether the pointer is asking for the caption, and for the transport bar. Everything is
-    /// answered by these two, and there is no half-shown state: a strip is drawn into the window's
-    /// own rows — the media is composed there and the chrome replaces it — so one painted at a
-    /// share of itself would be a strip with the picture gone behind it rather than a strip on its
-    /// way out. Each is drawn whole or not at all (see the note over `PIN_CHROME_NEAR_PIXELS`).
+    /// Whether the pointer is asking for the caption, and for the transport bar. There is no
+    /// half-shown state: a strip is drawn into the window's own rows, so one painted at a share
+    /// of itself would be a strip with the picture gone behind it. Each is drawn whole or not at
+    /// all (see the note over `PIN_CHROME_NEAR_PIXELS`).
     caption: bool,
     bar: bool,
-    /// When the arrival window closes, while one is open. While it is open both strips are shown:
-    /// what a pin owes the hand that just made it is the whole of its chrome.
+    /// When the arrival window closes, while one is open. While it is open both strips are shown.
     until: Option<Instant>,
 }
 
@@ -13711,7 +13704,7 @@ fn restart_pinned_player(path: &PathBuf, content: ScreenRegion, seconds: f64) {
         transport.paused_at = None;
         transport.seeking = None;
     });
-    update_pin_volume(|pin| pin.playing_at = volume);
+    with_pin(|pin| pin.volume.playing_at = volume);
 }
 
 /// Take a pinned video to a second of its file.
@@ -13781,11 +13774,7 @@ fn toggle_pinned_playback(path: &PathBuf, content: ScreenRegion, transport: PinT
 
 /// Write an answer about the transport back into the pin, if there is still one.
 fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
-    if let Ok(mut pinned) = PINNED.lock() {
-        if let Some(pin) = pinned.as_mut() {
-            change(&mut pin.transport);
-        }
-    }
+    with_pin(|pin| change(&mut pin.transport));
 }
 
 /// Hold a pinned sound where it stands, or set it going again: what a Space in a window the
@@ -13996,11 +13985,11 @@ fn settle_pinned_audio_seek(
 /// window (see `PinVolume`).
 fn set_pin_volume(level: u32) {
     let level = level.min(100);
-    update_pin_volume(|volume| volume.level = level);
+    with_pin(|pin| pin.volume.level = level);
 
     if current_media_type() == Some(MediaType::NativeVideo) {
         video_player::set_volume(level);
-        update_pin_volume(|volume| volume.playing_at = level);
+        with_pin(|pin| pin.volume.playing_at = level);
     }
 }
 
@@ -14022,14 +14011,14 @@ fn settle_pin_volume() {
     match current_media_type() {
         Some(MediaType::NativeVideo) => {
             video_player::set_volume(volume.level);
-            update_pin_volume(|volume| volume.playing_at = volume.level);
+            with_pin(|pin| pin.volume.playing_at = pin.volume.level);
         }
         Some(MediaType::Video) => {
             if pin_is_playing(&transport) {
                 let playhead = pin_playhead(&transport).unwrap_or(0.0);
                 restart_pinned_player(&path, content, playhead);
             } else {
-                update_pin_volume(|volume| volume.playing_at = volume.level);
+                with_pin(|pin| pin.volume.playing_at = pin.volume.level);
             }
         }
         _ => {}
@@ -14397,21 +14386,16 @@ fn end_pin_state() -> PreviewMessage {
 /// has died is a window onto nothing — so it comes down and previews resume, which is the half
 /// of "until it is closed, or it comes apart" that is not a button.
 ///
-/// A sound is deliberately not one of them, whichever player is behind it. A card is text
-/// this app draws, and the player it is playing is a player this app started: it plays the
-/// pass it was given and stops, and the tick after that stops puts the whole file round again
-/// (see `wrap_audio_player`). A player that is not running is therefore the moment between two
-/// passes rather than a pin onto nothing, and asking about it took the window down at the end
-/// of every pass — a sound looping, with the pin closing over it as it came back round. A card
-/// whose player never came back at all is a card with a still clock, which is the answer a
-/// machine with no output device gives, and the window stays up over it.
+/// A sound is deliberately not one of them, whichever player is behind it. A card is text this
+/// app draws, and its player plays the pass it was given and stops, so a player that is not
+/// running is the moment between two passes rather than a pin onto nothing — asking about it took
+/// the window down at the end of every pass (see `wrap_audio_player`). A card whose player never
+/// came back at all is a card with a still clock, which is what a machine with no output device
+/// gives, and the window stays up over it.
 ///
 /// And the question is whether the thing is *there*, not whether it has drawn anything yet: a
-/// browser that is still coming up, and a document it has been asked for that has not landed, are
-/// a pin with something to be a window onto — taking the window as the answer is what closed a
-/// pin on the first document of a run (see `webview_preview::is_behind`). A browser that has
-/// failed is where the pin does come down, and that arrives as the engine's own failure notice
-/// (see the loop's answer to it).
+/// browser still coming up, and a document it has been asked for that has not landed, are a pin
+/// with something to be a window onto (see `webview_preview::is_behind`).
 fn pin_media_is_alive() -> bool {
     // What kind it is, is taken in one look and the lock is let go of before anything is asked
     // *about* the answer. What a player's liveness is asked through — `is_video_process_running`
@@ -14513,9 +14497,9 @@ struct PinSwapSpace {
     /// The media box the pin has now: what the new file is centred on, so a window the hand has
     /// moved keeps its place while it changes size.
     current: ScreenRegion,
-    /// The longest side the new file's media may take, in either direction, which is a swap's
-    /// ceiling rather than the size it is given — and nothing while the pin has no bound yet,
-    /// where the room is the display's own (see `PinnedPreview::bound`).
+    /// The longest side the new file's media may take, in either direction: a swap's ceiling
+    /// rather than the size it is given, and nothing while the pin has no bound yet (see
+    /// `PinnedPreview::bound`).
     bound: Option<i32>,
     /// Whether the kind on screen carries a transport bar.
     transport_bar: bool,
@@ -14664,40 +14648,21 @@ fn take_pin_engine_answer(
 /// window taken out from under the hand that is reading it, and the point of the setting is for the
 /// pin to follow the listing rather than for it to be placed again on every file. So the new media
 /// goes in the middle of the box the pin has now, and how large it may be is answered by three
-/// things, innermost first:
+/// things, innermost first: the pin's bound is the ceiling, and it is a side rather than a box, so
+/// every shape may use the whole of it; inside it the file is laid out at the scale a hover of the
+/// same file would take; and a maximized window stays maximized, since a swap is not the gesture
+/// that takes it out of the state the user put it in.
 ///
-/// - The bound the pin carries is the ceiling, and it is a side rather than a box: the room is a
-///   square of the longest side the pin has been given, so every shape may use the whole of it. A
-///   box instead would hand the widescreen file that follows a tall pin a box no wider than the tall
-///   one was (see `PinnedPreview::bound`). A pin with no bound yet is given the room the display has
-///   instead, since no size has been asked of the window to fit the file inside (see `pin_swap_room`).
-/// - Inside it the file is laid out at the scale the configuration asks for — the scale a hover of
-///   the same file would take: fit-to-screen fills the bound, a percentage takes the file's own
-///   size and is reduced only where the bound cannot hold it (see `effective_preview_scale`).
-/// - And a window that is maximized stays maximized: the box it is given is the one it has, laid
-///   out at fit-to-screen the way the maximize itself was, since a swap is not the gesture that
-///   takes the window out of the state the user put it in. A sound's card is the one exception,
-///   and the paragraph below is where it is made.
+/// Three kinds are exceptions. A page of text and a listing keep the box exactly — they are
+/// measured against the room they are drawn in, not against a size the file holds — which is why a
+/// swap to one neither takes a bound nor gives one. A sound's card is given the box its own measure
+/// came out at, centred on the box the pin has now: the file before it left no size for a card.
 ///
-/// A page of text and a listing either reader produces keep the box exactly: they are measured
-/// against the room they are drawn in rather than against a size the file holds, so the box *is*
-/// what they are drawn to — and the scaling rules say nothing about a size they do not have, which
-/// is why a swap to one of them neither takes a bound nor gives one: a pin that has none keeps none
-/// until a file with a shape of its own is picked (see `pin_keeps_its_box` and `pin_bound_after`).
-///
-/// A sound's card is the one drawn kind a swap does not keep the box for, and the maximize above
-/// is no part of that either — a card offers no maximize to stay in, there being nothing to fill
-/// (`PinFrame::None`) — so what the swap gives it is the box its own measure came out at, centred
-/// on the box the pin has now: the box the file before it left is no size for a card, and a card a
-/// listing is followed into is the card a hover of the same file would have drawn rather than one
-/// cut to whatever box was standing there.
-///
-/// And a file whose box is still being read — a page being measured, a video being probed, a sound
-/// being probed — is not laid out at all: what the measure answered is the wait for a box rather
-/// than one, and a window made of it would be a square with the file's picture in it at the wrong
-/// shape. The same answer is what a file gets whose media does not exist yet at all: a page, a
-/// picture or a listing an engine still owes it is asked for rather than refused, and the pin keeps
-/// the file it is showing until the answer lands (see `PinBox` and `request_pin_engine_render`).
+/// And a file whose box is still being read is not laid out at all: what the measure answered is
+/// the wait for a box rather than one, and a window made of it would be a square with the file's
+/// picture in it at the wrong shape. The same answer is what a file gets whose media an engine
+/// still owes it: the pin keeps the file it is showing until the answer lands (see `PinBox` and
+/// `request_pin_engine_render`).
 fn pin_update_content(
     space: PinSwapSpace,
     path: &PathBuf,
@@ -15105,14 +15070,8 @@ struct PinLoad {
     /// pick was made with, kept rather than asked for again so that the answer and the plan can
     /// never disagree.
     update: PinUpdate,
-    started: Instant,
-    /// How long this load may run before the arc is put up for it, read from
-    /// `spinner_delay_ms` when it started, which is the delay a hover's own load is given.
-    spinner_delay: Duration,
-    /// When the arc was last turned, and nothing while it has not been put up at all. It is the
-    /// turn and not the wait that the cadence is read against, which is what keeps the turns at
-    /// the spinner's own pace rather than at the pace of whatever the loop happens to be doing.
-    turned: Option<Instant>,
+    /// The arc painted while this load runs.
+    arc: PinArc,
     /// The thread's answer, taken where it lands (see `take_pin_load`).
     answer: Receiver<Option<MediaData>>,
     /// The walk this load is a step of, which is stepped on where the file cannot be shown.
@@ -15132,13 +15091,50 @@ impl PinLoad {
 
         PinLoad {
             path: path.to_path_buf(),
-            spinner_delay: load_spinner_delay(),
+            arc: PinArc::new(),
             update,
-            started: Instant::now(),
-            turned: None,
             answer,
             walk,
         }
+    }
+}
+
+/// The arc a wait is painted on: when it began, how long before it is put up, and when it was
+/// last turned.
+///
+/// Whether a wait is due a paint: once it has run for the delay `spinner_delay_ms` names — the
+/// same moment a hover's own wait is given — and then once per turn of the arc for as long as it
+/// stands. The turn is the spinner's own cadence, the one `MediaType::Loading` advances at,
+/// because it is the same arc (see `MediaData::update_loading_frame`). It is measured from the
+/// last turn rather than from the start of the wait, so the moment the delay runs out is one
+/// paint and not one paint a tick until the cadence catches up with it.
+struct PinArc {
+    started: Instant,
+    spinner_delay: Duration,
+    /// When the arc was last turned, and nothing while it has not been put up at all.
+    turned: Option<Instant>,
+}
+
+impl PinArc {
+    fn new() -> Self {
+        PinArc {
+            started: Instant::now(),
+            spinner_delay: load_spinner_delay(),
+            turned: None,
+        }
+    }
+
+    fn due(&self) -> bool {
+        match self.turned {
+            None => self.started.elapsed() >= self.spinner_delay,
+            Some(turned) => turned.elapsed() >= Duration::from_millis(u64::from(SPINNER_TURN_MS)),
+        }
+    }
+
+    /// Note that the arc has been turned, so that the next turn is a cadence away rather than
+    /// due at once.
+    fn spun(&mut self) {
+        self.turned = Some(Instant::now());
     }
 }
 
@@ -15199,20 +15195,26 @@ struct PinAnswer {
     walk: Option<PinStep>,
 }
 
+/// What a decode thread has answered, or `None` where it has not answered yet — which is the
+/// ordinary case for the first ticks after a load is asked for, and what the pin keeps showing
+/// its own frame over until the answer lands.
+///
+/// A thread that is gone with nothing to say — a panic on the way out, a sender dropped — is
+/// answered as a file with no frame, which is what it is.
+fn answered(answer: Option<&Receiver<Option<MediaData>>>) -> Option<Option<MediaData>> {
+    match answer?.try_recv() {
+        Ok(media) => Some(media),
+        Err(TryRecvError::Empty) => None,
+        Err(TryRecvError::Disconnected) => Some(None),
+    }
+}
+
 /// Take a pinned window's load, where it has answered.
 ///
 /// `None` is a load still running: what the pin is showing is the file it already had, and the
 /// arc is due for the wait or is up (see `PinLoad`).
 fn take_pin_load(pin_load: &mut Option<PinLoad>) -> Option<PinAnswer> {
-    let load = pin_load.as_ref()?;
-    let media = match load.answer.try_recv() {
-        Ok(media) => media,
-        // Still running, or the thread is gone with nothing to say — the latter is answered as
-        // a file with no frame, which is what a thread that ended in a panic is.
-        Err(TryRecvError::Empty) => return None,
-        Err(TryRecvError::Disconnected) => None,
-    };
-
+    let media = answered(pin_load.as_ref().map(|load| &load.answer))?;
     let load = pin_load.take()?;
 
     Some(PinAnswer {
@@ -15221,29 +15223,6 @@ fn take_pin_load(pin_load: &mut Option<PinLoad>) -> Option<PinAnswer> {
         media,
         walk: load.walk,
     })
-}
-
-impl PinLoad {
-    /// Whether this wait is due a paint: once it has run for the delay `spinner_delay_ms`
-    /// names — the same moment a hover's own wait is given — and then once per turn of the arc
-    /// for as long as it stands.
-    ///
-    /// The turn is the spinner's own cadence, the one `MediaType::Loading` advances at, because
-    /// it is the same arc (see `MediaData::update_loading_frame`). It is measured from the last
-    /// turn rather than from the start of the wait, so the moment the delay runs out is one
-    /// paint and not one paint a tick until the cadence catches up with it.
-    fn due(&self) -> bool {
-        match self.turned {
-            None => self.started.elapsed() >= self.spinner_delay,
-            Some(turned) => turned.elapsed() >= Duration::from_millis(u64::from(SPINNER_TURN_MS)),
-        }
-    }
-
-    /// Note that the arc for this wait has been turned, so that the next turn is a cadence away
-    /// rather than due at once.
-    fn spun(&mut self) {
-        self.turned = Some(Instant::now());
-    }
 }
 
 /// Lay the pinned media out again for the box its window has been given — one it was maximized
@@ -15390,16 +15369,8 @@ struct PinRelayout {
 /// of the media being replaced *before* that lock is taken, for the reason it takes the lock
 /// itself: a lock this thread already holds is not a lock it can wait for.
 fn take_pin_relayout(relayout: &mut Option<PinRelayout>) {
-    let media = match relayout.as_ref().map(|pending| &pending.answer) {
-        Some(answer) => match answer.try_recv() {
-            Ok(media) => media,
-            Err(TryRecvError::Empty) => return,
-            // The thread is gone with nothing to say, which is answered as a frame that could
-            // not be decoded: the frame already on screen stays, which is what a resize has
-            // been showing all along.
-            Err(TryRecvError::Disconnected) => None,
-        },
-        None => return,
+    let Some(media) = answered(relayout.as_ref().map(|pending| &pending.answer)) else {
+        return;
     };
     let Some(pending) = relayout.take() else {
         return;
@@ -15628,7 +15599,15 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     // measured, which is the rule every other reader of a pin keeps: a measure is a file read,
     // and this is the thread that pumps the pinned window's own messages, so a read held under
     // the lock is a window that stops answering for as long as it takes (see `pin_swap_space`).
-    let Some((path, dpi, frame, overlay, transport_bar, content, restore)) = pin_maximize_inputs()
+    let Some(PinMaximizeInputs {
+        path,
+        dpi,
+        frame,
+        overlay,
+        transport_bar,
+        content,
+        restore,
+    }) = pin_maximize_inputs()
     else {
         return;
     };
@@ -15753,29 +15732,29 @@ fn pin_maximize_decided(asked: PinMaximize) -> (ScreenRegion, Option<ScreenRegio
 
 /// What a pin has to decide a maximize with, read out of it in one look: see `PinSwapSpace` for
 /// why it is read rather than asked for piece by piece.
-type PinMaximizeInputs = (
-    PathBuf,
-    u32,
-    PinFrame,
-    bool,
-    bool,
-    ScreenRegion,
-    Option<ScreenRegion>,
-);
+struct PinMaximizeInputs {
+    path: PathBuf,
+    dpi: u32,
+    frame: PinFrame,
+    overlay: bool,
+    transport_bar: bool,
+    content: ScreenRegion,
+    restore: Option<ScreenRegion>,
+}
 
 fn pin_maximize_inputs() -> Option<PinMaximizeInputs> {
     let pinned = PINNED.lock().ok()?;
     let pin = pinned.as_ref()?;
 
-    Some((
-        pin.path.clone(),
-        pin.dpi,
-        pin.frame,
-        pin.overlay,
-        pin.transport_bar,
-        pin.content,
-        pin.restore,
-    ))
+    Some(PinMaximizeInputs {
+        path: pin.path.clone(),
+        dpi: pin.dpi,
+        frame: pin.frame,
+        overlay: pin.overlay,
+        transport_bar: pin.transport_bar,
+        content: pin.content,
+        restore: pin.restore,
+    })
 }
 
 /// The box a restore down puts back for a file of a given shape: the size the user had the
@@ -16001,33 +15980,7 @@ impl PinStep {
 /// shown is not known yet and the user is owed an answer either way. Painted on the arc the
 /// pin already turns, on the same delay, because it is the same question to the person
 /// looking at it (see `PinLoad` and `paint_pin_spinner`).
-struct PinWait {
-    started: Instant,
-    spinner_delay: Duration,
-    turned: Option<Instant>,
-}
-
-impl PinWait {
-    fn new() -> Self {
-        PinWait {
-            started: Instant::now(),
-            spinner_delay: load_spinner_delay(),
-            turned: None,
-        }
-    }
-
-    /// Whether this wait is due a paint, on the same terms a load's is.
-    fn due(&self) -> bool {
-        match self.turned {
-            None => self.started.elapsed() >= self.spinner_delay,
-            Some(turned) => turned.elapsed() >= Duration::from_millis(u64::from(SPINNER_TURN_MS)),
-        }
-    }
-
-    fn spun(&mut self) {
-        self.turned = Some(Instant::now());
-    }
-}
+type PinWait = PinArc;
 
 /// The file a step along the folder's walk takes the pin to, and the walk that step began,
 /// or nothing where the walk has nowhere to step to.
@@ -16485,11 +16438,7 @@ fn pin_bubble_pause() -> Option<BubblePause> {
 
 /// Write an answer about what the bubble has parked back into the pin, if there is still one.
 fn update_pin_bubble_pause(park: Option<BubblePause>) {
-    if let Ok(mut pinned) = PINNED.lock() {
-        if let Some(pin) = pinned.as_mut() {
-            pin.bubble_pause = park;
-        }
-    }
+    with_pin(|pin| pin.bubble_pause = park);
 }
 
 /// Keep a pin's playback in step with its bubble: hold what is playing when the pin is collapsed
@@ -16650,31 +16599,22 @@ fn put_back_bubble_playback(
 /// (`compute_mouse_layout`).
 ///
 /// The bubble's own place is what is handed over as the pointer's — the hand that clicked it was
-/// there, and a bubble being clicked is a bubble nobody is pointing anywhere else — so what comes
-/// out is where a preview of this pin would have gone at that point: beside the hand rather than
-/// under it, in the best room the display has for it under `Follow Cursor`, and in the wider half of
-/// the display beside the pointer under `Best Position`.
+/// there — so what comes out is where a preview of this pin would have gone at that point.
 ///
 /// What is placed is the pin's *window* — the media box with the caption above it and the transport
-/// bar below — rather than the media alone, so the display's room has to hold the whole of it: a
-/// placement that keeps the picture inside the display but puts the caption over the top edge is a
-/// window whose close button cannot be reached.
+/// bar below — rather than the media alone, so the display's room has to hold the whole of it.
 ///
 /// A position mode decides *where* a window goes, so the box it keeps is the box it has: the
-/// placement is asked for the size the window already is (`PreviewScale::Percent(100)`), the media
-/// is not measured again the way a hover measures it — a pin is not a hover, and its frame was laid
-/// out for the box it is in — and a window the room has no space for at that size keeps its own size
-/// and is kept against the room's own edge rather than shrunk into a corner of it.
+/// placement is asked for the size the window already is, the media is not measured again the way a
+/// hover measures it, and a window the room has no space for keeps its own size against the room's
+/// edge rather than being shrunk into a corner of it.
 ///
 /// A pin collapsed while it was maximized is the one box that is not placed at all: it is a window
-/// the user has already settled where they want it — the room itself where nothing has been done to
-/// it since the maximize, and the place a carry has left it at where the hand has moved it (see
-/// `pin_restore_box`) — and placing it again would be the app moving a window the user put there. It
-/// goes back exactly as it went down, a maximized window being the one `pin.restore` is `Some` for.
+/// the user has already settled, and placing it again would be the app moving a window the user put
+/// there. It goes back exactly as it went down (see `pin_restore_box`).
 ///
-/// What a hover's placement steps around is the name the file is listed under (see `avoiding_text`);
-/// a bubble is on no name, so nothing is avoided here and the pointer's own standoff is the whole of
-/// the clearance between the hand and the window that opens beside it.
+/// A hover's placement steps around the name the file is listed under (see `avoiding_text`); a
+/// bubble is on no name, so the pointer's own standoff is the whole of the clearance.
 fn placed_pin_box(pin: &PinnedPreview) -> Option<ScreenRegion> {
     if pin.restore.is_some() {
         return None;
@@ -17047,24 +16987,17 @@ unsafe extern "system" fn pin_bubble_proc(
 /// its own messages therefore spends the drag correcting its own movement, which is what a hand on
 /// it reads as a bubble stuttering, overshooting and shaking rather than sitting under the cursor.
 ///
-/// The pointer is the one thing in this that the drag cannot move, so it is the one thing the box
-/// is taken from: the cursor is read fresh on every message (`cursor_screen_point`, the same source
-/// the pinned window's own drag measures from) and the window is put at it less the offset the press
-/// took hold of the bubble by — a subtraction and a `SetWindowPos`, which is the whole of a move's
-/// work. Nothing of the last message, and nothing of the window's own coordinates, reaches the box,
-/// so a message that arrives late, twice, or not at all cannot put the window anywhere but under the
-/// hand that is holding it.
+/// The cursor is read fresh on every message and the window is put at it less the offset the press
+/// took hold of the bubble by. Nothing of the last message, and nothing of the window's own
+/// coordinates, reaches the box, so a message that arrives late, twice, or not at all cannot put
+/// the window anywhere but under the hand that is holding it.
 ///
 /// That offset is the one thing a *placing* drag cannot do without: a bubble whose middle was put
-/// under the pointer would leap on the first move by however far from its middle the press landed —
-/// most of the radius, from a hand that took hold of the edge of it — and a window that jumps the
-/// moment it is picked up reads as having been dropped rather than grabbed. It is measured once, at
-/// the press, and held for the whole drag.
+/// under the pointer would leap on the first move, and a window that jumps the moment it is picked
+/// up reads as having been dropped rather than grabbed. It is measured once, at the press.
 ///
-/// A press that has not yet moved past the slop a click is told from a drag by places nothing: a
-/// click on the bubble is a click, however much the mouse shivers while it is being made. Where the
-/// bubble is left is nothing a later collapse asks about — every collapse puts its bubble back on
-/// the button it came from (see `show_pin_bubble`).
+/// A press that has not yet moved past the slop places nothing: a click on the bubble is a click,
+/// however much the mouse shivers while it is being made.
 unsafe fn drag_pin_bubble(hwnd: HWND) {
     let Ok(drag) = PIN_BUBBLE_DRAG.lock() else {
         return;
@@ -17537,22 +17470,20 @@ unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
 
 /// The popup a pin's volume button opens, as the pointer's questions about it need it: where it
 /// is, or nothing when it is not up.
+///
+/// The popup hangs off the transport bar, so its room is what is above the bar rather than the
+/// whole window: the width and the strip height are the bar's own (see
+/// `pinned_transport_geometry`).
 fn pinned_volume_geometry() -> Option<pin_chrome::VolumePopup> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
-    if pin.collapsed || !pin.transport_bar || !pin.volume.open {
-        return None;
-    }
+    let bar = pinned_transport_geometry()?;
 
-    let (width, height) = pin.window_size();
-    let strip = pinned_transport_height(pin.dpi, true);
-
-    Some(pin_chrome::volume_popup_layout(
-        width,
-        (height - strip).max(0),
-        strip,
-        pin.dpi,
-    ))
+    PINNED
+        .lock()
+        .ok()?
+        .as_ref()?
+        .volume
+        .open
+        .then(|| pin_chrome::volume_popup_layout(bar.width, bar.top.max(0), bar.height, bar.dpi))
 }
 
 /// Whether the popup's knob is being held.
@@ -17602,7 +17533,7 @@ unsafe fn pinned_volume_press(hwnd: HWND, x: i32, y: i32) -> bool {
     }
 
     let _ = SetCapture(hwnd);
-    update_pin_volume(|volume| volume.dragging = true);
+    with_pin(|pin| pin.volume.dragging = true);
     set_pin_volume((pin_chrome::volume_share_at(y, popup.track) * 100.0).round() as u32);
     render_layered_preview(hwnd);
     true
@@ -17953,23 +17884,18 @@ unsafe fn pinned_set_cursor(hwnd: HWND) -> bool {
 /// It is a transition and not a state, and the latch is what makes it one: the press that is
 /// answered sets it, a button that is not down clears it, and a hand held down on the band is
 /// one drag rather than one per tick. The drag it begins takes the pointer for the pin (`SetCapture`
-/// in `begin_pin_drag`), so the moves and the release that follow are this window's whatever they
-/// are over, and the rest of the drag is the one `pinned_mouse_move` and `pinned_release` carry.
+/// in `begin_pin_drag`), so the rest of it is the one `pinned_mouse_move` and `pinned_release` carry.
 ///
-/// Three kinds of press are deliberately left where they landed. A document that *runs* is a page
-/// the user is working in rather than a picture of one, and its own rectangle is where its own
-/// clicks belong, which is what `page_runs` tells the two apart by. A press with no pin up, or on
-/// a pin that is down to its bubble, is not on this window at all. And a press that did not reach
-/// the engine's window — one on the caption, on the opaque parts of the pin, or on whatever the
-/// pin is standing over — has already come to this window or to another one, and is that window's
-/// to answer.
+/// Three kinds of press are deliberately left where they landed: a document that *runs*, whose own
+/// rectangle is where its own clicks belong (see `page_runs`); a press with no pin up or on one down
+/// to its bubble, which is not on this window at all; and a press that did not reach the engine's
+/// window, which has already come to some window's to answer.
 ///
 /// The press is recognised by the count the Explorer hook publishes having moved rather than by
-/// the button being down, and the difference is a click this poll can be too slow to see: a
-/// press and a release inside the gap between two ticks of this loop leaves the button up on
-/// both of them, so a latch on the level alone never opens and the drag it means never begins.
-/// The count cannot be missed that way, and the button's own state is still what says the hand
-/// is on it now (see `pin_media_press_count`).
+/// the button being down: a press and a release inside the gap between two ticks leaves the button
+/// up on both of them, so a latch on the level alone never opens. The count cannot be missed that
+/// way, and the button's own state is still what says the hand is on it now (see
+/// `pin_media_press_count`).
 unsafe fn settle_pinned_engine_press(hwnd: HWND, seen_presses: &mut u64) {
     let presses = pin_media_press_count();
 
@@ -18049,20 +17975,12 @@ fn engine_window_is_at(x: i32, y: i32) -> bool {
 
 /// Whether the left button is down, as the Explorer hook published it.
 ///
-/// Read from what the hook published rather than from the system, and the reason is the press
-/// bit rather than the key.
-///
 /// `GetAsyncKeyState`'s low-order bit — the one that says a key has been pressed since the
-/// previous call — is *spent* by any call for that key, whichever thread makes it and whichever
-/// bit the caller goes on to read. Asking for it here therefore took the click out from under
-/// the Explorer hook, which is what tells `Pin Mode → Update Preview` that the user picked a
-/// file: the two loops poll at different rates on different threads, so a click was answered
-/// by whichever read it first, and roughly half of them were answered here, on a pin, where
-/// the listing behind it never heard of them. The hook reads the buttons once per tick and
-/// publishes the left button's state; this is that state, and it costs nothing to read.
-///
-/// The state rather than the press is what was wanted here anyway: what this answers is whether
-/// the button is *down* right now (see `settle_pinned_engine_press`).
+/// previous call — is *spent* by any call for that key, whichever thread makes it. Asking for it
+/// here therefore took the click out from under the Explorer hook, which is what tells
+/// `Pin Mode → Update Preview` that the user picked a file: the two loops poll at different rates
+/// on different threads, so a click was answered by whichever read it first. The hook reads the
+/// buttons once per tick and publishes the left button's state; this is that state.
 fn left_button_down() -> bool {
     PIN_MEDIA_LEFT_DOWN.load(Ordering::Acquire)
 }
@@ -18158,25 +18076,17 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
 
 /// Carry on, and let go of, a drag whose press this window was never given.
 ///
-/// The whole of this is that a drag begun from the hook's published press count cannot be ended
-/// by a message, and there is nothing else to end it with. `settle_pinned_engine_press` reads a
-/// press rather than being given one, because the engine's window — a window of its own, over
-/// this one, on a thread of its own — is what a press over a drawing is delivered to; the release
-/// of that press is that window's to answer in the same way, and nothing promises it is ever
-/// delivered here. Asking for the pointer back (`SetCapture` in `begin_pin_drag`) is a race the
-/// engine's side usually wins, and whether it wins decides nothing about the release: a window
-/// that holds the pointer and is not sent the moves and the release is a window in a modal loop
-/// somebody else is running, and it is in one whether the race was won or not.
+/// A drag begun from the hook's published press count cannot be ended by a message, and there is
+/// nothing else to end it with: the engine's window is what a press over a drawing is delivered
+/// to, and nothing promises the release is ever delivered here.
 ///
 /// So the end is read from the same place the beginning was, and the button's published state is
-/// a level rather than a transition: it cannot be missed the way a message can, and it is being
-/// looked at anyway. The drag is carried on while the button is down — from the pointer's
-/// position rather than from a move message, for the same reason the press was read rather than
-/// received, and because `GetCursorPos` is not subject to whatever is holding the pointer — and
-/// is let go of on the first tick the button is up.
+/// a level rather than a transition: it cannot be missed the way a message can. The drag is carried
+/// on while the button is down — from the pointer's position rather than from a move message, and
+/// because `GetCursorPos` is not subject to whatever is holding the pointer.
 ///
-/// A drag this window *was* given its release for is left alone: it ends in `pinned_release`,
-/// from the message, and its capture is this window's own to hold until that message arrives.
+/// A drag this window *was* given its release for is left alone: it ends in `pinned_release`, and
+/// its capture is this window's own to hold until that message arrives.
 unsafe fn settle_pinned_engine_drag(hwnd: HWND) {
     let Some(drag) = PINNED
         .lock()
@@ -18202,22 +18112,24 @@ unsafe fn settle_pinned_engine_drag(hwnd: HWND) {
 /// begun off the hook's press count, whose end is the same reading and not a `WM_LBUTTONUP` that
 /// is not promised to arrive (see `settle_pinned_engine_drag`).
 fn pin_drag_is_carried() -> bool {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().and_then(|pin| pin.dragging))
-        .is_some_and(|drag| !drag.delivered)
+    carried_drag().is_some_and(|drag| !drag.delivered)
 }
 
 /// The place a carried drag has last put its window, which is the pointer's position when it did
 /// and is how a pass is told from one that has moved anything.
 fn pin_drag_carried_to() -> (i32, i32) {
+    carried_drag()
+        .map(|drag| drag.carried)
+        .unwrap_or((i32::MIN, i32::MIN))
+}
+
+/// The drag of a pinned drawing the loop is carrying, read in one look: what a pass needs both
+/// the liveness and the last place from, so the two are not read under the lock separately.
+fn carried_drag() -> Option<PinDrag> {
     PINNED
         .lock()
         .ok()
         .and_then(|pinned| pinned.as_ref().and_then(|pin| pin.dragging))
-        .map(|drag| drag.carried)
-        .unwrap_or((i32::MIN, i32::MIN))
 }
 
 /// Follow a drag of a pinned drawing for as long as the hand is going.
@@ -18233,17 +18145,12 @@ fn pin_drag_carried_to() -> (i32, i32) {
 /// being thrown after the pointer rather than carried by it.
 ///
 /// So while a hand is going, the loop does not wait at all. It puts the window where the pointer
-/// is, gives the window procedure its turn, and asks again — which is the whole of what a window
-/// being carried is, at the pointer's rate instead of the clock's. A pass costs a `GetCursorPos`
-/// and a comparison when the pointer has not shifted (`apply_pin_drag` answers a pointer that has
-/// not moved with nothing at all), so following costs what following costs and no more.
+/// is, gives the window procedure its turn, and asks again. A pass costs a `GetCursorPos` and a
+/// comparison when the pointer has not shifted, so following costs what following costs.
 ///
-/// Two things bound it, and both are about not being a thread that never gives the tick back. A
-/// hand that stops moving is handed back to the loop's own wait, because a drag sitting still has
-/// nothing to spend a frame rate on — but only once it has sat still for a while, so that a hand
-/// pausing between movements is not read as one that has stopped. And every pass notes the loop
-/// alive, which it is: a window being carried is a loop that is turning, and the watchdog is
-/// entitled to know so (see `note_pin_alive`).
+/// Two things bound it, both about not being a thread that never gives the tick back: a hand that
+/// stops moving is handed back to the loop's own wait, but only once it has sat still for a while,
+/// and every pass notes the loop alive (see `note_pin_alive`).
 unsafe fn carry_pin_drag_with_the_hand(hwnd: HWND) {
     let mut moved_at = Instant::now();
 
@@ -18656,22 +18563,7 @@ fn resize_pinned_content(
     )
 }
 
-/// A file's path in the spelling the Shell will take.
-///
-/// The path the pin holds is the verbatim `\\?\` form, which is not a legal thing to hand a
-/// Shell call: a file named in that form is a file it cannot find, and both buttons that hand
-/// a file away would do nothing at all. So the prefix is taken off first — the same adjustment
-/// the browser and the Office engine make before they point anything at a file (see `plain_path`
-/// in `shell::pin_navigation`, which is the other end of the same question).
-fn plain_path(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    match text.strip_prefix(r"\\?\UNC\") {
-        Some(rest) => format!(r"\\{rest}"),
-        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_string(),
-    }
-}
-
-/// Hand a file to whatever the machine has filed it under — the program the user chose for
+/// Hand a file to whatever the machine has filed it under - the program the user chose for
 /// this kind of file, or the one Windows picked — which is the one way out of a pin into the
 /// program that owns the format. A pin shows a file rather than opening it, so this is the
 /// only button that gives it away.
@@ -19018,18 +18910,12 @@ unsafe fn finish_pin_drag(hwnd: HWND) -> bool {
 /// Wait for a preview message or for window input, whichever comes first.
 ///
 /// This is what makes a pinned window follow the hand at the pointer's own
-/// pace rather than at the pace of the repaint: the old `recv_timeout` wait
-/// held the thread without pumping its message queue, so `WM_MOUSEMOVE`
-/// messages queued for the whole `STATIC_PIN_WAIT_MS` (50 ms, ~20 Hz) and a
-/// drag was drained in batches once a tick. Waiting on the queue instead wakes
-/// the moment the pointer moves, and the move is dispatched on the next trip
-/// round the loop — the same way a native window moves — while costing nothing
-/// extra when idle: with no input the wait still runs its full `wait_ms`.
+/// pace rather than at the pace of the repaint: waiting on the message queue instead of on the
+/// channel wakes the moment the pointer moves, and costs nothing extra when idle.
 ///
-/// The channel itself is polled in short slices rather than blocked on, so a
-/// message sent while the wait runs lands within a slice rather than on the
-/// next tick. A slice is one kernel wait plus one non-blocking channel poll —
-/// no spinning — and input still wakes the current slice at once.
+/// The channel is polled in short slices rather than blocked on, so a message sent while the wait
+/// runs lands within a slice rather than on the next tick. A slice is one kernel wait plus one
+/// non-blocking channel poll — no spinning — and input still wakes the current slice at once.
 fn wait_preview_channel(rx: &Receiver<PreviewMessage>, wait_ms: u64) -> Option<PreviewMessage> {
     // A message sent just before the wait is answered without waiting at all.
     if let Ok(message) = rx.try_recv() {
@@ -19042,12 +18928,8 @@ fn wait_preview_channel(rx: &Receiver<PreviewMessage>, wait_ms: u64) -> Option<P
     while remaining > 0 {
         let slice = remaining.min(SLICE_MS);
         unsafe {
-            let _ = MsgWaitForMultipleObjectsEx(
-                None,
-                slice as u32,
-                QS_ALLINPUT,
-                MWMO_INPUTAVAILABLE,
-            );
+            let _ =
+                MsgWaitForMultipleObjectsEx(None, slice as u32, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
         // Woken by input, by the timeout, or — within a slice — by nothing at
         // all: either way the channel is only ever polled, never blocked on,
@@ -19152,33 +19034,28 @@ pub fn run_preview_window() {
         // sound FFmpeg plays is measured from the first, and the second is the cadence its card
         // is drawn at (see `audio_clock` and `AUDIO_CARD_REPAINT`).
         let mut audio_started: Option<Instant> = None;
-        // The second of the file the sound on screen was started at, which is nothing for one
-        // that started at its beginning: what a card's clock is measured from where the player
-        // reports no clock of its own (see `audio_clock`).
+        // The second of the file the sound was started at, and nothing for one started at its
+        // beginning: what a card's clock is measured from where the player reports none.
         let mut audio_start_offset = 0.0f64;
-        // The second of the file a key in a pinned window has held a sound at, which is what its
-        // card is drawn at while it is held: a player of this app's is ended to pause one, and
-        // the card is left standing on the second it stopped at rather than with no clock at all
-        // (see `toggle_pinned_audio` and `audio_clock`).
+        // The second a key in a pinned window has held a sound at, which is what its card is
+        // drawn at while held: the player is ended to pause one, so the card is left standing on
+        // the second it stopped at (see `toggle_pinned_audio`).
         let mut audio_paused: Option<f64> = None;
         // A `Volume → Audio Seek` of `Middle` or `Random` asked of a file whose length nothing
-        // had read yet, which is the one start position that cannot be worked out where the
-        // sound is started: a share of a length is asked for again the moment a player reports
-        // one (see the tick below), and this is the ask, held until then.
+        // had read yet — the one start position that cannot be worked out where the sound is
+        // started. Asked again the moment a player reports a length (see the tick below).
         let mut audio_share_seek: Option<AudioSeek> = None;
         let mut audio_repaint_at = Instant::now();
-        // The name of the sound on screen, scrolled sideways while the card has no room for it:
-        // the scroll is put up with the card it belongs to and advanced by the repaints below,
-        // so a hover that changes begins at the beginning again (see `audio_preview::NameScroll`).
+        // The name on screen, scrolled sideways while the card has no room for it, put up with
+        // the card it belongs to so a hover that changes begins at the beginning again.
         let mut audio_name_scroll: Option<audio_preview::NameScroll> = None;
-        // The hover the preview on screen came from, so a theme or Markdown
-        // switch can rebuild it without waiting for the next hover.
+        // The hover the preview came from, so a theme or Markdown switch can rebuild it without
+        // waiting for the next hover.
         let mut current_show: Option<PreviewMessage> = None;
-        // Track video position/size for periodic topmost re-assertion
+        // Video position/size, for the periodic topmost re-assertion.
         let mut video_pos: (i32, i32, i32, i32) = (0, 0, 0, 0); // (x, y, w, h)
         let mut last_topmost_check = Instant::now();
-        // When the pinned window's transport bar was last painted: its playhead moves on its own,
-        // so the window is painted again at a clock's pace while one is on screen.
+        // When the transport bar was last painted: its playhead moves on its own.
         let mut last_pin_repaint = Instant::now();
 
         // Background loading support
@@ -19591,12 +19468,12 @@ pub fn run_preview_window() {
                 // the arc rides along on that paint; one without has nothing else to repaint
                 // for, and this is what a load that outlives the delay is answered with
                 // rather than a window frozen for the length of the read (see `PinLoad`).
-                if let Some(load) = pin_load.as_mut().filter(|load| load.due()) {
+                if let Some(load) = pin_load.as_mut().filter(|load| load.arc.due()) {
                     // The arc is published as the wait comes due rather than as it starts, so
                     // a load that answers inside the delay never shows one — which is the
                     // whole of what the delay is for.
-                    pin_arc_set(Some(load.started.elapsed()));
-                    load.spun();
+                    pin_arc_set(Some(load.arc.started.elapsed()));
+                    load.arc.spun();
 
                     // The paint just happened, so the bar's own clock starts again here: a
                     // window with a transport bar would otherwise be painted twice within a
@@ -26792,12 +26669,18 @@ mod tests {
         let (started, from, held) = pinned_audio_after_seek(true, true, 90.0);
         assert!(started.is_some(), "a player came up for the second named");
         assert_eq!(from, 90.0, "and the card's clock is counted from it");
-        assert_eq!(held, None, "while a sound that is playing is not left recorded as held");
+        assert_eq!(
+            held, None,
+            "while a sound that is playing is not left recorded as held"
+        );
 
         // So the next press is a second seek rather than a hold being moved, and the sound goes on
         // being played while the card follows it to the new second.
         let (started, from, held) = pinned_audio_after_seek(held.is_none(), true, 30.0);
-        assert!(started.is_some(), "and it is a real seek, with a player of its own");
+        assert!(
+            started.is_some(),
+            "and it is a real seek, with a player of its own"
+        );
         assert_eq!(from, 30.0, "begun at the second the hand named");
         assert_eq!(held, None, "and still nothing held over it");
 
@@ -27334,19 +27217,24 @@ mod tests {
         let said = now + PIN_TOOLTIP_DELAY;
         assert!(pin.tooltip.refresh(pin.hovered, said));
         assert_eq!(pin.tooltip.shown, Some(pin_chrome::CaptionButton::OpenWith));
-        assert!(!pin.tooltip.refresh(pin.hovered, said + Duration::from_secs(1)));
+        assert!(!pin
+            .tooltip
+            .refresh(pin.hovered, said + Duration::from_secs(1)));
 
         // Moving on puts it away at once rather than waiting out the delay a second time, and
         // a different button starts its own wait from scratch.
         pin.hovered = Some(pin_chrome::CaptionButton::OpenWithList);
-        assert!(pin.tooltip.refresh(pin.hovered, said + Duration::from_secs(1)));
+        assert!(pin
+            .tooltip
+            .refresh(pin.hovered, said + Duration::from_secs(1)));
         assert_eq!(pin.tooltip.shown, None);
         assert!(!pin
             .tooltip
             .refresh(pin.hovered, said + Duration::from_millis(1)));
-        assert!(pin
-            .tooltip
-            .refresh(pin.hovered, said + Duration::from_secs(1) + PIN_TOOLTIP_DELAY));
+        assert!(pin.tooltip.refresh(
+            pin.hovered,
+            said + Duration::from_secs(1) + PIN_TOOLTIP_DELAY
+        ));
         assert_eq!(
             pin.tooltip.shown,
             Some(pin_chrome::CaptionButton::OpenWithList)
@@ -27393,17 +27281,16 @@ mod tests {
             // actually carries it, because the question a name is asked on is the same one for
             // both and it is about where the pointer is.
             let window = pin.window_box();
-            let on_the_caption =
-                Some((window.0 + 300, window.1 + pinned_caption_height(pin.dpi) / 2));
+            let on_the_caption = Some((
+                window.0 + 300,
+                window.1 + pinned_caption_height(pin.dpi) / 2,
+            ));
 
             // The first tick also settles the chrome itself, which is a repaint of its own; the
             // name is measured from where the pointer was noticed, so it is asked about on the
             // next one rather than this.
             let _ = refresh_pin_chrome(&mut pin, now, on_the_caption);
-            assert_eq!(
-                pin.tooltip.shown, None,
-                "{name}: arriving is not saying"
-            );
+            assert_eq!(pin.tooltip.shown, None, "{name}: arriving is not saying");
 
             // And once the wait is over, the name is written on both kinds alike.
             let said_at = now + PIN_TOOLTIP_DELAY;
@@ -29240,15 +29127,7 @@ mod tests {
         assert!(!pin_transport_kind(None));
     }
 
-    /// What this guards: asking whether the player behind a pinned preview is still alive walks
-    /// the media to reach it, so the media must not be held while the walk is made. Held, it is a
-    /// lock the asking thread already owns — not a wait but a stop, and it is exactly what a
-    /// pinned video and a pinned sound used to do on this app's own loop: the preview froze where
-    /// it stood, the pinned window stayed on the screen answering nothing, and the only way out
-    /// of it was to end the process.
-    ///
-    /// The ask is made on a thread of its own so that a hang is a *reported* failure rather than a
-    /// test run that never comes back.
+    /// asking whether the player behind a pinned preview is still alive walks /// the media to reach it, so the media must not be held while the walk is made.
     #[test]
     fn asking_after_a_pinned_players_liveness_does_not_stall_on_the_media_it_asks_about() {
         let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
@@ -29275,12 +29154,7 @@ mod tests {
         }
     }
 
-    /// What this guards: a pin shown a document the browser has to *start* for. `showing_hwnd` is
-    /// zero until the host is up, so a liveness read off the window alone takes the browser's first
-    /// document of a run — every one it is not already warm for — as a pin that came apart, and
-    /// takes the pin down with it: the window closed before the drawing it was asked for appeared.
-    /// What the question is asked of is the engine standing behind the file, which is the document
-    /// owed and no window yet (see `pin_media_is_alive` and `webview_preview::is_behind`).
+    /// a pin shown a document the browser has to *start* for.
     #[test]
     fn an_engine_coming_up_for_a_pinned_document_is_not_a_pin_that_came_apart() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
@@ -29331,11 +29205,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
     }
 
-    /// What this guards: a pin collapsed into its bubble whose player this app has parked, which
-    /// is a player that is deliberately not running. The liveness of the thing a pin is a window
-    /// onto is answered about a *process* for the two kinds FFmpeg's player serves, so a park not
-    /// told apart from a player that came apart would take the pin down the moment it was
-    /// minimized — the bubble the pause exists for, gone with the film it was holding.
+    /// a pin collapsed into its bubble whose player this app has parked, which /// is a player that is deliberately not running.
     #[test]
     fn a_player_the_bubble_parked_is_not_a_pin_that_came_apart() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
@@ -29373,15 +29243,7 @@ mod tests {
         }
     }
 
-    /// What this guards: a pinned window playing a sound, whose player plays the pass it was
-    /// given and stops at the end of it.
-    ///
-    /// A player between passes is what `wrap_audio_player` exists to answer — the tick finds the
-    /// player gone, reads the stop as the end of the file, and starts the whole file again. The
-    /// pin's liveness question ran *before* that tick, and read the same dead player as a pin
-    /// onto nothing: every pinned sound closed its window at the end of each pass, which read
-    /// as a sound that stopped rather than looped. The card is this app's own text, so the pin
-    /// is a window onto a card whatever the player behind it is doing (see `pin_media_is_alive`).
+    /// a pinned window playing a sound, whose player plays the pass it was /// given and stops at the end of it.
     #[test]
     fn a_pinned_sound_is_not_a_pin_that_came_apart_between_passes() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
@@ -29462,14 +29324,7 @@ mod tests {
         }
     }
 
-    /// What this guards: a walk bounded by the list it came from, standing on the file it last
-    /// landed on.
-    ///
-    /// The bound is the whole of what makes stepping over a file safe: a walk that is not
-    /// bounded is a walk that goes for ever over a folder of files this app cannot read. The
-    /// base is the same fact read the other way — a walk that steps from the file the pin is
-    /// still showing steps straight back onto the file it just failed on, and that is the
-    /// navigation stopping one file further along rather than not at all.
+    /// a walk bounded by the list it came from, standing on the file it last /// landed on.
     #[test]
     fn a_walk_offers_every_other_file_of_the_folder_once_and_then_ends() {
         let _every_file = WalkEveryFile::set();
@@ -29517,13 +29372,7 @@ mod tests {
         );
     }
 
-    /// What this guards: a file the pin cannot be shown is not where a walk stops, and the walk
-    /// comes back rather than being spent.
-    ///
-    /// It has to come back where the loop holds it, because the file after this one is picked
-    /// up on a tick of its own: a walk spent on the first file it could not show is a walk of
-    /// one, and the navigation stops on a corrupted file with the button still pressed (see
-    /// `step_pin_over`).
+    /// a file the pin cannot be shown is not where a walk stops, and the walk /// comes back rather than being spent.
     #[test]
     fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
         let _every_file = WalkEveryFile::set();
@@ -29557,14 +29406,7 @@ mod tests {
         );
     }
 
-    /// What this guards: the arc a pinned window waits with, and when it is put up.
-    ///
-    /// The delay is the point: a file that loads inside `spinner_delay_ms` goes from the file
-    /// the pin was showing straight to the new one, and one that does not is a wait the user
-    /// can see — the answer to a slow load being a window frozen for the length of it, which
-    /// is what the pin did before the load was given a thread of its own. The turn is a
-    /// cadence away from the last one rather than due on the next tick, which is what keeps a
-    /// long wait from repainting the window as fast as the loop runs.
+    /// the arc a pinned window waits with, and when it is put up.
     #[test]
     fn a_pin_wait_puts_its_arc_up_only_once_it_has_outlasted_the_delay() {
         let mut load = PinLoad {
@@ -29574,46 +29416,43 @@ mod tests {
                 dpi: 96,
                 volume: 50,
             },
-            started: Instant::now(),
-            spinner_delay: Duration::from_millis(DEFAULT_SPINNER_DELAY_MS),
-            turned: None,
+            arc: PinArc {
+                started: Instant::now(),
+                spinner_delay: Duration::from_millis(DEFAULT_SPINNER_DELAY_MS),
+                turned: None,
+            },
             answer: channel().1,
             walk: None,
         };
 
         assert!(
-            !load.due(),
+            !load.arc.due(),
             "a wait that has not run its delay shows no arc"
         );
 
-        load.started = Instant::now() - Duration::from_millis(DEFAULT_SPINNER_DELAY_MS + 1);
-        assert!(load.due(), "and a wait that has outlasted it shows one");
+        load.arc.started = Instant::now() - Duration::from_millis(DEFAULT_SPINNER_DELAY_MS + 1);
+        assert!(load.arc.due(), "and a wait that has outlasted it shows one");
 
-        load.spun();
+        load.arc.spun();
         assert!(
-            !load.due(),
+            !load.arc.due(),
             "the turn is a cadence away from the last one rather than due at once, so the \
              moment the delay runs out is one paint and not one paint a tick"
         );
         assert!(
-            load.turned.is_some(),
+            load.arc.turned.is_some(),
             "and a wait that has had its arc is a wait that does not ask for a second one"
         );
 
-        load.turned = Some(Instant::now() - Duration::from_millis(u64::from(SPINNER_TURN_MS) + 1));
+        load.arc.turned =
+            Some(Instant::now() - Duration::from_millis(u64::from(SPINNER_TURN_MS) + 1));
         assert!(
-            load.due(),
+            load.arc.due(),
             "until the spinner's own cadence has come round again"
         );
     }
 
-    /// What this guards: the wait a walk is asked under is painted on the pin's own terms —
-    /// nothing before the delay, then the arc at the spinner's cadence — because the folder
-    /// read is on a thread of its own now and a walk is only slow for the person looking at
-    /// it if they are told it is out.
-    ///
-    /// The same shape a load's wait has, deliberately: it is the same question to the user
-    /// (see `PinWait` and `PinLoad`).
+    /// the wait a walk is asked under is painted on the pin's own terms — /// nothing before the delay, then the arc at the spinner's cadence — because the folder /// read is on a thread of its own now and a walk is only slow f
     #[test]
     fn a_walk_wait_is_answered_on_the_same_terms_a_load_is() {
         let mut wait = PinWait {
@@ -29638,19 +29477,7 @@ mod tests {
         );
     }
 
-    /// What this guards: the floor an animation frame's own delay is lifted to, and which
-    /// frames it is lifted for.
-    ///
-    /// Sixty a second is a file's own timing, and a floor of thirty played every such
-    /// animation at half the speed it was authored at — the picture was right and the
-    /// timing was not, which is the kind of wrong nobody can say out loud. The floor is a
-    /// floor and not a pace: anything slower than it keeps the delay the file was given,
-    /// and only a file saying nothing at all is lifted, so a zero delay — a frame the
-    /// playhead would otherwise step through as fast as the message pump runs — is held
-    /// back to it.
-    ///
-    /// A wait's arc is deliberately not on this clock (see `SPINNER_TURN_MS`): an arc is a
-    /// mark rather than a picture, and the two are not to be moved together again.
+    /// the floor an animation frame's own delay is lifted to, and which /// frames it is lifted for.
     #[test]
     fn an_animation_floor_holds_back_nothing_a_file_itself_timed() {
         // A frame's delay as the APNG decoder hands it over: milliseconds, kept as the
@@ -29690,14 +29517,7 @@ mod tests {
         );
     }
 
-    /// What this guards: the walk a caption button asks for is asked of the planner, and the
-    /// planner answers with a walk that already holds the folder's list.
-    ///
-    /// The list being in the answer is the whole of what makes a walk cheap: `PinStep` steps
-    /// through what it was handed, so a second and third press down the same folder cost a
-    /// position in a vector rather than another `read_dir` on the thread that draws the pin's
-    /// caption. The bound is carried with it for the same reason — a walk that did not know
-    /// how many files it had left would go round the folder for ever.
+    /// the walk a caption button asks for is asked of the planner, and the /// planner answers with a walk that already holds the folder's list.
     #[test]
     fn a_walk_the_planner_answers_carries_the_list_it_walked() {
         let folder = walkable_folder("planner-walked");
@@ -29717,7 +29537,8 @@ mod tests {
             "the walk steps through the list it was handed, with no second read of the folder"
         );
         assert_eq!(
-            walk.from(), list[0],
+            walk.from(),
+            list[0],
             "and it still says which file it was asked from after it has moved on, which is \
              what a late answer is matched against"
         );
@@ -29732,13 +29553,7 @@ mod tests {
         );
     }
 
-    /// What this guards: the Shell is asked once per *format*, and a name with no extension
-    /// is keyed by itself rather than filed under no format at all.
-    ///
-    /// The second half is the one that bites: `Path::extension` reports none for `.gitignore`
-    /// — a leading dot begins a name rather than an extension — so keying on the extension
-    /// alone would put a dot-file in the same slot as every extensionless name beside it, and
-    /// one file's association would be drawn on another's hand-off button.
+    /// the Shell is asked once per *format*, and a name with no extension /// is keyed by itself rather than filed under no format at all.
     #[test]
     fn the_shell_is_asked_once_per_format_and_a_dot_file_is_its_own() {
         assert_eq!(shell_format(Path::new("C:\\a\\b.PNG")), ".png");
@@ -29754,18 +29569,14 @@ mod tests {
         );
     }
 
-    /// What this guards: a walk is *always* answered, so a press that had nowhere to go ends
-    /// the wait at once rather than leaving the pin's arc turning out a bound.
-    ///
-    /// The three ways a walk can come back with nothing — a folder that cannot be read, a
-    /// folder whose only walkable file is the one the pin is showing, and a folder this build
-    /// can walk nothing in — are ordinary answers. A walk answered with nothing at all is
-    /// indistinguishable from a planner that has stopped answering, and only the give-up
-    /// would end it: a 15-second spinner for a press that had nothing to step to.
+    /// a walk is *always* answered, so a press that had nowhere to go ends /// the wait at once rather than leaving the pin's arc turning out a bound.
     #[test]
     fn a_walk_with_nowhere_to_go_is_answered_rather_than_left_outstanding() {
         let _every_file = WalkEveryFile::set();
-        let config = CONFIG.lock().expect("the configuration is not poisoned").clone();
+        let config = CONFIG
+            .lock()
+            .expect("the configuration is not poisoned")
+            .clone();
 
         // The case the planner most often finds, and the least dramatic: a folder holding
         // nothing but the file the pin is standing on. `walkable_folder` makes three, so
@@ -29788,7 +29599,11 @@ mod tests {
             "and a walk with nothing to step to is a spent one, which is how the loop is told \
              the press is over rather than still out"
         );
-        assert_eq!(walk.at, folder.join("a.png"), "standing on the file it was asked from");
+        assert_eq!(
+            walk.at,
+            folder.join("a.png"),
+            "standing on the file it was asked from"
+        );
         let _ = std::fs::remove_dir_all(&folder);
 
         // And a folder this build cannot read at all is the same answer rather than silence.
@@ -29807,10 +29622,7 @@ mod tests {
         );
     }
 
-    /// What this guards: the arc is put over a band that is already there, in the middle of it,
-    /// and nowhere else — a band cleared for a spinner would be a window with nothing in it for
-    /// the length of a decode, which is the freeze the arc is here to answer (see
-    /// `paint_pin_spinner`).
+    /// the arc is put over a band that is already there, in the middle of it, /// and nowhere else — a band cleared for a spinner would be a window with nothing in it for /// the length of a decode, which is the freeze the arc
     #[test]
     fn the_pin_arc_leaves_the_band_it_is_drawn_over_except_where_it_is() {
         let (width, height) = (240u32, 200u32);
@@ -29895,16 +29707,7 @@ mod tests {
         );
     }
 
-    /// What this guards: a pinned video laid out again for the box its window was dragged to, which
-    /// is where a resize used to flash a sheared picture for the moment before the engine handed
-    /// the next frame over.
-    ///
-    /// A frame is a buffer of pixels *and* the size they were written at, and the composition reads
-    /// it at that size: a frame redeclared to be the size of the new box with the pixels of the old
-    /// one still in it is a picture sheared a row at a time — the diagonal striping a hand letting
-    /// go of an edge used to see. What the relayout owes the frame is the new box for the *window*;
-    /// the frame that fills it is the engine's next one, and until it lands the band is filled by
-    /// the frame that is there, scaled (see `relayout_pinned_media` and `compose_media_into_band`).
+    /// a pinned video laid out again for the box its window was dragged to, which /// is where a resize used to flash a sheared picture for the moment before the engine handed /// the next frame over.
     #[test]
     fn a_resized_pinned_video_keeps_the_frame_its_pixels_are() {
         let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
@@ -29944,11 +29747,7 @@ mod tests {
         }
     }
 
-    /// What this guards: a seek made while a pinned video is paused. A paused file is drawn at the
-    /// second it was stopped at rather than at the engine's own position (see `pin_playhead`), so a
-    /// seek that moves the engine and leaves that second where it was is a bar that springs back to
-    /// where the pause began the moment the hand lets go of it — the file seeked, and the bar
-    /// saying otherwise.
+    /// a seek made while a pinned video is paused.
     #[test]
     fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());

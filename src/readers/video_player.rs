@@ -17,21 +17,14 @@
 //! which is what it is by default when no playback window is named, and then
 //!
 //!   * it decodes, paces itself, plays the audio and loops — none of which this app does;
-//!   * this side asks, once a tick, whether a frame is due (`OnVideoStreamTick`) and takes
-//!     it (`TransferVideoFrame`) into a bitmap of its own, from the crop the probe settled on
-//!     where it settled on one (see [`Crop`]) — the region FFmpeg's player is told to draw
-//!     with its own `crop` filter, and the shape the box is placed at, so that the picture
-//!     fills it rather than being letterboxed inside it.
+//!   * this side asks, once a tick, whether a frame is due (`OnVideoStreamTick`) and takes it
+//!     (`TransferVideoFrame`) into a bitmap of its own, from the crop the probe settled on
+//!     where it settled on one (see [`Crop`]).
 //!
-//! Who *scales* the picture is the one thing here that depends on the size it is drawn at. A box
-//! larger than the picture — a video shown above 100%, or a pinned window dragged or maximized
-//! past the size the file has — is asked of the engine at the picture's own size and scaled by
-//! this side ([`scale_rows`]), because the engine's scaling is a fixed thing: which filter it
-//! reads a picture at is not a question this app can ask it, let alone choose, and what it left
-//! above 100% was the stair-stepping no linear read of the same source has. A box that is not
-//! larger is handed to the engine to scale into, as it always was — a scale *down* is the one
-//! direction this side has nothing to add to, and what the choice is made of is written where it
-//! is made (see [`play`]).
+//! Who *scales* the picture is settled by the two sizes alone: a box larger than the picture is
+//! one this side scales into it ([`scale_rows`]), because which filter the engine reads a
+//! picture at is not a question this app can ask it, let alone choose. What each side of that
+//! choice costs is written where it is made (see [`play`]).
 //!
 //! What that buys over the ffplay path is the whole of the window machinery a player's
 //! own window needs — the style monitor, the topmost re-assertion, the PID record, the
@@ -53,6 +46,7 @@
 
 use crate::formats::codecs;
 use crate::formats::head;
+use crate::paths::plain_path;
 use crate::readers::audio_track;
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
@@ -62,27 +56,27 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use windows::core::{implement, GUID, IUnknown, Interface, BSTR, PCWSTR};
+use windows::core::{implement, IUnknown, Interface, BSTR, GUID, PCWSTR};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Imaging::{
-    GUID_WICPixelFormat32bppBGRA, IWICBitmap, WICBitmapCacheOnLoad, WICBitmapLockWrite,
+    GUID_WICPixelFormat32bppBGRA, IWICBitmap, IWICBitmapLock, WICBitmapCacheOnLoad,
+    WICBitmapLockWrite,
 };
 use windows::Win32::Media::MediaFoundation::{
     CLSID_MFMediaEngineClassFactory, IMFAttributes, IMFByteStream, IMFMediaEngine,
     IMFMediaEngineClassFactory, IMFMediaEngineEx, IMFMediaEngineNotify, IMFMediaEngineNotify_Impl,
-    IMFSourceReader,
-    MFAudioFormat_AAC, MFAudioFormat_ADTS, MFAudioFormat_ALAC, MFAudioFormat_AMR_NB,
-    MFAudioFormat_AMR_WB, MFAudioFormat_DTS, MFAudioFormat_Dolby_AC3, MFAudioFormat_Dolby_DDPlus,
-    MFAudioFormat_FLAC, MFAudioFormat_Float, MFAudioFormat_MP3, MFAudioFormat_Opus,
-    MFAudioFormat_PCM, MFAudioFormat_Vorbis, MFAudioFormat_WMAudioV8, MFAudioFormat_WMAudioV9,
-    MFAudioFormat_WMAudio_Lossless, MFCreateAttributes, MFCreateMFByteStreamOnStream,
-    MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Audio, MFMediaType_Video,
-    MFVideoFormat_ARGB32, MFVideoFormat_RGB32, MFVideoNormalizedRect,
-    MFARGB, MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_EVENT_ERROR,
-    MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA, MF_MEDIA_ENGINE_READY_HAVE_METADATA,
-    MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_AUDIO_NUM_CHANNELS,
-    MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
-    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_PD_DURATION,
+    IMFSourceReader, MFAudioFormat_AAC, MFAudioFormat_ADTS, MFAudioFormat_ALAC,
+    MFAudioFormat_AMR_NB, MFAudioFormat_AMR_WB, MFAudioFormat_DTS, MFAudioFormat_Dolby_AC3,
+    MFAudioFormat_Dolby_DDPlus, MFAudioFormat_FLAC, MFAudioFormat_Float, MFAudioFormat_MP3,
+    MFAudioFormat_Opus, MFAudioFormat_PCM, MFAudioFormat_Vorbis, MFAudioFormat_WMAudioV8,
+    MFAudioFormat_WMAudioV9, MFAudioFormat_WMAudio_Lossless, MFCreateAttributes,
+    MFCreateMFByteStreamOnStream, MFCreateMediaType, MFCreateSourceReaderFromByteStream,
+    MFMediaType_Audio, MFMediaType_Video, MFVideoFormat_ARGB32, MFVideoFormat_RGB32,
+    MFVideoNormalizedRect, MFARGB, MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK,
+    MF_MEDIA_ENGINE_EVENT_ERROR, MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA,
+    MF_MEDIA_ENGINE_READY_HAVE_METADATA, MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
+    MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE, MF_MT_FRAME_SIZE,
+    MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_PD_DURATION,
     MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
     MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE,
 };
@@ -163,57 +157,42 @@ thread_local! {
 /// surface is currently the size of.
 struct Session {
     engine: IMFMediaEngine,
-    /// The source the engine was handed. The engine holds it too; this is the handle it
-    /// was handed, kept until the video is over so that nothing it is still reading from
-    /// can go out of scope under it.
+    /// The stream the engine was handed, kept until the video is over so that nothing it is
+    /// still reading from can go out of scope under it.
     byte_stream: IMFByteStream,
-    /// Where a video's frames are delivered — and nothing at all for a sound, which has no
-    /// frames to deliver and no box to draw one in. A session without a surface is the whole
-    /// of what playing a sound costs this side.
+    /// Where a video's frames are delivered, and nothing at all for a sound — which has no
+    /// frames to deliver and no box to draw one in.
     bitmap: Option<IWICBitmap>,
-    /// The box the preview draws at: the size of the frame this side hands over, and the size the
-    /// engine is asked to deliver at only while it is the one scaling (see `scaled`).
+    /// The box the preview draws at: the size of the frame this side hands over, and the size
+    /// the engine is asked to deliver at only while it is the one scaling (see `scaled`).
     width: u32,
     height: u32,
-    /// The size the picture has in the file, which is what the engine is asked for where this side
-    /// scales it, and what the box sits above or below for the question of who scales. Nothing at
-    /// all for a sound, which has no picture to scale.
+    /// The size the picture has in the file, which is what the engine is asked for where this
+    /// side scales it.
     picture: (u32, u32),
     /// Whether this side scales the picture into the box rather than the engine: the two sizes
     /// above are what settles it, and what each of the two costs is written on [`play`].
     scaled: bool,
-    /// The two rows of the picture this side has already read across to the box's width, kept
-    /// between the rows of the box that are mixed from them, and empty while the engine is the one
-    /// scaling (see `scale_rows`).
+    /// The two rows of the picture already read across to the box's width, kept between the
+    /// rows of the box mixed from them, and empty while the engine is the one scaling.
     rows: [Vec<u8>; 2],
     /// Where in the frame the picture is taken from, where the probe settled on a crop: the
     /// rectangle the engine's frame transfer is asked for. The whole frame is `None`, which is
-    /// what a file the probe found no crop in is played with — and what every sound is.
+    /// a file the probe found no crop in and every sound.
     source: Option<MFVideoNormalizedRect>,
     path: PathBuf,
     failed: Arc<AtomicBool>,
-    /// Whether a frame of the file has been handed over at all.
-    ///
-    /// A session is not a promise that a picture will come of it: what the engine accepts and
-    /// then cannot draw is a file whose decoder and converter are there and whose *pipeline* is
-    /// not — an H.264 film in a chroma the hardware decoder has no mode for, which is a file
-    /// this engine is handed by a probe that asked a question it could answer and then fails at
-    /// playback. What tells that apart from a video that is merely slow to start is this: no
-    /// frame at all, some while after the session began (see [`failing_path`]).
+    /// Whether a frame of the file has been handed over at all: a session is not a promise that
+    /// a picture will come of it, since the engine accepts a file whose decoder and converter
+    /// are both there and whose *pipeline* is not (see [`failing_path`]).
     drew: bool,
-    /// Where the sound was asked to start, while the engine has not taken it there yet.
-    ///
-    /// A seek is made of a source the engine has read the header of, and the header is not
-    /// there the instant `Load` answers: a call made before it is one the engine refuses, or
-    /// takes and does nothing with. So the position is kept rather than made once and hoped
-    /// for, and the first tick that finds the engine loaded is the one that makes it — a tick
-    /// of a sound's own preview, which is a sixtieth of a second (see `apply_seek`). It is
-    /// nothing for a video, and nothing for a sound that starts at the beginning — which is
-    /// most of them.
+    /// Where the sound was asked to start, while the engine has not taken it there yet: `Load`
+    /// answers before the header is there, so the position is kept and made on the first tick
+    /// that finds the engine loaded (see `apply_seek`).
     pending_seek: Option<f64>,
-    /// When the session was started, which is what bounds the wait for a pending seek: an
-    /// engine that has not read the header of its file in this long is an engine that is not
-    /// going to, and a seek left standing is a seek made on every read of the clock after it.
+    /// When the session was started, which bounds the wait for a pending seek: an engine that
+    /// has not read the header of its file in this long is not going to, and a seek left
+    /// standing is a seek made on every read of the clock after it.
     began: Instant,
 }
 
@@ -242,17 +221,14 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
         unsafe { reader.GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, 0) }
             .ok()?;
 
-    // The frame's size and the shape of a pixel, both packed into one `UINT64` each: the
-    // width is the high half and the height the low one, and a pixel aspect ratio is a
-    // numerator over a denominator the same way.
     let frame = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE) }.ok()?;
-    let (frame_width, frame_height) = ((frame >> 32) as u32, frame as u32);
+    let (frame_width, frame_height) = unpack_pair(frame);
     if frame_width == 0 || frame_height == 0 {
         return None;
     }
 
     let aspect = unsafe { media_type.GetUINT64(&MF_MT_PIXEL_ASPECT_RATIO) }.unwrap_or(1 << 32);
-    let (aspect_width, aspect_height) = ((aspect >> 32) as u32, aspect as u32);
+    let (aspect_width, aspect_height) = unpack_pair(aspect);
 
     // A pixel that is not square makes the picture a different shape from its frame, and
     // which axis grows is whichever the ratio takes past one — a DVD's 720 x 480 is shown
@@ -643,12 +619,11 @@ pub fn duration() -> Option<f64> {
 /// a file to this engine rather than to FFmpeg's player.
 ///
 /// It is the question `audio_probe` asks about a sound, asked about a picture and the same way:
-/// the file is opened as a source reader, it has to hold a video stream at all, and then the
-/// reader is asked to produce *decoded* frames on that stream. What it is asked for is RGB32,
-/// which is the frame the rest of this app works in rather than the subtype any one codec
-/// delivers, so a yes is a decoder *and* a converter — which is what the engine needs before a
-/// frame can be handed over. A no here is a file FFmpeg's player takes, and the two engines
-/// between them are why a video is previewed at all on a machine that has only one of them.
+/// the file is opened as a source reader, it has to hold a video stream, and the reader is then
+/// asked to produce *decoded* RGB32 on it — a decoder *and* a converter, which is what the
+/// engine needs before a frame can be handed over. A no here is a file FFmpeg's player takes,
+/// and the two engines between them are why a video is previewed at all on a machine that has
+/// only one of them.
 ///
 /// What is deliberately not asked is whether the file would play *well*: a file this engine opens
 /// and then fails on is answered where every other failure about a preview is, and a probe that
@@ -664,15 +639,10 @@ pub fn can_play(path: &Path) -> bool {
 
     // The reader is asked for decoded frames in the format this app composes in, and that is a
     // question with two halves: a decoder for the stream, and something to turn what the decoder
-    // hands back into RGB32 — which in the ordinary case is NV12, and what turns NV12 into RGB32
-    // is the video processor MFT, inserted by the reader only where it has been told to insert it.
-    // Asking without this attribute asks whether the *decoder itself* delivers RGB32, which no
-    // H.264 decoder does and no film with one can answer yes to: every video of every kind is
-    // answered with no, and the file goes to FFmpeg's player for a reason that has nothing to do
-    // with the file. What the engine needs to play a video into a surface of its own is the same
-    // two things — decoder and converter — since frame-server mode is asked for ARGB32, so this
-    // stays the question `can_play` is documented to ask rather than being widened to "is there a
-    // decoder at all", which would answer yes for files the engine then cannot draw.
+    // hands back into RGB32. Asked without `MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING` it asks
+    // whether the *decoder itself* delivers RGB32, which no H.264 decoder does: every video of
+    // every kind would be answered no, and the file would go to FFmpeg's player for a reason
+    // that has nothing to do with the file.
     let mut attributes: Option<IMFAttributes> = None;
     if unsafe { MFCreateAttributes(&mut attributes, 1) }.is_err() {
         return false;
@@ -692,7 +662,8 @@ pub fn can_play(path: &Path) -> bool {
 
     // A file with no video stream at all — a sound, a container of something else — is not a
     // video, and there is nothing to be asked about it beyond that.
-    if unsafe { reader.GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, 0) }.is_err()
+    if unsafe { reader.GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, 0) }
+        .is_err()
     {
         return false;
     }
@@ -709,8 +680,10 @@ pub fn can_play(path: &Path) -> bool {
 
     // The decoder, asked for the only way that answers it: a stream the reader will hand back as
     // frames is a stream this machine has a decoder for.
-    unsafe { reader.SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, None, &frames) }
-        .is_ok()
+    unsafe {
+        reader.SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, None, &frames)
+    }
+    .is_ok()
 }
 
 /// What the engine said about a file, held by the path and the version of the file it was said
@@ -794,10 +767,8 @@ pub fn audio_probe(path: &Path) -> Option<audio_track::Track> {
     let pcm = unsafe { MFCreateMediaType() }.ok()?;
     unsafe { pcm.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio) }.ok()?;
     unsafe { pcm.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM) }.ok()?;
-    unsafe {
-        reader.SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, None, &pcm)
-    }
-    .ok()?;
+    unsafe { reader.SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, None, &pcm) }
+        .ok()?;
 
     Some(audio_track::Track {
         player: audio_track::Player::Native,
@@ -968,24 +939,14 @@ impl Session {
 
         // The file is handed over as a stream rather than as a URL, for the reason the PDF
         // engine is: the Shell gives a hovered path in its verbatim form — `\\?\C:\…` —
-        // and that form is not a URL anything will open. The path comes with the stream as
-        // the name to read it by, since a stream has no name of its own and the handler
-        // that opens one is chosen by what the file is called.
-        //
-        // That name is the *plain* form and not the verbatim one the stream is opened
-        // with above, which is a difference that was measured rather than reasoned about:
-        // handed the verbatim path the engine resolves the name it is given as a URL, the
-        // resolution fails, and the failure arrives *after* `Play` has already answered —
-        // as `MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED` on the notify callback a moment
-        // later — so what a hover got was a card whose clock never moved and a sound that
-        // never played, with nothing on this side able to say why. Every sound the native
-        // engine plays was that way; the ones FFmpeg plays were not, because a command
-        // line takes a verbatim path happily, which is what made the report look like a
-        // bug about formats rather than about the form of a path. The stream itself is
-        // still opened on the verbatim path — long paths and odd names open by it, and it
-        // is not a name anything parses — so what changes here is only the name handed to
-        // the engine beside it.
-        let url = BSTR::from(plain_name(path).as_str());
+        // and that form is not a URL anything will open. The name goes on the stream as the
+        // *plain* form, which is the one the engine resolves: handed the verbatim path the
+        // resolution fails, and the failure arrives *after* `Play` has already answered — as
+        // an error on the notify callback a moment later — so a sound was a card whose clock
+        // never moved, with nothing on this side able to say why. The stream itself is still
+        // opened on the verbatim path — long paths and odd names open by it, and it is not a
+        // name anything parses — so what changes is only the name handed over beside it.
+        let url = BSTR::from(plain_path(path).as_str());
         unsafe { engine_ex.SetSourceFromByteStream(&byte_stream, &url) }.ok()?;
 
         unsafe { engine.SetLoop(true) }.ok()?;
@@ -1030,12 +991,10 @@ impl Session {
         Some(session)
     }
 
-    /// Ask to be taken to `seconds` into the file, making the seek now where the engine is
-    /// ready for it and keeping it otherwise.
-    ///
-    /// Nothing is a position rather than the beginning: the beginning is somewhere a transport
-    /// bar can be dragged to, and a seek that is dropped because the second asked for is the
-    /// zeroth is a bar that does nothing at the left-hand end of itself.
+    /// Ask to be taken to `seconds` into the file. Nothing is a position rather than the
+    /// beginning: the beginning is somewhere a transport bar can be dragged to, and a seek
+    /// dropped because the second asked for is the zeroth is a bar that does nothing at its
+    /// own left-hand end.
     fn seek(&mut self, seconds: f64) {
         if !seconds.is_finite() {
             return;
@@ -1050,29 +1009,21 @@ impl Session {
     /// What "ready" means is the engine's own ready state rather than a wait of this side's: a
     /// seek asked for before the media is loaded is one the engine refuses, and one asked for
     /// the moment it lands is what this app wants — so what is watched is the state that says
-    /// the file's own header has been read, which is the moment a seek stops being a request to
-    /// seek somewhere in a file nothing knows the shape of.
+    /// the file's own header has been read.
     ///
-    /// Three things end it: the seek being made, which happens once and is not checked
-    /// afterwards — a source that will not seek, and a position past the end of a file that
-    /// says nothing about its length, are both answered by the engine playing on from where it
-    /// is, and asking again would be a sound restarted four times a second; a file whose length
-    /// is known and is not past the position asked for, which is a remembered position past the
-    /// end of a file that has been edited since (see `audio_seek::planned`); and the wait
-    /// running out, which is an engine that never read the file's header at all — and a wait
-    /// that only a seek which had to wait is under at all, a seek asked of a session that is
-    /// already playing being made where it is asked for.
+    /// A seek is made once and not checked afterwards, because a source that will not seek and
+    /// a position past the end of a file that says nothing about its length are both answered
+    /// by the engine playing on from where it is. The one length that is read is where the
+    /// file's own says the position asked for is past it, which is a remembered position past
+    /// a file edited since it was asked for (see `audio_seek::planned`).
     fn take_pending(&mut self) {
         let Some(target) = self.pending_seek else {
             return;
         };
 
-        // A seek asked of an engine that has not read the file's header yet is a seek that has to
-        // wait, and the wait is what runs out — an engine that never reads a header is one this
-        // side stops asking. What the wait is *not* about is the session: a seek asked of a file
-        // that has been playing for a minute is not a seek that arrived late, and treating it as
-        // one is what left a transport bar dragged after the first three seconds of a video doing
-        // nothing at all.
+        // The wait is bounded by the session's own age and not by the age of the seek: a seek
+        // asked of a file that has been playing for a minute is not one that arrived late, and
+        // an engine that has not read a header by now is not going to (see `SEEK_GIVE_UP`).
         if unsafe { self.engine.GetReadyState() } < MF_MEDIA_ENGINE_READY_HAVE_METADATA.0 as u16 {
             if self.began.elapsed() >= SEEK_GIVE_UP {
                 self.pending_seek = None;
@@ -1164,28 +1115,6 @@ impl Session {
     }
 }
 
-/// A path as the name a media source is read by, which is the Shell's verbatim form with
-/// its prefix taken off.
-///
-/// The engine resolves this name as a URL while it opens the stream, and a verbatim path
-/// is not one: `\\?\C:\music\track.mp3` is refused where `C:\music\track.mp3` is read, and
-/// a share comes back as the UNC path it names rather than as `\\?\UNC\…`. It is the same
-/// adjustment `webview_preview` makes before it points a browser at a file, and it is
-/// asked for here for the same reason — the Shell's spelling of a path is not every
-/// consumer's (see `plain_path` in `office_render`, which reads paths rather than URLs
-/// but strips the same prefix for the same reason).
-fn plain_name(path: &Path) -> String {
-    let text = path.to_string_lossy();
-
-    match text.strip_prefix(r"\\?\UNC\") {
-        Some(share) => format!(r"\\{share}"),
-        None => text
-            .strip_prefix(r"\\?\")
-            .map(str::to_string)
-            .unwrap_or_else(|| text.to_string()),
-    }
-}
-
 /// A surface for the engine to deliver into: a bitmap in the format a frame is composed
 /// in, made at the size the preview came out at.
 fn surface(width: u32, height: u32) -> Option<IWICBitmap> {
@@ -1203,14 +1132,15 @@ fn surface(width: u32, height: u32) -> Option<IWICBitmap> {
     }
 }
 
-/// The file as the media stack's own stream, which is the form every reader here is handed.
+/// The file as the media stack's own stream, which is the form every reader here is handed and
+/// is shared with `heif_sequence` (see there).
 ///
 /// The path goes in as it is — verbatim prefix and all — because `SHCreateStreamOnFileEx`
 /// is handed a path rather than being asked to resolve a URL, which is what
 /// `pdf_preview::open_document` settled for the same reason. The name is set on the stream
 /// as well: the handler that opens a byte stream is chosen by the name it carries, and a
 /// stream made from a file has none.
-fn open_stream(path: &Path) -> Option<IMFByteStream> {
+pub(crate) fn open_stream(path: &Path) -> Option<IMFByteStream> {
     let wide: Vec<u16> = path
         .as_os_str()
         .encode_wide()
@@ -1235,6 +1165,60 @@ fn open_stream(path: &Path) -> Option<IMFByteStream> {
     Some(stream)
 }
 
+/// A frame's alpha bytes forced opaque, which is what every frame of this app's is composed with
+/// and is shared with `heif_sequence`.
+///
+/// The fourth byte of a pixel is set rather than taken from whatever produced the frame, because
+/// a picture has no transparency here: the window a video used to be played in was opaque, so a
+/// frame that carried an alpha of nothing composites to a preview that fades out or opens blank.
+/// What the engine hands over in `RGB32` has no alpha written into it at all (see
+/// `heif_sequence::set_output_type`).
+pub(crate) fn force_opaque(pixels: &mut [u8]) {
+    // `as_chunks_mut` rather than `chunks_exact_mut`: a frame is a few million bytes and this
+    // is a per-pixel pass over every one of them, so the bounds check the other form carries is
+    // worth taking out. A frame that is not a whole number of pixels is left alone rather than
+    // shortened, since it is not a frame.
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel[3] = 255;
+    }
+}
+
+/// A pair packed the way Media Foundation packs one into a `UINT64` — `MF_MT_FRAME_SIZE`'s width
+/// over height, a pixel aspect ratio's numerator over denominator, `MF_MT_FRAME_RATE`'s numerator
+/// over denominator — the first of the two in the high half and the second in the low.
+///
+/// It is written as the unpacking it is rather than as arithmetic because it is the reverse of
+/// the way a `(u32, u32)` reads, and the mistake is a file that opens and then decodes into a
+/// transposed frame.
+pub(crate) fn unpack_pair(packed: u64) -> (u32, u32) {
+    ((packed >> 32) as u32, packed as u32)
+}
+
+/// The surface locked for writing, with the bytes and the row stride the lock reports: the
+/// prologue [`copy_locked`] and [`resample_locked`] both open with.
+///
+/// The lock is handed back rather than let go of here, because what the bytes are read through
+/// borrows it and a picture is only drawn while it is held.
+fn locked_surface(bitmap: &IWICBitmap) -> Option<(IWICBitmapLock, &[u8], usize)> {
+    let lock = unsafe { bitmap.Lock(std::ptr::null(), WICBitmapLockWrite.0 as u32) }.ok()?;
+    let stride = (unsafe { lock.GetStride() }).ok()? as usize;
+
+    let mut size: u32 = 0;
+    let mut data: *mut u8 = std::ptr::null_mut();
+    if unsafe { lock.GetDataPointer(&mut size, &mut data) }.is_err() || data.is_null() {
+        return None;
+    }
+
+    // SAFETY: `data` is the pointer the lock just reported, it is not null, and it describes the
+    // `size` bytes the same call reports. The lock is handed back with it and is what lets the
+    // surface go when the picture has been drawn.
+    Some((
+        lock,
+        unsafe { std::slice::from_raw_parts(data, size as usize) },
+        stride,
+    ))
+}
+
 /// Take the picture out of a locked bitmap and into the box, scaled by this side: the road every
 /// frame of a preview shown above the picture's own size takes (see `scales_here`).
 ///
@@ -1250,20 +1234,9 @@ fn resample_locked(
     box_size: (u32, u32),
     rows: &mut [Vec<u8>; 2],
 ) -> bool {
-    let Ok(lock) = (unsafe { bitmap.Lock(std::ptr::null(), WICBitmapLockWrite.0 as u32) }) else {
+    let Some((_lock, source, stride)) = locked_surface(bitmap) else {
         return false;
     };
-    let Ok(stride) = (unsafe { lock.GetStride() }) else {
-        return false;
-    };
-
-    let mut size: u32 = 0;
-    let mut data: *mut u8 = std::ptr::null_mut();
-    if unsafe { lock.GetDataPointer(&mut size, &mut data) }.is_err() || data.is_null() {
-        return false;
-    }
-
-    let source = unsafe { std::slice::from_raw_parts(data, size as usize) };
 
     // The buffer is the frame's own and is kept between frames, and every byte of it is written by
     // the rows below: what it needs is the room rather than a zeroing, which at the size of a
@@ -1278,7 +1251,7 @@ fn resample_locked(
         pixels.resize(needed, 0);
     }
 
-    scale_rows(source, stride as usize, picture, box_size, rows, pixels)
+    scale_rows(source, stride, picture, box_size, rows, pixels)
 }
 
 /// The scaling itself: the picture at its own size read into a buffer of the box's.
@@ -1393,7 +1366,7 @@ fn scale_rows(
 /// scaling, and the reason a row of the picture is read where a row of the box asks for one.
 ///
 /// The alpha is not read at all — a picture is opaque here, so the fourth byte of every pixel
-/// written is 255 whatever the codec put beside it (see [`copy_locked`]).
+/// written is 255 whatever the codec put beside it (see [`force_opaque`]).
 fn interpolate_row(
     source: &[u8],
     stride: usize,
@@ -1449,11 +1422,6 @@ fn blend_rows(upper: &[u8], lower: &[u8], weight: u32, out: &mut [u8]) {
 
 /// Copy a locked bitmap out as the preview's frame, which is the one place a video's pixels
 /// are touched where the engine is the one that scaled them.
-///
-/// The alpha is forced opaque rather than taken from the codec. What the engine delivers is
-/// a picture, and a picture has no transparency of its own here: the window a video used to
-/// be played in was opaque, so a frame that carried an alpha of nothing would be a preview
-/// that faded out rather than one that is drawn.
 fn copy_locked(bitmap: &IWICBitmap, pixels: &mut Vec<u8>, width: u32, height: u32) -> bool {
     let Some(stride) = (width as usize).checked_mul(4) else {
         return false;
@@ -1462,19 +1430,10 @@ fn copy_locked(bitmap: &IWICBitmap, pixels: &mut Vec<u8>, width: u32, height: u3
         return false;
     };
 
-    let Ok(lock) = (unsafe { bitmap.Lock(std::ptr::null(), WICBitmapLockWrite.0 as u32) }) else {
+    let Some((_lock, source, source_stride)) = locked_surface(bitmap) else {
         return false;
     };
-    let Ok(source_stride) = (unsafe { lock.GetStride() }) else {
-        return false;
-    };
-
-    let mut size: u32 = 0;
-    let mut data: *mut u8 = std::ptr::null_mut();
-    if unsafe { lock.GetDataPointer(&mut size, &mut data) }.is_err() || data.is_null() {
-        return false;
-    }
-    if (size as usize) < needed {
+    if source.len() < needed {
         return false;
     }
 
@@ -1485,15 +1444,12 @@ fn copy_locked(bitmap: &IWICBitmap, pixels: &mut Vec<u8>, width: u32, height: u3
         pixels.resize(needed, 0);
     }
 
-    let source = unsafe { std::slice::from_raw_parts(data, size as usize) };
     for row in 0..height as usize {
-        let from = row * source_stride as usize;
+        let from = row * source_stride;
         let to = row * stride;
         pixels[to..to + stride].copy_from_slice(&source[from..from + stride]);
 
-        for pixel in pixels[to..to + stride].as_chunks_mut::<4>().0 {
-            pixel[3] = 0xFF;
-        }
+        force_opaque(&mut pixels[to..to + stride]);
     }
 
     true
@@ -1509,22 +1465,22 @@ mod tests {
     #[test]
     fn reads_the_plain_form_of_a_verbatim_path() {
         assert_eq!(
-            plain_name(Path::new(r"\\?\C:\Music\track.mp3")),
+            plain_path(Path::new(r"\\?\C:\Music\track.mp3")),
             r"C:\Music\track.mp3",
             "the verbatim form of a local path is the path it is written around"
         );
         assert_eq!(
-            plain_name(Path::new(r"\\?\UNC\server\share\track.mp3")),
+            plain_path(Path::new(r"\\?\UNC\server\share\track.mp3")),
             r"\\server\share\track.mp3",
             "and the verbatim form of a share keeps its server"
         );
         assert_eq!(
-            plain_name(Path::new(r"C:\Music\track.mp3")),
+            plain_path(Path::new(r"C:\Music\track.mp3")),
             r"C:\Music\track.mp3",
             "a path that was never verbatim is left exactly as it is"
         );
         assert_eq!(
-            plain_name(Path::new(r"\\server\share\track.mp3")),
+            plain_path(Path::new(r"\\server\share\track.mp3")),
             r"\\server\share\track.mp3",
             "and so is a share written the ordinary way"
         );
@@ -1616,7 +1572,10 @@ mod tests {
     /// everything at or below the picture's own size is the engine's, as it always was.
     #[test]
     fn a_box_larger_than_the_picture_is_the_one_this_side_scales() {
-        assert!(scales_here((640, 480), 1280, 960), "shown at twice its size");
+        assert!(
+            scales_here((640, 480), 1280, 960),
+            "shown at twice its size"
+        );
         assert!(scales_here((640, 480), 641, 480), "over by a pixel");
 
         assert!(

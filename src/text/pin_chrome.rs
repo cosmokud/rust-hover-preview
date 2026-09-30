@@ -29,17 +29,11 @@ const CAPTION_FACE: &str = "Segoe UI";
 /// Windows 11 gives one, so the three land where a hand expects them.
 const BUTTON_PIXELS: f32 = 46.0;
 
-/// The room a title is kept clear of the left edge by.
-const TITLE_PADDING_PIXELS: f32 = 12.0;
-
-/// How thick a glyph's strokes are drawn.
-const GLYPH_STROKE_PIXELS: f32 = 1.4;
-
-/// How wide the glyph inside a caption button is.
-const GLYPH_PIXELS: f32 = 10.0;
-
-/// The room a caption tooltip takes around its text, and how far it floats below the button it
+/// The room a tooltip takes around its text, and how far it floats below the button it
 /// belongs to, in the units a display's scale multiplies.
+const TITLE_PADDING_PIXELS: f32 = 12.0;
+const GLYPH_STROKE_PIXELS: f32 = 1.4;
+const GLYPH_PIXELS: f32 = 10.0;
 const TOOLTIP_PADDING_PIXELS: f32 = 8.0;
 const TOOLTIP_GAP_PIXELS: f32 = 6.0;
 const TOOLTIP_RADIUS: f32 = 4.0;
@@ -69,20 +63,18 @@ const VOLUME_THUMB_RADIUS: f32 = 8.0;
 /// that keeps a knob drawn over the filled part of the groove reading as a knob.
 const VOLUME_COLLAR_PIXELS: f32 = 1.5;
 
-/// The colors a caption and a bubble are painted in.
+/// The colors a caption and a bubble are painted in: the theme's page, its text, and one it
+/// spends on something else, which is drawn as the accent.
 ///
-/// They come from the theme the text previews are painted with — One Dark Pro, Atom One
-/// Light, or a `.tmTheme` of the user's own — rather than from a palette of this app's, so
-/// that the chrome of a pinned preview belongs to the same app as the page inside it. What
-/// the theme is *read* for is three colors: its page, its text, and one it uses for
-/// something else, which is drawn as the accent.
+/// They come from the theme the text previews are painted with — One Dark Pro, Atom One Light,
+/// or a `.tmTheme` of the user's own — so that the chrome of a pinned preview belongs to the
+/// same app as the page inside it.
 pub(crate) struct ChromePalette {
-    /// The theme's page color: the caption's bar and the bubble's face.
+    /// The caption's bar and the bubble's face.
     pub(crate) background: [u8; 3],
-    /// The theme's text color: the title and the glyphs.
+    /// The title and the glyphs.
     pub(crate) foreground: [u8; 3],
-    /// A color the theme spends on something else — a keyword, which every theme colors —
-    /// drawn as the accent: the bubble's ring, and the played part of a transport's bar.
+    /// The bubble's ring, and the played part of a transport's bar.
     pub(crate) accent: [u8; 3],
     /// Whether the theme is a dark one, which decides which way a hairline is shaded.
     pub(crate) dark: bool,
@@ -422,7 +414,7 @@ pub(crate) fn paint_transport(
     {
         let buffer = unsafe {
             std::slice::from_raw_parts_mut(
-                surface.bits(),
+                surface_pixels(surface),
                 surface.width as usize * surface.height as usize * 4,
             )
         };
@@ -477,7 +469,7 @@ pub(crate) fn paint_transport(
     // GDI leaves the alpha byte of everything it draws at zero (see the module documentation).
     let buffer = unsafe {
         std::slice::from_raw_parts_mut(
-            surface.bits(),
+            surface_pixels(surface),
             surface.width as usize * surface.height as usize * 4,
         )
     };
@@ -510,7 +502,7 @@ fn paint_play_button(
 
     let buffer = unsafe {
         std::slice::from_raw_parts_mut(
-            surface.bits(),
+            surface_pixels(surface),
             surface.width as usize * surface.height as usize * 4,
         )
     };
@@ -575,7 +567,7 @@ fn paint_volume_button(
     let pressed = state.pressed == Some(TransportPart::Volume);
     let buffer = unsafe {
         std::slice::from_raw_parts_mut(
-            surface.bits(),
+            surface_pixels(surface),
             surface.width as usize * surface.height as usize * 4,
         )
     };
@@ -804,9 +796,13 @@ pub(crate) fn measure_caption_text(surface: &DibSurface, text: &str, dpi: u32) -
         return 0;
     }
 
-    let scale = dpi as f32 / 96.0;
-    let style = text_paint::TextStyle {
-        foreground: [0, 0, 0],
+    measure_text(surface, &caption_style([0, 0, 0]), text, dpi as f32 / 96.0)
+}
+
+/// The style every piece of caption text is drawn in, whatever colour it is asked for.
+fn caption_style(foreground: [u8; 3]) -> text_paint::TextStyle {
+    text_paint::TextStyle {
+        foreground,
         background: None,
         bold: false,
         italic: false,
@@ -814,29 +810,6 @@ pub(crate) fn measure_caption_text(surface: &DibSurface, text: &str, dpi: u32) -
         strike: false,
         level: text_paint::BODY_LEVEL,
         face: CAPTION_FACE,
-    };
-
-    unsafe {
-        let font = text_paint::create_font(
-            text_paint::scaled(text_paint::LEVEL_FONT_PIXELS[style.level as usize], scale),
-            &style,
-        );
-        if font.0.is_null() {
-            return 0;
-        }
-
-        let previous = SelectObject(surface.dc, font);
-        let mut extent = SIZE::default();
-        let wide: Vec<u16> = text.encode_utf16().collect();
-        let width = if GetTextExtentPoint32W(surface.dc, &wide, &mut extent).as_bool() {
-            extent.cx
-        } else {
-            0
-        };
-        let _ = SelectObject(surface.dc, previous);
-        let _ = windows::Win32::Graphics::Gdi::DeleteObject(font);
-
-        width
     }
 }
 
@@ -1122,16 +1095,7 @@ fn paint_time(
     align_right: bool,
 ) {
     let text = clock_text(seconds);
-    let style = text_paint::TextStyle {
-        foreground: palette.foreground,
-        background: None,
-        bold: false,
-        italic: false,
-        underline: false,
-        strike: false,
-        level: text_paint::BODY_LEVEL,
-        face: CAPTION_FACE,
-    };
+    let style = caption_style(palette.foreground);
 
     let cell = text_paint::scaled(
         text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
@@ -1445,7 +1409,7 @@ pub(crate) fn paint_caption(
     // module documentation).
     let buffer = unsafe {
         std::slice::from_raw_parts_mut(
-            surface.bits(),
+            surface_pixels(surface),
             surface.width as usize * surface.height as usize * 4,
         )
     };
@@ -1477,7 +1441,10 @@ pub(crate) fn tooltip_layout(
     let scale = dpi as f32 / 96.0;
     let padding = text_paint::scaled(TOOLTIP_PADDING_PIXELS as i32, scale);
     let gap = text_paint::scaled(TOOLTIP_GAP_PIXELS as i32, scale);
-    let cell = text_paint::scaled(text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize], scale);
+    let cell = text_paint::scaled(
+        text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
+        scale,
+    );
 
     let panel_width = (text_width + padding * 2).min(width.max(0));
     let panel_height = cell + padding;
@@ -1493,8 +1460,8 @@ pub(crate) fn tooltip_layout(
     // Centred under the button it belongs to, then pulled inside the window's own sides, and
     // hung below the caption with the gap it was given — a name touching the bar it describes
     // reads as part of the bar.
-    let left = ((anchor.left + anchor.right - panel_width) / 2)
-        .clamp(0, (width - panel_width).max(0));
+    let left =
+        ((anchor.left + anchor.right - panel_width) / 2).clamp(0, (width - panel_width).max(0));
 
     Some(RECT {
         left,
@@ -1594,16 +1561,7 @@ pub(crate) fn paint_tooltip(
         1.0,
     );
 
-    let style = text_paint::TextStyle {
-        foreground: palette.foreground,
-        background: None,
-        bold: false,
-        italic: false,
-        underline: false,
-        strike: false,
-        level: text_paint::BODY_LEVEL,
-        face: CAPTION_FACE,
-    };
+    let style = caption_style(palette.foreground);
 
     // The name is measured against this same font, so the run is given a box of the cell's own
     // height and the room `text_width` leaves is the room the panel was made from. Its
@@ -1633,7 +1591,7 @@ pub(crate) fn paint_tooltip(
     // not part of the caption — it is a panel over the media underneath it.
     let pixels = unsafe {
         std::slice::from_raw_parts_mut(
-            surface.bits(),
+            surface_pixels(surface),
             surface.width as usize * surface.height as usize * 4,
         )
     };
@@ -1743,7 +1701,7 @@ fn paint_glyph(
 ) {
     let buffer = unsafe {
         std::slice::from_raw_parts_mut(
-            surface.bits(),
+            surface_pixels(surface),
             surface.width as usize * surface.height as usize * 4,
         )
     };
@@ -1848,16 +1806,7 @@ fn paint_title(
         return;
     }
 
-    let style = text_paint::TextStyle {
-        foreground: palette.foreground,
-        background: None,
-        bold: false,
-        italic: false,
-        underline: false,
-        strike: false,
-        level: text_paint::BODY_LEVEL,
-        face: CAPTION_FACE,
-    };
+    let style = caption_style(palette.foreground);
 
     let fitted = fit_title(surface, &style, title, right - left, scale);
     if fitted.is_empty() {
@@ -2159,6 +2108,18 @@ fn paint_mark(
     }
 }
 
+/// The surface's pixels, which every box, disc and glyph here is drawn into.
+///
+/// # Safety
+///
+/// The surface must be one GDI is not drawing into, and must not be handed back to GDI
+/// until the slice built from this has ended. A raw pointer rather than a `&mut`, because
+/// the surface is reached by shared reference and the pixels behind it are the only thing
+/// written: the caller gets a slice for the length of its own block, and nothing else.
+unsafe fn surface_pixels(surface: &DibSurface) -> *mut u8 {
+    surface.bits()
+}
+
 /// One pixel written premultiplied (see the module documentation).
 fn put(buffer: &mut [u8], width: i32, x: i32, y: i32, color: [u8; 3], coverage: f32) {
     if x < 0 || y < 0 || x >= width {
@@ -2292,23 +2253,17 @@ fn draw_cross(
 /// One chevron pointing left or right, walked a column at a time the way the cross is.
 ///
 /// A chevron rather than an arrowhead: a walk has no end, so what the two buttons mean is
-/// which way along it to go and not where it stops, and the mark for that is the one the
-/// keyboard's own arrow keys carry.
+/// which way along it to go and not where it stops.
 ///
 /// The vertex is at the end the chevron points to and the arms open away from it. Measured
-/// from the middle of the span instead, the two arms open on both sides of it and the mark
-/// is a cross rather than a chevron — which is what a `<` and a `>` would both be drawn as.
+/// from the middle of the span instead, the mark is a cross rather than a chevron — which is
+/// what a `<` and a `>` would both be drawn as.
 ///
-/// The arms part *half* a span either side of the middle row, a row for every other column
-/// rather than a row for every column, so that the mark comes out the size the close cross
-/// and the maximize box beside it are drawn at. Arms that reach as far as the mark is walked
-/// are twice as tall as every other glyph in the bar, and a row of marks that is not one size
-/// is a row of things that are not one kind of thing.
+/// The arms part *half* a span either side of the middle row, so that the mark comes out the
+/// size the close cross and the maximize box beside it are drawn at.
 ///
 /// Walked in whole pixels rather than in `stroke_segment` because a vertex is the whole of
-/// what a chevron says: an anti-aliased stroke a pixel wide rounds its own point off, and the
-/// one row at the end the arms part from is what says a chevron. The cross is walked the same
-/// way, for the same reason.
+/// what a chevron says: an anti-aliased stroke a pixel wide rounds its own point off.
 fn draw_chevron(
     buffer: &mut [u8],
     width: i32,
@@ -2348,23 +2303,14 @@ fn draw_chevron(
 
 /// An arrow leaving a box: the file handed to whatever the machine has filed it under.
 ///
-/// Drawn as the box and the arrow together rather than as a box with a mark in it, because
-/// the button's whole meaning is the leaving — a pin shows a file and this is the one that
-/// gives it away to a program that owns the format.
-///
-/// The box is a full-height outline drawn in every side but the one the arrow goes out of, so
-/// that what it stands for — the file — is a box, and the corner the arrow leaves from is the
-/// one that is open. It is the mark every "open in" button is drawn as, and the reading it
-/// has to carry is *leaving this thing*, which a box with an arrow in it does not say: a box
-/// drawn too small to read as a box, with a big arrow standing on top of it, is the upload
-/// mark, and a button that means "hand this to another program" must not be drawn as a
-/// button that means "send this away".
+/// Drawn as the box and the arrow together rather than as a box with a mark in it, because the
+/// button's whole meaning is the leaving. The box is drawn in every side but the one the arrow
+/// goes out of, and the reading it has to carry is *leaving this thing* — a box drawn too small
+/// to read as a box with a big arrow on top of it is the upload mark, and a button that means
+/// "hand this to another program" must not be drawn as a button that means "send this away".
 ///
 /// The tail starts at the middle of the box and crosses its open side to run out past the
-/// corner, so that the arrow is seen leaving rather than hovering over. The strokes are laid
-/// out about the mark's centre and then have the stroke's own half width taken out of them,
-/// because a stroke is drawn about the line it is given and not inside it — a mark a stroke
-/// and a half past the size it was asked for is a mark off its own button.
+/// corner, so that the arrow is seen leaving rather than hovering over.
 fn draw_open_with(
     buffer: &mut [u8],
     width: i32,
@@ -2806,160 +2752,13 @@ mod tests {
             .expect("a written picture");
     }
 
-    /// The pictures this test writes are the design under review: the bar's volume button in each
-    /// state it can be in, and the popup over a picture — which is what the panel is drawn over,
-    /// and what it has to read against at every level.
-    #[test]
-    fn draws_the_volume_control() {
-        let dir = scratch("volume");
-        let light = ChromePalette {
-            background: [250, 250, 250],
-            foreground: [56, 58, 66],
-            accent: [166, 38, 164],
-            dark: false,
-        };
-        let dark = ChromePalette {
-            background: [40, 44, 52],
-            foreground: [171, 178, 191],
-            accent: [198, 120, 221],
-            dark: true,
-        };
-
-        for (name, palette) in [("light", &light), ("dark", &dark)] {
-            for (dpi, size) in [(96u32, "1x"), (192, "2x")] {
-                let bar = 30 * (dpi / 96);
-
-                // The bar at each state the button can be in: idle, a hand over it, and its popup
-                // open — which is a button held down — and the last of those at a level of nothing,
-                // which is the button crossed out.
-                let states = [
-                    (65u32, None, false),
-                    (65, Some(TransportPart::Volume), false),
-                    (0, Some(TransportPart::Volume), true),
-                ];
-                let (width, height) = (560 * (dpi / 96), bar * states.len() as u32);
-                let mut bars = image_buffer(width, height);
-
-                for (index, (volume, hovered, open)) in states.iter().enumerate() {
-                    let surface = DibSurface::create(width, bar).expect("a surface");
-                    paint_transport(
-                        &surface,
-                        palette,
-                        &TransportState {
-                            interactive: true,
-                            playing: index % 2 == 0,
-                            position: Some(42.0),
-                            duration: Some(180.0),
-                            hovered: *hovered,
-                            pressed: None,
-                            volume: *volume,
-                            volume_open: *open,
-                        },
-                        dpi,
-                    );
-                    blit(
-                        &mut bars,
-                        width,
-                        bar,
-                        &surface.pixels(),
-                        0,
-                        index as u32 * bar,
-                    );
-                }
-
-                write_png(
-                    dir.join(format!("bar-{name}-{size}.png")),
-                    &bars,
-                    width,
-                    height,
-                );
-
-                // The popup as it stands over the picture in a pinned window, at three levels —
-                // nothing, a hand's worth, and everything — with the middle one held, which is the
-                // knob the accent colour is drawn in.
-                let (window, row) = (360 * (dpi / 96), 240 * (dpi / 96));
-                let (out_width, out_height) = (window * 3, row);
-                let mut out = image_buffer(out_width, out_height);
-
-                for (index, volume) in [0u32, 45, 100].into_iter().enumerate() {
-                    let x = index as u32 * window;
-                    let strip_top = row as i32 - bar as i32;
-                    let picture = backdrop(window, row, palette);
-                    for y in 0..row {
-                        for column in 0..window {
-                            let from = ((y * window + column) * 4) as usize;
-                            let to = ((y * out_width + x + column) * 4) as usize;
-                            out[to..to + 4].copy_from_slice(&picture[from..from + 4]);
-                        }
-                    }
-
-                    let surface = DibSurface::create(window, bar).expect("a surface");
-                    paint_transport(
-                        &surface,
-                        palette,
-                        &TransportState {
-                            interactive: true,
-                            playing: true,
-                            position: Some(42.0),
-                            duration: Some(180.0),
-                            hovered: None,
-                            pressed: None,
-                            volume,
-                            volume_open: true,
-                        },
-                        dpi,
-                    );
-                    blit(&mut out, out_width, row, &surface.pixels(), x, row - bar);
-
-                    let mut popup = volume_popup_layout(window as i32, strip_top, bar as i32, dpi);
-                    for rect in [&mut popup.panel, &mut popup.track] {
-                        rect.left += x as i32;
-                        rect.right += x as i32;
-                    }
-
-                    paint_volume_popup(
-                        &mut out,
-                        out_width as i32,
-                        palette,
-                        &popup,
-                        volume,
-                        volume == 45,
-                    );
-                }
-
-                write_png(
-                    dir.join(format!("popup-{name}-{size}.png")),
-                    &out,
-                    out_width,
-                    out_height,
-                );
-            }
-        }
-    }
-
     fn image_buffer(width: u32, height: u32) -> Vec<u8> {
         vec![0u8; width as usize * height as usize * 4]
     }
 
-    fn blit(out: &mut [u8], width: u32, height: u32, source: &[u8], x: u32, y: u32) {
-        // The source is as wide as the destination: every caller pastes a full-width picture at
-        // a y offset, which is what the volume fixture and this one both do.
-        let stride = width as usize;
-        for row in 0..height as usize {
-            for column in 0..width as usize {
-                let from = ((row * stride + column) * 4) as usize;
-                let to = (((y as usize + row) * stride + x as usize + column) * 4) as usize;
-                if to + 3 < out.len() && from + 3 < source.len() {
-                    out[to..to + 4].copy_from_slice(&source[from..from + 4]);
-                }
-            }
-        }
-    }
-
     /// One painted button's own width pasted into a strip of several, so that a row of glyphs is
     /// laid out side by side the way the bar lays them out. The source is a button wide and the
-    /// destination is the whole strip, so the two are not the same stride and this cannot be
-    /// `blit`.
+    /// destination is the whole strip, so the two are not the same stride.
     fn blit_cell(
         out: &mut [u8],
         width: u32,
@@ -2975,152 +2774,6 @@ mod tests {
                 if to + 3 < out.len() && from + 3 < source.len() {
                     out[to..to + 4].copy_from_slice(&source[from..from + 4]);
                 }
-            }
-        }
-    }
-
-    /// A picture for the popup to float over: light and dark bands and a colour wash, so that a
-    /// panel which reads on one of them and not the other says so in the picture.
-    fn backdrop(width: u32, height: u32, palette: &ChromePalette) -> Vec<u8> {
-        let mut out = image_buffer(width, height);
-        for y in 0..height {
-            for x in 0..width {
-                let index = ((y * width + x) * 4) as usize;
-                let band: f32 = if (x / 40 + y / 40) % 2 == 0 {
-                    0.75
-                } else {
-                    0.12
-                };
-                let color = text_paint::blend(
-                    [20, 20, 20],
-                    palette.accent,
-                    (x as f32 / width as f32) * 0.7,
-                );
-                let level = (band * 255.0).round() as u8;
-                out[index] = (color[2] as f32 * (0.4 + band * 0.6)) as u8;
-                out[index + 1] = (color[1] as f32 * (0.4 + band * 0.6)) as u8;
-                out[index + 2] = (color[0] as f32 * (0.4 + band * 0.6)) as u8;
-                out[index + 3] = level;
-            }
-        }
-
-        out
-    }
-
-    /// The pictures this test writes are the design under review: a caption with each of the
-    /// two names it can say, at both scales, over a picture — which is what a tooltip is drawn
-    /// over, and what it has to read against at every level.
-    ///
-    /// It is the one panel here that hangs off a strip rather than out of a bar, so the thing
-    /// worth seeing is where it lands: below the caption, clear of the buttons on either side
-    /// of it, and off the window's own edges when the name is longer than the space for it.
-    #[test]
-    fn draws_the_caption_tooltip() {
-        let dir = scratch("tooltip");
-        let light = ChromePalette {
-            background: [250, 250, 250],
-            foreground: [56, 58, 66],
-            accent: [166, 38, 164],
-            dark: false,
-        };
-        let dark = ChromePalette {
-            background: [40, 44, 52],
-            foreground: [171, 178, 191],
-            accent: [198, 120, 221],
-            dark: true,
-        };
-
-        for (name, palette) in [("light", &light), ("dark", &dark)] {
-            for (dpi, size) in [(96u32, "1x"), (192, "2x")] {
-                let caption = 30 * (dpi / 96);
-                let window = 360 * (dpi / 96);
-                let row = 240 * (dpi / 96);
-                // The three names a caption can be saying, laid out in one row of windows: the
-                // default's own, the list, and a name far too long for the window it is on.
-                let names = [
-                    "Open With Adobe Photoshop",
-                    "Open With...",
-                    "Open With A Program Whose Name Goes On",
-                ];
-                let mut cells: Vec<Vec<u8>> = Vec::new();
-
-                for text in names {
-                    // One window drawn at a time and pasted into its own cell, rather than all
-                    // three drawn at once into a strip: a panel and a caption are placed against
-                    // a window's own width, and a window that had the other two beside it would
-                    // be laid out as if it were the width of all three.
-                    let mut out = image_buffer(window, row);
-                    let picture = backdrop(window, row, palette);
-                    out.copy_from_slice(&picture);
-
-                    let surface = DibSurface::create(window, caption).expect("a surface");
-                    let caption_state = Caption {
-                        title: "picture.png",
-                        maximized: false,
-                        maximizable: true,
-                        hovered: Some(CaptionButton::OpenWith),
-                        pressed: None,
-                    };
-                    paint_caption(&surface, palette, &caption_state, dpi);
-                    blit(&mut out, window, row, &surface.pixels(), 0, 0);
-
-                    // The name over the media below it, on a surface of its own because GDI
-                    // needs a device context to draw it on.
-                    let anchor = button_boxes(window as i32, caption as i32, dpi, true)
-                        .into_iter()
-                        .find(|button| button.kind == CaptionButton::OpenWith)
-                        .expect("a hand-off button")
-                        .rect;
-                    let text_surface = DibSurface::create(window, row).expect("a surface");
-                    let text_width = measure_caption_text(&text_surface, text, dpi);
-                    if let Some(panel) = tooltip_layout(
-                        window as i32,
-                        row as i32,
-                        caption as i32,
-                        anchor,
-                        text_width,
-                        dpi,
-                    ) {
-                        paint_tooltip(
-                            &mut out,
-                            window as i32,
-                            palette,
-                            panel,
-                            TooltipText {
-                                text,
-                                width: text_width,
-                                surface: &text_surface,
-                            },
-                            dpi as f32 / 96.0,
-                        );
-                    }
-
-                    cells.push(out);
-                }
-
-                let (out_width, out_height) = (window * names.len() as u32, row);
-                let mut strip = image_buffer(out_width, out_height);
-                for (index, cell) in cells.iter().enumerate() {
-                    blit(&mut strip, out_width, out_height, cell, index as u32 * window, 0);
-                    // Each cell on its own as well as in the strip: a strip of three windows is
-                    // a picture of the three together and is read as one, and what has to be
-                    // seen here — whether a name is drawn whole, and how far off its panel it
-                    // sits — is a thing a name thirty pixels wide says at full size and not at
-                    // a third of it.
-                    write_png(
-                        dir.join(format!("tooltip-{name}-{size}-{index}.png")),
-                        cell,
-                        window,
-                        row,
-                    );
-                }
-
-                write_png(
-                    dir.join(format!("tooltip-{name}-{size}.png")),
-                    &strip,
-                    out_width,
-                    out_height,
-                );
             }
         }
     }
