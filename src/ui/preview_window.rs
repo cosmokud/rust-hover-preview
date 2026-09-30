@@ -14120,6 +14120,20 @@ struct PinDrag {
     from: (i32, i32),
     window: ScreenRegion,
     action: PinDragAction,
+    /// Whether the press that began this drag was delivered to this window as a message, or
+    /// read from what the Explorer hook publishes about a press taken by the engine's window.
+    ///
+    /// It decides where the *end* of the drag is read from, and the distinction is the whole of
+    /// it. A press this window was given brings its release with it, so a drag begun that way is
+    /// ended by `pinned_release` and needs nothing else. A press read from the hook was taken by
+    /// a window of somebody else's, and the release of a press somebody else took is that
+    /// window's to answer: nothing guarantees it is ever delivered here, and a drag whose end is
+    /// a message that never arrives is a drag that never ends (see `settle_pinned_engine_drag`).
+    delivered: bool,
+    /// Where the pointer was when this drag was last carried out to, so that a drag carried on
+    /// from the tick and a drag carried on from a pointer message are the same work asked twice
+    /// rather than twice the work (see `apply_pin_drag`).
+    carried: (i32, i32),
 }
 
 #[derive(Clone, Copy)]
@@ -17720,7 +17734,7 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             pinned.as_ref().and_then(|pin| pin.resize_edge(x, y))
         };
         if let Some(edge) = edge {
-            begin_pin_drag(hwnd, PinDragAction::Resize(edge));
+            begin_pin_drag(hwnd, PinDragAction::Resize(edge), true);
             return true;
         }
     }
@@ -17744,7 +17758,7 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             }
         }
 
-        begin_pin_drag(hwnd, PinDragAction::Move);
+        begin_pin_drag(hwnd, PinDragAction::Move, true);
         return true;
     }
 
@@ -17761,7 +17775,7 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     }
 
     if pinned_content_is_the_pins(x, y) {
-        begin_pin_drag(hwnd, PinDragAction::Move);
+        begin_pin_drag(hwnd, PinDragAction::Move, true);
         return true;
     }
 
@@ -18005,7 +18019,11 @@ unsafe fn settle_pinned_engine_press(hwnd: HWND, seen_presses: &mut u64) {
     // A press on a pinned window is what makes the pin the window the user is in, whichever part
     // of it was pressed, and what it begins is the drag its place means.
     pin_take_focus(hwnd);
-    begin_pin_drag(hwnd, pinned_engine_press_action(window, dpi, frame, point));
+    begin_pin_drag(
+        hwnd,
+        pinned_engine_press_action(window, dpi, frame, point),
+        false,
+    );
 }
 
 /// Whether the window under a point is the one a document the engine draws is standing in.
@@ -18107,7 +18125,7 @@ fn pinned_engine_press_action(
     PinDragAction::Move
 }
 
-unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction) {
+unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
     let Some(from) = cursor_screen_point() else {
         return;
     };
@@ -18127,11 +18145,57 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction) {
                 from,
                 window,
                 action,
+                delivered,
+                // A drag has not been carried out to anywhere yet, and `from` is a place it has
+                // not been: the window has not moved by a single pixel until the pointer does.
+                carried: (i32::MIN, i32::MIN),
             });
         }
     }
 
     let _ = SetCapture(hwnd);
+}
+
+/// Carry on, and let go of, a drag whose press this window was never given.
+///
+/// The whole of this is that a drag begun from the hook's published press count cannot be ended
+/// by a message, and there is nothing else to end it with. `settle_pinned_engine_press` reads a
+/// press rather than being given one, because the engine's window — a window of its own, over
+/// this one, on a thread of its own — is what a press over a drawing is delivered to; the release
+/// of that press is that window's to answer in the same way, and nothing promises it is ever
+/// delivered here. Asking for the pointer back (`SetCapture` in `begin_pin_drag`) is a race the
+/// engine's side usually wins, and whether it wins decides nothing about the release: a window
+/// that holds the pointer and is not sent the moves and the release is a window in a modal loop
+/// somebody else is running, and it is in one whether the race was won or not.
+///
+/// So the end is read from the same place the beginning was, and the button's published state is
+/// a level rather than a transition: it cannot be missed the way a message can, and it is being
+/// looked at anyway. The drag is carried on while the button is down — from the pointer's
+/// position rather than from a move message, for the same reason the press was read rather than
+/// received, and because `GetCursorPos` is not subject to whatever is holding the pointer — and
+/// is let go of on the first tick the button is up.
+///
+/// A drag this window *was* given its release for is left alone: it ends in `pinned_release`,
+/// from the message, and its capture is this window's own to hold until that message arrives.
+unsafe fn settle_pinned_engine_drag(hwnd: HWND) {
+    let Some(drag) = PINNED
+        .lock()
+        .ok()
+        .and_then(|pinned| pinned.as_ref().and_then(|pin| pin.dragging))
+    else {
+        return;
+    };
+
+    if drag.delivered {
+        return;
+    }
+
+    if left_button_down() {
+        apply_pin_drag(hwnd);
+        return;
+    }
+
+    finish_pin_drag(hwnd);
 }
 
 /// Let go of the pointer, if this window is the one holding it.
@@ -18178,6 +18242,13 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
     let Some(point) = cursor_screen_point() else {
         return;
     };
+    // A drag is a function of where the pointer is, so asking twice for a pointer that has not
+    // moved is asking the same question twice: a tick carrying a drag on asks this for the same
+    // sixteen milliseconds the pointer messages do, and a resize answered from the tick is a
+    // repaint of the whole window for a pointer that has not shifted.
+    if drag.carried == point {
+        return;
+    }
     let (dx, dy) = (point.0 - drag.from.0, point.1 - drag.from.1);
 
     let window = match drag.action {
@@ -18215,6 +18286,11 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
         // with it and the button maximizes again (see `pin_restore_box`).
         pin.restore = pin_restore_box(pin.restore, pin.content, content);
         pin.content = content;
+        // And where it was carried to, so that the next ask for a pointer that has not moved is
+        // recognised as the same question (see the early return above).
+        if let Some(drag) = pin.dragging.as_mut() {
+            drag.carried = cursor_screen_point().unwrap_or(drag.carried);
+        }
     }
 
     let (width, height) = (window.2 - window.0, window.3 - window.1);
@@ -18740,7 +18816,12 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
-    let (pressed, dragging, caption_height, dpi, width, framed) = {
+    // Only the button is taken here. The drag is not, because letting go of one is the same work
+    // whichever end it is asked from, and `finish_pin_drag` is that work: a press that arrived as
+    // a message ends here, and one read off the hook's published button state is ended by the
+    // tick instead (see `settle_pinned_engine_drag`). A window's own press does not press a
+    // caption button and drag the window at once, so the two are not in competition.
+    let (pressed, caption_height, dpi, width, framed) = {
         let Ok(mut pinned) = PINNED.lock() else {
             return false;
         };
@@ -18749,11 +18830,9 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
         };
 
         let pressed = pin.pressed.take();
-        let dragging = pin.dragging.take();
         let (width, _) = pin.window_size();
         (
             pressed,
-            dragging,
             pinned_caption_height(pin.dpi),
             pin.dpi,
             width,
@@ -18761,11 +18840,9 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
         )
     };
 
-    if pressed.is_some() || dragging.is_some() {
-        let _ = ReleaseCapture();
-    }
-
     if let Some(button) = pressed {
+        let _ = ReleaseCapture();
+
         let still_on_it = y < caption_height
             && pin_chrome::button_at(x, y, width, caption_height, dpi, framed) == Some(button);
 
@@ -18806,22 +18883,43 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
-    if let Some(drag) = dragging {
-        // A window that was resized owes its media a layout at the box it now has; one that was
-        // moved owes it nothing but the places its bands are in.
-        if matches!(drag.action, PinDragAction::Resize(_)) {
-            if let Some(content) = pinned_content() {
-                if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
-                    *request = Some(content);
-                }
+    finish_pin_drag(hwnd)
+}
+
+/// Let go of a drag, from whichever of the two ends has arrived.
+///
+/// The tail of `pinned_release` and the whole of what a drag read out of the hook's published
+/// button state owes the same three things, so they are one function: the pointer this window
+/// took for the drag is let go of (it is taken outside the lock, because `ReleaseCapture`
+/// delivers `WM_CAPTURECHANGED` and the window procedure asks for that same lock — see
+/// `release_pin_capture`), a resize asks for its media to be laid out again at the box it ended
+/// up with, and the window is painted at where it stands. Which of the two ends is *asked* is
+/// the caller's: a message ends a drag this window was given, and the tick ends a drag begun out
+/// of what the hook published (see `settle_pinned_engine_drag`).
+///
+/// Returns whether there was a drag to let go of, which is what a caller that has other release
+/// work to do needs to know.
+unsafe fn finish_pin_drag(hwnd: HWND) -> bool {
+    let drag = PINNED
+        .lock()
+        .ok()
+        .and_then(|mut pinned| pinned.as_mut().and_then(|pin| pin.dragging.take()));
+    let Some(drag) = drag else {
+        return false;
+    };
+
+    release_pin_capture(hwnd);
+
+    if matches!(drag.action, PinDragAction::Resize(_)) {
+        if let Some(content) = pinned_content() {
+            if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+                *request = Some(content);
             }
         }
-
-        render_layered_preview(hwnd);
-        return true;
     }
 
-    false
+    render_layered_preview(hwnd);
+    true
 }
 
 /// Wait for a preview message or for window input, whichever comes first.
@@ -19261,6 +19359,12 @@ pub fn run_preview_window() {
                 // band is a browser's window over this one, so the press is read here and the
                 // drag it means begun here (see `settle_pinned_engine_press`).
                 settle_pinned_engine_press(hwnd, &mut engine_press_seen);
+
+                // And a drag that press began carried on, and let go of, from what the hook
+                // publishes rather than from a message — which is the only end it can have, the
+                // press having been taken by the engine's window rather than by this one (see
+                // `settle_pinned_engine_drag`).
+                settle_pinned_engine_drag(hwnd);
 
                 // A step the caption's own walk buttons took is a pick like any other, and is
                 // held in the walk rather than in the pick slot: the file it stands on is the
@@ -22253,6 +22357,12 @@ mod tests {
     // The key a pin answers with nothing, which is the one the mapping has to name explicitly
     // and which nothing outside a test ever has to read.
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_SPACE;
+    // What the pointer probe speaks with: a real `SendInput`, because a drag is a sequence of
+    // events delivered to whatever window is under the pointer and nothing less is one.
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_TYPE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
+        MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT, MOUSE_EVENT_FLAGS,
+    };
 
     /// A display to place on: 1000 by 800 at its top-left corner.
     fn bounds() -> ScreenBounds {
@@ -24718,6 +24828,286 @@ mod tests {
         );
     }
 
+    /// Put the pointer at a point on the screen, as a hand would: a real `SendInput` move,
+    /// because a drag is a sequence of moves delivered to whatever window is under the pointer
+    /// and nothing less is one.
+    fn send_pointer_to(x: i32, y: i32) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+            SM_YVIRTUALSCREEN,
+        };
+
+        unsafe {
+            let (left, top) = (
+                GetSystemMetrics(SM_XVIRTUALSCREEN),
+                GetSystemMetrics(SM_YVIRTUALSCREEN),
+            );
+            let (wide, high) = (
+                GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                GetSystemMetrics(SM_CYVIRTUALSCREEN),
+            );
+            let scaled = |value: i32, from: i32, over: i32| {
+                ((value - from).max(0) * 65535) / (over - 1).max(1)
+            };
+
+            send_inputs(&[mouse_input(
+                scaled(x, left, wide),
+                scaled(y, top, high),
+                MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+            )]);
+        }
+    }
+
+    fn send_left_button(down: bool) {
+        send_inputs(&[mouse_input(
+            0,
+            0,
+            if down {
+                MOUSEEVENTF_LEFTDOWN
+            } else {
+                MOUSEEVENTF_LEFTUP
+            },
+        )]);
+    }
+
+    /// The pin key, as a hand would press it — the low-level hook counts real key-downs and this
+    /// is the only way to give it one without a hand.
+    fn send_pin_key() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            KEYBDINPUT, KEYBD_EVENT_FLAGS, VIRTUAL_KEY,
+        };
+
+        fn key(vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
+            INPUT {
+                r#type: INPUT_TYPE(1),
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: vk,
+                        wScan: 0,
+                        dwFlags: flags,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            }
+        }
+
+        send_inputs(&[
+            key(VIRTUAL_KEY(0x20), KEYBD_EVENT_FLAGS(0)),
+            key(VIRTUAL_KEY(0x20), KEYBD_EVENT_FLAGS(0x0002)),
+        ]);
+    }
+
+    fn mouse_input(dx: i32, dy: i32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
+        INPUT {
+            r#type: INPUT_TYPE(0),
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx,
+                    dy,
+                    mouseData: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    fn send_inputs(inputs: &[INPUT]) {
+        unsafe {
+            let sent = SendInput(inputs, std::mem::size_of::<INPUT>() as i32);
+            assert_eq!(
+                sent as usize,
+                inputs.len(),
+                "SendInput refused {sent} of {} — another program is holding the input desktop",
+                inputs.len()
+            );
+        }
+    }
+
+    /// The whole of a pinned drawing's fault, end to end and without a hand: a document the
+    /// engine draws is taken up in a pin, a press is made over the drawing and carried across
+    /// it, and the pin is then asked to answer a press on its own caption.
+    ///
+    /// The last question is the one that matters and the one nothing else can answer. A drag of
+    /// the drawing is *supposed* to move the window, so a window that moved says nothing about
+    /// whether it can be moved again; a caption button that answers afterwards says the window is
+    /// still a window. The two symptoms are what a hand reports — the drawing comes away in the
+    /// cursor, the window follows it for a while, and afterwards nothing on the window answers.
+    ///
+    /// The press over the drawing is published rather than waited for. What the Explorer hook
+    /// does is count presses and publish the button's state (`publish_pin_media_press`), and the
+    /// loop answers that publication rather than a message, because the engine's window is
+    /// somebody else's and a message of this window's never arrives. A probe with no Explorer
+    /// behind it publishes what the hook would have published, and everything downstream of that
+    /// is the production path.
+    ///
+    /// Ignored, and driven by `RHP_APP_PROBE` —
+    /// `$env:RHP_APP_PROBE = "C:\art\clock.svg"; cargo test -- --ignored --nocapture pin_drawing_drag_probe`
+    #[test]
+    #[ignore = "drives the pointer over a pinned drawing"]
+    fn pin_drawing_drag_probe() {
+        let path = match std::env::var("RHP_APP_PROBE") {
+            Ok(path) => PathBuf::from(path),
+            Err(_) => std::env::temp_dir().join("rhp-pin-drag-probe.svg"),
+        };
+        if !path.exists() {
+            std::fs::write(
+                &path,
+                b"<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'>\
+                  <rect width='200' height='200' fill='#2b6'/><circle cx='100' cy='100' r='60' fill='#fff'/>\
+                  </svg>",
+            )
+            .expect("a written document");
+        }
+
+        std::thread::spawn(run_preview_window);
+        std::thread::sleep(Duration::from_millis(500));
+
+        show_preview(&path, 200, 200, None);
+
+        let mut landed = false;
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(100));
+            if crate::engines::webview_preview::showing_path().as_deref() == Some(path.as_path()) {
+                landed = true;
+                break;
+            }
+        }
+        assert!(landed, "the document never reached the browser");
+
+        crate::shell::key_input::spawn_key_watcher();
+        crate::shell::key_input::refresh();
+        std::thread::sleep(Duration::from_millis(200));
+        send_pin_key();
+
+        let mut up = false;
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(100));
+            if pinned() {
+                up = true;
+                break;
+            }
+        }
+        assert!(up, "the pin never came up");
+
+        let Some(content) = pinned_content() else {
+            panic!("a pinned window with no media box");
+        };
+        println!("drawing at {content:?}");
+        assert!(
+            engine_window_is_at((content.0 + content.2) / 2, (content.1 + content.3) / 2),
+            "the engine's own window is not where the drawing is",
+        );
+
+        let before = pinned_window_box().map(|(window, ..)| window);
+        let latched = |()| {
+            PINNED
+                .lock()
+                .ok()
+                .and_then(|pin| pin.as_ref().map(|pin| pin.dragging.is_some()))
+        };
+
+        // The drag: a press on the drawing, carried across it a step at a time, and let go of.
+        let (cx, cy) = ((content.0 + content.2) / 2, (content.1 + content.3) / 2);
+        send_pointer_to(cx, cy);
+        std::thread::sleep(Duration::from_millis(120));
+        send_left_button(true);
+        publish_pin_media_press(true, true);
+        std::thread::sleep(Duration::from_millis(120));
+        for step in 1..=24 {
+            send_pointer_to(cx - step * 8, cy - step * 4);
+            publish_pin_media_press(true, false);
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        send_left_button(false);
+        publish_pin_media_press(false, false);
+        std::thread::sleep(Duration::from_millis(400));
+
+        let after = pinned_window_box().map(|(window, ..)| window);
+        println!(
+            "after the drag: pinned={}, window {before:?} -> {after:?}, drag still latched={:?}",
+            pinned(),
+            latched(()),
+        );
+
+        // A drag of the drawing is what a hand on a drawing means, so the window following it is
+        // not the bug — it is the feature, and the feature is what a fix that simply refused the
+        // drag would have thrown away with it. Asserted before the window is asked anything else,
+        // because a window that has followed a hand is a window that was listening.
+        assert!(
+            before != after,
+            "a drag of the drawing did not move the window"
+        );
+
+        // And now the question: is this still a window?
+        assert!(
+            pinned(),
+            "the pin did not survive a drag of its own drawing — it was taken down rather than left"
+        );
+
+        let close = close_button_on_screen();
+        send_pointer_to(close.0, close.1);
+        std::thread::sleep(Duration::from_millis(120));
+        // A button that is not under the pointer after the pointer was put there is a button the
+        // window cannot be asked about, and that is the same answer however it was arrived at -
+        // so it is said rather than left to be the close click's own confusing failure.
+        assert_eq!(
+            cursor_screen_point(),
+            Some(close),
+            "the close button is not where the window was asked to put it",
+        );
+        send_left_button(true);
+        std::thread::sleep(Duration::from_millis(120));
+        send_left_button(false);
+
+        let mut closed = false;
+        for _ in 0..30 {
+            std::thread::sleep(Duration::from_millis(100));
+            if !pinned() {
+                closed = true;
+                break;
+            }
+        }
+        assert!(
+            closed,
+            "a drag of the drawing left a window whose caption answers nothing"
+        );
+
+        hide_preview();
+    }
+
+    /// Where the caption's close button is on the screen right now, found by asking the chrome
+    /// that draws it rather than by a metric that would be right only on this display, and
+    /// placed against where the window *is* rather than where the pin's state last said it was:
+    /// a click is delivered to a real window, and to nothing else.
+    fn close_button_on_screen() -> (i32, i32) {
+        let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+        let Some((left, top, width, _)) = window_origin(hwnd) else {
+            panic!("no pinned window to find a button on");
+        };
+        let Some(caption) = pinned_caption_geometry() else {
+            panic!("a pinned window with no caption");
+        };
+        let y = caption.height / 2;
+        let closes: Vec<i32> = (0..width)
+            .filter(|x| {
+                pin_chrome::button_at(*x, y, caption.width, caption.height, caption.dpi, false)
+                    == Some(pin_chrome::CaptionButton::Close)
+            })
+            .collect();
+        let Some(span) = closes.first().zip(closes.last()) else {
+            panic!("no close button on this caption")
+        };
+
+        // The middle of the button rather than its first pixel: the band along the top of a
+        // framed window is a resize, and it is asked about before the caption is (see
+        // `pinned_press`), so a press on the button's outermost column is a resize rather than a
+        // click on it.
+        (left + (span.0 + span.1) / 2, top + y)
+    }
+
     /// A video replaced in place is probed again rather than cropped and sized by
     /// the answer about the file it used to be: the version is part of what a probed
     /// geometry is held for.
@@ -26666,6 +27056,8 @@ mod tests {
             from: (0, 0),
             window: content,
             action: PinDragAction::Move,
+            delivered: true,
+            carried: (i32::MIN, i32::MIN),
         });
         assert!(!refresh_pin_chrome(&mut pressed, now, far));
         assert!(!pressed.chrome.caption && !pressed.chrome.bar);
