@@ -4429,6 +4429,11 @@ struct PinUpdateWatch {
     /// on every read, so it runs on its own cadence rather than on every tick — a click is
     /// still answered on its own tick (see `PIN_SELECTION_POLL_MS`).
     sel_polled_at: Option<Instant>,
+    /// Where the pointer was when the last press was read, or nothing where this watch has
+    /// not seen one. It is what tells a press of its own from the second press of a
+    /// double-click, which is one gesture at one point rather than two picks (see
+    /// `PinUpdateWatch::press_is_a_pick`).
+    press_point: Option<POINT>,
 }
 
 impl PinUpdateWatch {
@@ -4551,7 +4556,16 @@ impl PinUpdateWatch {
         let hovered = on_hover && self.arrived && !self.probed && settled;
         // Read by the tick that hands the watch its input rather than here, because the press bit is
         // the one thing about a click that can only be read once a tick (see `focus_move_input`).
+        //
+        // A press the hand has not moved for is the other half of a press it has already made, and
+        // is not a pick of its own. That is what a double-click is: one gesture at one point. Where
+        // the first press opened a folder, the second is answered out of the listing that first one
+        // put under a pointer nobody moved — a file the user never chose, and the one the new folder
+        // happens to have drawn there. Both doors a press comes through are closed by this one
+        // answer: the file under the point, and the listing's own selection (see
+        // `PinUpdateWatch::press_is_a_pick`).
         let clicked = focus_move.clicked;
+        let pick = clicked && self.press_is_a_pick(pointer.point, threshold);
 
         // Whether the press was read at all, before anything is decided about it, and where
         // the pointer was when it was. This is the one reading that says a click was lost
@@ -4595,7 +4609,7 @@ impl PinUpdateWatch {
             resolver.forget_window_views();
         }
 
-        if (clicked && click_is_over_a_listing(over_explorer, over_our_own))
+        if (pick && click_is_over_a_listing(over_explorer, over_our_own))
             || (hovered && over_explorer)
         {
             self.probed = true;
@@ -4604,11 +4618,11 @@ impl PinUpdateWatch {
                 // What was resolved is answered whatever it turned out to be — a file nothing can
                 // be shown for is one of them — so there is nothing here left to ask about again.
                 let offered = self.offer(&path, &showing);
-                self.answer_click(&path, &showing, clicked, now, pointer.point);
+                self.answer_click(&path, &showing, pick, now, pointer.point);
                 note_pin_click(
                     trace.as_deref(),
                     pin_click_line(ClickTrace {
-                        click: clicked,
+                        click: pick,
                         foreground: is_foreground_explorer(),
                         over_explorer,
                         showing: &showing,
@@ -4619,7 +4633,7 @@ impl PinUpdateWatch {
                         window_class: window_class_of(pointer.window),
                     }),
                 );
-            } else if clicked {
+            } else if pick {
                 // The lookup answered nothing, and the click is the only evidence it happened: the
                 // press bit it came from has been spent by the read that gave this tick its input
                 // and is not on any later tick. Explorer is commonly still coming up when a click
@@ -4644,7 +4658,7 @@ impl PinUpdateWatch {
                     }),
                 );
             }
-        } else if clicked {
+        } else if pick {
             // The same click, one step earlier in the race: what is under the pointer is not
             // Explorer's own window because the window is not there yet, and a click is asked
             // about wherever it landed rather than dropped for having landed early.
@@ -4669,8 +4683,8 @@ impl PinUpdateWatch {
 
         // The click above, asked again now that the shell may have caught up. It runs only where
         // something is held, and only something a click put there, so a tick that never saw a
-        // click offers nothing here — the held click is a user's pick and never a hover.
-        if !clicked {
+        // pick offers nothing here — the held click is a user's pick and never a hover.
+        if !pick {
             if let (Some(at), Some(point)) = (self.pending_click_at, self.pending_click_point) {
                 if now - at > Duration::from_millis(PIN_CLICK_RETRY_MS) {
                     // Nothing has come of it by now, and what a click held for half a second is
@@ -4878,8 +4892,38 @@ impl PinUpdateWatch {
         // this runs on every such tick rather than only where the press or the focus above
         // answered (see `PinUpdateWatch::follow_selection`).
         if !on_hover {
-            self.follow_selection(resolver, &pointer, &showing, over_explorer, clicked);
+            self.follow_selection(resolver, &pointer, &showing, over_explorer, pick);
         }
+    }
+
+    /// Whether the press that was just read is a pick of its own, rather than the second press of
+    /// a double-click — one gesture at one point rather than two choices. The press is noted on the
+    /// way out, so the next one is measured against this one.
+    ///
+    /// This is the whole of the rule that keeps a folder change from being answered as a pick.
+    /// A press is read against whatever is under the pointer at the tick it lands, and a
+    /// double-click that opened a folder leaves the new listing drawn exactly where the hand
+    /// already was: the second press was answered with a file that arrived under a pointer
+    /// nobody moved. The place cannot tell those apart, because by the time the second press
+    /// lands the folder has already changed and "where the press was made" and "where the
+    /// pointer is" are one place. The hand can, because a pick in a new listing is a file the
+    /// hand travelled to.
+    ///
+    /// A press within the move tolerance of the last one is therefore the other half of a gesture
+    /// already read, and is not offered — through either door, the file under the point and the
+    /// listing's own selection. It is still noted, so the third press of a triple-click is
+    /// refused the same way rather than answering on the strength of the first.
+    ///
+    /// What this does not cost: a click on a different file is a different row, and the hand
+    /// crosses a row to reach it. A click on the file the pin already shows is declined in
+    /// silence by `offer` whatever this says, and a second click on one file — what a slow
+    /// double-click on a file is — has nothing new to ask for either.
+    fn press_is_a_pick(&mut self, point: POINT, threshold: i32) -> bool {
+        let pick = self.press_point.is_none_or(|last| {
+            (point.x - last.x).abs() > threshold || (point.y - last.y).abs() > threshold
+        });
+        self.press_point = Some(point);
+        pick
     }
 
     /// Begin again from the file a pin is showing now, and tell apart the two reasons the file can
@@ -4912,6 +4956,11 @@ impl PinUpdateWatch {
             next.focused = self.focused.clone();
             next.place = self.place.clone();
             next.arrived = self.arrived;
+            // A press already read belongs to the listing it was read in, and a swap is the same
+            // listing being shown another file — so the press after a swap is still measured
+            // against this one, and the first click after a swap is the tail of whatever was
+            // pressed before it rather than a pick of its own (see `press_is_a_pick`).
+            next.press_point = self.press_point;
             // The selection the listing holds goes with the listing, for the same reason the
             // keyboard's item does: a swap is the window being shown another file, and what the
             // listing has selected is where it was — so the first pick after one is still a
@@ -7860,6 +7909,101 @@ mod tests {
         assert_eq!(
             watch.showing.as_deref(),
             Some(Path::new("D:/Videos/clip.mp4"))
+        );
+    }
+
+    /// The second press of the double-click that opened a folder is not a pick, and the pin keeps
+    /// the file it was showing.
+    ///
+    /// This is the whole of the fault. A press is read against whatever is under the pointer at the
+    /// tick it lands, and a double-click that opens a folder leaves the new listing drawn exactly
+    /// where the hand already was — so the second press was answered with whatever file the new
+    /// folder happened to put there, and the pin swapped to it. The place cannot tell the two
+    /// apart: by the time the second press lands the folder has already changed, so where the press
+    /// was made and where the pointer is are one place. The hand can, because a pick in a new
+    /// listing is a file the hand travelled to.
+    ///
+    /// Asserted on the decision rather than on the swap, because the swap needs a pin and a shell
+    /// to stand in: the rule is what this app decides, and everything downstream of it is `offer`.
+    #[test]
+    fn the_second_press_of_a_double_click_is_not_a_pick() {
+        let tolerance = KeyboardPointerPause::default().move_threshold_px(false, 96);
+        let on_the_folder = POINT { x: 400, y: 300 };
+        // The new folder's listing drew a row under the hand, in the same place.
+        let on_the_new_listing = POINT { x: 402, y: 301 };
+
+        let mut watch = PinUpdateWatch::default();
+
+        // The first press: the folder. A pick, and `offer` declines it — a folder is not a file
+        // this app can show anything for.
+        assert!(
+            watch.press_is_a_pick(on_the_folder, tolerance),
+            "the first press of a double-click is a pick of its own"
+        );
+
+        // The second, one gesture later, on the file the new folder put under the hand.
+        assert!(
+            !watch.press_is_a_pick(on_the_new_listing, tolerance),
+            "a press the hand has not moved for is the other half of a gesture, not a pick"
+        );
+
+        // And a third, for the same reason: a triple-click is one gesture, and the second press
+        // being refused must not leave the third answering on the strength of the first.
+        assert!(
+            !watch.press_is_a_pick(on_the_new_listing, tolerance),
+            "a triple-click is one gesture too"
+        );
+
+        // What it does cost: a click on a file the hand reached is a pick, however soon the click
+        // before it was made.
+        let mut moved = PinUpdateWatch::default();
+        assert!(moved.press_is_a_pick(on_the_folder, tolerance));
+        assert!(
+            moved.press_is_a_pick(POINT { x: 40, y: 140 }, tolerance),
+            "a click on another row is a file the hand travelled to"
+        );
+
+        // And the very first press a watch sees is a pick: there is no press before it to be the
+        // other half of, which is the first click after a pin is taken up.
+        assert!(
+            PinUpdateWatch::default().press_is_a_pick(on_the_folder, tolerance),
+            "the first press a watch sees is a pick"
+        );
+    }
+
+    /// A swap carries the press with it and a take-up does not: a press read against a listing the
+    /// next pin is not standing over is a press that pin has not seen.
+    #[test]
+    fn a_take_up_forgets_the_press_and_a_swap_keeps_it() {
+        let tolerance = KeyboardPointerPause::default().move_threshold_px(false, 96);
+        let point = POINT { x: 400, y: 300 };
+
+        // A watch is already showing a file, as a live one is by the time a swap can happen:
+        // the first `note_shown` is what told it the pin is up.
+        let mut watch = PinUpdateWatch {
+            showing: Some(Path::new("D:/Pictures/one.png").to_path_buf()),
+            ..PinUpdateWatch::default()
+        };
+        assert!(watch.press_is_a_pick(point, tolerance));
+
+        // A swap is the same window being shown another file, and the hand and the press it made
+        // are where they were — so the press after a swap is still measured against this one.
+        watch.note_shown(Path::new("D:/Pictures/one.png"));
+        assert!(
+            !watch.press_is_a_pick(point, tolerance),
+            "a swap carries the press with it: the listing did not change"
+        );
+
+        // A take-up is a watch beginning from nothing, so the first click after it is a pick
+        // whatever the pointer was doing before the window went up.
+        let mut taken_up = PinUpdateWatch {
+            press_point: Some(point),
+            ..PinUpdateWatch::default()
+        };
+        taken_up.note_shown(Path::new("D:/Pictures/one.png"));
+        assert!(
+            taken_up.press_is_a_pick(point, tolerance),
+            "a take-up begins from nothing, so the first click after it is a pick"
         );
     }
 
