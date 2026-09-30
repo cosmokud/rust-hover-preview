@@ -58,10 +58,10 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindow,
-    GetWindowPlacement, GetWindowRect, IsChild, IsIconic, IsWindowVisible, SystemParametersInfoW,
-    WindowFromPoint, GA_ROOT, GW_HWNDNEXT, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
+    EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
+    GetWindowRect, IsChild, IsIconic, IsWindowVisible, SystemParametersInfoW, WindowFromPoint,
+    GA_ROOT, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    WINDOWPLACEMENT,
 };
 
 /// What the walk over Explorer's own windows found: how many there are, how many are
@@ -1521,71 +1521,6 @@ fn window_class_of(window: HWND) -> String {
     String::from_utf16_lossy(&buffer[..written as usize])
 }
 
-/// The name a clicked file is written under in the trace: its own, the whole path being the
-/// same folder on both sides of every question there and a path long enough to be worth
-/// reading being one too long to read.
-fn trace_name(path: Option<&Path>) -> String {
-    path.and_then(|path| path.file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "-".to_string())
-}
-
-/// How far down the z-order the trace looks for a window of somebody else's under a point.
-/// A handful is every arrangement this is asked about: the couple of windows of this app's
-/// own that can stand over a listing, and the listing itself.
-const WINDOW_BENEATH_WALK_LIMIT: usize = 24;
-
-/// The first window under a point that is not one of this app's own: what the pointer would
-/// be over if the windows this app puts up were not there.
-///
-/// It is the walk the click trace needs to tell one unwritten click from another: a click
-/// that landed on this app's own window with a listing behind it — a click on that listing,
-/// and one nothing can read out of the point, because the hit test goes through whatever
-/// stands on top — and a click that landed on this app's own window with no listing under
-/// it at all. Nothing is decided by it; it is written down, so that a click lost this way
-/// says so rather than reading like a click that found nothing.
-///
-/// Z-order rather than a hit test, deliberately: the question is what lies *under* a window
-/// of this app's, which is the one question the hit test cannot answer. The window under
-/// the point is taken up to its frame first, because the walk below it is the z-order of
-/// the windows the desktop holds rather than of a child's siblings, and every window that
-/// is one of this app's own — or not at the point at all — is passed.
-fn window_beneath_ours(point: POINT) -> HWND {
-    unsafe {
-        let mut window = GetAncestor(WindowFromPoint(point), GA_ROOT);
-
-        for _ in 0..WINDOW_BENEATH_WALK_LIMIT {
-            if window.is_invalid() {
-                break;
-            }
-
-            let Ok(next) = GetWindow(window, GW_HWNDNEXT) else {
-                break;
-            };
-            window = next;
-
-            if is_our_own_window(window) || !IsWindowVisible(window).as_bool() {
-                continue;
-            }
-
-            let mut rect = RECT::default();
-            if GetWindowRect(window, &mut rect).is_err() {
-                continue;
-            }
-
-            let holds_point = point.x >= rect.left
-                && point.x < rect.right
-                && point.y >= rect.top
-                && point.y < rect.bottom;
-            if holds_point {
-                return window;
-            }
-        }
-    }
-
-    HWND::default()
-}
-
 /// One tick of a click in the listing, as the facts that say whether it was answered.
 ///
 /// Every field is a fact the loop has already read for its own reasons and none of them is
@@ -1611,12 +1546,10 @@ struct ClickTrace<'a> {
     /// How long the click has been held, where it is held at all.
     held_for: Option<Duration>,
     /// Where the pointer was, and what class of window was under it. The two are the
-    /// whole of what says a click can be answered out of the point at all: the pick is
-    /// read out of the listing under the pointer, and the window under the pointer is how
-    /// the listing is found — so a click that lands on this app's own window over the
-    /// listing is one the point cannot be read for, and it reads here as plainly as
-    /// anything else. What was under *that* window at the point — the line the press is
-    /// read on carries it — is what says whether there was a listing there to be read.
+    /// whole of what says a click can be answered at all: the pick is read out of the
+    /// listing under the pointer, and the window under the pointer is how the listing is
+    /// found — so a click that lands on this app's own window over the listing is a click
+    /// the shell never heard of, and it reads here as plainly as anything else.
     point: POINT,
     window_class: String,
 }
@@ -1627,6 +1560,12 @@ struct ClickTrace<'a> {
 /// same on both sides of every question here and a path long enough to be worth reading is a
 /// path too long to read.
 fn pin_click_line(tick: ClickTrace<'_>) -> String {
+    fn name(path: &Path) -> String {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "-".to_string())
+    }
+
     format!(
         "click {}  fg {}  over {}  at {},{}  win {}  showing {}  resolved {}  offered {}  held {}",
         tick.click as u8,
@@ -1635,8 +1574,10 @@ fn pin_click_line(tick: ClickTrace<'_>) -> String {
         tick.point.x,
         tick.point.y,
         tick.window_class,
-        trace_name(Some(tick.showing)),
-        trace_name(tick.resolved.map(|path| path.as_path())),
+        name(tick.showing),
+        tick.resolved
+            .map(|path| name(path.as_path()))
+            .unwrap_or_else(|| "-".to_string()),
         tick.offered as u8,
         tick.held_for
             .map(|held| format!("{}ms", held.as_millis()))
@@ -2317,6 +2258,26 @@ fn get_current_hover_resolver_hints(
     anchored_view_context(resolver, window, true)
         .map(|context| view_resolver_hints(&context))
         .unwrap_or_default()
+}
+
+/// The place a click was made in, as the view under the pointer describes itself: the listing a
+/// click held for a retry is measured against (see `PinUpdateWatch::pending_click_place`).
+///
+/// The folder is deliberately not asked for, which is the one fact `get_current_hover_resolver_hints`
+/// pays a walk out through the shell and a `stat` for: a click's place is compared with the place a
+/// *focused item* is read in, and that look asks for no folder either (see `focused_item_location`)
+/// — the URL a view was opened with is the folder for a folder view and the query for a search — so
+/// the fact would be one the comparison cannot use on its own terms.
+///
+/// A shell that described nothing is `None` rather than an empty place: a click whose listing cannot
+/// be named is left to its own look at the point, and a comparison against a place nobody answered
+/// is what the place rule exists to avoid (see `hover_location_changed`).
+fn click_place(resolver: &mut ItemResolver, pointer: &PointerTick) -> Option<HoverLocation> {
+    let window = item_window_of(pointer.window)?;
+    let context = anchored_view_context(resolver, window, false)?;
+    let place = HoverLocation::of(&view_resolver_hints(&context));
+
+    place.was_answered().then_some(place)
 }
 
 /// Whether a point is inside a box, read the way a window reads one: the right and
@@ -3370,46 +3331,6 @@ fn get_file_under_cursor(resolver: &mut ItemResolver, pointer: &PointerTick) -> 
     look.path
 }
 
-/// The file a click is to be answered with: the item the point draws its file from, and —
-/// where that look answers nothing — the item the view has the focus on, kept only where
-/// the view draws it at the point the click landed (see `file_at_point_from_view_focus`).
-///
-/// The pointer's own look is the better witness and comes first: it is the item the point
-/// is on, read out of the view that drew it. The focus is the reading a click has that the
-/// hit test does not — it belongs to the click once the shell has taken it in, and it is
-/// answered from the view's own side rather than through what stands on top of the view —
-/// which is what answers the two shapes a click loses its first look to: a click that lands
-/// on this app's own window over the listing, and a click the shell has not caught up with
-/// yet, where the item under the point has not been chosen by the view at all.
-///
-/// It is the click's second look and a hover has none: a hover is answered out of the point
-/// it is on (`get_file_under_cursor`), which is the whole of what a pointer resting on a
-/// file is asking.
-fn file_a_click_is_about(resolver: &mut ItemResolver, pointer: &PointerTick) -> Option<PathBuf> {
-    if let Some(path) = get_file_under_cursor(resolver, pointer) {
-        return Some(path);
-    }
-
-    let from_focus = file_at_point_from_view_focus(resolver, pointer.point);
-
-    // What the second look made of the point, where a trace is being written: the point
-    // having answered nothing is what says this look was the one the click was answered by,
-    // and a file it found is a click the window stack cost.
-    if let Some(trace) = pin_click_trace_path() {
-        note_pin_click(
-            Some(&trace),
-            format!(
-                "point none  focus {}  at {},{}",
-                trace_name(from_focus.as_deref()),
-                pointer.point.x,
-                pointer.point.y,
-            ),
-        );
-    }
-
-    from_focus
-}
-
 /// The file the pointer is over.
 ///
 /// Two witnesses and no third: the item the pointer is on, turned into a file by
@@ -3774,19 +3695,16 @@ fn get_explorer_state() -> ExplorerState {
     explorer_state_from_counts(&counts, pinned())
 }
 
-/// Whether `window` is one of this app's own rather than Explorer's: a preview surface of
-/// this app's — the window every kind but a video is drawn in, and the player's own window
-/// where a video is played by one (see `preview_window::is_preview_window`) — or something
-/// inside the engine's window where a document is drawn.
+/// Whether `window` is one of this app's own rather than Explorer's: the preview window
+/// itself, or something inside the engine's window where a document is drawn.
 ///
 /// A pinned window stands over the listing it was taken from, and it stands over it where
-/// the files are. A click that lands on it is a click on that listing underneath — the user
-/// is looking at a folder and clicking a file in it — so it has to be read out of the
-/// listing rather than dropped for having landed on us. What it cannot be read out of is
-/// the point: the look at what a point holds is a hit test, and a hit test asks what is *on
-/// top*, which is this window. The view's own answer is the same question from the other
-/// side, and it is the one a click is answered by where the point gives nothing (see
-/// `file_at_point_from_view_focus`).
+/// the files are. A click that lands on it is a click on the listing underneath — the user
+/// is looking at a folder and clicking a file in it — so it is read as a click on a listing
+/// rather than dropped for having landed on us. What the shell will name for such a point is
+/// this window, which is why a click is read a second way wherever its own look at the point
+/// answers nothing: out of the item the view has the focus on, which is where a click's own
+/// selection is answered from the view's side (see `PinUpdateWatch::click_picked_item`).
 fn is_our_own_window(window: HWND) -> bool {
     if preview_window_is_at(window) {
         return true;
@@ -4475,6 +4393,18 @@ struct PinUpdateWatch {
     /// not: a click is a file the user picked at the spot they picked it, and a hand that has
     /// travelled since is asking about whatever is under it now.
     pending_click_point: Option<POINT>,
+    /// The place the click `pending_click_at` was made in, as the view under the pointer described
+    /// itself when the press was read.
+    ///
+    /// A click whose own look at the point answers nothing is read a second way while it is held:
+    /// out of the item the view has the focus on, which is where a click's selection is reported
+    /// from the view's own side (see `PinUpdateWatch::click_picked_item`). What that reading needs
+    /// is this: a folder, a tab or a window moved to puts another item under a pointer nobody has
+    /// moved — the item a fresh listing puts under the hand is drawn exactly where the click landed
+    /// — so what tells the click's own pick from a listing that replaced the one it was made in is
+    /// the place, and only the place it was made in. `None` where the shell did not describe one as
+    /// the press was read, which leaves the click to its own look at the point.
+    pending_click_place: Option<HoverLocation>,
 }
 
 impl PinUpdateWatch {
@@ -4493,8 +4423,11 @@ impl PinUpdateWatch {
     /// not pick. Two facts are asked of such a move, and a move has to be the keyboard's by both of
     /// them: the *place* it was read in has to be the one the watch was already watching, and a key
     /// that walks a listing has to be what moved it (see `PinUpdateWatch::note_place` and
-    /// `PinUpdateWatch::focus_moved_by_key`). A click and a hover need neither rule: each is the
-    /// pointer acting on something the user is looking at, whatever listing it happens to be in.
+    /// `PinUpdateWatch::focus_moved_by_key`). A hover needs neither rule: it is the pointer acting on
+    /// something the user is looking at, whatever listing it happens to be in. A click needs them
+    /// wherever its own look at the point answers nothing and it is read out of the focus instead —
+    /// the same two facts, a place and a witness, with the click standing as the witness and the
+    /// place being the one the click was made in (see `PinUpdateWatch::click_picked_item`).
     ///
     /// The first item a watch sees is a baseline rather than a pick — it is the item the keyboard
     /// was already on when the watch began — and a swap does not begin a watch again, so the item
@@ -4509,11 +4442,6 @@ impl PinUpdateWatch {
     /// it back, is asked about, with the shell not yet answering for the listing under it. Such a
     /// click is held and asked again while the hand stays where it left it (see
     /// `pending_click_at`).
-    ///
-    /// A click is answered out of two looks and a hover out of one: the item the point draws its
-    /// file from, and — where that hit test answers nothing, which is what happens wherever a
-    /// window of this app's stands over the spot — the item the view has the focus on, kept only
-    /// where the view draws it at the point the click landed (see `file_a_click_is_about`).
     fn follow(
         &mut self,
         resolver: &mut ItemResolver,
@@ -4605,26 +4533,17 @@ impl PinUpdateWatch {
         // the pointer was when it was. This is the one reading that says a click was lost
         // before any of the rest had a chance to answer it, and it is not in any of the arms
         // below because every one of them is reached only where something else already held.
-        //
-        // The window under the point is written down with the one beneath this app's own
-        // windows at it: a click on a pinned window that stands over the listing is a click
-        // on the listing, and one there is nothing under is a click on nothing — and which
-        // of the two it was is not a question the arms below can answer, because neither of
-        // them is reached on a click the window stack has taken.
         if clicked {
-            if let Some(trace) = trace.as_deref() {
-                note_pin_click(
-                    Some(trace),
-                    format!(
-                        "press read  fg {}  at {},{}  win {}  beneath {}",
-                        is_foreground_explorer() as u8,
-                        pointer.point.x,
-                        pointer.point.y,
-                        window_class_of(pointer.window),
-                        window_class_of(window_beneath_ours(pointer.point)),
-                    ),
-                );
-            }
+            note_pin_click(
+                trace.as_deref(),
+                format!(
+                    "press read  fg {}  at {},{}  win {}",
+                    is_foreground_explorer() as u8,
+                    pointer.point.x,
+                    pointer.point.y,
+                    window_class_of(pointer.window)
+                ),
+            );
         }
 
         // A click is a change to the listing as much as a pick out of it, and the caches a pick
@@ -4657,16 +4576,7 @@ impl PinUpdateWatch {
         {
             self.probed = true;
 
-            // A click is answered out of the point and then out of the view's own focus,
-            // where the point answers nothing (see `file_a_click_is_about`); a hover is
-            // answered out of the point alone, which is the whole of what it asks.
-            let resolved = if clicked {
-                file_a_click_is_about(resolver, &pointer)
-            } else {
-                get_file_under_cursor(resolver, &pointer)
-            };
-
-            if let Some(path) = resolved {
+            if let Some(path) = get_file_under_cursor(resolver, &pointer) {
                 // What was resolved is answered whatever it turned out to be — a file nothing can
                 // be shown for is one of them — so there is nothing here left to ask about again.
                 let offered = self.offer(&path, &showing);
@@ -4694,6 +4604,7 @@ impl PinUpdateWatch {
                 // it is held and asked again below rather than spent for nothing.
                 self.pending_click_at = Some(now);
                 self.pending_click_point = Some(pointer.point);
+                self.pending_click_place = click_place(resolver, &pointer);
                 note_pin_click(
                     trace.as_deref(),
                     pin_click_line(ClickTrace {
@@ -4715,6 +4626,7 @@ impl PinUpdateWatch {
             // about wherever it landed rather than dropped for having landed early.
             self.pending_click_at = Some(now);
             self.pending_click_point = Some(pointer.point);
+            self.pending_click_place = click_place(resolver, &pointer);
             note_pin_click(
                 trace.as_deref(),
                 pin_click_line(ClickTrace {
@@ -4741,6 +4653,7 @@ impl PinUpdateWatch {
                     // not worth a stale file being shown beside it (see `PIN_CLICK_RETRY_MS`).
                     self.pending_click_at = None;
                     self.pending_click_point = None;
+                    self.pending_click_place = None;
                     note_pin_click(
                         trace.as_deref(),
                         pin_click_line(ClickTrace {
@@ -4763,6 +4676,29 @@ impl PinUpdateWatch {
                     // the user has not picked.
                     self.pending_click_at = None;
                     self.pending_click_point = None;
+                    self.pending_click_place = None;
+                    note_pin_click(
+                        trace.as_deref(),
+                        pin_click_line(ClickTrace {
+                            click: false,
+                            foreground: is_foreground_explorer(),
+                            over_explorer,
+                            showing: &showing,
+                            resolved: None,
+                            offered: false,
+                            held_for: Some(now - at),
+                            point: pointer.point,
+                            window_class: window_class_of(pointer.window),
+                        }),
+                    );
+                } else if self.click_place_changed(resolver, &pointer) {
+                    // The listing the click was made in is not the one under the pointer any more —
+                    // a folder, a tab or a window moved to — so the click is let go rather than
+                    // answered: what the point holds now is a file that arrived under a hand nobody
+                    // has moved, which is not a file anybody picked.
+                    self.pending_click_at = None;
+                    self.pending_click_point = None;
+                    self.pending_click_place = None;
                     note_pin_click(
                         trace.as_deref(),
                         pin_click_line(ClickTrace {
@@ -4778,19 +4714,17 @@ impl PinUpdateWatch {
                         }),
                     );
                 } else if click_is_over_a_listing(over_explorer, over_our_own) {
-                    // The hand is where it clicked and the click can still be read out of the
-                    // listing under it. The lookup is kept only while it answers nothing: a file
-                    // it does resolve is offered and stops the retry, whatever the offer then
-                    // does with it.
+                    // The hand is where it clicked and Explorer is answering for it. The lookup is
+                    // kept only while it answers nothing: a file it does resolve is offered and
+                    // stops the retry, whatever the offer then does with it.
                     //
-                    // What is on top of the point is not asked again here, because it is not what
-                    // decides the question: the click is read out of the listing — out of the item
-                    // the point draws its file from, and, where that hit test answers nothing, as
-                    // it does wherever this app's own window stands over the spot, out of the item
-                    // the view has the focus on (see `file_a_click_is_about`). Gating this on
-                    // Explorer's own window made a click that landed on a pinned window
-                    // unanswerable for as long as the hold lasted: the retry could not run, so
-                    // neither look was ever made.
+                    // What is on top of the point is not asked again here, because it is not
+                    // what decides the question: the shell is asked what file is at the point,
+                    // and it will answer while this app's own window stands over the listing as
+                    // readily as while Explorer's does. Gating this on Explorer's own window
+                    // made a click that landed on a pinned window unanswerable for as long as
+                    // the hold lasted — the retry could not run, so the shell was never asked,
+                    // so nothing was ever resolved.
                     //
                     // Both caches go before the ask rather than only the item's answer: a retry is
                     // a question about a listing that has *since* caught up, and what the click was
@@ -4804,7 +4738,7 @@ impl PinUpdateWatch {
                     resolver.forget_item();
                     resolver.forget_window_views();
 
-                    match file_a_click_is_about(resolver, &pointer) {
+                    match get_file_under_cursor(resolver, &pointer) {
                         Some(path) => {
                             let offered = self.offer(&path, &showing);
                             self.answer_click(&path, &showing, clicked, now, pointer.point);
@@ -4863,7 +4797,8 @@ impl PinUpdateWatch {
                     // Why the focus has moved, which is what tells a key the user pressed from a
                     // folder, a tab or a window the user moved to. The place is read for the watch's
                     // first item as much as for a move — a baseline is taken in a place too.
-                    let landed = self.note_place(focused_item_location(resolver, &focused));
+                    let place = focused_item_location(resolver, &focused);
+                    let landed = self.note_place(place.clone());
 
                     // And a place is not the whole of it, which is why the keyboard's own keys are
                     // asked as well: the place a focused item is read in is the view the *pointer*
@@ -4873,9 +4808,40 @@ impl PinUpdateWatch {
                     // already watching. A move both facts call the keyboard's is a file the user
                     // picked; one either of them calls somebody else's is not (see
                     // `focus_moved_by_key`).
-                    if known && !landed && self.focus_moved_by_key(now) {
+                    //
+                    // A click is the other thing that moves the focus onto a file, and it is read
+                    // here because it is the same change: what a click selects, the view reports as
+                    // the focus it moved — from its own side, where the watch's own look at the point
+                    // answers for whatever is standing on top. It carries its own witness, and a
+                    // click that is not this one is not a pick (see `click_picked_item`).
+                    let by_key = known && !landed && self.focus_moved_by_key(now);
+                    let bounds = focused.item.bounds;
+                    let by_click = self.click_picked_item(
+                        (bounds.left, bounds.top, bounds.right, bounds.bottom),
+                        place.as_ref(),
+                        now,
+                    );
+
+                    if by_key || by_click {
                         if let Some(path) = resolve_focused_item_to_path(resolver, &focused) {
-                            self.offer(&path, &showing);
+                            let offered = self.offer(&path, &showing);
+
+                            // Which of the two readings answered is the one thing a click lost to the
+                            // wrong reading cannot say for itself, so it is written down where a
+                            // trace is being written.
+                            note_pin_click(
+                                trace.as_deref(),
+                                format!(
+                                    "focus pick  by {}  at {},{}  file {}  offered {}",
+                                    if by_click { "click" } else { "key" },
+                                    pointer.point.x,
+                                    pointer.point.y,
+                                    path.file_name()
+                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| "-".to_string()),
+                                    offered as u8,
+                                ),
+                            );
                         }
                     }
                 }
@@ -4955,6 +4921,81 @@ impl PinUpdateWatch {
         )
     }
 
+    /// Whether the click in hand is what moved the focus onto this item: the click's own pick, read
+    /// out of the item the view has the focus on rather than out of the point under the hand.
+    ///
+    /// It is the pick the keyboard's own rule reads — an item the focus has moved to, in a place the
+    /// watch was already watching — asked of a click instead of a key, because a click *is* a focus
+    /// change the view reports and this app never sees: Explorer gives the item a click selects the
+    /// keyboard focus, and what the view says about it is answered from the view's own side, where
+    /// the hit test this watch's own look uses answers for whatever is standing on top.
+    ///
+    /// Three facts make a focus change this click's, and all three are needed:
+    ///
+    /// * A click is in hand: the press was read, and its hold (`PIN_CLICK_RETRY_MS`) has not run
+    ///   out. A click whose hold is over is not a click any more, and a focus that moves after one is
+    ///   nobody's pick.
+    /// * The item is drawn where the click landed, which is the box the view gives it. A click
+    ///   selects the item under the hand, so an item the hand was not on is not the item it picked.
+    /// * The item is read in the place the click was *made in* — and this is the fact the other two
+    ///   cannot stand in for. A folder, a tab or a window moved to puts a fresh listing under a
+    ///   pointer nobody has moved, and the item *that* listing puts under the hand is drawn exactly
+    ///   where the click landed: read as a pick, every folder change would answer a click made in
+    ///   the folder before it, and the preview would follow the item under a parked pointer through
+    ///   the listing. The place is what tells the two apart (see `HoverLocation`).
+    ///
+    /// The place is asked of the click rather than of the watch for the same reason the box is: the
+    /// watch's own place is where the *keyboard* was last read, and the click is the one thing here
+    /// that says which listing the pointer was working in.
+    fn click_picked_item(
+        &self,
+        bounds: (i32, i32, i32, i32),
+        place: Option<&HoverLocation>,
+        now: Instant,
+    ) -> bool {
+        let (Some(at), Some(point), Some(clicked_in)) = (
+            self.pending_click_at,
+            self.pending_click_point,
+            self.pending_click_place.as_ref(),
+        ) else {
+            return false;
+        };
+
+        if now.saturating_duration_since(at) > Duration::from_millis(PIN_CLICK_RETRY_MS) {
+            return false;
+        }
+
+        if !point_in_box(point, bounds) {
+            return false;
+        }
+
+        let Some(here) = place else {
+            return false;
+        };
+
+        !hover_location_changed(clicked_in, here)
+    }
+
+    /// Whether the listing the click in hand was made in is no longer the one under the pointer.
+    ///
+    /// The place is what a retry cannot say for itself. A folder, a tab or a window moved to puts a
+    /// fresh listing where the old one stood, and a retry asks about the *point*: read without the
+    /// place, a listing that replaced the one the click was made in answers it with whatever the
+    /// fresh listing happens to have under a hand nobody moved — which is a preview that follows the
+    /// pointer through every folder change, and the file the user clicked in the folder before it
+    /// never offered at all.
+    ///
+    /// A click whose place was never read is not answered as changed: a shell that did not describe
+    /// the view when the press was read is not a listing that moved, and the click is left to its own
+    /// look at the point (see `PinUpdateWatch::pending_click_place`).
+    fn click_place_changed(&self, resolver: &mut ItemResolver, pointer: &PointerTick) -> bool {
+        let Some(clicked_in) = self.pending_click_place.as_ref() else {
+            return false;
+        };
+
+        click_place(resolver, pointer).is_some_and(|here| hover_location_changed(clicked_in, &here))
+    }
+
     /// Note the place the item the keyboard has landed on was read in, and answer whether the focus
     /// has landed somewhere the watch was not watching: another folder, another tab of one window,
     /// another window. Those are the moves that put the focus on a file without a key the user
@@ -5032,6 +5073,7 @@ impl PinUpdateWatch {
 
         self.pending_click_at = None;
         self.pending_click_point = None;
+        self.pending_click_place = None;
     }
 
     /// Offer a file to the pin that is up: the one thing this watch does, and the only
@@ -5310,45 +5352,6 @@ fn resolve_focused_item_to_path(
         .value
         .as_deref()
         .and_then(resolve_media_path_from_text)
-}
-
-/// The file the view draws at a point, read from the item the view has the focus on rather
-/// than from a hit test.
-///
-/// The hit test every other look here is built on asks what is under the point on the
-/// *screen*, so it answers for this app's own windows wherever one of them stands over the
-/// spot — and a pinned window standing over the listing it came from, with the files the
-/// user is picking drawn behind it, is exactly that (see `click_is_over_a_listing`). What
-/// the view has the focus on is the same file read the other way round, and it is the one
-/// question about the point that does not go through the window stack: Explorer gives a
-/// clicked item the keyboard focus — that is what selecting one means — and the item that
-/// holds it is reported from the view's own side.
-///
-/// What makes the answer about *this* point is the box: the item is offered only where the
-/// view draws it at the point the click landed (`HoveredItem::bounds`, which is the part of
-/// the item's box that is really on screen). A focus that something other than this click
-/// moved — an item the arrows walked onto, a listing relaid out under a parked pointer — is
-/// therefore not a file the user picked at the point, while an item whose box holds the
-/// point is the item the point is on.
-fn file_at_point_from_view_focus(resolver: &mut ItemResolver, point: POINT) -> Option<PathBuf> {
-    let focused = uia_item_from_focus(resolver)?;
-
-    let bounds = (
-        focused.bounds.left,
-        focused.bounds.top,
-        focused.bounds.right,
-        focused.bounds.bottom,
-    );
-    if !point_in_box(point, bounds) {
-        return None;
-    }
-
-    let info = FocusedItemInfo {
-        root_window: root_window_of_item(&focused),
-        item: focused,
-    };
-
-    resolve_focused_item_to_path(resolver, &info)
 }
 
 /// The place the item the keyboard is on was read in: the view that drew it, and what that view
@@ -7587,7 +7590,9 @@ mod tests {
             "the settle and the probe were measured against a window that has since moved"
         );
         assert!(
-            watch.pending_click_at.is_none() && watch.pending_click_point.is_none(),
+            watch.pending_click_at.is_none()
+                && watch.pending_click_point.is_none()
+                && watch.pending_click_place.is_none(),
             "and a click held for a retry was measured against the showing before this one"
         );
 
@@ -7636,7 +7641,9 @@ mod tests {
             "what is on the keyboard when a pin comes up is a baseline, not a choice"
         );
         assert!(
-            watch.pending_click_at.is_none() && watch.pending_click_point.is_none(),
+            watch.pending_click_at.is_none()
+                && watch.pending_click_point.is_none()
+                && watch.pending_click_place.is_none(),
             "and a click held for a retry was held against the pin before this one"
         );
         assert_eq!(
@@ -7720,7 +7727,9 @@ mod tests {
             point,
         );
         assert!(
-            watch.pending_click_at.is_none() && watch.pending_click_point.is_none(),
+            watch.pending_click_at.is_none()
+                && watch.pending_click_point.is_none()
+                && watch.pending_click_place.is_none(),
             "a file the pin is not showing ends the hold"
         );
 
@@ -8318,6 +8327,79 @@ mod tests {
         assert_ne!(
             location_fact_key("search-ms:query=Foo"),
             location_fact_key("search-ms:query=foo")
+        );
+    }
+
+    /// A click read out of the focus is the click that made it, and a listing that replaced the one
+    /// it was made in is not that click.
+    ///
+    /// This is the rule that lets a click be answered out of the item the view has the focus on —
+    /// which is where a click's own selection is reported from the view's side, where the look at
+    /// the point cannot answer, because the hit test it is made of answers for whatever stands on top
+    /// of the listing. What it has to *refuse* is the whole of why it is made of three facts: a
+    /// folder, a tab or a window moved to puts a fresh listing under a pointer nobody has moved, and
+    /// the item that listing puts under the hand is drawn exactly where the click landed — so a rule
+    /// of "a click was seen and the focus is on the item under it" answers every folder change, and
+    /// the preview follows the item under a parked pointer from listing to listing, which is the
+    /// regression this test exists to hold shut. What tells the two apart is the place the click was
+    /// *made in*, and it is asked of the click rather than of the watch because the click is the one
+    /// thing here that says which listing the pointer was working in.
+    #[test]
+    fn a_focus_change_is_a_click_pick_only_where_that_click_was_made() {
+        let now = Instant::now();
+        let clicked_in = HoverLocation {
+            folder: None,
+            search_root: None,
+            location_url: Some("file:///D:/Pictures".to_string()),
+            view_hwnd: Some(0x1234),
+        };
+        let under_the_click = (100, 230, 480, 250);
+
+        let watch = PinUpdateWatch {
+            pending_click_at: Some(now),
+            pending_click_point: Some(POINT { x: 300, y: 240 }),
+            pending_click_place: Some(clicked_in.clone()),
+            ..PinUpdateWatch::default()
+        };
+
+        assert!(
+            watch.click_picked_item(under_the_click, Some(&clicked_in), now),
+            "the item under the click, in the place the click was made in, is what that click picked"
+        );
+
+        // The folder change, which is the case the rule is written against: the item the fresh
+        // listing has put under the hand is drawn exactly where the click landed, so nothing about
+        // the box can tell it — the place is what says it is not the item the click was on.
+        let elsewhere = HoverLocation {
+            location_url: Some("file:///D:/Pictures/2024".to_string()),
+            ..clicked_in.clone()
+        };
+        assert!(
+            !watch.click_picked_item(under_the_click, Some(&elsewhere), now),
+            "an item in another folder is not the file the click was on, whatever box it is drawn in"
+        );
+
+        // A shell that described no place: which listing the item is in is not known, and a
+        // comparison that cannot be made is never made in the click's favour.
+        assert!(
+            !watch.click_picked_item(under_the_click, None, now),
+            "a place nobody answered is not the place the click was made in"
+        );
+
+        // An item the click was not on: a focus that lands beside the hand is the shell's own move.
+        assert!(
+            !watch.click_picked_item((0, 0, 60, 40), Some(&clicked_in), now),
+            "the item has to be drawn where the click landed"
+        );
+
+        // And a click whose hold has run out is not a click any more, whatever the focus is doing.
+        let expired = PinUpdateWatch {
+            pending_click_at: Some(now - Duration::from_millis(PIN_CLICK_RETRY_MS + 1)),
+            ..watch
+        };
+        assert!(
+            !expired.click_picked_item(under_the_click, Some(&clicked_in), now),
+            "a focus that moves after the hold is over is nobody's pick"
         );
     }
 }
