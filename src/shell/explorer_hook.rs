@@ -1057,6 +1057,20 @@ const PIN_CLICK_RETRY_MS: u64 = 500;
 /// walked with the arrow keys is read as being followed rather than as catching up.
 const KEYBOARD_FOCUS_PROBE_MS: u64 = 30;
 
+/// The sleep each Explorer state is answered with, and how often the state is read again while it
+/// is being answered with (see `ExplorerState` and `explorer_pace`).
+///
+/// The active row is the `tick_ms` setting rather than a constant of its own — the one number that
+/// trades how soon a move is answered against what the app costs while it works — so a state is
+/// asked for its row rather than carrying its numbers.
+const DEEP_SLEEP_MS: u64 = 1000; // No Explorer windows - check once per second
+const LONG_SLEEP_MS: u64 = 500; // All minimized or hidden - check twice per second
+const MEDIUM_SLEEP_MS: u64 = 150; // Visible but not focused - moderate checking
+const STATE_RECHECK_DEEP_MS: u64 = 2000; // When no Explorer windows
+const STATE_RECHECK_LONG_MS: u64 = 1000; // When minimized/hidden
+const STATE_RECHECK_MEDIUM_MS: u64 = 300; // When visible but not focused
+const STATE_RECHECK_ACTIVE_MS: u64 = 100; // When active
+
 /// How long the preview loop may go without ticking before the engines it is holding
 /// are ended from here.
 ///
@@ -1723,7 +1737,12 @@ fn avoid_mode() -> AvoidMode {
         .unwrap_or(AvoidMode::Off)
 }
 
-fn same_path(a: &PathBuf, b: &PathBuf) -> bool {
+/// Whether two paths name the same file.
+///
+/// What "the same" means is the shell's rather than `Path`'s: Windows paths are not
+/// case-sensitive, and a listing that answers with `D:\Pictures\One.PNG` for a pin showing
+/// `D:\Pictures\one.png` is answering with the file that is already on screen.
+fn same_path(a: &Path, b: &Path) -> bool {
     a == b
         || a.as_os_str()
             .encode_wide()
@@ -3538,12 +3557,17 @@ fn get_explorer_state() -> ExplorerState {
     // Everything past here is about the Explorer windows themselves: how many there
     // are, and whether the window in front leaves any of them out from behind itself.
     let counts = get_explorer_window_counts(foreground_cover_rect());
-    explorer_state_from_counts(&counts)
+    explorer_state_from_counts(&counts, pinned())
 }
 
 /// The state the counts come out as: which sleep the loop takes, and whether the
 /// cursor is asked about at all.
-fn explorer_state_from_counts(counts: &ExplorerWindowCounts) -> ExplorerState {
+///
+/// `pin_up` is handed in rather than read here so that the one answer a pin changes is
+/// a decision this function makes rather than a fact it goes and looks up — it is the whole
+/// of what `PinUpdateWatch` depends on, and a rule that can only be tested by putting a window
+/// on somebody's screen is a rule that goes untested.
+fn explorer_state_from_counts(counts: &ExplorerWindowCounts, pin_up: bool) -> ExplorerState {
     if counts.total == 0 {
         return ExplorerState::NoExplorerWindows;
     }
@@ -3558,8 +3582,43 @@ fn explorer_state_from_counts(counts: &ExplorerWindowCounts) -> ExplorerState {
         return ExplorerState::HiddenByForeground;
     }
 
+    // A window this app has put up and the user has not closed is a window of its own, and
+    // a pin takes the focus off Explorer on purpose — `pin_take_focus`, so that the keys the
+    // pin answers are the user's own rather than the listing's. Reading that arrangement as
+    // "Explorer is showing but nobody is in it" is what dropped the loop to the medium
+    // cadence and the half-second recheck behind a preview that is on screen and being worked
+    // in: a reachable Explorer window and an open pin is the active arrangement it is, and
+    // which of the two has the keyboard does not change that.
+    //
+    // Minimized, and behind a window that covers it, are left where they are. There is no
+    // listing under the pointer in either, so a pin has nothing to be shown another file
+    // from, and nothing about them is active — see `ExplorerState`.
+    if pin_up {
+        return ExplorerState::ActiveFocus;
+    }
+
     // Explorer windows exist and are visible, but not in foreground
     ExplorerState::VisibleNotFocused
+}
+
+/// The sleep a state is answered with, and how often that state is read again while it is being
+/// answered with — the whole of the ladder, in one place because two branches of the loop are
+/// paced by it: the hover machinery below, and the pinned tick above it.
+///
+/// The pinned tick is where the second reader is, and it is there because a pin standing over a
+/// listing makes the loop's own answer to "is Explorer in use" wrong in the direction that costs
+/// the most: the pin takes the focus off Explorer on purpose (`pin_take_focus`), so a pin in front
+/// of a listing that is up and visible is `ActiveFocus` however the keyboard is arranged
+/// (`explorer_state_from_counts`), and neither half of this ladder is ever reached at the medium
+/// cadence while one is on screen.
+fn explorer_pace(state: ExplorerState, tick_ms: u64) -> (u64, u64) {
+    match state {
+        ExplorerState::NoExplorerWindows => (DEEP_SLEEP_MS, STATE_RECHECK_DEEP_MS),
+        ExplorerState::AllMinimized => (LONG_SLEEP_MS, STATE_RECHECK_LONG_MS),
+        ExplorerState::HiddenByForeground => (LONG_SLEEP_MS, STATE_RECHECK_LONG_MS),
+        ExplorerState::VisibleNotFocused => (MEDIUM_SLEEP_MS, STATE_RECHECK_MEDIUM_MS),
+        ExplorerState::ActiveFocus => (tick_ms, STATE_RECHECK_ACTIVE_MS),
+    }
 }
 
 /// Read the state of Explorer, and record it for the engines' away timer.
@@ -4269,16 +4328,39 @@ impl PinUpdateWatch {
         // the one thing about a click that can only be read once a tick (see `focus_move_input`).
         let clicked = focus_move.clicked;
 
+        // A click is a change to the listing as much as a pick out of it, and the caches a pick
+        // is resolved against are frozen while a pin is up — they are whatever the listing held
+        // when the pin came up, because nothing on the pinned branch resolves anything else. The
+        // tick that drops them is the tick the shell is *seen* to have caught up with the focus
+        // moving, and a click is read before the shell has caught up with it: the press bit is
+        // spent the moment the button goes down and the foreground window is activated after that,
+        // so the transition is noticed a tick *after* the click that needed it. The first click
+        // after a pin is taken up is therefore resolved against the listing as it was before that
+        // click — and a stale view set answers it with the file the pin is already showing, which
+        // `offer` declines in silence. Nothing moves on screen, nothing was offered, and the click
+        // after it — read a tick later, against caches the late drop has already cleared — is the
+        // first one answered. That is the whole of the rule it followed: every time, on any file,
+        // the first click only.
+        //
+        // So the click carries the drop itself, before anything is read out of them. It is made
+        // once, here, for all three shapes a click takes below — over the listing, over nothing
+        // yet, and the retry it arms — rather than in the arms, so that no arm can resolve a pick
+        // through a cache that the click has already made a lie. The loop's own drop on the focus
+        // transition stays where it is: it still covers a focus that moved with no click, and a
+        // click that drops twice costs one view walk.
+        if clicked {
+            resolver.forget_item();
+            resolver.forget_window_views();
+        }
+
         if over_explorer && (clicked || hovered) {
             self.probed = true;
 
             if let Some(path) = get_file_under_cursor(resolver, &pointer) {
-                // What was resolved is answered whatever it turned out to be — a file the pin is
-                // already showing and a file nothing can be shown for are both answers the pin
-                // deals with — so there is nothing here left to ask about again.
+                // What was resolved is answered whatever it turned out to be — a file nothing can
+                // be shown for is one of them — so there is nothing here left to ask about again.
                 self.offer(&path, &showing);
-                self.pending_click_at = None;
-                self.pending_click_point = None;
+                self.answer_click(&path, &showing, clicked, now, pointer.point);
             } else if clicked {
                 // The lookup answered nothing, and the click is the only evidence it happened: the
                 // press bit it came from has been spent by the read that gave this tick its input
@@ -4320,23 +4402,21 @@ impl PinUpdateWatch {
                     // kept only while it answers nothing: a file it does resolve is offered and
                     // stops the retry, whatever the offer then does with it.
                     //
-                    // The answer the click itself was given is dropped with the item it was read
-                    // from, because a retry that asked that item again would be handed back the
-                    // very answer it exists to replace. A click that lands on the tick the listing
-                    // takes the focus back is read before the shell has caught up with the move,
-                    // and what it resolves then is an item the stale views cannot name — which
-                    // `remember_item` keeps against that item exactly as it keeps the answer that
-                    // an item is a folder. The two are told apart nowhere, so a negative read for
-                    // the first is kept for the second, and the retry is answered "no file" once a
-                    // tick for as long as the hand stays in that item, which is the whole of the
-                    // click's life. The pick is then offered nothing at all, and the click after
-                    // it — on another file, and so on another item — is the first one answered.
+                    // Both caches go before the ask rather than only the item's answer: a retry is
+                    // a question about a listing that has *since* caught up, and what the click was
+                    // answered out of is the listing as it was when the click landed. Keeping the
+                    // item's own memo would hand the retry back the very answer it exists to
+                    // replace — a look that finds an item and cannot name a file for it is kept
+                    // against that item exactly as it keeps the answer that an item is a folder,
+                    // and the two are told apart nowhere — and keeping the view set would ask the
+                    // stale walk the same question again. One walk a tick for as long as the hold
+                    // lasts, and only on a click that is not yet answered, is what a retry is.
                     resolver.forget_item();
+                    resolver.forget_window_views();
 
                     if let Some(path) = get_file_under_cursor(resolver, &pointer) {
                         self.offer(&path, &showing);
-                        self.pending_click_at = None;
-                        self.pending_click_point = None;
+                        self.answer_click(&path, &showing, clicked, now, pointer.point);
                     }
                 }
             }
@@ -4483,6 +4563,55 @@ impl PinUpdateWatch {
         self.place = Some(place);
 
         moved
+    }
+
+    /// What an answer to a click does to the hold on it: an answer the pin is already showing
+    /// holds it, anything else ends it.
+    ///
+    /// Every answer but one ends it. A file nothing can be shown for is a real answer — Explorer
+    /// selected it and this app has nothing to put in the window, and offering it would blank the
+    /// pin for a file the user did not ask to see — so the hold ends there as it always did.
+    ///
+    /// The file the pin is already showing is not an answer, it is the *absence* of one, and
+    /// letting it end the hold is what made the first click after a pin was focused the one that
+    /// was lost: `offer` declines such a file in silence, and the decline was read as "resolved",
+    /// so nothing was offered, nothing waited, and the next click on another file — read a tick
+    /// later, against caches the late drop had by then cleared — was the first one answered.
+    /// Every time, on any file, the first click only.
+    ///
+    /// So a click is held until the shell names a file that is not the one on screen, or until its
+    /// own window runs out (`PIN_CLICK_RETRY_MS`). A hand that clicks the file already on screen
+    /// pays for the hold and nothing else: the answer it keeps getting is the answer, and the pin
+    /// is left exactly as it was, which is what clicking the file you are already looking at is
+    /// supposed to do.
+    ///
+    /// A click in hand is one read on this tick or one already being held for a retry; a hover
+    /// is neither and arms nothing — a hand that settles on the file already on screen has asked
+    /// for nothing, so there is nothing to hold on its behalf.
+    ///
+    /// The hold's own clock is set by the click that started it and by nothing else. Re-arming it
+    /// on a retry would slide the window along with every tick told "not the file on screen", and
+    /// a click that is being spent rather than answered would then be held for as long as the
+    /// hand stayed still over it.
+    fn answer_click(
+        &mut self,
+        path: &Path,
+        showing: &Path,
+        clicked: bool,
+        now: Instant,
+        point: POINT,
+    ) {
+        if same_path(path, showing) && (clicked || self.pending_click_at.is_some()) {
+            if clicked {
+                self.pending_click_at = Some(now);
+                self.pending_click_point = Some(point);
+            }
+
+            return;
+        }
+
+        self.pending_click_at = None;
+        self.pending_click_point = None;
     }
 
     /// Offer a file to the pin that is up: the one thing this watch does.
@@ -4897,19 +5026,11 @@ pub fn run_explorer_hook() {
     // is the `tick_ms` setting rather than a constant here — the one number that trades
     // how soon a move is answered against what the app costs while it works (see
     // `DEFAULT_TICK_MS`) — and the stationary probe below is gated by it as well: a file
-    // under a parked pointer is read again no sooner than the loop looks.
-    const DEEP_SLEEP_MS: u64 = 1000; // No Explorer windows - check once per second
-    const LONG_SLEEP_MS: u64 = 500; // All minimized or hidden - check twice per second
-    const MEDIUM_SLEEP_MS: u64 = 150; // Visible but not focused - moderate checking
+    // under a parked pointer is read again no sooner than the loop looks. The ladder
+    // itself is `explorer_pace`, because a pinned tick is paced by it as well.
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
     const VIDEO_PROCESS_SWEEP_MS: u64 = 1000;
-
-    // How often to re-evaluate the state when in sleep modes
-    const STATE_RECHECK_DEEP_MS: u64 = 2000; // When no Explorer windows
-    const STATE_RECHECK_LONG_MS: u64 = 1000; // When minimized/hidden
-    const STATE_RECHECK_MEDIUM_MS: u64 = 300; // When visible but not focused
-    const STATE_RECHECK_ACTIVE_MS: u64 = 100; // When active
 
     let (mut config_snapshot, mut trigger_key_vk, mut trigger_key_seen) = CONFIG
         .lock()
@@ -5270,6 +5391,20 @@ pub fn run_explorer_hook() {
         // the pin rather than a hover beside it, and it is answered by the same loop, one tick at
         // a time, with nothing of the machinery above touched (see `PinUpdateWatch`).
         if pinned() {
+            // The state is read here as well, on the clock the ladder keeps it on, so that the one
+            // thing this branch does not ask about is not left to go stale behind the pin: what the
+            // loop records for the engines' idle timer is recorded from the window the user is
+            // actually in, and a pin standing over a listing makes that window reachable whatever
+            // has the keyboard (see `read_explorer_state` and `explorer_pace`). What the state is
+            // not read for here is a sleep — a pinned tick is followed at `tick_ms` either way,
+            // which is the whole of what this branch is for — but a minimized Explorer behind a
+            // pin is still the answer the branch below would find the moment the pin is closed.
+            let (_, state_recheck_ms) = explorer_pace(current_state, tick_ms);
+            if last_state_check.elapsed() > Duration::from_millis(state_recheck_ms) {
+                current_state = read_explorer_state();
+                last_state_check = Instant::now();
+            }
+
             // What the item and the view caches hold is frozen while a pin is up — nothing
             // resolves on this branch but the pin's own following — so every view and every item
             // is still the one the listing had when the pin came up. A pin that has just taken the
@@ -5281,6 +5416,12 @@ pub fn run_explorer_hook() {
             // transition itself rather than on a timer, so the first pick after the pin is focused
             // or clicked resolves against — and is compared against — the listing as it is now
             // (see `ItemResolver::forget_item` and `ItemResolver::forget_window_views`).
+            //
+            // A click drops them as well, and this drop is the one that does not work: the click
+            // that moves the focus is read on the tick before the shell has caught up with it, so
+            // the transition this watches for is noticed a tick *after* the pick that needed it.
+            // That is why the click carries its own drop inside the watch rather than relying on
+            // this one (see `PinUpdateWatch::follow`).
             let explorer_fg = is_foreground_explorer();
             if explorer_fg != pin_saw_explorer_foreground {
                 resolver.forget_item();
@@ -5324,13 +5465,7 @@ pub fn run_explorer_hook() {
         let settling_delay = Duration::from_millis(settling_delay_ms);
 
         // Determine sleep duration and whether to recheck state based on current state
-        let (sleep_ms, state_recheck_ms) = match current_state {
-            ExplorerState::NoExplorerWindows => (DEEP_SLEEP_MS, STATE_RECHECK_DEEP_MS),
-            ExplorerState::AllMinimized => (LONG_SLEEP_MS, STATE_RECHECK_LONG_MS),
-            ExplorerState::HiddenByForeground => (LONG_SLEEP_MS, STATE_RECHECK_LONG_MS),
-            ExplorerState::VisibleNotFocused => (MEDIUM_SLEEP_MS, STATE_RECHECK_MEDIUM_MS),
-            ExplorerState::ActiveFocus => (tick_ms, STATE_RECHECK_ACTIVE_MS),
-        };
+        let (sleep_ms, state_recheck_ms) = explorer_pace(current_state, tick_ms);
 
         // Periodically re-evaluate the state
         if last_state_check.elapsed() > Duration::from_millis(state_recheck_ms) {
@@ -7004,6 +7139,112 @@ mod tests {
         );
     }
 
+    /// The first click after a pin is focused is a pick, and an answer of "the file you are
+    /// already looking at" is not what settles one.
+    ///
+    /// This is the whole of the fault, and it is a rule rather than a cache: a click is read
+    /// before the shell has caught up with it, so the listing it is resolved against can name
+    /// the file the pin is already showing — and `offer` declines that file in silence. Treating
+    /// the silence as "resolved" ended the hold with nothing offered and nothing waited, so the
+    /// first click after every take-up was lost and the click after it — read a tick later,
+    /// against caches the loop's own late drop had by then cleared — was the first one answered.
+    ///
+    /// What is asserted here is the rule the click is answered by, because that is the part that
+    /// is this app's decision rather than the shell's: an answer the pin already has holds the
+    /// click, anything else ends it, and a hover holds nothing at all. The timing that produces
+    /// such an answer belongs to the shell, and the drop that stops most of it is the one the
+    /// click carries into `follow`.
+    #[test]
+    fn a_click_the_pin_already_shows_is_not_an_answer_to_that_click() {
+        let showing = Path::new("D:/Pictures/one.png");
+        let clicked_at = Instant::now();
+        let point = POINT { x: 300, y: 180 };
+        let mut watch = PinUpdateWatch::default();
+
+        // The click tick. What a listing caught mid-click answers is the file the pin is already
+        // showing, and `offer` declines that in silence — so a click given it has been given
+        // nothing at all, and has to be held to be asked again. This is the arm that was missing:
+        // with the hold never taken, the retry had nothing to retry.
+        watch.answer_click(showing, showing, true, clicked_at, point);
+        assert_eq!(
+            watch.pending_click_at,
+            Some(clicked_at),
+            "the click is held from the tick it was read on, not dropped"
+        );
+        assert_eq!(
+            watch.pending_click_point,
+            Some(point),
+            "against the spot the hand clicked at, which is what a moved hand is told from"
+        );
+
+        // The retry. The shell says the same thing again, and the hold survives it — but its own
+        // clock does not move, because it is measured from the click: a hold re-armed here would
+        // slide its window along with every tick and a click that is being spent rather than
+        // answered would be held for as long as the hand stayed still over it.
+        let retried_at = clicked_at + Duration::from_millis(120);
+        watch.answer_click(showing, showing, false, retried_at, point);
+        assert_eq!(
+            watch.pending_click_at,
+            Some(clicked_at),
+            "and the hold is still the one the click took out, with its own clock"
+        );
+
+        // Case is not the difference: a listing that spells the name its own way is still
+        // answering with the file on screen, and treating it as another file would swap a window
+        // onto the picture it is already showing.
+        watch.answer_click(
+            Path::new("d:/pictures/ONE.PNG"),
+            showing,
+            false,
+            retried_at,
+            point,
+        );
+        assert!(
+            watch.pending_click_at.is_some(),
+            "and a spelling is not a different file"
+        );
+
+        // The shell has caught up and names the file the user actually clicked, which is the
+        // answer the click was taken up for. Now the hold is given up.
+        watch.answer_click(
+            Path::new("D:/Pictures/two.png"),
+            showing,
+            false,
+            retried_at,
+            point,
+        );
+        assert!(
+            watch.pending_click_at.is_none() && watch.pending_click_point.is_none(),
+            "a file the pin is not showing ends the hold"
+        );
+
+        // Which includes a file nothing here can preview: Explorer selected it and there is
+        // nothing to put in the window, so holding the click for it would ask the shell the same
+        // question for as long as the hold lasts and swap nothing either way.
+        watch.pending_click_at = Some(clicked_at);
+        watch.pending_click_point = Some(point);
+        watch.answer_click(
+            Path::new("D:/Pictures/archive.7z"),
+            showing,
+            false,
+            retried_at,
+            point,
+        );
+        assert!(
+            watch.pending_click_at.is_none(),
+            "and so does a file this app has nothing to show for"
+        );
+
+        // And a hover that settles on the file already on screen is not a click and arms
+        // nothing: a hand coming to rest on what is on screen has asked for nothing, so there is
+        // nothing of its own to hold on its behalf.
+        watch.answer_click(showing, showing, false, retried_at, point);
+        assert!(
+            watch.pending_click_at.is_none(),
+            "a hover on the file already shown arms no click"
+        );
+    }
+
     /// The width a name is drawn at is the name's own: a longer name measures wider
     /// than a short one, which is what makes the region a preview is kept off the name
     /// rather than the column it sits in.
@@ -7237,9 +7478,51 @@ mod tests {
     #[test]
     fn a_window_beside_the_one_in_front_leaves_explorer_reachable() {
         assert_eq!(
-            explorer_state_from_counts(&counts(1, 1, 1, primary_display())),
+            explorer_state_from_counts(&counts(1, 1, 1, primary_display()), false),
             ExplorerState::VisibleNotFocused
         );
+    }
+
+    /// A pin standing over a listing is that listing being worked in, and the pin is what
+    /// took the keyboard off it — so the arrangement is the active one whichever of the two
+    /// has the focus, and the loop is paced as it is rather than as a window nobody is in.
+    ///
+    /// This is what makes the pinned tick's own watch fast. Everything a pin does — following
+    /// a pick in the listing, the caption's walk, the click that begins a drag on the window —
+    /// is this loop, and the medium cadence and half-second recheck behind a pin are what put
+    /// a delay in front of all of it that the setting's own `tick_ms` never asked for. What it
+    /// is *not* is an answer for a minimized Explorer or one behind a maximized window: there
+    /// is no listing under the pointer in either, so there is nothing for a pin to be shown
+    /// another file from, and those keep the deep and long rows.
+    #[test]
+    fn a_pin_over_a_reachable_listening_is_the_active_arrangement() {
+        assert_eq!(
+            explorer_state_from_counts(&counts(1, 1, 1, None), true),
+            ExplorerState::ActiveFocus,
+            "a pin in front of a listing is that listing in use"
+        );
+
+        // Which is what the ladder reads as the fast row, and only on the fast row: the two
+        // states a pin cannot make anything of are asked before the pin is looked at, so they
+        // are the same with and without one.
+        let active = explorer_pace(ExplorerState::ActiveFocus, 15);
+        assert_eq!(
+            explorer_pace(explorer_state_from_counts(&counts(1, 1, 1, None), true), 15),
+            active,
+            "a pinned tick is asked on the tick's own clock"
+        );
+        assert_eq!(active.0, 15, "which is the tick setting, not a constant");
+
+        for counts in [
+            counts(2, 0, 0, primary_display()),
+            counts(2, 2, 0, primary_display()),
+        ] {
+            assert_eq!(
+                explorer_state_from_counts(&counts, true),
+                explorer_state_from_counts(&counts, false),
+                "minimized, or behind a window that covers it, a pin changes nothing"
+            );
+        }
     }
 
     /// Every window Explorer has showing behind the window in front is the one case
@@ -7247,7 +7530,7 @@ mod tests {
     #[test]
     fn every_window_behind_the_one_in_front_is_hidden() {
         assert_eq!(
-            explorer_state_from_counts(&counts(2, 2, 0, primary_display())),
+            explorer_state_from_counts(&counts(2, 2, 0, primary_display()), false),
             ExplorerState::HiddenByForeground
         );
     }
@@ -7257,7 +7540,7 @@ mod tests {
     #[test]
     fn a_window_that_hides_nothing_leaves_explorer_visible() {
         assert_eq!(
-            explorer_state_from_counts(&counts(1, 1, 1, None)),
+            explorer_state_from_counts(&counts(1, 1, 1, None), false),
             ExplorerState::VisibleNotFocused
         );
     }
@@ -7267,7 +7550,7 @@ mod tests {
     #[test]
     fn no_window_is_answered_before_the_window_in_front() {
         assert_eq!(
-            explorer_state_from_counts(&counts(0, 0, 0, primary_display())),
+            explorer_state_from_counts(&counts(0, 0, 0, primary_display()), false),
             ExplorerState::NoExplorerWindows
         );
     }
@@ -7276,7 +7559,7 @@ mod tests {
     #[test]
     fn every_window_minimized_is_answered_as_minimized() {
         assert_eq!(
-            explorer_state_from_counts(&counts(2, 0, 0, primary_display())),
+            explorer_state_from_counts(&counts(2, 0, 0, primary_display()), false),
             ExplorerState::AllMinimized
         );
     }
