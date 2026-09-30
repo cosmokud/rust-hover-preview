@@ -110,20 +110,32 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     EnumWindows, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
-    MsgWaitForMultipleObjectsEx, PeekMessageW, RegisterClassExW, SetCursor, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, SystemParametersInfoW,
-    TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
-    GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
-    IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR,
-    WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
+    SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
+    CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL,
+    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE,
+    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE,
+    PM_REMOVE, QS_ALLINPUT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
+    ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
+
+/// The message the pin watchdog posts to the preview window when it gives up on a pin, so that
+/// the preview thread lets go of the pointer a press on the pin took.
+///
+/// It has to be a message rather than a call, because the mouse pointer belongs to the thread
+/// that took it: `ReleaseCapture` on the watchdog's own thread releases nothing, and asking the
+/// preview thread to do it directly would be asking a thread that is not turning to do more work —
+/// which is the whole thing it has been given up on. Posted rather than sent for the same reason
+/// the rest of this file posts: a thread that is not answering must never be waited on (see
+/// `hide_preview`).
+const WM_PIN_RELEASE_POINTER: u32 = WM_APP + 4;
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
@@ -343,6 +355,23 @@ fn spawn_pin_watchdog() {
             PIN_RESUMED.store(true, Ordering::Release);
             if let Ok(mut jobs) = PIN_JOBS.0.lock() {
                 *jobs = None;
+            }
+
+            // And the pointer this thread cannot let go of: a press on the pin took it for the
+            // preview thread, and only that thread can give it back, so the pin being cleared
+            // here leaves the window holding it with no state and therefore no release coming.
+            // It is posted rather than sent, because the loop being given up on is the thing
+            // that must not be waited on — and it is worth asking for anyway, because a loop
+            // that was slow rather than gone does come back, and a window that comes back still
+            // holding the pointer is a desktop nothing can be clicked on.
+            let preview = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+            if !preview.is_invalid() {
+                // Safety: the handle is read from the slot the window was created into, and
+                // the message asks only for something this window does to itself. A window
+                // that has since gone is refused by the call rather than acted on.
+                unsafe {
+                    let _ = PostMessageW(preview, WM_PIN_RELEASE_POINTER, WPARAM(0), LPARAM(0));
+                }
             }
 
             std::thread::spawn(|| {
@@ -11558,6 +11587,15 @@ unsafe extern "system" fn window_proc(
             DISPLAY_RESET.store(true, Ordering::Release);
             LRESULT(0)
         }
+        WM_PIN_RELEASE_POINTER => {
+            // The watchdog gave up on a pin and cleared its state from outside the loop, and
+            // this is the loop letting go of what its own window was still holding. The pin is
+            // already gone by the time this arrives, so nothing here asks about one — the state
+            // has been taken and there is no release coming to take the pointer back (see
+            // `spawn_pin_watchdog`).
+            release_pin_capture(hwnd);
+            LRESULT(0)
+        }
         WM_ACTIVATE => {
             // Windows is the only thing that can say which window the user is in, and it says it
             // here: a pin that has lost the focus is a pin the user has clicked away from, and
@@ -14307,6 +14345,16 @@ fn pin_screen_is_settled(media: Option<MediaType>, engine_draws: bool) -> bool {
 /// collapsed pin left goes with it, and so does the record of a pin being up at all, which is
 /// what lets the next hover through (see `PIN_ACTIVE` and `PIN_RESUMED`).
 fn end_pin_state() -> PreviewMessage {
+    // The pointer goes before the pin does, for the same reason the take-up lets it go before it
+    // rebuilds one: a pin that is over cannot be pressed on, so a press still held against it
+    // will never be answered by the release that would end it — and the window procedure gates
+    // that release on the pin still being up (see `pinned_release`). Taken first and outside the
+    // lock, because `ReleaseCapture` delivers `WM_CAPTURECHANGED`.
+    let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+    if !hwnd.is_invalid() {
+        unsafe { release_pin_capture(hwnd) };
+    }
+
     if let Ok(mut pinned) = PINNED.lock() {
         *pinned = None;
     }
@@ -15193,16 +15241,29 @@ impl PinLoad {
 /// is cheaper still: a player's window is resized and its picture scales with it, and a browser
 /// is told the new bounds of the page it is already showing.
 ///
-/// It runs on the preview thread, and that is deliberate. A pinned window is not a hover, so
-/// there is no spinner to put up and no generation to match an answer against; what a decode
-/// costs is one tick that takes longer than usual, spent on a box the user has just asked for,
-/// with nothing else on screen for it to be late for.
+/// It runs on the preview thread, and that is deliberate for everything a box change asks of
+/// *another* window — a player's window to move, a browser's to travel with the band, a card to be
+/// laid out again — because all of that is a message to a window this thread owns and nothing else
+/// can send it.
+///
+/// What it asks of this thread's own decoding is not, and is not asked here any more. A decode is
+/// the one thing in this function with no bound on it, and it was being run inline on the thread
+/// that pumps the pinned window's messages: a large picture or a long document resized on the
+/// loop is a tick that takes seconds, and a tick is a stretch of the loop in which no window
+/// message is dispatched at all — so the drag under the hand stops answering, the caption's
+/// buttons stop answering, and the window is the frozen one this function's own comment used to
+/// call a deliberate trade. It is the same wait a swap already waits on, and it is waited on the
+/// same way: the read and the decode go to a thread of their own and the loop installs what comes
+/// back (see `PinRelayout`). Nothing is lost by the frame not being there the instant the box
+/// changes, because the band is already filled from the frame that *is* there and scaled into the
+/// new box — the same answer a resized video is given for as long as the engine's next frame is
+/// on its way (see `compose_media_into_band`).
 fn relayout_pinned_media(
-    path: &PathBuf,
+    path: &Path,
     content: ScreenRegion,
     dpi: u32,
     card: Option<AudioCardClock>,
-) {
+) -> Option<PinRelayout> {
     let width = (content.2 - content.0).max(1) as u32;
     let height = (content.3 - content.1).max(1) as u32;
     let kind = CURRENT_MEDIA
@@ -15215,6 +15276,7 @@ fn relayout_pinned_media(
         // box that changed is a window that moved.
         Some(MediaType::Video) => {
             ensure_pinned_sibling_box(content);
+            None
         }
         // The media engine draws into a surface of the size it was started at, and this window
         // draws the frames it hands back: both are resized, and the picture follows.
@@ -15228,6 +15290,7 @@ fn relayout_pinned_media(
             // frame that lands on the next tick is the one at the size the window now is (see
             // `compose_media_into_band`).
             video_player::resize(width, height);
+            None
         }
         // The browser draws in a window of its own, so the band that changed is a window that has
         // to travel with the box: it is moved rather than only asked again — a document still on
@@ -15243,15 +15306,14 @@ fn relayout_pinned_media(
                 },
                 engine_background(path),
             );
+            None
         }
         // A sound's card, which is a page of text laid out again rather than a file decoded —
         // and the one kind whose layout needs something the loop holds rather than the media:
         // where the player it started is, how far a name it had no room for has been scrolled,
         // and where a key put it on hold (see `AudioCardClock`).
         Some(MediaType::Audio) => {
-            let Some(clock) = card else {
-                return;
-            };
+            let clock = card?;
             let (elapsed, duration) = audio_clock(path, clock.started, clock.from, clock.paused);
 
             if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -15266,24 +15328,84 @@ fn relayout_pinned_media(
                     );
                 }
             }
+            None
         }
-        // A frame this app draws for itself: the media is loaded again at the box it is now
-        // shown in, which is the same call a hover's own load makes.
-        Some(_) => {
-            let cancel = Arc::new(AtomicBool::new(false));
-            if let Some(media) =
-                load_media(path, width, height, PreviewScale::FitToScreen, dpi, cancel)
-            {
-                let media = keep_text_place(media);
-                if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                    if let Some(ref mut existing) = *current {
-                        existing.cancel_background_work();
-                    }
-                    *current = Some(media);
-                }
-            }
+        // A frame this app draws for itself: the media is read and decoded again at the box it
+        // is now shown in, which is the same call a hover's own load makes — and the same
+        // wait one is, on a thread of its own. The decode used to run here, inline, which
+        // put an unbounded stretch of unpumped loop in front of a window the hand was
+        // still dragging; it is now answered a tick or more later by `take_pin_relayout`,
+        // and the band is filled from the frame that is there until it lands.
+        Some(_) => Some(PinRelayout {
+            path: path.to_path_buf(),
+            answer: pin_media_load(path, width, height, dpi),
+        }),
+        None => None,
+    }
+}
+
+/// A relayout of a pinned window's own media, waited for on a thread of its own.
+///
+/// The wait is held by the loop rather than inside the tick that started it, for the reason a
+/// `PinLoad` is: the read and the decode are a thread's work, so the question is still out when
+/// the tick that asked it ends and the answer to it arrives on one of the next.
+///
+/// There is no arc for this wait, and no spinner, and that is deliberate rather than an
+/// oversight. A relayout answers a box the window has *already* been given: the file on screen is
+/// the right file at a size it is being taken to, so there is nothing to wait *for* as far as the
+/// person looking at it is concerned — the picture is there, scaled into the new box, and the frame
+/// that is drawn for that box arrives when it arrives. An arc over it would say a thing that is
+/// not true: that the window has nothing to show yet. It is the same answer a resized video is
+/// given while the media engine's next frame is on its way.
+struct PinRelayout {
+    /// The file being decoded, which is what the answer is installed over: a relayout left in
+    /// flight across a swap would otherwise install a frame of the file the pin has left behind,
+    /// at a box belonging to the one it is now showing.
+    path: PathBuf,
+    answer: Receiver<Option<MediaData>>,
+}
+
+/// Take a relayout that has answered, and install it.
+///
+/// One still running is the ordinary case for the first few ticks after a window is dragged to a
+/// new size: what is on screen is the frame already decoded, and this is where it is replaced by
+/// one drawn for the box the window is now at.
+///
+/// The frame is installed here, on the loop's own thread, because `CURRENT_MEDIA` is the loop's
+/// (see `swap_pinned_media` for the same rule on a swap's answer) — and `keep_text_place` is asked
+/// of the media being replaced *before* that lock is taken, for the reason it takes the lock
+/// itself: a lock this thread already holds is not a lock it can wait for.
+fn take_pin_relayout(relayout: &mut Option<PinRelayout>) {
+    let media = match relayout.as_ref().map(|pending| &pending.answer) {
+        Some(answer) => match answer.try_recv() {
+            Ok(media) => media,
+            Err(TryRecvError::Empty) => return,
+            // The thread is gone with nothing to say, which is answered as a frame that could
+            // not be decoded: the frame already on screen stays, which is what a resize has
+            // been showing all along.
+            Err(TryRecvError::Disconnected) => None,
+        },
+        None => return,
+    };
+    let Some(pending) = relayout.take() else {
+        return;
+    };
+
+    // A relayout is only an answer while the pin is still standing on the file it was asked for.
+    // A swap that landed first, or a pin that has been closed, leaves it asking a question about
+    // a window that is no longer there, and its frame must not be installed over whatever is
+    // there now.
+    if pinned_path().as_deref() != Some(pending.path.as_path()) {
+        return;
+    }
+
+    let Some(media) = media else { return };
+    let media = keep_text_place(media);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(ref mut existing) = *current {
+            existing.cancel_background_work();
         }
-        None => {}
+        *current = Some(media);
     }
 }
 
@@ -18012,6 +18134,30 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction) {
     let _ = SetCapture(hwnd);
 }
 
+/// Let go of the pointer, if this window is the one holding it.
+///
+/// A press on a pinned window takes the pointer for the pin (`SetCapture` in `begin_pin_drag` and
+/// in the three presses that are a drag under another name), and the release is what lets it go
+/// again (see `pinned_release`). That makes the release the only thing standing between a press
+/// and a window that eats every mouse message on the desktop, so whatever discards the state a
+/// press was written into without a release coming has to let the pointer go here instead.
+///
+/// A pin rebuilt over another one is the case that matters, and it is an everyday one: a window
+/// being resized is a drag, and a drag answers nothing until the hand lets go — but the file it is
+/// a drag *of* is free to be replaced before the hand does (see `PreviewMessage::Pin`, and
+/// `step_pinned_file` for the walk that asks for one). The take-up builds a whole new pin with no
+/// drag in it, so the drag the pointer was taken for is gone, and nothing is left to release it.
+/// A window still holding the pointer after its own drag has been taken away out from under it is a
+/// window whose caption answers nothing: every click is delivered here rather than to whatever the
+/// pointer was aimed at, and the cursor keeps whichever shape the last edge gave it. It ends when
+/// some other window takes the pointer for itself, which is why clicking anywhere else appeared to
+/// bring the window back.
+unsafe fn release_pin_capture(hwnd: HWND) {
+    if GetCapture() == hwnd {
+        let _ = ReleaseCapture();
+    }
+}
+
 /// Carry a pinned window's drag on: the pointer has moved, and what the press began is applied to
 /// the box the window had when it began.
 unsafe fn apply_pin_drag(hwnd: HWND) {
@@ -18905,6 +19051,12 @@ pub fn run_preview_window() {
         // run for `spinner_delay_ms` puts an arc in the middle of the pin's media (see
         // `PinLoad` and `paint_pin_spinner`).
         let mut pin_load: Option<PinLoad> = None;
+        // A pinned window's own media being decoded again at a box it has been given, and the
+        // wait for it. Held here rather than inside a tick for the reason a load is: the read
+        // and the decode are a thread's work, so a window dragged to a new size keeps drawing
+        // the frame it had — scaled into the new box — until the frame drawn for that box
+        // lands, rather than costing a tick as long as the decode (see `PinRelayout`).
+        let mut pin_relayout: Option<PinRelayout> = None;
         // A walk a pin's own caption button stepped, held for as long as the walk has files
         // left to offer rather than for the length of the tick that started it: a file the pin
         // cannot be shown is stepped over rather than stopped at, and the file after it is
@@ -20890,6 +21042,14 @@ pub fn run_preview_window() {
                 }
             }
 
+            // A relayout of a pinned window's own media has answered, and is installed here on this
+            // thread. It is asked of before the load below, and that order is the only thing
+            // that matters: a swap installs its own media and a relayout left over from the box
+            // before it would put a frame of the file just left behind over the file just
+            // arrived — which the path check in `take_pin_relayout` refuses, but which is
+            // better not to be asked about at all.
+            take_pin_relayout(&mut pin_relayout);
+
             // A load a pinned window is waiting for has answered. What came back is installed
             // here, on this thread, and the take-up below is the pin's own: the box is the one
             // the plan was made with, and what comes of it is the same window showing
@@ -21367,6 +21527,16 @@ pub fn run_preview_window() {
                         // answer lands rather than the take-up waiting for it.
                         ask_pin_open_with(path.clone());
 
+                        // Whatever the pin was being pressed for, it is being pressed for no
+                        // longer: the state below replaces it whole, and the pointer a press on
+                        // this window took goes with the drag it was taken for. It is let go
+                        // here rather than left to the release that is never coming, and it is
+                        // let go before `PINNED` is taken rather than inside it, because
+                        // `ReleaseCapture` delivers `WM_CAPTURECHANGED` and the window procedure
+                        // asks for that same lock (see the note above, and `pinned_release` for
+                        // the release this stands in for).
+                        release_pin_capture(hwnd);
+
                         if let Ok(mut pinned) = PINNED.lock() {
                             let now = Instant::now();
                             *pinned = Some(PinnedPreview {
@@ -21459,7 +21629,10 @@ pub fn run_preview_window() {
                         // because being pinned is the whole of what full mode is read from.
                         if kind == Some(MediaType::Text) {
                             if let Some((path, dpi)) = pinned_media_owner() {
-                                relayout_pinned_media(&path, content, dpi, None);
+                                // A take-up is a box this window has not been given before, so
+                                // the relayout asked for here is asked for the file the pin is
+                                // now showing, and any older one is dropped with it.
+                                pin_relayout = relayout_pinned_media(&path, content, dpi, None);
                             }
                         }
 
@@ -21489,7 +21662,11 @@ pub fn run_preview_window() {
                         };
 
                         if let Some((path, dpi)) = pinned_media_owner() {
-                            relayout_pinned_media(&path, content, dpi, Some(card));
+                            // A box change is what a relayout is asked for, so this is where one
+                            // starts — and where an older one is dropped: the newest box is the
+                            // only one worth decoding for, and the frame already decoded is
+                            // drawn scaled into this one meanwhile.
+                            pin_relayout = relayout_pinned_media(&path, content, dpi, Some(card));
                         }
                         show_pinned_window(hwnd);
                         place_pinned_siblings();
