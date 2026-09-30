@@ -73,7 +73,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 use windows::core::{w, PCWSTR, PWSTR};
@@ -115,7 +115,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
     GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
     IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, QS_ALLINPUT,
+    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
     SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN,
@@ -161,9 +161,10 @@ const IDLE_WAIT_MS: u64 = 500;
 /// window messages. ~7x/s instead of ~60x/s; pinned static ticks use their own
 /// shorter ceiling so caption buttons stay snappy (see the wait below).
 const STATIC_WAIT_MS: u64 = 150;
-/// Ceiling for a static tick while a pin is up: buttons and drags are answered
-/// in the tick, so this stays short enough to feel instant while still waking
-/// 3x less often than the frame loop.
+/// Ceiling for a static tick while a pin is up: the wait wakes on window input
+/// at once (see `wait_preview_channel`), so a drag follows the hand at the
+/// pointer's pace rather than at this pace — this stays short so caption
+/// buttons still feel instant while waking 3x less often than the frame loop.
 const STATIC_PIN_WAIT_MS: u64 = 50;
 /// How often the pointer hold region is republished while a static preview is
 /// up. The region only changes on show/move/resize/swap/hide, so a slow
@@ -18648,6 +18649,59 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
     false
 }
 
+/// Wait for a preview message or for window input, whichever comes first.
+///
+/// This is what makes a pinned window follow the hand at the pointer's own
+/// pace rather than at the pace of the repaint: the old `recv_timeout` wait
+/// held the thread without pumping its message queue, so `WM_MOUSEMOVE`
+/// messages queued for the whole `STATIC_PIN_WAIT_MS` (50 ms, ~20 Hz) and a
+/// drag was drained in batches once a tick. Waiting on the queue instead wakes
+/// the moment the pointer moves, and the move is dispatched on the next trip
+/// round the loop — the same way a native window moves — while costing nothing
+/// extra when idle: with no input the wait still runs its full `wait_ms`.
+///
+/// The channel itself is polled in short slices rather than blocked on, so a
+/// message sent while the wait runs lands within a slice rather than on the
+/// next tick. A slice is one kernel wait plus one non-blocking channel poll —
+/// no spinning — and input still wakes the current slice at once.
+fn wait_preview_channel(rx: &Receiver<PreviewMessage>, wait_ms: u64) -> Option<PreviewMessage> {
+    // A message sent just before the wait is answered without waiting at all.
+    if let Ok(message) = rx.try_recv() {
+        return Some(message);
+    }
+    // Long enough that an idle thread still sleeps instead of spinning, short
+    // enough that a channel message never waits out a full tick to be noticed.
+    const SLICE_MS: u64 = 8;
+    let mut remaining = wait_ms;
+    while remaining > 0 {
+        let slice = remaining.min(SLICE_MS);
+        unsafe {
+            let _ = MsgWaitForMultipleObjectsEx(
+                None,
+                slice as u32,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE,
+            );
+        }
+        // Woken by input, by the timeout, or — within a slice — by nothing at
+        // all: either way the channel is only ever polled, never blocked on,
+        // so the queue is never left unpumped while a drag is going.
+        if let Ok(message) = rx.try_recv() {
+            return Some(message);
+        }
+        // Input alone is a reason to go round the loop now rather than to sit
+        // out the rest of the tick: the queue holds the move the wait woke for.
+        let mut msg = MSG::default();
+        unsafe {
+            if PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE).as_bool() {
+                return None;
+            }
+        }
+        remaining = remaining.saturating_sub(slice);
+    }
+    None
+}
+
 pub fn run_preview_window() {
     // Page sizes come from Windows.Data.Pdf and picture sizes from the codec Windows
     // has, so this thread needs an apartment before the first layout asks for one.
@@ -21933,25 +21987,20 @@ pub fn run_preview_window() {
                 // in step, so the wait becomes the preview channel itself: a hover
                 // is answered as it arrives rather than on the next tick, and the
                 // interval is only a ceiling on how long a window message — a
-                // resume, a display change — waits to be noticed.
-                carried_preview_msg = match rx.recv_timeout(Duration::from_millis(IDLE_WAIT_MS)) {
-                    Ok(message) => Some(message),
-                    Err(RecvTimeoutError::Timeout) => None,
-                    // Nothing left that could send, so this waits a tick rather
-                    // than spinning on a channel no message can arrive on.
-                    Err(RecvTimeoutError::Disconnected) => {
-                        std::thread::sleep(Duration::from_millis(IDLE_WAIT_MS));
-                        None
-                    }
-                };
+                // resume, a display change — waits to be noticed. The wait wakes
+                // on window input at once, so a drag never queues behind it (see
+                // `wait_preview_channel`).
+                carried_preview_msg = wait_preview_channel(&rx, IDLE_WAIT_MS);
             } else {
                 // Something is on screen. A tick that has something to animate —
                 // video, animation, audio card, transport, spinner, load or wait —
                 // keeps the frame cadence; a static picture or page of text waits on
-                // the channel instead, so a Hide/Show still answers the moment it
-                // arrives. Pinned static ticks keep a shorter ceiling than hover
+                // the channel instead, so a Hide/Show still answers within a slice
+                // of it. Pinned static ticks keep a shorter ceiling than hover
                 // ones so caption buttons stay snappy (see `STATIC_WAIT_MS` and
-                // `STATIC_PIN_WAIT_MS`).
+                // `STATIC_PIN_WAIT_MS`), and a drag is dispatched at the pointer's
+                // pace either way since the wait wakes on input (see
+                // `wait_preview_channel`).
                 //
                 // A wait that ended, a generation that moved or a pin that came up
                 // or down may have installed another kind behind the hint: classify
@@ -21976,16 +22025,7 @@ pub fn run_preview_window() {
                 } else {
                     STATIC_WAIT_MS
                 };
-                carried_preview_msg = match rx.recv_timeout(Duration::from_millis(wait_ms)) {
-                    Ok(message) => Some(message),
-                    Err(RecvTimeoutError::Timeout) => None,
-                    // Nothing left that could send, so this waits a tick rather
-                    // than spinning on a channel no message can arrive on.
-                    Err(RecvTimeoutError::Disconnected) => {
-                        std::thread::sleep(Duration::from_millis(wait_ms));
-                        None
-                    }
-                };
+                carried_preview_msg = wait_preview_channel(&rx, wait_ms);
             }
         }
 
