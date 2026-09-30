@@ -17,6 +17,8 @@ target/
 #.idea/
 
 AGENTS.md
+/scratchpad/
+/.scratch/
 /.serena/
 /.venv/
 /.commandcode/
