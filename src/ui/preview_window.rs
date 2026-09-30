@@ -18282,10 +18282,16 @@ fn resize_pinned_content(
 
     // Where the box comes out. The edge opposite the one being dragged is the one that stays; an
     // axis the hand is not on is centered on the line it was on, and moved along that line by as
-    // little as the room asks rather than by the whole of what the centering wanted.
+    // little as the room asks rather than by the whole of what the centering wanted. Where the
+    // hand did not change the size on that axis at all — it asked past the room and was refused —
+    // the line is kept where the drag left it: centering a room-sized box would snap a carried
+    // maximized window back onto the room's edge, forgetting the drag that put it there (see
+    // `pin_restore_box`).
     let left = if edge.left {
         content.2 - width
     } else if edge.right {
+        content.0
+    } else if width == start_width {
         content.0
     } else {
         (content.0 + (start_width - width) / 2)
@@ -18294,6 +18300,8 @@ fn resize_pinned_content(
     let top = if edge.top {
         content.3 - height
     } else if edge.bottom {
+        content.1
+    } else if height == start_height {
         content.1
     } else {
         (content.1 + (start_height - height) / 2)
@@ -27803,6 +27811,80 @@ mod tests {
             dragged(edge(true, true, false, false), 100, 75),
             (500, 375, 800, 600),
             "the top-left corner pulled in"
+        );
+    }
+
+    /// A resize begun from a box a drag left partly off the room keeps the dragged place where
+    /// the hand did not change the size: a maximized window fills the room in one dimension, so
+    /// asking past the room is refused and the size comes back unchanged — and centering an
+    /// unchanged room-sized box would snap it back onto the room's edge, forgetting the drag.
+    /// That is Maximize → drag → resize jumping back to the top; a drag → resize while not
+    /// maximized never fills the room, so it never meets the clamp at all.
+    #[test]
+    fn a_resize_from_a_dragged_maximized_box_keeps_the_dragged_place() {
+        // A maximized 4:3 picture fills the 1200x900 room exactly, then is carried to
+        // (100, 90): partly off the room's right and bottom edges.
+        let moved = (100, 90, 1300, 990);
+
+        // Pulling the left edge further out cannot grow past the room, so the box is
+        // already what the hand asked for: the top stays at the dragged line 90
+        // rather than snapping back to the room's top 0.
+        assert_eq!(
+            dragged_overlay(
+                moved,
+                PinFrame::Shaped,
+                edge(true, false, false, false),
+                -25,
+                0,
+                true
+            ),
+            moved,
+            "the left edge pulled out past the room"
+        );
+        // The user's own gesture: pulling the top border up cannot grow past the
+        // room either, so the left stays at the dragged line 100.
+        assert_eq!(
+            dragged_overlay(
+                moved,
+                PinFrame::Shaped,
+                edge(false, true, false, false),
+                0,
+                -25,
+                true
+            ),
+            moved,
+            "the top edge pulled up past the room"
+        );
+    }
+
+    /// The same promise for a kind laid out to its box: a maximized page fills the room in
+    /// both dimensions, so a refused grow on one axis must not re-center the other back
+    /// onto the room either.
+    #[test]
+    fn a_resize_from_a_dragged_maximized_page_keeps_the_dragged_place() {
+        let moved = (100, 90, 1300, 990);
+
+        assert_eq!(
+            dragged_from(
+                moved,
+                PinFrame::Free,
+                edge(false, true, false, false),
+                0,
+                -25
+            ),
+            moved,
+            "the top edge pulled up past the room"
+        );
+        assert_eq!(
+            dragged_from(
+                moved,
+                PinFrame::Free,
+                edge(true, false, false, false),
+                -25,
+                0
+            ),
+            moved,
+            "the left edge pulled out past the room"
         );
     }
 
