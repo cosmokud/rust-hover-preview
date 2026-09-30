@@ -17984,9 +17984,15 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction) {
     let Some(from) = cursor_screen_point() else {
         return;
     };
-    let Some((window, _, _)) = pinned_window_box() else {
+    // The box the window is standing at on screen, rather than the one the pin remembers: a
+    // window the hand has carried since it was maximized is no longer standing where the
+    // maximize left it, and a resize begun from the remembered box is begun from the screen's
+    // own top border rather than from the place the hand left the window at — which is the
+    // window snapping back to the top the moment an edge is pulled (see `apply_pin_drag`).
+    let Some((left, top, width, height)) = window_origin(hwnd) else {
         return;
     };
+    let window = (left, top, left + width, top + height);
 
     if let Ok(mut pinned) = PINNED.lock() {
         if let Some(pin) = pinned.as_mut() {
