@@ -1470,6 +1470,94 @@ fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) {
     }
 }
 
+/// Where the trace of what a click in the listing did to a pinned window is written, or
+/// nothing at all when `RHP_HOOK_TRACE` did not ask for it. A second file rather than
+/// more lines in the first, because this is a sequence to read in order and that one is
+/// a count to read once.
+fn pin_click_trace_path() -> Option<PathBuf> {
+    HOOK_TRACE.then(|| std::env::temp_dir().join("rhp-pin-click-trace.log"))
+}
+
+/// Write one line about what a click in the listing did to a pinned window, where a trace
+/// is being written.
+///
+/// This is the question the counters cannot answer: they say how many crossings the shell
+/// was asked for, and not whether the click was seen at all, whether the pointer was over
+/// a listing, what the lookup made of it, or whether the pin was asked for another file.
+/// A click lost to a race reads, in a counter, exactly like a click that never happened.
+///
+/// One line per tick a click is in hand — the tick it was read on and every tick of its
+/// retry — and nothing on any other tick, so asking for this costs nothing on a run where
+/// nothing is clicked, and the file stays short enough to read.
+fn note_pin_click(path: Option<&Path>, line: String) {
+    let Some(path) = path else {
+        return;
+    };
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+/// One tick of a click in the listing, as the facts that say whether it was answered.
+///
+/// Every field is a fact the loop has already read for its own reasons and none of them is
+/// read again for this: `foreground` is the loop's own question on the same tick, `over` is
+/// what the watch decided, `resolved` is what the lookup made of the point, `offered` is what
+/// the pin was asked for, and `held` is how long the click has been in hand. A click that is
+/// lost reads here as exactly the thing it was, which is the whole of why it is written down.
+struct ClickTrace<'a> {
+    /// Whether this tick read the press. Zero on every tick of the retry, and zero on
+    /// every tick of a run in which the press was never read at all — which is the one
+    /// reading that says the click was lost before any of this had a chance to answer it.
+    click: bool,
+    /// Whether Explorer held the focus as this tick found it.
+    foreground: bool,
+    /// Whether the pointer was over one of Explorer's own windows.
+    over_explorer: bool,
+    /// The file the pin is showing.
+    showing: &'a Path,
+    /// What the lookup made of the point under the pointer.
+    resolved: Option<&'a PathBuf>,
+    /// Whether the pin was actually asked for another file.
+    offered: bool,
+    /// How long the click has been held, where it is held at all.
+    held_for: Option<Duration>,
+}
+
+/// The one line a tick of a click is written as.
+///
+/// `showing` and `resolved` are names rather than whole paths, because the folder is the
+/// same on both sides of every question here and a path long enough to be worth reading is a
+/// path too long to read.
+fn pin_click_line(tick: ClickTrace<'_>) -> String {
+    fn name(path: &Path) -> String {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    format!(
+        "click {}  fg {}  over {}  showing {}  resolved {}  offered {}  held {}",
+        tick.click as u8,
+        tick.foreground as u8,
+        tick.over_explorer as u8,
+        name(tick.showing),
+        tick.resolved
+            .map(|path| name(path.as_path()))
+            .unwrap_or_else(|| "-".to_string()),
+        tick.offered as u8,
+        tick.held_for
+            .map(|held| format!("{}ms", held.as_millis()))
+            .unwrap_or_else(|| "-".to_string()),
+    )
+}
+
 /// End the engines held by a preview loop that has stopped ticking, which is what the
 /// loop's own idle tiers would have done had it been running.
 ///
@@ -4261,6 +4349,7 @@ impl PinUpdateWatch {
         last_focus_probe: &mut Instant,
         focus_move: FocusMoveInput,
     ) {
+        let trace = pin_click_trace_path();
         let now = Instant::now();
         // What the keyboard and the pointer did is noted before anything can return: one of the two
         // takes the witness away, and a tick that takes it away has to be a tick that keeps it taken
@@ -4359,8 +4448,20 @@ impl PinUpdateWatch {
             if let Some(path) = get_file_under_cursor(resolver, &pointer) {
                 // What was resolved is answered whatever it turned out to be — a file nothing can
                 // be shown for is one of them — so there is nothing here left to ask about again.
-                self.offer(&path, &showing);
+                let offered = self.offer(&path, &showing);
                 self.answer_click(&path, &showing, clicked, now, pointer.point);
+                note_pin_click(
+                    trace.as_deref(),
+                    pin_click_line(ClickTrace {
+                        click: clicked,
+                        foreground: is_foreground_explorer(),
+                        over_explorer,
+                        showing: &showing,
+                        resolved: Some(&path),
+                        offered,
+                        held_for: self.pending_click_at.map(|at| now - at),
+                    }),
+                );
             } else if clicked {
                 // The lookup answered nothing, and the click is the only evidence it happened: the
                 // press bit it came from has been spent by the read that gave this tick its input
@@ -4370,6 +4471,18 @@ impl PinUpdateWatch {
                 // it is held and asked again below rather than spent for nothing.
                 self.pending_click_at = Some(now);
                 self.pending_click_point = Some(pointer.point);
+                note_pin_click(
+                    trace.as_deref(),
+                    pin_click_line(ClickTrace {
+                        click: true,
+                        foreground: is_foreground_explorer(),
+                        over_explorer,
+                        showing: &showing,
+                        resolved: None,
+                        offered: false,
+                        held_for: Some(Duration::ZERO),
+                    }),
+                );
             }
         } else if clicked {
             // The same click, one step earlier in the race: what is under the pointer is not
@@ -4377,6 +4490,18 @@ impl PinUpdateWatch {
             // about wherever it landed rather than dropped for having landed early.
             self.pending_click_at = Some(now);
             self.pending_click_point = Some(pointer.point);
+            note_pin_click(
+                trace.as_deref(),
+                pin_click_line(ClickTrace {
+                    click: true,
+                    foreground: is_foreground_explorer(),
+                    over_explorer,
+                    showing: &showing,
+                    resolved: None,
+                    offered: false,
+                    held_for: Some(Duration::ZERO),
+                }),
+            );
         }
 
         // The click above, asked again now that the shell may have caught up. It runs only where
@@ -4389,6 +4514,18 @@ impl PinUpdateWatch {
                     // not worth a stale file being shown beside it (see `PIN_CLICK_RETRY_MS`).
                     self.pending_click_at = None;
                     self.pending_click_point = None;
+                    note_pin_click(
+                        trace.as_deref(),
+                        pin_click_line(ClickTrace {
+                            click: false,
+                            foreground: is_foreground_explorer(),
+                            over_explorer,
+                            showing: &showing,
+                            resolved: None,
+                            offered: false,
+                            held_for: Some(now - at),
+                        }),
+                    );
                 } else if (pointer.point.x - point.x).abs() > threshold
                     || (pointer.point.y - point.y).abs() > threshold
                 {
@@ -4397,6 +4534,18 @@ impl PinUpdateWatch {
                     // the user has not picked.
                     self.pending_click_at = None;
                     self.pending_click_point = None;
+                    note_pin_click(
+                        trace.as_deref(),
+                        pin_click_line(ClickTrace {
+                            click: false,
+                            foreground: is_foreground_explorer(),
+                            over_explorer,
+                            showing: &showing,
+                            resolved: None,
+                            offered: false,
+                            held_for: Some(now - at),
+                        }),
+                    );
                 } else if over_explorer {
                     // The hand is where it clicked and Explorer is answering for it. The lookup is
                     // kept only while it answers nothing: a file it does resolve is offered and
@@ -4414,9 +4563,35 @@ impl PinUpdateWatch {
                     resolver.forget_item();
                     resolver.forget_window_views();
 
-                    if let Some(path) = get_file_under_cursor(resolver, &pointer) {
-                        self.offer(&path, &showing);
-                        self.answer_click(&path, &showing, clicked, now, pointer.point);
+                    match get_file_under_cursor(resolver, &pointer) {
+                        Some(path) => {
+                            let offered = self.offer(&path, &showing);
+                            self.answer_click(&path, &showing, clicked, now, pointer.point);
+                            note_pin_click(
+                                trace.as_deref(),
+                                pin_click_line(ClickTrace {
+                                    click: false,
+                                    foreground: is_foreground_explorer(),
+                                    over_explorer,
+                                    showing: &showing,
+                                    resolved: Some(&path),
+                                    offered,
+                                    held_for: self.pending_click_at.map(|held| now - held),
+                                }),
+                            );
+                        }
+                        None => note_pin_click(
+                            trace.as_deref(),
+                            pin_click_line(ClickTrace {
+                                click: false,
+                                foreground: is_foreground_explorer(),
+                                over_explorer,
+                                showing: &showing,
+                                resolved: None,
+                                offered: false,
+                                held_for: Some(now - at),
+                            }),
+                        ),
                     }
                 }
             }
@@ -4614,18 +4789,27 @@ impl PinUpdateWatch {
         self.pending_click_point = None;
     }
 
-    /// Offer a file to the pin that is up: the one thing this watch does.
+    /// Offer a file to the pin that is up: the one thing this watch does, and the only
+    /// thing in it that asks for anything.
     ///
     /// Nothing is offered where the pin is already showing the file, and nothing where the file is
     /// not one this app previews at all — a name no kind claims is a file Explorer selects and the
     /// pin has nothing to show for, and a pin that went blank or took a hover of its own for one
-    /// would be worse than a pin that stayed as it was (see `is_media_file`).
-    fn offer(&self, path: &PathBuf, showing: &PathBuf) {
-        if same_path(path, showing) || !is_media_file(path) {
-            return;
+    /// would be worse than a pin that stayed as it was (see `is_media_file`). Which of the two it
+    /// was is returned, because the caller has to tell them apart: the first is the silence that a
+    /// stale listing answers with (see `PinUpdateWatch::answer_click`) and the second is an answer
+    /// (see `PinUpdateWatch::answer_click` again).
+    fn offer(&self, path: &PathBuf, showing: &PathBuf) -> bool {
+        if same_path(path, showing) {
+            return false;
+        }
+
+        if !is_media_file(path) {
+            return true;
         }
 
         update_pinned_preview(path);
+        true
     }
 }
 
