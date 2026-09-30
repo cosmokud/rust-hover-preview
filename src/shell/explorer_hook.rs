@@ -7030,7 +7030,7 @@ pub fn run_explorer_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::UI::Shell::{FWF_USESEARCHFOLDER, SORTDIRECTION};
+    use windows::Win32::UI::Shell::SORTDIRECTION;
 
     /// The sort a column asks for, given the key it is on and which way it runs.
     fn sorted(key: PROPERTYKEY, direction: SORTDIRECTION) -> Option<[SORTCOLUMN; 1]> {
