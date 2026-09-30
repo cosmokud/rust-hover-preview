@@ -15541,6 +15541,27 @@ fn place_pinned_siblings() {
         // page has no reason to put it anywhere else by itself (see `webview_preview::place`).
         Some(MediaType::EngineSvg) | Some(MediaType::EngineFont) => {
             if let Some((path, _)) = pinned_media_owner() {
+                // Move the engine's window on this thread, in the same call that moved the
+                // preview: the async `place` below trails by engine-loop latency, which is the
+                // lag a hand reads during a drag (see `Host::place`). `SetWindowPos` is safe
+                // cross-thread for a move; a resize still needs the engine thread's `SetBounds`,
+                // which `place` delivers right after.
+                let engine = webview_preview::showing_hwnd();
+                if engine != 0
+                    && webview_preview::showing_path().as_deref() == Some(path.as_path())
+                {
+                    unsafe {
+                        let _ = SetWindowPos(
+                            HWND(engine as *mut _),
+                            HWND_TOPMOST,
+                            content.0,
+                            content.1,
+                            (content.2 - content.0).max(1),
+                            (content.3 - content.1).max(1),
+                            SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+                        );
+                    }
+                }
                 webview_preview::place(
                     &path,
                     webview_preview::Area {
