@@ -596,19 +596,31 @@ fn frame_page(
     // the same URL answered out of its cache with the squares of the last one.
     let page = user_data_folder().join(format!("frame-{}.html", background.as_str()));
 
-    // The version is in the image's URL and in the page's, so neither is answered out
-    // of the browser's cache with a document that has been written since it was read.
-    let html = format!(
+    let html = frame_html(&document, version, background);
+
+    write_page(&page, &html, version)
+}
+
+/// The markup a document is drawn in, as a function of its URL rather than of its path, so
+/// that what the refusal on it is can be asked of the markup without a page being written for
+/// the question — one page per backdrop is one file, so two hovers of the same kind answer
+/// from the same name by design, and two tests asking the same question of it at once would
+/// be reading each other's.
+///
+/// The version is in the image's URL and in the page's, so neither is answered out of the
+/// browser's cache with a document that has been written since it was read.
+fn frame_html(document: &str, version: u64, background: TransparentBackground) -> String {
+    format!(
         "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
          <style>html,body{{margin:0;padding:0;height:100%;overflow:hidden}}\
          img{{display:block;width:100%;height:100%;object-fit:contain}}</style>\
+         <style>{no_interaction}</style>\
          {checkerboard}\
-         <img src=\"{}?v={version}\" alt=\"\">",
-        escape_attribute(&document),
-        checkerboard = checkerboard_style(background)
-    );
-
-    write_page(&page, &html, version)
+         <img src=\"{}?v={version}\" draggable=\"false\" alt=\"\">",
+        escape_attribute(document),
+        checkerboard = checkerboard_style(background),
+        no_interaction = NO_INTERACTION_STYLE
+    )
 }
 
 /// The page a page of HTML is drawn in, and the one it runs in: the file itself, whole, in a
@@ -719,8 +731,29 @@ fn font_page(
     // an Arabic or Hebrew line is then laid out from the right, its full stop ending it where
     // the script ends it rather than where a left-to-right page would, and a line of any
     // other script is drawn as it was.
-    let lines: String = specimen
-        .samples
+    let html = specimen_html(
+        &font,
+        version,
+        background,
+        &specimen.title,
+        &specimen.samples,
+    );
+
+    write_page(&page, &html, version)
+}
+
+/// The markup a specimen is drawn in, apart from what it is read from: the font's own URL,
+/// the name its `name` table gave and the lines its character map covers. Split out for the
+/// reason `frame_html` is — one page per backdrop and face is one file, so a question asked of
+/// the markup should not be asked of a file two hovers are also writing.
+fn specimen_html(
+    font: &str,
+    version: u64,
+    background: TransparentBackground,
+    title: &str,
+    samples: &[String],
+) -> String {
+    let lines: String = samples
         .iter()
         .enumerate()
         .map(|(index, line)| {
@@ -735,15 +768,14 @@ fn font_page(
     // A font that covers more of the sample lines than the box was shaped for — a pan-script
     // one, which is rare — is drawn smaller rather than past the bottom of it: the sizes above
     // are what a pangram and the handful of script lines a font usually holds want.
-    let (pangram_size, script_size, script_margin) = if specimen.samples.len() > SPECIMEN_FULL_LINES
-    {
+    let (pangram_size, script_size, script_margin) = if samples.len() > SPECIMEN_FULL_LINES {
         ("6vh", "3.6vh", "1vh")
     } else {
         ("8vh", "5vh", "1.6vh")
     };
 
     let (ink, shadow) = specimen_ink(background);
-    let html = format!(
+    format!(
         "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
          <style>\
          html,body{{margin:0;padding:0;height:100%;overflow:hidden}}\
@@ -757,16 +789,16 @@ fn font_page(
          .pangram{{font-size:{pangram_size}}}\
          .script{{font-size:{script_size};margin-top:{script_margin}}}\
          </style>\
+         <style>{no_interaction}</style>\
          <style>@font-face{{font-family:\"RHPPreviewFont\";\
          src:url(\"{font}?v={version}\")}}</style>\
          {checkerboard}\
          <div class=\"title\">{title}</div>{lines}",
-        font = escape_attribute(&font),
-        title = escape_text(&specimen.title),
-        checkerboard = checkerboard_style(background)
-    );
-
-    write_page(&page, &html, version)
+        font = escape_attribute(font),
+        title = escape_text(title),
+        checkerboard = checkerboard_style(background),
+        no_interaction = NO_INTERACTION_STYLE
+    )
 }
 
 /// How many lines a specimen is drawn at the sizes above: the pangram and six lines under it
@@ -802,6 +834,30 @@ fn checkerboard_style(background: TransparentBackground) -> &'static str {
         _ => "",
     }
 }
+
+/// The refusal a looked-at document is drawn under: the page takes no pointer at all.
+///
+/// This is the second of the two refusals a picture in a browser needs, and the first is
+/// `draggable="false"` on the drawing itself (`frame_page`). Neither is a setting of the
+/// browser's — WebView2 has none for it — and both are the page's own, because the page is
+/// the only part of this a hand can be kept away from.
+///
+/// What is refused is a *drag*, and the drag is what hangs a pinned preview. A browser drag
+/// of an image is not a message this app is given: Chromium begins a drag session of its own
+/// on the engine's thread, with the drawing's own silhouette following the pointer, and that
+/// session is a modal loop holding the pointer. The pin takes the same pointer for its own
+/// drag of the window at almost the same moment, and one pointer with two owners is a press
+/// whose release reaches neither — the pin left holding a capture nothing will release, and
+/// a browser's drag that never ends. So the page is drawn so that there is no press to
+/// begin one with.
+///
+/// A specimen is refused the same way for the same reason, and is the one place the selection
+/// matters: text a pointer can sweep across is text a pointer can begin a drag out of. It is
+/// put here rather than written into either page because the two of them are the two kinds of
+/// document that are *looked at*, and a page of HTML — the third kind, and the only one this
+/// engine runs — is exactly the one that keeps its pointer (`html_page`).
+const NO_INTERACTION_STYLE: &str = "*{pointer-events:none;user-select:none;\
+     -webkit-user-select:none;-webkit-user-drag:none}";
 
 /// The colour a specimen's text is drawn in over each backdrop, and the shadow that goes with
 /// it.
@@ -2934,6 +2990,100 @@ mod tests {
                 "{refused} is a way out of the frame, so a page previewed cannot do it"
             );
         }
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A document is looked at, not handled — and the page is where that has to be said,
+    /// because the page is the only thing standing between the pointer and a browser that
+    /// answers it.
+    ///
+    /// An image is draggable in a browser by default, and a drag of one is not a message this
+    /// app ever sees: Chromium begins its own drag session on the engine's thread, complete
+    /// with the ghost of the drawing following the pointer, and that session is a modal loop
+    /// that takes the pointer for itself. The pin takes the same pointer for itself at almost
+    /// the same moment (`begin_pin_drag` in `preview_window`), and two owners of one pointer
+    /// is a press whose release arrives to neither: the pin holds it with no release coming,
+    /// and the browser's drag never ends. That is the fault — a pinned document that hangs
+    /// the preview — and it is the *drag* of it, not the drawing, so it is the drag this page
+    /// refuses.
+    ///
+    /// Both halves are needed, and neither is enough alone: `draggable="false"` is what tells
+    /// the browser the image is not a thing to be carried off the page, and `pointer-events:
+    /// none` is what stops the pointer from reaching it at all — no `mousedown`, so no drag to
+    /// begin, and nothing else either, which is the whole of what "no interaction" means here.
+    /// A page of HTML is the one document a hand is on, so it keeps both: the same assertion
+    /// against `html_page` is the other half of this test, and it is what keeps the fix from
+    /// being the blunt one that takes interaction away from the only document that has any.
+    #[test]
+    fn a_document_is_drawn_in_a_page_that_cannot_be_dragged_or_pointed_at() {
+        let document = "file:///C:/art/a%20drawing.svg";
+
+        // Every backdrop, because the drawing is the same page under each of them and a
+        // refusal that only one of them carried would be a drag waiting to be found.
+        for background in [
+            TransparentBackground::Transparent,
+            TransparentBackground::Black,
+            TransparentBackground::White,
+            TransparentBackground::Checkerboard,
+        ] {
+            let html = frame_html(document, 42, background);
+
+            let start = html
+                .find("<img")
+                .expect("the document is an image on the page");
+            let image = &html[start..start + html[start..].find('>').expect("a closed tag") + 1];
+            assert!(
+                image.contains("draggable=\"false\""),
+                "the drawing is not a thing the browser can begin a drag of ({background:?}): \
+                 {image}"
+            );
+            assert!(
+                html.contains("pointer-events:none"),
+                "and the pointer does not reach it at all, so there is no press to begin one \
+                 with ({background:?})"
+            );
+        }
+
+        // The one document that is interacted with keeps both, so the refusal above is a
+        // refusal of pictures and not of the browser.
+        let folder = std::env::temp_dir().join("rust-hover-preview-drag-tests");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let page_file = folder.join("a page.html");
+        std::fs::write(&page_file, "<!doctype html><title>a page</title>").expect("a written page");
+
+        let (page, _) = html_page(&page_file, 42, TransparentBackground::Black)
+            .expect("a page for a page of html");
+        let html = std::fs::read_to_string(&page).expect("a written page");
+
+        assert!(
+            !html.contains("draggable=\"false\""),
+            "a page of HTML is a program the user clicks into, and it keeps its own drags"
+        );
+        assert!(
+            !html.contains("pointer-events:none"),
+            "and the pointer still reaches it, which is what a page being worked in means"
+        );
+
+        // A specimen is looked at on the same terms as a drawing, and is the one of the two
+        // where a drag can begin in text rather than in a picture: type a pointer can sweep
+        // across is type a pointer can begin a drag out of.
+        let html = specimen_html(
+            "file:///C:/art/specimen.ttf",
+            7,
+            TransparentBackground::Black,
+            "Test Family Regular",
+            &["The quick brown fox jumps over the lazy dog.".to_string()],
+        );
+
+        assert!(
+            html.contains("pointer-events:none"),
+            "a specimen is looked at, so the pointer does not reach it either"
+        );
+        assert!(
+            html.contains("user-select:none"),
+            "and none of its type can be swept across, which is what a drag out of text is"
+        );
 
         let _ = std::fs::remove_dir_all(&folder);
     }
