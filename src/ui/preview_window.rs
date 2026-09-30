@@ -137,7 +137,16 @@ const ANIMATION_QUEUE_FRAMES: usize = 6;
 /// How much already-played footage piles up behind the playhead before it is
 /// released. Releasing in blocks keeps the sliding window from moving per frame.
 const ANIMATION_RELEASE_BYTES: usize = 16 * 1024 * 1024;
-const MIN_ANIMATION_FRAME_DELAY_MS: u32 = 33;
+/// Floor for an animation frame's own delay: a file saying zero — or a still
+/// timebase, which is zero too — is a frame the playhead would advance through
+/// as fast as the message pump allows, spinning the render loop on a picture
+/// that never appears to change. 16 ms lets authored-60fps files play at speed;
+/// anything slower is untouched.
+const MIN_ANIMATION_FRAME_DELAY_MS: u32 = 16;
+/// Turn of a pin spinner's arc, kept at the old animation floor: a wait
+/// indicator needs no more than 30 Hz, and doubling its repaints would buy
+/// nothing (see `PinLoad::due` and `PinWait::due`).
+const SPINNER_TURN_MS: u32 = 33;
 /// Frames an animation is given before it is handed over.
 ///
 /// Two, rather than a startup buffer: the frame the preview opens on is the first
@@ -15165,7 +15174,7 @@ impl PinLoad {
         match self.turned {
             None => self.started.elapsed() >= self.spinner_delay,
             Some(turned) => {
-                turned.elapsed() >= Duration::from_millis(u64::from(MIN_ANIMATION_FRAME_DELAY_MS))
+                turned.elapsed() >= Duration::from_millis(u64::from(SPINNER_TURN_MS))
             }
         }
     }
@@ -15878,7 +15887,7 @@ impl PinWait {
         match self.turned {
             None => self.started.elapsed() >= self.spinner_delay,
             Some(turned) => {
-                turned.elapsed() >= Duration::from_millis(u64::from(MIN_ANIMATION_FRAME_DELAY_MS))
+                turned.elapsed() >= Duration::from_millis(u64::from(SPINNER_TURN_MS))
             }
         }
     }
@@ -28755,7 +28764,7 @@ mod tests {
         );
 
         load.turned = Some(
-            Instant::now() - Duration::from_millis(u64::from(MIN_ANIMATION_FRAME_DELAY_MS) + 1),
+            Instant::now() - Duration::from_millis(u64::from(SPINNER_TURN_MS) + 1),
         );
         assert!(
             load.due(),
