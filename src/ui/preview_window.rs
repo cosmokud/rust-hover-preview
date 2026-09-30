@@ -14272,6 +14272,16 @@ fn pin_screen_is_settled(media: Option<MediaType>, engine_draws: bool) -> bool {
 /// collapsed pin left goes with it, and so does the record of a pin being up at all, which is
 /// what lets the next hover through (see `PIN_ACTIVE` and `PIN_RESUMED`).
 fn end_pin_state() -> PreviewMessage {
+    // The pointer goes before the pin does, for the same reason the take-up lets it go before it
+    // rebuilds one: a pin that is over cannot be pressed on, so a press still held against it
+    // will never be answered by the release that would end it — and the window procedure gates
+    // that release on the pin still being up (see `pinned_release`). Taken first and outside the
+    // lock, because `ReleaseCapture` delivers `WM_CAPTURECHANGED`.
+    let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+    if !hwnd.is_invalid() {
+        unsafe { release_pin_capture(hwnd) };
+    }
+
     if let Ok(mut pinned) = PINNED.lock() {
         *pinned = None;
     }
@@ -17975,6 +17985,30 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction) {
     let _ = SetCapture(hwnd);
 }
 
+/// Let go of the pointer, if this window is the one holding it.
+///
+/// A press on a pinned window takes the pointer for the pin (`SetCapture` in `begin_pin_drag` and
+/// in the three presses that are a drag under another name), and the release is what lets it go
+/// again (see `pinned_release`). That makes the release the only thing standing between a press
+/// and a window that eats every mouse message on the desktop, so whatever discards the state a
+/// press was written into without a release coming has to let the pointer go here instead.
+///
+/// A pin rebuilt over another one is the case that matters, and it is an everyday one: a window
+/// being resized is a drag, and a drag answers nothing until the hand lets go — but the file it is
+/// a drag *of* is free to be replaced before the hand does (see `PreviewMessage::Pin`, and
+/// `step_pinned_file` for the walk that asks for one). The take-up builds a whole new pin with no
+/// drag in it, so the drag the pointer was taken for is gone, and nothing is left to release it.
+/// A window still holding the pointer after its own drag has been taken away out from under it is a
+/// window whose caption answers nothing: every click is delivered here rather than to whatever the
+/// pointer was aimed at, and the cursor keeps whichever shape the last edge gave it. It ends when
+/// some other window takes the pointer for itself, which is why clicking anywhere else appeared to
+/// bring the window back.
+unsafe fn release_pin_capture(hwnd: HWND) {
+    if GetCapture() == hwnd {
+        let _ = ReleaseCapture();
+    }
+}
+
 /// Carry a pinned window's drag on: the pointer has moved, and what the press began is applied to
 /// the box the window had when it began.
 unsafe fn apply_pin_drag(hwnd: HWND) {
@@ -21189,6 +21223,16 @@ pub fn run_preview_window() {
                         // `PinTooltip`). The button is drawn without a name until the
                         // answer lands rather than the take-up waiting for it.
                         ask_pin_open_with(path.clone());
+
+                        // Whatever the pin was being pressed for, it is being pressed for no
+                        // longer: the state below replaces it whole, and the pointer a press on
+                        // this window took goes with the drag it was taken for. It is let go
+                        // here rather than left to the release that is never coming, and it is
+                        // let go before `PINNED` is taken rather than inside it, because
+                        // `ReleaseCapture` delivers `WM_CAPTURECHANGED` and the window procedure
+                        // asks for that same lock (see the note above, and `pinned_release` for
+                        // the release this stands in for).
+                        release_pin_capture(hwnd);
 
                         if let Ok(mut pinned) = PINNED.lock() {
                             let now = Instant::now();
