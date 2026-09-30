@@ -110,20 +110,32 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     EnumWindows, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
-    MsgWaitForMultipleObjectsEx, PeekMessageW, RegisterClassExW, SetCursor, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, SystemParametersInfoW,
-    TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
-    GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
-    IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE, QS_ALLINPUT,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR,
-    WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
+    SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
+    CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL,
+    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE,
+    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_REMOVE,
+    QS_ALLINPUT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE,
+    WM_APP, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND,
+    WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP,
 };
+
+/// The message the pin watchdog posts to the preview window when it gives up on a pin, so that
+/// the preview thread lets go of the pointer a press on the pin took.
+///
+/// It has to be a message rather than a call, because the mouse pointer belongs to the thread
+/// that took it: `ReleaseCapture` on the watchdog's own thread releases nothing, and asking the
+/// preview thread to do it directly would be asking a thread that is not turning to do more work —
+/// which is the whole thing it has been given up on. Posted rather than sent for the same reason
+/// the rest of this file posts: a thread that is not answering must never be waited on (see
+/// `hide_preview`).
+const WM_PIN_RELEASE_POINTER: u32 = WM_APP + 4;
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
@@ -308,6 +320,23 @@ fn spawn_pin_watchdog() {
             PIN_RESUMED.store(true, Ordering::Release);
             if let Ok(mut jobs) = PIN_JOBS.0.lock() {
                 *jobs = None;
+            }
+
+            // And the pointer this thread cannot let go of: a press on the pin took it for the
+            // preview thread, and only that thread can give it back, so the pin being cleared
+            // here leaves the window holding it with no state and therefore no release coming.
+            // It is posted rather than sent, because the loop being given up on is the thing
+            // that must not be waited on — and it is worth asking for anyway, because a loop
+            // that was slow rather than gone does come back, and a window that comes back still
+            // holding the pointer is a desktop nothing can be clicked on.
+            let preview = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+            if !preview.is_invalid() {
+                // Safety: the handle is read from the slot the window was created into, and
+                // the message asks only for something this window does to itself. A window
+                // that has since gone is refused by the call rather than acted on.
+                unsafe {
+                    let _ = PostMessageW(preview, WM_PIN_RELEASE_POINTER, WPARAM(0), LPARAM(0));
+                }
             }
 
             std::thread::spawn(|| {
@@ -11521,6 +11550,15 @@ unsafe extern "system" fn window_proc(
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
             reset_preview_after_display_change(hwnd);
             DISPLAY_RESET.store(true, Ordering::Release);
+            LRESULT(0)
+        }
+        WM_PIN_RELEASE_POINTER => {
+            // The watchdog gave up on a pin and cleared its state from outside the loop, and
+            // this is the loop letting go of what its own window was still holding. The pin is
+            // already gone by the time this arrives, so nothing here asks about one — the state
+            // has been taken and there is no release coming to take the pointer back (see
+            // `spawn_pin_watchdog`).
+            release_pin_capture(hwnd);
             LRESULT(0)
         }
         WM_ACTIVATE => {
