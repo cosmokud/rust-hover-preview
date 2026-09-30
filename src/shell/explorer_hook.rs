@@ -3177,6 +3177,33 @@ fn get_file_under_cursor(resolver: &mut ItemResolver, pointer: &PointerTick) -> 
     look.path
 }
 
+/// The file the pointer is over, asked of the shell rather than of what this tick has
+/// already answered.
+///
+/// It is `get_file_under_cursor` without the two answers the look keeps: the memo of the
+/// point (see `ProbeMemo`) and the item the pointer was last answered from (see
+/// `AnsweredItem`). What asks for it is a held click — a click whose first lookup answered
+/// nothing while Explorer was still coming up (see `PinUpdateWatch::follow`) — and a held
+/// click is a question about a listing that has *since* come up. The answer the first look
+/// kept is the answer the shell gave before it could describe the view, and where that
+/// answer is an item with no file to show for it, asking the retry through it hands the
+/// retry that nothing back without asking: the retry exists to ask again, so it asks.
+///
+/// What the look does find is kept the way every look keeps it, so the rest of the watch
+/// reads what this read of the shell said rather than something older.
+fn get_file_under_cursor_fresh(
+    resolver: &mut ItemResolver,
+    pointer: &PointerTick,
+) -> Option<PathBuf> {
+    let point = pointer.point;
+    let window = item_window_of(pointer.window);
+    let look = resolve_file_under_cursor(resolver, point, window.as_ref());
+    resolver.remember_probe(point, look.path.clone());
+    resolver.remember_item(&look);
+
+    look.path
+}
+
 /// The file the pointer is over.
 ///
 /// Two witnesses and no third: the item the pointer is on, turned into a file by
@@ -4319,7 +4346,14 @@ impl PinUpdateWatch {
                     // The hand is where it clicked and Explorer is answering for it. The lookup is
                     // kept only while it answers nothing: a file it does resolve is offered and
                     // stops the retry, whatever the offer then does with it.
-                    if let Some(path) = get_file_under_cursor(resolver, &pointer) {
+                    //
+                    // Asked fresh rather than through the answers the first look kept: the click
+                    // is held because the shell had not caught up when it was asked, so the first
+                    // look's answer — an item with no file among the rest — is the answer of a
+                    // moment the retry was taken up to move past, and reading it again would hold
+                    // the click to the end of its time rather than answer it (see
+                    // `get_file_under_cursor_fresh`).
+                    if let Some(path) = get_file_under_cursor_fresh(resolver, &pointer) {
                         self.offer(&path, &showing);
                         self.pending_click_at = None;
                         self.pending_click_point = None;
