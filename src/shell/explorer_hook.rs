@@ -3177,33 +3177,6 @@ fn get_file_under_cursor(resolver: &mut ItemResolver, pointer: &PointerTick) -> 
     look.path
 }
 
-/// The file the pointer is over, asked of the shell rather than of what this tick has
-/// already answered.
-///
-/// It is `get_file_under_cursor` without the two answers the look keeps: the memo of the
-/// point (see `ProbeMemo`) and the item the pointer was last answered from (see
-/// `AnsweredItem`). What asks for it is a held click — a click whose first lookup answered
-/// nothing while Explorer was still coming up (see `PinUpdateWatch::follow`) — and a held
-/// click is a question about a listing that has *since* come up. The answer the first look
-/// kept is the answer the shell gave before it could describe the view, and where that
-/// answer is an item with no file to show for it, asking the retry through it hands the
-/// retry that nothing back without asking: the retry exists to ask again, so it asks.
-///
-/// What the look does find is kept the way every look keeps it, so the rest of the watch
-/// reads what this read of the shell said rather than something older.
-fn get_file_under_cursor_fresh(
-    resolver: &mut ItemResolver,
-    pointer: &PointerTick,
-) -> Option<PathBuf> {
-    let point = pointer.point;
-    let window = item_window_of(pointer.window);
-    let look = resolve_file_under_cursor(resolver, point, window.as_ref());
-    resolver.remember_probe(point, look.path.clone());
-    resolver.remember_item(&look);
-
-    look.path
-}
-
 /// The file the pointer is over.
 ///
 /// Two witnesses and no third: the item the pointer is on, turned into a file by
@@ -4347,13 +4320,20 @@ impl PinUpdateWatch {
                     // kept only while it answers nothing: a file it does resolve is offered and
                     // stops the retry, whatever the offer then does with it.
                     //
-                    // Asked fresh rather than through the answers the first look kept: the click
-                    // is held because the shell had not caught up when it was asked, so the first
-                    // look's answer — an item with no file among the rest — is the answer of a
-                    // moment the retry was taken up to move past, and reading it again would hold
-                    // the click to the end of its time rather than answer it (see
-                    // `get_file_under_cursor_fresh`).
-                    if let Some(path) = get_file_under_cursor_fresh(resolver, &pointer) {
+                    // The answer the click itself was given is dropped with the item it was read
+                    // from, because a retry that asked that item again would be handed back the
+                    // very answer it exists to replace. A click that lands on the tick the listing
+                    // takes the focus back is read before the shell has caught up with the move,
+                    // and what it resolves then is an item the stale views cannot name — which
+                    // `remember_item` keeps against that item exactly as it keeps the answer that
+                    // an item is a folder. The two are told apart nowhere, so a negative read for
+                    // the first is kept for the second, and the retry is answered "no file" once a
+                    // tick for as long as the hand stays in that item, which is the whole of the
+                    // click's life. The pick is then offered nothing at all, and the click after
+                    // it — on another file, and so on another item — is the first one answered.
+                    resolver.forget_item();
+
+                    if let Some(path) = get_file_under_cursor(resolver, &pointer) {
                         self.offer(&path, &showing);
                         self.pending_click_at = None;
                         self.pending_click_point = None;
@@ -6478,6 +6458,69 @@ mod tests {
             }),
             None,
             "no columns is a view whose order there is nothing to reproduce"
+        );
+    }
+
+    /// A negative answer kept against an item outlives the tick that read it, which is what
+    /// makes the click retry drop it before asking again.
+    ///
+    /// A look that finds an item and cannot name a file for it is kept as an answer, because
+    /// most of the time that is what it is — a folder, an application, a name no kind claims
+    /// — and asking the shell about it again on every tick is the cost the memo exists to
+    /// avoid. A click that lands on the tick the listing takes the focus back produces the
+    /// same shape for a different reason: the item is read before the shell has caught up with
+    /// the move, and the stale views cannot name it. Nothing tells the two apart, so the retry
+    /// — which exists precisely to ask again once the shell has — reads the memo and is
+    /// answered with the negative it was sent to replace, once a tick, until it expires. The
+    /// pick is then offered nothing, and the first click after the pin is focused is the one
+    /// that is lost (see the retry in `PinUpdateWatch::follow`).
+    #[test]
+    fn a_negative_item_answer_outlives_the_tick_that_read_it() {
+        // Built field by field rather than through `ItemResolver::new`, which asks the
+        // shell for a window collection this test has no apartment to ask it with.
+        let mut resolver = ItemResolver {
+            automation: None,
+            automation_bounded: false,
+            cache: None,
+            walker: None,
+            item_index_property: None,
+            shell_windows: None,
+            window_views: None,
+            item: None,
+            probe: None,
+        };
+        let point = POINT { x: 40, y: 60 };
+        let bounds = (10, 50, 400, 70);
+
+        // The shape both a folder and a listing caught mid-move produce: an item, and no
+        // file to be had for it.
+        resolver.remember_probe(point, None);
+        resolver.remember_item(&PointerLook {
+            path: None,
+            item_bounds: Some(bounds),
+            drawn_in: 0,
+        });
+
+        // The pointer's own answer belongs to the tick that produced it, so the next tick
+        // begins with neither the point memo nor — which is the point of this test — the
+        // item's.
+        resolver.forget_probe();
+        assert!(
+            resolver.probed_at(point).is_none(),
+            "the tick's own answer does not outlive the tick"
+        );
+        assert!(
+            matches!(resolver.item_under(point, 0), Some(None)),
+            "but the item's negative answer does, and it is the one a retry would read"
+        );
+
+        // Which is why the retry drops it rather than asking the item again: this is what
+        // makes the ask a real one, so a shell that has caught up with the focus by now is
+        // free to answer differently than it could not a moment ago.
+        resolver.forget_item();
+        assert!(
+            resolver.item_under(point, 0).is_none(),
+            "so the retry reads the shell instead of the answer it is replacing"
         );
     }
 
