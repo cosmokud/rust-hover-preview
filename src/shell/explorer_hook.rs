@@ -1051,6 +1051,14 @@ const HOVER_RESOLVER_INPUT_GRACE_MS: u64 = 1500;
 /// keyboard's own input is given to move something in, and a hand that clicks and then leaves has
 /// not asked for anything to be looked up on its behalf after that.
 const PIN_CLICK_RETRY_MS: u64 = 500;
+/// How often the file the listing under the pointer has selected is read while a pin follows
+/// picks rather than hovers: the selection is answered out of live shell objects on every
+/// read, so it is polled on its own cadence rather than on every tick of a loop that runs
+/// several dozen times a second. A click is still answered on its own tick — the press is
+/// what schedules a read outside this cadence — so what this bounds is the keyboard's lag
+/// behind a parked hand, and what a folder opened under one costs (see
+/// `PinUpdateWatch::follow_selection`).
+const PIN_SELECTION_POLL_MS: u64 = 120;
 /// How often the item the keyboard is on is looked at, while a key is being pressed or while a
 /// preview is pinned and the pin follows the keyboard: the focus is read through UI Automation,
 /// which is a crossing into Explorer, so it is asked no faster than this — fast enough that a list
@@ -4405,6 +4413,22 @@ struct PinUpdateWatch {
     /// the place, and only the place it was made in. `None` where the shell did not describe one as
     /// the press was read, which leaves the click to its own look at the point.
     pending_click_place: Option<HoverLocation>,
+    /// The listing the selection `sel_selected` was last read in, where the shell described one:
+    /// the view the pointer is in and what that view is showing.
+    ///
+    /// What tells a pick in this listing from a listing that replaced it is this place and
+    /// nothing else — the same rule the click and the keyboard are held to (see
+    /// `PinUpdateWatch::note_place` and `PinUpdateWatch::click_picked_item`), asked here of
+    /// the selection itself rather than of a press or a key.
+    sel_place: Option<HoverLocation>,
+    /// The file the listing above last had selected, as the view's own selection pattern
+    /// reported it: the pick the pointer or the keyboard made, whoever has the foreground
+    /// (see `PinUpdateWatch::follow_selection`).
+    sel_selected: Option<PathBuf>,
+    /// When the selection above was last polled. The poll answers out of live shell objects
+    /// on every read, so it runs on its own cadence rather than on every tick — a click is
+    /// still answered on its own tick (see `PIN_SELECTION_POLL_MS`).
+    sel_polled_at: Option<Instant>,
 }
 
 impl PinUpdateWatch {
@@ -4847,6 +4871,15 @@ impl PinUpdateWatch {
                 }
             }
         }
+
+        // The selection's own answer, where the setting follows picks rather than hovers: the
+        // file the listing under the pointer holds selected, whoever has the keyboard. A hover
+        // needs the hand to settle on a file; a pick only needs the listing to hold one, so
+        // this runs on every such tick rather than only where the press or the focus above
+        // answered (see `PinUpdateWatch::follow_selection`).
+        if !on_hover {
+            self.follow_selection(resolver, &pointer, &showing, over_explorer, clicked);
+        }
     }
 
     /// Begin again from the file a pin is showing now, and tell apart the two reasons the file can
@@ -4879,6 +4912,12 @@ impl PinUpdateWatch {
             next.focused = self.focused.clone();
             next.place = self.place.clone();
             next.arrived = self.arrived;
+            // The selection the listing holds goes with the listing, for the same reason the
+            // keyboard's item does: a swap is the window being shown another file, and what the
+            // listing has selected is where it was — so the first pick after one is still a
+            // change, and still a pick (see `PinUpdateWatch::follow_selection`).
+            next.sel_place = self.sel_place.clone();
+            next.sel_selected = self.sel_selected.clone();
         }
 
         *self = next;
@@ -5098,6 +5137,165 @@ impl PinUpdateWatch {
         update_pinned_preview(path);
         true
     }
+
+    /// Follow the listing's own selection for one tick: the file the view under the pointer
+    /// holds selected, offered wherever it is another pick in the listing already watched.
+    ///
+    /// This is what a pin follows when `Update Preview` is on and `On Hover` is off, and it is
+    /// the selection's answer to the hover's reading: where `On Hover` polls the file under a
+    /// settled hand, this polls the file the listing has selected — a click's pick, a key's
+    /// pick, whoever has the keyboard — with neither a press bit to catch nor a foreground to
+    /// wait for. The first click after the pin takes the focus is exactly the pick both of
+    /// those miss: the press is spent before the shell has caught up with it, and the focus is
+    /// not read until Explorer is in front again.
+    ///
+    /// Nothing is asked where the pointer is not over Explorer at all: the selection of a
+    /// listing the hand is not in is not a file anybody just picked. Nothing is asked twice
+    /// a dozen times a second either: the poll runs on its own cadence, and a click schedules
+    /// a read outside it (see `PIN_SELECTION_POLL_MS`).
+    fn follow_selection(
+        &mut self,
+        resolver: &mut ItemResolver,
+        pointer: &PointerTick,
+        showing: &PathBuf,
+        over_explorer: bool,
+        clicked: bool,
+    ) {
+        if !over_explorer {
+            return;
+        }
+
+        let now = Instant::now();
+        let due = self
+            .sel_polled_at
+            .map(|at| {
+                now.saturating_duration_since(at) >= Duration::from_millis(PIN_SELECTION_POLL_MS)
+            })
+            .unwrap_or(true);
+        if !clicked && !due {
+            return;
+        }
+        self.sel_polled_at = Some(now);
+
+        // The place is what a pick in this listing is told apart from a listing that replaced
+        // it by, and it is read without the folder walk the hover's own place pays for: the
+        // URL a view was opened with is the folder for a folder view and the query for a
+        // search, which is the comparison this needs (see `click_place`). A shell that
+        // describes nothing leaves the last baseline standing rather than answering either
+        // way.
+        let Some(place) = click_place(resolver, pointer) else {
+            return;
+        };
+        let selected = selected_file_in_view(resolver, pointer);
+
+        if let Some(path) = self.note_selection(place, selected, clicked) {
+            self.offer(&path, showing);
+        }
+    }
+
+    /// Note what the listing under the pointer has selected, and answer which file the pin is
+    /// owed, if any: the file itself where this sighting is a pick, and nothing where it is a
+    /// baseline or no change at all.
+    ///
+    /// A sighting is a pick by two facts, and only two. The listing is the one already
+    /// watched — a folder, a tab or a window moved to is a fresh baseline, offered nothing,
+    /// the way a landing is (see `PinUpdateWatch::note_place`) — and, where the listing is a
+    /// new one, only a click in hand offers out of it: the click selects before the shell
+    /// reports it, so the selection a click has just made in a listing this watch has not
+    /// seen is still that click's pick. The very first sighting is a baseline too: which file
+    /// a listing holds before the hand does anything in it is not a file anybody picked.
+    ///
+    /// A click whose selection the shell has not caught up with offers nothing either — the
+    /// sighting keeps the old selection, so the change answers on the tick the shell reports
+    /// it on. What the pin is already showing is answered the same way by the caller: it is
+    /// offered and declined, which is what clicking the file on screen is supposed to do.
+    fn note_selection(
+        &mut self,
+        place: HoverLocation,
+        selected: Option<PathBuf>,
+        clicked: bool,
+    ) -> Option<PathBuf> {
+        let known = self.sel_place.is_some();
+        let changed = self
+            .sel_place
+            .as_ref()
+            .is_some_and(|previous| hover_location_changed(previous, &place));
+        self.sel_place = Some(place);
+
+        if clicked {
+            // The click selects what it is on. Where the shell has caught up the selection
+            // is the pick; where it has not, `selected` is the old file or nothing, and the
+            // baseline above keeps the old answer standing for the change below.
+            if let Some(path) = selected {
+                self.sel_selected = Some(path.clone());
+                return Some(path);
+            }
+            return None;
+        }
+
+        if !known || changed {
+            self.sel_selected = selected;
+            return None;
+        }
+
+        if selected != self.sel_selected {
+            self.sel_selected = selected.clone();
+            return selected;
+        }
+
+        None
+    }
+}
+
+/// The file the view under the pointer has selected, read from the view's own selection
+/// rather than from the point or the keyboard focus.
+///
+/// The list is what answers for its own selection, through the same pattern the focused
+/// list is asked with when the view reports the list itself as focused (see
+/// `selected_item_of_focused_list`) — and a list answers it whoever has the keyboard, which
+/// is what makes this the reading a click behind a focused pin is followed by. The walk
+/// starts at what the point is on and climbs to the list the way the item walks climb to
+/// the item (see `walk_to_item`), and the item it names is resolved the way the pointer's
+/// own item is: by the view that is showing it (see `item_file_path`).
+///
+/// A selection nothing names a file for is an answer rather than a reason to ask the
+/// element above: the list holds this item, and nothing above it holds another selection.
+/// Nothing at all is answered where the point is on no list, or where the shell will not
+/// describe the item the list holds.
+fn selected_file_in_view(resolver: &mut ItemResolver, pointer: &PointerTick) -> Option<PathBuf> {
+    let automation = resolver.automation.as_ref()?;
+    let cache = resolver.cache.as_ref()?;
+    let walker = resolver.walker.as_ref()?;
+    let window = item_window_of(pointer.window)?;
+
+    let mut element =
+        unsafe { automation.ElementFromPointBuildCache(pointer.point, cache) }.ok()?;
+    for _ in 0..POINTER_ITEM_ANCESTOR_LIMIT {
+        if let Ok(pattern) = unsafe {
+            element.GetCurrentPatternAs::<IUIAutomationSelectionPattern>(UIA_SelectionPatternId)
+        } {
+            if let Ok(selection) = unsafe { pattern.GetCurrentSelection() } {
+                if let Ok(count) = unsafe { selection.Length() } {
+                    for index in 0..count.min(16) {
+                        let Ok(candidate) = (unsafe { selection.GetElement(index) }) else {
+                            continue;
+                        };
+                        if !element_names_an_item(&candidate) {
+                            continue;
+                        }
+                        if let Some(item) = walk_to_item(resolver, &candidate, None, false) {
+                            return item_file_path(resolver, &window, &item);
+                        }
+                        return None;
+                    }
+                }
+                return None;
+            }
+        }
+        element = unsafe { walker.GetParentElementBuildCache(&element, cache) }.ok()?;
+    }
+
+    None
 }
 
 /// Whether the window under the pointer is an Explorer window or one inside one.
@@ -7634,6 +7832,15 @@ mod tests {
         // watch beginning: the click was measured against a window that is not there now.
         watch.pending_click_at = Some(Instant::now());
         watch.pending_click_point = Some(POINT { x: 40, y: 60 });
+        // The selection the listing held goes with it, for the same reason: it was read in a
+        // listing this pin is not standing over.
+        watch.sel_place = Some(HoverLocation {
+            folder: None,
+            search_root: None,
+            location_url: Some("file:///D:/Videos".to_string()),
+            view_hwnd: Some(0x1234),
+        });
+        watch.sel_selected = Some(std::path::PathBuf::from("D:/Videos/clip.mp4"));
         watch.note_shown(Path::new("D:/Videos/clip.mp4"));
 
         assert!(
@@ -7645,6 +7852,10 @@ mod tests {
                 && watch.pending_click_point.is_none()
                 && watch.pending_click_place.is_none(),
             "and a click held for a retry was held against the pin before this one"
+        );
+        assert!(
+            watch.sel_place.is_none() && watch.sel_selected.is_none(),
+            "and the selection the listing held went with the pin before this one"
         );
         assert_eq!(
             watch.showing.as_deref(),
@@ -8400,6 +8611,98 @@ mod tests {
         assert!(
             !expired.click_picked_item(under_the_click, Some(&clicked_in), now),
             "a focus that moves after the hold is over is nobody's pick"
+        );
+    }
+
+    /// A selection the listing holds is a pick wherever it changes in the listing watched —
+    /// whoever has the keyboard — and a baseline everywhere else.
+    ///
+    /// This is the rule the pin follows picks by when `On Hover` is off (see
+    /// `PinUpdateWatch::note_selection`): the first sighting baselines rather than offers, a
+    /// change in the watched listing offers, and a folder, a tab or a window moved to
+    /// baselines again — except under a click, whose selection the shell reports after the
+    /// press that made it.
+    #[test]
+    fn a_selection_change_in_the_watched_listing_is_a_pick() {
+        let watched = HoverLocation {
+            folder: None,
+            search_root: None,
+            location_url: Some("file:///D:/Pictures".to_string()),
+            view_hwnd: Some(0x1234),
+        };
+        let elsewhere = HoverLocation {
+            location_url: Some("file:///D:/Pictures/2024".to_string()),
+            ..watched.clone()
+        };
+        let one = std::path::PathBuf::from("D:/Pictures/one.png");
+        let two = std::path::PathBuf::from("D:/Pictures/two.png");
+        let three = std::path::PathBuf::from("D:/Pictures/2024/three.png");
+
+        let mut watch = PinUpdateWatch::default();
+
+        // The very first sighting is a baseline, not a pick: which file the listing holds
+        // before the hand does anything in it is not a file anybody picked.
+        assert_eq!(
+            watch.note_selection(watched.clone(), Some(one.clone()), false),
+            None,
+            "the first sighting baselines rather than offers"
+        );
+        assert_eq!(watch.sel_selected.as_deref(), Some(one.as_path()));
+
+        // Another file selected in the same listing is the pick — by click or by key, which
+        // of the two is not asked.
+        assert_eq!(
+            watch.note_selection(watched.clone(), Some(two.clone()), false),
+            Some(two.clone()),
+            "a change in the watched listing is a pick"
+        );
+
+        // No change is nothing, however often it is seen.
+        assert_eq!(
+            watch.note_selection(watched.clone(), Some(two.clone()), false),
+            None,
+            "seeing the same selection again is not another pick"
+        );
+
+        // A fresh listing under the hand baselines again rather than offering what it
+        // happens to hold: the preview does not follow a folder change.
+        assert_eq!(
+            watch.note_selection(elsewhere.clone(), Some(three.clone()), false),
+            None,
+            "a folder moved to is a fresh baseline, not a pick"
+        );
+        assert_eq!(watch.sel_selected.as_deref(), Some(three.as_path()));
+
+        // ...unless a click is in hand: the click selects before the shell reports it, so a
+        // selection read in a listing the watch has not seen is still that click's pick.
+        let mut fresh = PinUpdateWatch::default();
+        assert_eq!(
+            fresh.note_selection(elsewhere.clone(), Some(three.clone()), true),
+            Some(three.clone()),
+            "a click's selection is that click's pick even in a new listing"
+        );
+
+        // A click the shell has not caught up with offers nothing and keeps the old answer
+        // standing, so the change offers on the tick the shell reports it on.
+        let mut lagging = PinUpdateWatch::default();
+        assert_eq!(
+            lagging.note_selection(watched.clone(), Some(one.clone()), false),
+            None
+        );
+        assert_eq!(
+            lagging.note_selection(watched.clone(), None, true),
+            None,
+            "a click nothing is reported for yet offers nothing"
+        );
+        assert_eq!(
+            lagging.sel_selected.as_deref(),
+            Some(one.as_path()),
+            "and the old answer is left standing for the change"
+        );
+        assert_eq!(
+            lagging.note_selection(watched.clone(), Some(two.clone()), false),
+            Some(two.clone()),
+            "which the change then offers"
         );
     }
 }
