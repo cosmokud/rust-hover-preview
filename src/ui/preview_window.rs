@@ -18293,16 +18293,26 @@ fn resize_pinned_content(
 
     // Where the box comes out. The edge opposite the one being dragged is the one that stays; an
     // axis the hand is not on is centered on the line it was on, and moved along that line by as
-    // little as the room asks rather than by the whole of what the centering wanted. Where the
-    // hand did not change the size on that axis at all — it asked past the room and was refused —
-    // the line is kept where the drag left it: centering a room-sized box would snap a carried
-    // maximized window back onto the room's edge, forgetting the drag that put it there (see
-    // `pin_restore_box`).
+    // little as the room asks rather than by the whole of what the centering wanted.
+    //
+    // A box the drag has already carried past the room's own edge is the exception, and it is the
+    // whole of what a maximized window is: it fills the room in one dimension, so there is no room
+    // left on that line for the centering to sit in, and the clamp that would have moved it back
+    // has nothing to move it back *to* — it collapses onto the room's edge instead. A maximized
+    // window dragged down and then pulled by an edge is the case, and the window jumps to the top
+    // or the left of the screen the moment the edge is touched, resizing from the place the screen
+    // says rather than the one the hand left it at. A box already off the room keeps the line the
+    // drag gave it: the room cannot hold it either way, so there is nothing to be gained by
+    // pretending it can (and the window is still kept on the display by `clamp_pinned_box`, which
+    // is the rule for a box that must stay reachable at all).
+    let off_the_room_horizontally = content.0 < room.left || content.2 > room.right;
+    let off_the_room_vertically = content.1 < room.top || content.3 > room.bottom;
+
     let left = if edge.left {
         content.2 - width
     } else if edge.right {
         content.0
-    } else if width == start_width {
+    } else if off_the_room_horizontally {
         content.0
     } else {
         (content.0 + (start_width - width) / 2)
@@ -18312,7 +18322,7 @@ fn resize_pinned_content(
         content.3 - height
     } else if edge.bottom {
         content.1
-    } else if height == start_height {
+    } else if off_the_room_vertically {
         content.1
     } else {
         (content.1 + (start_height - height) / 2)
@@ -27897,6 +27907,57 @@ mod tests {
             moved,
             "the left edge pulled out past the room"
         );
+    }
+
+    /// Maximize → drag → resize keeps the place the drag left the window at, whichever edge
+    /// is pulled. This is the whole of the snapping: a maximized window fills the room, so on the
+    /// axis the hand is not on there is no room left for the box to be centred in, and the clamp
+    /// that keeps it inside the room collapses onto the room's edge instead — a top-edge drag
+    /// taking a 16:9 picture from left 100 to 33, and a left-edge drag taking it from top 90 to
+    /// 19, which is the window jumping to the top of the screen the moment an edge is touched.
+    ///
+    /// Note that the picture's own shape is kept on both axes, so the size on the *untouched* axis
+    /// changes too: a guard that only kept the place when the size had not moved never sees this
+    /// case, which is why the snapping survived it.
+    #[test]
+    fn a_resize_of_a_maximized_box_keeps_the_dragged_place_on_both_axes() {
+        // A maximized picture filling the 1200x900 room, then carried to (100, 90).
+        let moved = (100, 90, 1300, 990);
+
+        // Every edge and corner, for a picture that keeps its shape as it grows.
+        let cases: [(&str, PinResize, i32, i32); 5] = [
+            ("top", edge(false, true, false, false), 0, 25),
+            ("bottom", edge(false, false, false, true), 0, 25),
+            ("left", edge(true, false, false, false), 25, 0),
+            ("right", edge(false, false, true, false), 25, 0),
+            ("bottom-right", edge(false, false, true, true), 25, 25),
+        ];
+        for (name, e, dx, dy) in cases {
+            let got = dragged_overlay(moved, PinFrame::Shaped, e, dx, dy, true);
+            // Only the line under the hand may move: an axis the hand is not on has to stay where
+            // the drag left it, which is the whole of what the snapping broke.
+            if !(e.left || e.right) {
+                assert_eq!(got.0, moved.0, "the left line moves on a {name} drag");
+            }
+            if !(e.top || e.bottom) {
+                assert_eq!(got.1, moved.1, "the top line moves on a {name} drag");
+            }
+        }
+
+        // And for a page laid out to its box, which resizes one dimension at a time — the
+        // same promise, asked of the axis the page's resize does not touch.
+        for (name, e, dx, dy) in [
+            ("top", edge(false, true, false, false), 0i32, 25i32),
+            ("left", edge(true, false, false, false), 25i32, 0i32),
+        ] {
+            let got = dragged_overlay(moved, PinFrame::Free, e, dx, dy, true);
+            if !(e.left || e.right) {
+                assert_eq!(got.0, moved.0, "a page's left line moves on a {name} drag");
+            }
+            if !(e.top || e.bottom) {
+                assert_eq!(got.1, moved.1, "a page's top line moves on a {name} drag");
+            }
+        }
     }
 
     /// A drag cannot take the media off the display it is on, and the shape it keeps is kept
