@@ -4853,6 +4853,27 @@ fn engine_font_media() -> MediaData {
     }
 }
 
+/// The media a pinned window is given for a file the engine draws, when the hover it was
+/// taken up from left none behind: the same kind, carrying the same nothing.
+///
+/// A document, a specimen and a page of HTML are shown in the engine's own window, so the
+/// handover that puts one on screen deliberately leaves the media slot empty (see the loop's
+/// own handover) — and a pin taken up over one finds that emptiness rather than a frame. What
+/// is needed is the *kind* and nothing more: the pin reads it to know what shape the window is
+/// framed by and what chrome it carries, and asks the engine itself whether the thing it is a
+/// window onto is still there (see `pin_media_is_alive`).
+///
+/// `None` for a file this app draws itself, which is the whole of what this answers: such a
+/// file has a frame of its own in the slot already, and installing an engine kind over it
+/// would take a picture's window for a document's.
+fn pinned_engine_media(path: &Path) -> Option<MediaData> {
+    match engine_kind_of(path)? {
+        PreviewType::Vector | PreviewType::Text => Some(engine_svg_media()),
+        PreviewType::Fonts => Some(engine_font_media()),
+        _ => None,
+    }
+}
+
 /// A still image as `MediaData`: one frame, nothing streaming.
 ///
 /// The kind arrives with the frame rather than being decided here: a texture is a still
@@ -14207,17 +14228,40 @@ fn pin_what_is_on_screen(
     }
 
     let path = current_show.as_ref().and_then(show_path)?.clone();
-    let settled = CURRENT_MEDIA
-        .lock()
-        .ok()
-        .and_then(|media| media.as_ref().map(|media| !media.media_type.is_loading()))
-        .unwrap_or(false);
-    if !settled {
+
+    // A document, a specimen and a page of HTML are settled by the engine rather than by
+    // the media, and the wait above is what stands in for the engine while it is not (see
+    // `pin_screen_is_settled`).
+    let engine_draws = engine_kind_of(&path).is_some()
+        && webview_preview::showing_path().as_deref() == Some(path.as_path());
+    if !pin_screen_is_settled(current_media_type(), engine_draws) {
         return None;
     }
 
     let rect = preview_screen_rect()?;
     Some(PreviewMessage::Pin { path, rect })
+}
+
+/// Whether what is on screen is a preview rather than a promise: either a frame this app has
+/// finished making, or a page the engine has finished drawing.
+///
+/// The media answers it for everything this app draws, and cannot answer it for the three
+/// kinds the engine draws: nothing of this app's goes on screen behind a document, a specimen
+/// or a page of HTML, so what is left in the media slot is either nothing at all or the spinner
+/// that stood in for the page until it landed — and the page's landing takes the wait without
+/// touching the slot (see the loop's `webview_preview::showing_path`). Asking the media is
+/// therefore what left the pin key doing nothing at all over every file the browser draws.
+///
+/// The engine says it by naming the file its window is showing, which is published only once a
+/// document has actually been put up: a browser still coming up, a page that has not landed and
+/// a navigation that failed all leave the name of something else, or of nothing (see
+/// `webview_preview::showing_path`).
+fn pin_screen_is_settled(media: Option<MediaType>, engine_draws: bool) -> bool {
+    if engine_draws {
+        return true;
+    }
+
+    media.is_some_and(|kind| !kind.is_loading())
 }
 
 /// Take the pin down, answering with the message that does it.
@@ -21047,6 +21091,26 @@ pub fn run_preview_window() {
                             cancel.store(true, Ordering::Release);
                         }
 
+                        // A document, a specimen and a page of HTML are on screen in the engine's
+                        // own window with no media of this app's behind them, so what the hover
+                        // left in the slot is nothing at all — or the spinner that stood in for
+                        // the page while it was on its way, which its landing never clears. A pin
+                        // built on either would be a window with no kind in it: no frame, no
+                        // transport, and a liveness read that takes the window straight back down
+                        // (see `pin_media_is_alive`). So the kind is installed here, before it is
+                        // read, which is the same handover the swap path performs for the same
+                        // file (see `swap_pinned_media`) and the loop's own handover performs for
+                        // a hover. It goes in only where the engine draws the file, and only where
+                        // the slot does not already say so: a file this app draws has a frame of
+                        // its own there, and a swap has just installed the very kind.
+                        if !current_media_type().is_some_and(|kind| kind.is_engine()) {
+                            if let Some(media) = pinned_engine_media(&path) {
+                                if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                    *current = Some(media);
+                                }
+                            }
+                        }
+
                         let kind = CURRENT_MEDIA
                             .lock()
                             .ok()
@@ -25895,6 +25959,43 @@ mod tests {
         // did nothing at all, which is the answer a Space now always gets.
         assert!(!pin_key_restores_bubble(false, true));
         assert!(!pin_key_restores_bubble(false, false));
+    }
+
+    /// The pin key is answered by what is *on screen*, and for the three kinds the engine
+    /// draws that is the engine's own window rather than any media of this app's — the slot
+    /// behind one is empty by design, or holds the spinner that stood in for the page until it
+    /// landed. Reading the slot alone is what made the key do nothing at all over an `.html`
+    /// with **Render HTML** on, an SVG document and a font specimen, while the very same key
+    /// worked over everything else.
+    ///
+    /// What is not settled stays unpinnable: a spinner over a file of this app's own is still a
+    /// promise, and the engine saying it is showing a file is the only thing that settles the
+    /// three kinds it draws.
+    #[test]
+    fn what_is_on_screen_is_settled_by_the_engine_as_well_as_by_the_media() {
+        // Everything this app draws is settled by its own media, and a spinner never is.
+        assert!(pin_screen_is_settled(Some(MediaType::StaticImage), false));
+        assert!(pin_screen_is_settled(Some(MediaType::Text), false));
+        assert!(
+            !pin_screen_is_settled(Some(MediaType::Loading), false),
+            "a spinner is a promise rather than a preview"
+        );
+        assert!(
+            !pin_screen_is_settled(None, false),
+            "and nothing on screen is not a preview either"
+        );
+
+        // A document, a specimen and a page of HTML: the engine has put the file up, so there
+        // is a preview on screen — with no media of ours behind it at all, which is the whole
+        // of what used to stop the key.
+        assert!(
+            pin_screen_is_settled(None, true),
+            "a page the engine is showing is a preview, whatever the media slot says"
+        );
+        assert!(
+            pin_screen_is_settled(Some(MediaType::Loading), true),
+            "the spinner left behind by a page that has landed does not un-settle it"
+        );
     }
 
     /// Every command a caption's button asks for survives the trip out of the window procedure
