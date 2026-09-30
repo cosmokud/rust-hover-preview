@@ -10,19 +10,11 @@
 
 ## Multi-Frame Formats The Front Does Not Count
 
-What a file's own head says is what this app routes by, and for the still-or-moving question
-the head settles everything a name cannot: a `.png` with an `acTL` chunk is an animation, a
-`.gif` with a second frame block is one, a `.webp` with an `ANIM` chunk is one, and the `ftyp`
-brands of an `.avif` or `.heic` say whether the file is a picture or a sequence — a brand list
-rather than the one at the front, since an animated AVIF is commonly written with `avis` behind
-`avif`. A `.jxl` is the one that cannot be settled from a brand at all, and is asked of a
-decoder instead: whether its codestream animates is a flag in the image header, behind whatever
-container box the file opens with, so `head` checks the two signature forms it arrives in
-against the bytes it already holds and only then opens the file to read that one flag
-(`jxl_image::is_animated`).
-Four more hold a second picture that nothing in the front of the file announces, so each is
-drawn as its first frame — which is what it was drawn as before this was read at all — and
-each would take a reader rather than a byte to change:
+The still-or-moving question is settled from the head of the file, and `ARCHITECTURE.md` states
+the probe that does it — a brand list rather than the one at the front for an ISO base media
+file, a decoder for a `.jxl`, and so on. What is below is what the probe cannot reach: a second
+picture nothing in the front of the file announces, so each is drawn as its first frame, and
+each would take a reader rather than a byte to change.
 
 - **A stereo or multi-picture JPEG (`.jpg` `.jpeg` `.jpe` `.jfif`).** The second picture is
   named in an `APP2` segment, and an Exif segment of any size may sit in front of it, so
@@ -33,36 +25,29 @@ each would take a reader rather than a byte to change:
 - **A layered XCF (`.xcf`).** Its layers are the file's own layer structure — the question the
   merged picture a `.psd` keeps is already read for, and this would be the same walk over a
   different container.
-- **A `.dds` with more than one surface (`.dds`), and a multi-extension FITS (`.fits`).** Both
-  carry more than one picture behind a header this app reads only the first surface of; what
-  each is drawn as is that first surface, which is the picture either way.
-
-**And one of the three is settled, and two are back on the list for a measured reason.** An
-**animated JPEG XL** is drawn now, by a decoder compiled in (`jxl_image`), and needs nothing
-installed on the machine at all. **An animated AVIF and an animated HEIF sequence** are not,
-and the reason is not a guess: the media engine Windows has was asked directly, on files whose
-brands are exactly the ones this is about, and it refused every one of them —
-`MFCreateSourceReaderFromByteStream` answering `0x80004005` for an `avis` AVIF and an `msf1`
-HEIC alike, while an AV1 `.mp4` and an HEVC `.mp4` through the same calls came back with frames
-at 100 ms and 33 ms on the same machine. So the engine is not missing the codec, and never was:
-it decodes both, and has no demuxer for the image-sequence brands. The reader that asked it
-(`heif_sequence`) is still wired in, still returns `None` for these, and still falls through to
-the first frame — which is the behaviour it was written to have, and is why these show a still
-rather than nothing. What is needed is a demuxer for `avis` and `msf1` that this graph does not
-have, and the ways to get one are not small: **libheif** (which brings libde265 for HEVC, and is
-the first C/C++ build in a tree that compiles none), or a pure-Rust container reader that hands
-its samples to a decoder the same way this one does — [`heic`](https://github.com/imazen/heic)
-parses `msf1`/`moov` in pure Rust, but is AGPL-3.0 or a paid commercial licence, decodes HEVC
-I-slices only with no inter prediction, and reads a movie structure for its first I-frame rather
-than a whole sequence, so it may land in the same place this did. Neither is a decision to make
-without a licence answer first.
-
-**And one that was never on the list, because it is a name rather than a flag.** A multi-image
-HEIC — a camera burst — carries its pictures as items behind a `mif1` brand, and `mif1` is the
-generic HEIF *image* brand an ordinary single-image HEIC is written under, so treating it as a
-sequence would hand every camera photo the animated scaling and a pointless attempt to open it
-as one. It is drawn as its first frame, and what would change that is a walk of the `meta` box
-counting the items behind the brand rather than reading the brand.
+- **A `.dds` with more than one surface, and a multi-extension FITS (`.fits`).** Both carry
+  more than one picture behind a header this app reads only the first surface of.
+- **A multi-image HEIC — a camera burst — carries its pictures as items behind a `mif1`
+  brand**, and `mif1` is the generic HEIF *image* brand an ordinary single-image HEIC is
+  written under, so treating it as a sequence would hand every camera photo the animated
+  scaling and a pointless attempt to open it as one. What would change that is a walk of the
+  `meta` box counting the items behind the brand rather than reading the brand.
+- **An animated AVIF and an animated HEIF sequence** are drawn as their first frame, and the
+  reason is not a guess: the media engine Windows has was asked directly, on files whose
+  brands are exactly the ones this is about, and it refused every one of them —
+  `MFCreateSourceReaderFromByteStream` answering `0x80004005` for an `avis` AVIF and an `msf1`
+  HEIC alike, while an AV1 `.mp4` and an HEVC `.mp4` through the same calls came back with
+  frames at 100 ms and 33 ms on the same machine. So the engine is not missing the codec, and
+  never was: it decodes both, and has no demuxer for the image-sequence brands. The reader
+  that asked it (`heif_sequence`) is still wired in, still returns `None` for these, and
+  still falls through to the first frame. What is needed is a demuxer for `avis` and `msf1`
+  that this graph does not have, and the ways to get one are not small: **libheif** (which
+  brings libde265 for HEVC, and is the first C/C++ build in a tree that compiles none), or a
+  pure-Rust container reader that hands its samples to a decoder the same way this one does —
+  [`heic`](https://github.com/imazen/heic) parses `msf1`/`moov` in pure Rust, but is AGPL-3.0
+  or a paid commercial licence, decodes HEVC I-slices only with no inter prediction, and reads
+  a movie structure for its first I-frame rather than a whole sequence, so it may land in the
+  same place this did. Neither is a decision to make without a licence answer first.
 
 ## Unsupported Audio Formats
 

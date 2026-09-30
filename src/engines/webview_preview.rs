@@ -38,21 +38,8 @@
 //! image, a page that draws itself is nothing without a run, and what a run is given stops
 //! at everything that is a way out of the frame it is in (see `html_page`, `page_runs`).
 //!
-//! Kept warm is not the same as left working, and the second of those is what that same
-//! exception makes necessary. A browser whose window is not on screen is told to stop —
-//! `Host::hide` asks the runtime to suspend it, which takes a runtime exposing
-//! `ICoreWebView2_3`; on an older one the controller is only hidden, and that alone is
-//! enough to stop the compositor producing frames for a window no one can see. Where the
-//! ask is there to be made it is also what a document that runs needs: its frame loop and
-//! its script timers are paused too, rather than dropped to what a background tab runs at.
 //! What is kept between documents is the browser, not the work it was doing, and
-//! `Host::wake` puts that browser back to work on the next document, which is a resume
-//! rather than a browser start — so what a page costs is paid while it is on screen, and
-//! briefly after a browser has been woken but before its window goes up, which a
-//! navigation ending superseded or failed never reaches (see `Host::hide`). None of it is
-//! about HTML alone: an animated SVG is a compositor working just as hard behind a window
-//! that has been hidden, and the same question is asked of every kind of document (see
-//! `frame_page`, `suspend`).
+//! `Host::hide`/`Host::wake` are what stop and start it (see `suspend`).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
@@ -90,6 +77,7 @@ use crate::config::config::{
 };
 use crate::formats::font_formats;
 use crate::formats::text_formats;
+use crate::paths::plain_path;
 use crate::readers::font_preview;
 use crate::{readers::svg_preview, CONFIG};
 
@@ -170,11 +158,13 @@ pub struct Area {
 /// file it settles on is one the loop asks for, one after another, and an engine that
 /// draws one document at a time and can be a tenth of a second about it would otherwise
 /// draw each of them in turn — showing a file the hand has already left before the one it
-/// is on, for as long as the hand keeps moving. One want is kept instead of a queue, so
-/// what the engine takes up is the newest file rather than the oldest, and a want is a
-/// generation of its own only where the *document* is another one: a box that moved while
-/// the same document was being navigated to is the same want, and counting it as another
-/// would throw away the navigation it is waiting for (see `show`).
+/// is on, for as long as the hand keeps moving.
+///
+/// One cell rather than a queue, so what the engine takes up is the newest file rather than
+/// the oldest — the rule `PLACED` and `PLACE_ASKED` follow for a box rather than a document.
+/// A want is a generation of its own only where the *document* is another one: a box that
+/// moved while the same document was being navigated to is the same want, and counting it as
+/// another would throw away the navigation it is waiting for (see `show`).
 static WANTED: Lazy<Mutex<Option<Wanted>>> = Lazy::new(|| Mutex::new(None));
 
 /// The generation of the newest want. Every request carries the generation it was made
@@ -183,16 +173,15 @@ static WANTED: Lazy<Mutex<Option<Wanted>>> = Lazy::new(|| Mutex::new(None));
 /// messages and unable to take a lock the loop may be holding.
 static WANTED_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// The box a document the engine is *holding* is to be moved to: one cell rather than a
-/// queue, and the same rule `WANTED` follows for the document itself.
+/// The box a document the engine is *holding* is to be moved to, published under one cell
+/// rather than a queue (see `WANTED`).
 ///
 /// A drag is many placements and only the place the hand let go at is worth putting up. This
 /// is what a placement is made of, and it is deliberately not a want: a want names a document
 /// and is replaced only by another document, while this is the same document in another box.
 /// Publishing a new one here therefore *replaces* what was there, which is the whole of the
-/// coalescing — the same arrangement `WANTED` has, kept apart because a document that has
-/// landed keeps its want and a box is asked for far more often than a document is (see
-/// `place`, `ask_place`).
+/// coalescing — kept apart from `WANTED` because a document that has landed keeps its want
+/// and a box is asked for far more often than a document is (see `place`, `ask_place`).
 static PLACED: Lazy<Mutex<Option<Placement>>> = Lazy::new(|| Mutex::new(None));
 
 /// Whether a placement has been asked of the engine's thread and not yet taken up, so that a
@@ -326,7 +315,13 @@ pub fn runtime_version() -> Option<String> {
         let mut version = PWSTR::null();
         GetAvailableCoreWebView2BrowserVersionString(PCWSTR::null(), &mut version).ok()?;
 
-        let text = pwstr_to_string(version);
+        // A null string is a runtime that is not installed, and the buffer is freed either
+        // way: it is allocated with `CoTaskMem` on this thread and does not outlive this call.
+        let text = if version.is_null() {
+            None
+        } else {
+            version.to_string().ok()
+        };
         CoTaskMemFree(Some(version.0 as *const _));
 
         text
@@ -370,16 +365,24 @@ pub fn showing_hwnd() -> isize {
     HOST_HWND.load(Ordering::Acquire)
 }
 
-/// Say what the engine's window is showing, for `showing_path` to answer with. Nothing is
-/// said with the window coming down, which is what `hide` is for.
-fn publish_shown(path: Option<PathBuf>) {
-    if let Ok(mut shown) = SHOWN.lock() {
-        *shown = path;
+/// Say what the engine's window is showing and where it is, or that it is showing nothing
+/// and is nowhere: the three things the preview loop asks a preview about, published together
+/// because they are one fact and are read together (see `is_showing`, `showing_path`,
+/// `screen_rect`).
+///
+/// Nothing is published as the window comes down, which is what `hide` is for.
+fn publish(shown: Option<(PathBuf, Area)>) {
+    if let Ok(mut path) = SHOWN.lock() {
+        *path = shown.as_ref().map(|(path, _)| path.clone());
     }
+
+    SHOWING.store(shown.is_some(), Ordering::Release);
+
+    publish_rect(shown.map(|(_, area)| area));
 }
 
-/// Say where the engine's window is — or that it is nowhere — for `screen_rect` to
-/// answer with.
+/// Say where the engine's window is — or that it is nowhere — for `screen_rect` to answer
+/// with. The one half of `publish` a window being *moved* is also owed.
 fn publish_rect(area: Option<Area>) {
     if let Ok(mut rect) = SHOWING_RECT.lock() {
         *rect = area.map(|area| (area.x, area.y, area.x + area.width, area.y + area.height));
@@ -601,6 +604,15 @@ fn frame_page(
     write_page(&page, &html, version)
 }
 
+/// What every page of this app's opens with: the doctype, the encoding, and a page that fills
+/// the window it is given rather than scrolling inside it — the arrangement `html_page` exists
+/// for, and the one a document drawn as an image needs as well.
+///
+/// The style is left open: each of the three kinds of page carries its own rules after it and
+/// closes the same element.
+const PAGE_HEAD: &str = "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
+     <style>html,body{margin:0;padding:0;height:100%;overflow:hidden}";
+
 /// The markup a document is drawn in, as a function of its URL rather than of its path, so
 /// that what the refusal on it is can be asked of the markup without a page being written for
 /// the question — one page per backdrop is one file, so two hovers of the same kind answer
@@ -611,8 +623,7 @@ fn frame_page(
 /// browser's cache with a document that has been written since it was read.
 fn frame_html(document: &str, version: u64, background: TransparentBackground) -> String {
     format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
-         <style>html,body{{margin:0;padding:0;height:100%;overflow:hidden}}\
+        "{PAGE_HEAD}\
          img{{display:block;width:100%;height:100%;object-fit:contain}}</style>\
          <style>{no_interaction}</style>\
          {checkerboard}\
@@ -624,40 +635,31 @@ fn frame_html(document: &str, version: u64, background: TransparentBackground) -
 }
 
 /// The page a page of HTML is drawn in, and the one it runs in: the file itself, whole, in a
-/// frame that fills the window it is given.
+/// frame that fills the window it is given — the arrangement `frame_page` reaches the same
+/// end by with an image, for a document that has a size of its own.
 ///
-/// The frame is what a standalone document is not: a browser draws an SVG at the size it
-/// asks for and will not stretch one to the window, and a page of HTML asked for as the page
-/// would scroll inside it and show only its first screenful. A frame is sized by the box it
-/// is given, so the page and the window are the same box at every scale, and the share of the
-/// display `document_scale` names is a share of the room — see `frame_page`, which is the
-/// same arrangement for a document that has a size of its own.
+/// The frame is given two allowances and nothing else. It is given its own origin, without
+/// which the page itself would not arrive: a page's stylesheets and its pictures are relative
+/// to it, so a frame loaded as a document of an opaque origin of its own comes up unstyled.
+/// And it is given script, which is the one thing a page of HTML is handed the browser's own
+/// engine for: a page that draws itself with WebGL, or lays itself out from a script, is a
+/// page nothing but a run can show, and withheld it comes up a blank rectangle.
 ///
-/// The frame is given its own origin, without which the page itself would not arrive: a
-/// page's stylesheets and its pictures are relative to it, so a frame loaded as a document
-/// of an opaque origin of its own comes up unstyled. It is given script as well, and that is
-/// the one thing a page of HTML is handed the browser's own engine for: a page that draws
-/// itself with WebGL, or lays itself out from a script, is a page nothing but a run can show,
-/// and withheld it comes up a blank rectangle. So these two allowances are what the frame
-/// gets, and what is still withheld is everything that is a way *out* of it — popups, forms,
-/// and any navigation of the top frame — which is the same reach a document drawn as an
-/// image has, since a picture cannot pop up, submit, or navigate either, and which
-/// `BROWSER_ARGUMENTS` reaches from the outside for the links a page keeps. Nor is it given
-/// the three things a run would otherwise bring with it: a browser that plays sound without
-/// a gesture, a page that reads the files beside it, and a page that takes the whole screen
-/// — no autoplay policy is passed, no `--allow-file-access-from-files`, and no
-/// `allowfullscreen` for a page asking to be shown full screen to be refused.
+/// What is still withheld is everything that is a way *out* of the frame — popups, forms, and
+/// any navigation of the top frame — which is the same reach a document drawn as an image has,
+/// since a picture cannot pop up, submit, or navigate either, and which `BROWSER_ARGUMENTS`
+/// reaches from the outside for the links a page keeps. Nor is the frame given the three
+/// things a run would otherwise bring with it: a browser that plays sound without a gesture, a
+/// page that reads the files beside it, and a page that takes the whole screen — no autoplay
+/// policy is passed, no `--allow-file-access-from-files`, and no `allowfullscreen` for a page
+/// asking to be shown full screen to be refused.
 ///
-/// The two together are not the loosening they would be for same-origin content, where an
-/// allowance to keep one's own origin alongside one to run would let a framed document reach
-/// out of itself and take the frame with it. They are not same-origin here: the wrapper is a
-/// file this app wrote into this run's own profile folder and the document is another file
-/// altogether, so the two are separate origins whatever the sandbox is told, and a document
-/// that runs reaches its own file and no further out of it.
-///
-/// The target is in the page's own name as well as in its content, for the reason the
-/// backdrop and the face are: two pages of HTML are two pages the browser has not seen,
-/// rather than one URL answered out of its cache with the last page's source in it.
+/// The two allowances together are not the loosening they would be for same-origin content,
+/// where an allowance to keep one's own origin alongside one to run would let a framed document
+/// reach out of itself and take the frame with it. They are not same-origin here: the wrapper
+/// is a file this app wrote into this run's own profile folder and the document is another
+/// file altogether, so the two are separate origins whatever the sandbox is told, and a
+/// document that runs reaches its own file and no further out of it.
 fn html_page(
     path: &Path,
     version: u64,
@@ -671,8 +673,7 @@ fn html_page(
     ));
 
     let html = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
-         <style>html,body{{margin:0;padding:0;height:100%;overflow:hidden}}\
+        "{PAGE_HEAD}\
          iframe{{display:block;width:100%;height:100%;border:0}}</style>\
          {checkerboard}\
          <iframe src=\"{}?v={version}\" sandbox=\"allow-same-origin allow-scripts\" title=\"\"></iframe>",
@@ -776,9 +777,7 @@ fn specimen_html(
 
     let (ink, shadow) = specimen_ink(background);
     format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
-         <style>\
-         html,body{{margin:0;padding:0;height:100%;overflow:hidden}}\
+        "{PAGE_HEAD}\
          body{{display:flex;flex-direction:column;justify-content:center;\
          padding:6vh 6vw;box-sizing:border-box;color:{ink};{shadow}}}\
          .title{{font-family:\"Segoe UI\",system-ui,sans-serif;font-size:2.4vh;\
@@ -1023,16 +1022,18 @@ pub fn wanted_here(path: &Path, area: Area) {
 /// restored or carried to another display, and what stands in its media band has to travel
 /// with the box.
 ///
-/// It is both of the asks above in one, and either half applies: a document still on its
-/// way has only a want to move — moving one sends no command, exactly as `wanted_here` does
-/// — while one the engine is already holding has the window put in the new box, which is a
-/// `show` that does not navigate again because the document it is asked for is the document
-/// it holds (`Host::show`). The two are told apart by the window rather than by the want:
-/// a document that has landed keeps its want, so a box that changed under one would be read
-/// as a box still on its way and moved nowhere (`box_change`). Nothing is asked for another
-/// file: a box belongs to the preview it was measured for, and a preview for another file is
-/// a `show`, which is the ask that takes this want's place altogether. A box that is already
-/// the one asked for is nothing to do at all — a drag is many of these.
+/// It is both of the asks above in one, and either half applies (`box_change`). A document
+/// still on its way has only a want to move — moving one sends no command, exactly as
+/// `wanted_here` does — while one the engine is already holding has the window put in the new
+/// box by a placement rather than by a `show`, which would navigate again for a document the
+/// engine already has. The two are told apart by the window rather than by the want: a
+/// document that has landed keeps its want, so a box that changed under one would be read as
+/// a box still on its way and moved nowhere (see `PLACED`, `Host::place`).
+///
+/// Nothing is asked for another file: a box belongs to the preview it was measured for, and a
+/// preview for another file is a `show`, which is the ask that takes this want's place
+/// altogether. A box that is already the one asked for is nothing to do at all — a drag is
+/// many of these.
 pub fn place(path: &Path, area: Area, background: TransparentBackground) {
     // What is done with the box is read from the two cells the engine keeps and nothing else:
     // whether the document is the one *wanted*, whether it is the one *held*, and whether the
@@ -1113,24 +1114,11 @@ fn ask_place(path: &Path, area: Area, background: TransparentBackground) {
 
 /// Which half of a `place` a box that changed under a document belongs to.
 ///
-/// The two facts a cell alone cannot tell apart are the whole of this, and the reason it is a
-/// question at all is that both of them are true of a document that is on screen: a want is what
-/// the engine is *owed*, a document that lands keeps it until the next file takes its place, and
-/// what a box that changed under a landed document asks is not the want but the window the
-/// document is really in. So "owed" is the wrong question to ask on its own — a document still
-/// on its way and the one being drawn are both owed, and a box that changed under the second
-/// was answered as if it were the first: the want was moved, no window was, and a pinned window
-/// left its document behind the moment it was dragged.
-///
-/// What separates them is the window, which is what `holds` is: the file the engine has put up.
-/// A box that changed under it — and under a file that is *wanted*, since one the engine holds
-/// without being the wanted file is a preview that has moved on and has no box of its own to
-/// move — is the window's, and the ask that moves a window without navigating again is a
-/// *placement* rather than a `show`, which is a document being put up and pays for one (see
-/// `ask_place`, `Host::place`). A box that changed under a document still on its way is the
-/// want's, and moving one sends nothing at all. A box that has not moved is neither, and a file
-/// the engine neither holds nor is owed — which is no document of this file's to move — is
-/// nothing.
+/// "Owed" cannot answer it on its own: a want is what the engine is owed, a document that
+/// lands keeps it until the next file takes its place, and both a document still on its way and
+/// the one being drawn are owed — so a box that changed under the second was answered as if it
+/// were the first, and a pinned window left its document behind the moment it was dragged. What
+/// separates them is the window, which is what `holds` is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BoxChange {
     /// Nothing to do: the box is the one on record, or the file is not the engine's.
@@ -1343,44 +1331,7 @@ fn engine_thread(commands: Receiver<Command>) {
                 }
                 idle_since = Instant::now();
             }
-            Ok(Command::Place) => {
-                // The newest box, not the one this command was sent for: a drag publishes a box
-                // per pointer move and only the last of them is a place worth putting the
-                // window in.
-                if let Some(placement) = take_placement() {
-                    // A placement for a document the engine no longer holds is a drag of a
-                    // window that has been swapped or closed since, and moving that window
-                    // would put somebody else's document where the hand let go.
-                    if !host
-                        .as_ref()
-                        .is_some_and(|host| host.holds(&placement.path))
-                    {
-                        trace(&format!(
-                            "engine: dropped a placement for {} it does not hold",
-                            placement.path.display()
-                        ));
-                    } else if let Some(ask) = wanted().filter(|ask| ask.path == placement.path) {
-                        // A backdrop is the page's as well as the controller's, so a box
-                        // published under a backdrop the page was not written for is a page to
-                        // write again rather than a window to move — which is what `show` is
-                        // for, and it is asked for once rather than per pointer move, because
-                        // every box of a drag carries the backdrop that is on record.
-                        if host
-                            .as_ref()
-                            .is_some_and(|host| host.needs_page(&placement))
-                        {
-                            if let Some(host) = host.as_mut() {
-                                host.show(&ask);
-                            }
-                        } else if let Some(host) = host.as_mut() {
-                            // And a move: nothing navigates, nothing is woken and nothing is
-                            // re-shown, all of which describe a document arriving rather than a
-                            // window being carried (see `Host::place`).
-                            host.place(&placement);
-                        }
-                    }
-                }
-            }
+            Ok(Command::Place) => carry_out_placement(&mut host),
             Ok(Command::Show { generation }) => {
                 // What was asked for here may have been asked for after: the pointer moves
                 // while a document is on its way, and the file this is about is then one
@@ -1511,6 +1462,59 @@ fn engine_thread(commands: Receiver<Command>) {
     }
 }
 
+/// Carry out the placement the engine's thread has been asked for, if it still belongs to a
+/// window this engine has.
+///
+/// The box in hand is the newest one rather than the one the command was sent for: a drag
+/// publishes a box per pointer move and only the last of them is a place worth putting the
+/// window in (see `PLACED`).
+fn carry_out_placement(host: &mut Option<Host>) {
+    let Some(placement) = take_placement() else {
+        return;
+    };
+
+    // A placement for a document the engine no longer holds is a drag of a
+    // window that has been swapped or closed since, and moving that window
+    // would put somebody else's document where the hand let go.
+    if !host
+        .as_ref()
+        .is_some_and(|host| host.holds(&placement.path))
+    {
+        trace(&format!(
+            "engine: dropped a placement for {} it does not hold",
+            placement.path.display()
+        ));
+        return;
+    }
+
+    let Some(ask) = wanted().filter(|ask| ask.path == placement.path) else {
+        return;
+    };
+
+    // A backdrop is the page's as well as the controller's, so a box
+    // published under a backdrop the page was not written for is a page to
+    // write again rather than a window to move — which is what `show` is
+    // for, and it is asked for once rather than per pointer move, because
+    // every box of a drag carries the backdrop that is on record.
+    if host
+        .as_ref()
+        .is_some_and(|host| host.needs_page(&placement))
+    {
+        if let Some(host) = host.as_mut() {
+            host.show(&ask);
+        }
+
+        return;
+    }
+
+    // And a move: nothing navigates, nothing is woken and nothing is
+    // re-shown, all of which describe a document arriving rather than a
+    // window being carried (see `Host::place`).
+    if let Some(host) = host.as_mut() {
+        host.place(&placement);
+    }
+}
+
 /// Everything one engine is: the window it draws in, the environment, and the
 /// controller over it.
 struct Host {
@@ -1606,17 +1610,18 @@ impl Host {
         // browser that is *silent* rather than refusing spends the deadline of the
         // attempt instead of being asked again on a fresh clock, which is why the
         // deadline is one of its own and not a per-call timeout.
-        let mut controller = None;
-        for attempt in 0..4 {
+        //
+        // The first ask is made whatever the deadline says, since `create_controller` is
+        // what spends it; the ones after it are put off a quarter of a second further
+        // each time, and never past the end of the attempt, up to four asks.
+        let mut controller = create_controller(environment.clone(), hwnd, deadline);
+        let mut asked = 1;
+
+        while controller.is_none() && asked < 4 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(250 * asked).min(remaining(deadline)));
+
             controller = create_controller(environment.clone(), hwnd, deadline);
-
-            if controller.is_some() || Instant::now() >= deadline {
-                break;
-            }
-
-            if attempt < 3 {
-                std::thread::sleep(Duration::from_millis(250 * (attempt + 1)));
-            }
+            asked += 1;
         }
 
         trace(&format!(
@@ -1736,12 +1741,7 @@ impl Host {
             // than something drawn small and resized after the fact. It is set again
             // below from the box the *newest* want asks for, which is where a wait that
             // followed a moving hand ended up.
-            let _ = self.controller.SetBounds(RECT {
-                left: 0,
-                top: 0,
-                right: area.width,
-                bottom: area.height,
-            });
+            self.set_bounds(area);
         }
 
         if self.current.as_ref() != Some(&(path.clone(), background, face)) {
@@ -1814,12 +1814,7 @@ impl Host {
         self.last_area = Some((area.width, area.height));
 
         unsafe {
-            let _ = self.controller.SetBounds(RECT {
-                left: 0,
-                top: 0,
-                right: area.width,
-                bottom: area.height,
-            });
+            self.set_bounds(area);
 
             let current = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
             let style = ex_style_for(current, runs);
@@ -1828,6 +1823,21 @@ impl Host {
             }
 
             let _ = self.controller.SetIsVisible(true);
+
+            self.put_window(area);
+            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+        }
+
+        publish(Some((path.clone(), area)));
+    }
+
+    /// Put the window in `area`, topmost, and without ever activating it.
+    ///
+    /// The placement never activates, whatever the document is: a hover is not a click, and a
+    /// preview that appeared over a window being named would put the caret somewhere else
+    /// than where it was.
+    fn put_window(&self, area: Area) {
+        unsafe {
             let _ = SetWindowPos(
                 self.hwnd,
                 HWND_TOPMOST,
@@ -1835,17 +1845,23 @@ impl Host {
                 area.y,
                 area.width,
                 area.height,
-                // The placement never activates, whatever the document is: a hover is not a
-                // click, and a preview that appeared over a window being named would put
-                // the caret somewhere else than where it was.
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
-            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
+    }
 
-        publish_shown(Some(path.clone()));
-        SHOWING.store(true, Ordering::Release);
-        publish_rect(Some(area));
+    /// Tell the controller the box the page is rendered in, which is what the browser lays the
+    /// page out at: a page is drawn at the size of the window it is drawn in, so this is owed
+    /// by a box that changed *size* and by nothing else (see `place`).
+    fn set_bounds(&self, area: Area) {
+        unsafe {
+            let _ = self.controller.SetBounds(RECT {
+                left: 0,
+                top: 0,
+                right: area.width,
+                bottom: area.height,
+            });
+        }
     }
 
     /// Whether the document this host is holding is `path`, which is what a placement is
@@ -1898,27 +1914,11 @@ impl Host {
         let resized = self.last_area != Some(size);
         self.last_area = Some(size);
 
-        unsafe {
-            if resized {
-                let _ = self.controller.SetBounds(RECT {
-                    left: 0,
-                    top: 0,
-                    right: placement.area.width,
-                    bottom: placement.area.height,
-                });
-            }
-
-            let _ = SetWindowPos(
-                self.hwnd,
-                HWND_TOPMOST,
-                placement.area.x,
-                placement.area.y,
-                placement.area.width,
-                placement.area.height,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
+        if resized {
+            self.set_bounds(placement.area);
         }
 
+        self.put_window(placement.area);
         publish_rect(Some(placement.area));
     }
 
@@ -1945,9 +1945,7 @@ impl Host {
     /// as an answer to the question of what the browser is doing would skip the one ask
     /// that stops it, and the engine is kept warm between documents, so nothing else would
     /// ever come along and do it. What not guarding costs is two Win32 calls and the one
-    /// `Interface::cast` in `suspend`, and that is nothing at all once the browser has
-    /// been asked: the guard at the top of `suspend` is what returns for a host that has
-    /// nothing to wake.
+    /// `Interface::cast` in `suspend`.
     fn hide(&mut self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
@@ -1966,9 +1964,7 @@ impl Host {
         // ask rather than after it: `suspend` waits, and can wait for up to
         // `SUSPEND_TIMEOUT`, and publishing first is what keeps a window in which the
         // preview has been taken down and the app is still reporting one under the pointer.
-        publish_shown(None);
-        SHOWING.store(false, Ordering::Release);
-        publish_rect(None);
+        publish(None);
 
         // The window is off screen, so the box a drag last asked for is a box nothing is in:
         // taking it back is what stops a placement published before this hide being carried out
@@ -1989,11 +1985,10 @@ impl Host {
     /// does it for an animated document as much as for a page.
     ///
     /// The ask is waited for, and waited for within `SUSPEND_TIMEOUT`, rather than left to
-    /// complete whenever it completes: the engine's thread is the thread the browser is
-    /// driven from, so the wait here is a `GetMessage` for the reason `wait_for_navigation`
-    /// is one. A runtime older than suspension is answered by leaving the controller
-    /// hidden and doing nothing else — `SetIsVisible(false)` has already stopped the
-    /// frames, and that half is the one that is not optional.
+    /// complete whenever it completes (see `wait_for_suspend`). A runtime older than
+    /// suspension is answered by leaving the controller hidden and doing nothing else —
+    /// `SetIsVisible(false)` has already stopped the frames, and that half is the one that
+    /// is not optional.
     ///
     /// It is called on every hide rather than only on a hide of something on screen, so the
     /// guard at the top of it is what keeps that cheap: a browser that has already been asked
@@ -2047,7 +2042,7 @@ impl Host {
 
     /// Put the browser back to work, which is what a page that runs needs before the next
     /// document is drawn: a resume rather than a browser begun again, and a page that picks
-    /// up where it left off rather than an engine thrown away and started.
+    /// up where it left off rather than an engine thrown away and started (see `suspend`).
     ///
     /// The order it is called in — resume first, and the controller told it is on screen
     /// after it — is the runtime's documented one, and nothing turns on it here: `Navigate`
@@ -2226,53 +2221,52 @@ const NAVIGATION_TIMEOUT: Duration = Duration::from_secs(15);
 ///
 /// What the wait is for is `TrySuspendCompleted`, which the runtime calls as soon as it has
 /// stopped, so a quarter of a second is longer than a suspend takes on any machine and short
-/// enough that a pointer moving on over a document never notices it. The bound is the elapsed
-/// check read again on every pass of the wait loop, and the thread timer is what brings
-/// `GetMessage` back so that it is read again: the same shape and the same reliance as
-/// `wait_for_navigation`. A browser that does not answer is recorded as suspended anyway —
-/// the answer is what says it has stopped, not the asking — and a resume of a WebView that is
-/// not suspended is harmless.
+/// enough that a pointer moving on over a document never notices it. A browser that does not
+/// answer is recorded as suspended anyway — the answer is what says it has stopped, not the
+/// asking — and a resume of a WebView that is not suspended is harmless (see `pump_until`).
 const SUSPEND_TIMEOUT: Duration = Duration::from_millis(250);
 
-/// Wait for the page to arrive, pumping the thread's messages while it does, and ending on
-/// one of the three things that can end the wait.
+/// Why a wait ended without an answer: the bound ran out, or the message queue is gone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Unanswered {
+    /// The wait ran longer than the answer takes.
+    TimedOut,
+    /// There was no queue left to wait on.
+    Gone,
+}
+
+/// Pump this thread's messages until `probe` answers, `timeout` runs out, or the queue is
+/// gone — whichever comes first.
 ///
 /// The messages have to be pumped rather than waited on: a controller is created on this
-/// thread and stops drawing when the thread stops retrieving messages, and the event this
-/// waits for arrives through that same queue — so the wait *is* a `GetMessage`, and the
-/// page is noticed the moment it lands, with no interval between and nothing polled. The
-/// two ways the wait ends besides the page are a want that is no longer this one, which
-/// `wake_engine_thread` brings this thread back to look at, and a browser that has not
-/// answered within `NAVIGATION_TIMEOUT`, which is what the timer armed for the length of
-/// the wait is for.
-fn wait_for_navigation(receiver: &Receiver<()>, generation: u64) -> Arrival {
-    const NAVIGATION_TIMER: usize = 1;
-
+/// thread and stops drawing when the thread stops retrieving messages, and both of the events
+/// this waits for arrive through that same queue — so the wait *is* a `GetMessage`, and an
+/// answer is noticed the moment it lands, with no interval between and nothing polled.
+///
+/// The timer is armed on the thread rather than on a window, and under an id of its own so
+/// that two waits cannot answer one another's timer: its whole job is to bring `GetMessage`
+/// back so that the elapsed check is read again. The bound is therefore read on every pass,
+/// which is what stops a browser that never answers from parking the engine's thread for the
+/// rest of the run.
+fn pump_until<T>(
+    timeout: Duration,
+    timer: usize,
+    mut probe: impl FnMut() -> Option<T>,
+) -> Result<T, Unanswered> {
     let started = Instant::now();
     let mut message = MSG::default();
 
     unsafe {
-        // A timer on the thread rather than on a window: its whole job is to bring
-        // `GetMessage` back once the wait has run longer than any document takes.
-        let _ = SetTimer(
-            HWND::default(),
-            NAVIGATION_TIMER,
-            NAVIGATION_TIMEOUT.as_millis() as u32,
-            None,
-        );
+        let _ = SetTimer(HWND::default(), timer, timeout.as_millis() as u32, None);
     }
 
-    let arrival = loop {
-        if receiver.try_recv().is_ok() {
-            break Arrival::Arrived;
+    let answer = loop {
+        if let Some(answer) = probe() {
+            break Ok(answer);
         }
 
-        if !is_wanted(generation) {
-            break Arrival::Superseded;
-        }
-
-        if started.elapsed() >= NAVIGATION_TIMEOUT {
-            break Arrival::TimedOut;
+        if started.elapsed() >= timeout {
+            break Err(Unanswered::TimedOut);
         }
 
         let mut answered = false;
@@ -2287,83 +2281,58 @@ fn wait_for_navigation(receiver: &Receiver<()>, generation: u64) -> Arrival {
 
         if !answered {
             // `GetMessage` answered -1, an error, or 0, a quit: there is no queue left to
-            // wait on, and a page that has not arrived by then is not coming.
-            break Arrival::Failed;
+            // wait on, and an answer that has not arrived by then is not coming.
+            break Err(Unanswered::Gone);
         }
     };
 
     unsafe {
-        let _ = KillTimer(HWND::default(), NAVIGATION_TIMER);
+        let _ = KillTimer(HWND::default(), timer);
     }
 
-    arrival
+    answer
+}
+
+/// Wait for the page to arrive, pumping the thread's messages while it does, and ending on
+/// one of the three things that can end the wait.
+///
+/// The three are the page arriving, a want that is no longer this one — which
+/// `wake_engine_thread` brings this thread back to look at — and a browser that has not
+/// answered within `NAVIGATION_TIMEOUT` (see `pump_until`).
+fn wait_for_navigation(receiver: &Receiver<()>, generation: u64) -> Arrival {
+    const NAVIGATION_TIMER: usize = 1;
+
+    match pump_until(NAVIGATION_TIMEOUT, NAVIGATION_TIMER, || {
+        if receiver.try_recv().is_ok() {
+            Some(Arrival::Arrived)
+        } else if !is_wanted(generation) {
+            Some(Arrival::Superseded)
+        } else {
+            None
+        }
+    }) {
+        Ok(arrival) => arrival,
+        Err(Unanswered::TimedOut) => Arrival::TimedOut,
+        Err(Unanswered::Gone) => Arrival::Failed,
+    }
 }
 
 /// Wait for the browser to answer a suspend, pumping the thread's messages while it does.
 ///
-/// The wait is a `GetMessage` for the reason the one in `wait_for_navigation` is: the
-/// browser is driven from this thread and its answer arrives through this thread's queue,
-/// so the wait *is* a message and the answer is noticed the moment it lands. The timer is
-/// armed on the thread rather than on a window for the same job the navigation's is armed
-/// for — its whole business is to bring `GetMessage` back so that the elapsed check is read
-/// again — under an id of its own so that the two waits cannot answer one another's timer.
-/// The answer is `Some` when the browser gave one, and `None` when it gave nothing before
-/// `SUSPEND_TIMEOUT` or when the queue is gone, both of which the caller reads as the same
-/// thing (see `suspend`).
+/// The wait is a `GetMessage` for the reason the one in `wait_for_navigation` is (see
+/// `pump_until`). The answer is `Some` when the browser gave one, and `None` when it gave
+/// nothing before `SUSPEND_TIMEOUT` or when the queue is gone, both of which the caller reads
+/// as the same thing (see `suspend`).
 fn wait_for_suspend(receiver: &Receiver<bool>) -> Option<bool> {
     const SUSPEND_TIMER: usize = 2;
 
-    let started = Instant::now();
-    let mut message = MSG::default();
-
-    unsafe {
-        let _ = SetTimer(
-            HWND::default(),
-            SUSPEND_TIMER,
-            SUSPEND_TIMEOUT.as_millis() as u32,
-            None,
-        );
-    }
-
-    let answered = loop {
-        if let Ok(answer) = receiver.try_recv() {
-            break Some(answer);
-        }
-
-        if started.elapsed() >= SUSPEND_TIMEOUT {
-            break None;
-        }
-
-        let mut retrieved = false;
-        unsafe {
-            let got = GetMessageW(&mut message, HWND::default(), 0, 0);
-            if got.0 > 0 {
-                let _ = TranslateMessage(&message);
-                DispatchMessageW(&message);
-                retrieved = true;
-            }
-        }
-
-        if !retrieved {
-            // `GetMessage` answered -1, an error, or 0, a quit: there is no queue left to
-            // wait on, and a browser that has not answered by then is not coming.
-            break None;
-        }
-    };
-
-    unsafe {
-        let _ = KillTimer(HWND::default(), SUSPEND_TIMER);
-    }
-
-    answered
+    pump_until(SUSPEND_TIMEOUT, SUSPEND_TIMER, || receiver.try_recv().ok()).ok()
 }
 
 impl Drop for Host {
     fn drop(&mut self) {
-        publish_shown(None);
+        publish(None);
         HOST_HWND.store(0, Ordering::Release);
-        SHOWING.store(false, Ordering::Release);
-        publish_rect(None);
 
         // Closing the engine drops the environment, and the browser goes with the
         // last controller over it — usually. A browser that does not is the leftover
@@ -2679,23 +2648,9 @@ fn configure(webview: &ICoreWebView2) {
     }
 }
 
-/// Whether the engine is to run the code in the document it is pointed at.
-///
-/// This is the one setting of the browser's that is not a property of the engine but of the
-/// document in it, and the engine is one window reused for every document it draws: a
-/// document is a specimen for ten seconds and the next hover is a page of HTML, on the same
-/// `ICoreWebView2` and in the same window. A setting made when the engine is begun would be
-/// one answer for all of them, and there is no one answer — a page of HTML is handed to a
-/// browser to run and a document and a specimen are handed to it to be looked at. So it is
-/// read as the document is being pointed at, which is also the only moment at which the
-/// browser is about to read it (see `Host::navigate`), and a setting that were left off
-/// would stay off for the documents that follow until one of them said otherwise.
-///
-/// The document is the whole of the answer: the sandbox around a page of HTML is what stops
-/// a page that runs from being a way out of the preview (see `html_page`), and the network
-/// is dead from the outside whatever this says (see `BROWSER_ARGUMENTS`). Nor is the setting
-/// a grant of a capability to a document that is being looked at: an SVG and a specimen are
-/// given it off, and an image in a browser has nowhere to put it.
+/// Whether the engine is to run the code in the document it is pointed at: the one setting of
+/// the browser's that is a property of the document in it rather than of the engine, and so is
+/// made as the document is pointed at (see `Host::navigate`).
 fn set_scripts(webview: &ICoreWebView2, on: bool) {
     if let Ok(settings) = unsafe { webview.Settings() } {
         let _ = unsafe { settings.SetIsScriptEnabled(on) };
@@ -2757,26 +2712,18 @@ fn background_color(background: TransparentBackground) -> COREWEBVIEW2_COLOR {
 
 /// A local file as a URL, which is what the engine is pointed at.
 ///
-/// The path a hover carries is the Shell's, and the Shell canonicalizes paths to the
-/// verbatim form — `\\?\C:\…`, with `\\?\UNC\` in front of a share — which is not
-/// something a URL may contain: a browser pointed at it fails at once, silently, and
-/// what a hover shows is nothing. So the prefix comes off first, and a share keeps its
-/// server: `\\?\UNC\server\share` becomes `file://server/share`, a drive becomes
-/// `file:///C:/…`. The characters that would end the path early — a space, a hash, a
-/// question mark, a percent — are escaped; anything else is left as it is written.
+/// A verbatim path is not something a URL may contain: a browser pointed at one fails at
+/// once, silently, and what a hover shows is nothing. So the Shell's prefix comes off
+/// first (`crate::paths::plain_path`), and a share keeps its server: `\\?\UNC\server\share`
+/// becomes `file://server/share`, a drive becomes `file:///C:/…`. The characters that
+/// would end the path early — a space, a hash, a question mark, a percent — are escaped;
+/// anything else is left as it is written.
 fn file_url(path: &Path) -> Option<String> {
     if !path.is_absolute() {
         return None;
     }
 
-    let text = path.to_string_lossy();
-    let local = match text.strip_prefix(r"\\?\UNC\") {
-        Some(share) => format!(r"\\{share}"),
-        None => text
-            .strip_prefix(r"\\?\")
-            .map(str::to_string)
-            .unwrap_or_else(|| text.to_string()),
-    };
+    let local = plain_path(path);
 
     let (mut url, rest) = match local.strip_prefix(r"\\") {
         Some(share) => (String::from("file://"), share.to_string()),
@@ -2799,23 +2746,6 @@ fn file_url(path: &Path) -> Option<String> {
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn pwstr_to_string(value: PWSTR) -> Option<String> {
-    if value.is_null() {
-        return None;
-    }
-
-    let mut length = 0usize;
-    unsafe {
-        while *value.0.add(length) != 0 {
-            length += 1;
-        }
-
-        Some(String::from_utf16_lossy(std::slice::from_raw_parts(
-            value.0, length,
-        )))
-    }
 }
 
 #[cfg(test)]
@@ -3124,11 +3054,7 @@ mod tests {
     }
 
     /// A box that changes under a document is answered by the half of the ask that owns it, and
-    /// the half that owns it is what the *window* says. The want cannot say it on its own: the
-    /// want a document landed under is not taken back when it lands, so the document being drawn
-    /// and the one still on its way are both wanted, and a box that changed under the first would
-    /// be moved into the want — a window left standing where it was while the box travelled
-    /// (see `place` and `box_change`).
+    /// what owns it is the *window* rather than the want (see `place` and `box_change`).
     #[test]
     fn a_box_that_changes_moves_the_window_of_the_document_the_engine_holds() {
         // The document the engine is holding, at a box that has moved: the window's.
@@ -3154,20 +3080,7 @@ mod tests {
 
     /// A drag of a pinned document is a flood of boxes, and the engine's thread is one that
     /// takes a single command per pass — so what a box is asked for has to cost the engine one
-    /// move however many boxes arrive, and never a backlog.
-    ///
-    /// This is the shape of the fault: the box was asked for as a whole `show`, one per
-    /// pointer move, on an unbounded channel. Each of those re-woke the browser, re-told the
-    /// controller it was on screen and re-showed the window, so a drag queued far more work
-    /// than the thread could ever drain. A still document absorbs that. An animated one has a
-    /// compositor already working, and the thread fell behind until the drawing stopped
-    /// following the hand and then stopped answering altogether — a window that cannot be
-    /// dragged and an app that has to be killed.
-    ///
-    /// What is asserted here is the two halves of the answer, both of them visible without a
-    /// browser: a box published replaces the one before it rather than queueing behind it, and
-    /// asking again while one is already owed publishes without asking, so a drag of any length
-    /// leaves exactly one placement outstanding.
+    /// move however many boxes arrive, and never a backlog (see `PLACED`, `PLACE_ASKED`).
     #[test]
     fn a_drag_publishes_one_box_rather_than_a_queue_of_them() {
         /// The box a placement is published under, read without taking the cell's contents out

@@ -51,8 +51,11 @@ encrypted. Nothing bypasses a password, and no password is ever stored.
   keys (your trigger key, the navigation keys, the letters and digits a name is
   typed with in Explorer, mouse buttons, and Ctrl+C while text is selected) to
   drive previews, and it watches one key with a keyboard hook so that a preview
-  can be pinned (see below). Keystrokes are never recorded, stored, or sent, and
-  nothing you type is ever read: what is compared is a key's number.
+  can be pinned. Keystrokes are never recorded, stored, or sent, and nothing you
+  type is ever read: what is compared is a key's number. A pinned window you have
+  clicked takes the ordinary Windows keyboard focus, and the handful of keys it
+  answers (arrows, `Escape`) arrive at it as keystrokes sent to that window —
+  nothing is polled system-wide for them, and nothing is recorded.
 - No screen scraping of other apps. The preview is the app's own window,
   painted by itself.
 - No code injection into Explorer. It asks Explorer which item is under the
@@ -115,18 +118,11 @@ run during normal use.
   scroll under a parked cursor refreshes the preview. It records counts, not
   positions or applications. Wheel motion over a scrollable text preview is
   given to the preview instead of Explorer.
-- **Keyboard, one key:** pinning a preview is driven by a key you choose
-  (`Space` by default), and that key is watched with a system-wide low-level
-  keyboard hook: the hook is called for every keystroke — that is how such a
-  hook works — and what it does with each is compare the key's number with the
-  one you chose, and, when they match, count a press. Nothing else about the
-  event is read, no character or text is ever produced, nothing is written down
-  or sent, and the keystroke is always passed on: `Space` still does what it
-  does in Explorer. Turning **Enable Pin** off unbinds the key, and the hook
-  then compares against nothing at all. A pinned window you have clicked takes
-  the ordinary Windows keyboard focus, and the handful of keys it answers
-  (arrows, `Escape`) arrive at it as keystrokes sent to that window — nothing
-  is polled system-wide for them, and nothing is recorded.
+- **Keyboard, the pin key:** pinning a preview is driven by a key you choose
+  (`Space` by default), watched with a system-wide low-level keyboard hook that
+  compares a key's number with the one you chose and counts a press. Turning
+  **Enable Pin** off unbinds the key, and the hook then compares against nothing
+  at all.
 - **Clipboard, two cases:** (1) copying from a text preview writes to the
   clipboard only when you choose Copy / Select All / Ctrl+C with a selection.
   (2) On printerless machines, an Excel sheet preview copies a corner of the

@@ -35,6 +35,7 @@ use crate::config::config::{
 };
 use crate::engines::document_cache::{self, Page, PageKind};
 use crate::formats::office_formats::{app_for, container_kind, OfficeApp};
+use crate::paths::plain_path;
 use crate::shell::cloud_files;
 use crate::ui::preview_window;
 use crate::CONFIG;
@@ -1826,12 +1827,7 @@ struct PreparedSource {
 
 impl PreparedSource {
     fn new(source: &Path) -> Self {
-        let Some(plain) = plain_path(source) else {
-            return Self {
-                path: source.to_path_buf(),
-                copy: false,
-            };
-        };
+        let plain = plain_path(source);
 
         if plain.chars().count() < MAX_OFFICE_PATH && !has_zone_identifier(&plain) {
             return Self {
@@ -1854,20 +1850,6 @@ impl PreparedSource {
             let _ = std::fs::remove_file(&self.path);
         }
     }
-}
-
-/// The path without the verbatim prefix the hook canonicalizes to.
-fn plain_path(path: &Path) -> Option<String> {
-    let text = path.to_string_lossy();
-
-    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-        return Some(format!(r"\\{rest}"));
-    }
-    if let Some(rest) = text.strip_prefix(r"\\?\") {
-        return Some(rest.to_string());
-    }
-
-    Some(text.to_string())
 }
 
 fn has_zone_identifier(path: &str) -> bool {
@@ -2223,22 +2205,6 @@ mod tests {
     /// about is a render, not the worker that would normally make it.
     fn render_here(engines: &mut Engines, request: &RenderRequest) -> RenderOutcome {
         render_request(engines, request, WORKER_GENERATION.load(Ordering::Acquire))
-    }
-
-    #[test]
-    fn reads_the_plain_form_of_a_verbatim_path() {
-        assert_eq!(
-            plain_path(Path::new(r"\\?\C:\docs\report.docx")).as_deref(),
-            Some(r"C:\docs\report.docx")
-        );
-        assert_eq!(
-            plain_path(Path::new(r"\\?\UNC\server\share\report.docx")).as_deref(),
-            Some(r"\\server\share\report.docx")
-        );
-        assert_eq!(
-            plain_path(Path::new(r"C:\docs\report.docx")).as_deref(),
-            Some(r"C:\docs\report.docx")
-        );
     }
 
     /// A document of this module's own, in a folder the tests share: a page is kept by the

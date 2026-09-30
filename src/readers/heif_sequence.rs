@@ -2,51 +2,28 @@
 //! engine's *decoder* rather than its player.
 //!
 //! An AVIF sequence (`avis` brand) and a HEIC/HEIF sequence (`mif1` sample group) are
-//! ISOBMFF containers — MP4-shaped, with a track of samples and a timing per sample — and
-//! this is the reader that asks Windows for their frames one at a time. It uses
-//! Media Foundation as a decode engine only: an `IMFSourceReader` on the file, pulled
-//! synchronously, each sample wrapped as a BGRA frame and pushed into the same
-//! `Vec<ImageFrame>` queue an animated GIF feeds. The app's own video path (the media
-//! engine in frame-server mode, `MediaType::NativeVideo`) is deliberately *not* used
-//! here: a moving picture is a moving GIF that happens to be in a fancier container, and
-//! the whole point of the queue is that the drawing code does not know the difference.
-//!
-//! ## This may not work, and that is the expected answer
-//!
-//! **Microsoft never documented that Media Foundation can open a HEIF image sequence or
-//! an AVIF sequence as a source at all.** The ISOBMFF demuxer Media Foundation ships
-//! understands a set of brands, and `avis` and `mif1` are not among anything anyone has
-//! confirmed. What this module may therefore produce on any given machine, for any given
-//! file, is `None` — and that is the *designed* answer, not a bug to be chased: the caller
-//! falls back to the still (first-frame) path, which reads the same file through WIC and
-//! which works for a single-image HEIF.
-//!
-//! Nobody should read this file as a guaranteed-working decoder, or route a still
-//! HEIC/AVIF through it in the hope that `None` is a bug. Every failure path here returns
-//! `None`, none of them panic, and a `None` from a still file is the correct answer for a
-//! still. What is left when a sequence *does* decode is the same shape a GIF produces:
-//! frames of BGRA pixels at one size, and a delay per frame.
-//!
-//! The startup the media engine needs is not done here: `codecs::mf_started()` starts it
-//! once for the process, and asking it also puts the calling thread in an apartment, which
-//! is what every COM object below needs an apartment to have been made in.
+//! ISOBMFF containers, and this asks Windows for their frames one at a time as an
+//! `IMFSourceReader`, each sample pushed into the same `Vec<ImageFrame>` queue an animated
+//! GIF feeds — the drawing code must not know the difference, which is why the app's own
+//! video path is deliberately not used here. **Microsoft has never documented that Media
+//! Foundation can open either brand as a source, so `None` is the designed answer rather
+//! than a bug to be chased**: the caller falls back to the still path, which reads the same
+//! file through WIC. And the startup the media engine needs is not done here —
+//! `codecs::mf_started()` starts it once for the process, and asking it also puts the
+//! calling thread in an apartment, which is what every COM object below needs.
 
 use crate::formats::codecs;
-use std::os::windows::ffi::OsStrExt;
+use crate::readers::video_player;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use windows::core::{Interface, PCWSTR};
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFByteStream, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader,
-    MFCreateAttributes, MFCreateMFByteStreamOnStream, MFCreateMediaType,
-    MFCreateSourceReaderFromByteStream, MFMediaType_Video, MFVideoFormat_ARGB32,
-    MFVideoFormat_RGB32, MF_BYTESTREAM_ORIGIN_NAME, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
-    MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SAMPLE_SIZE, MF_MT_SUBTYPE,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN,
-    MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+    IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader, MFCreateAttributes,
+    MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Video, MFVideoFormat_ARGB32,
+    MFVideoFormat_RGB32, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
+    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SAMPLE_SIZE, MF_MT_SUBTYPE, MF_SOURCE_READERF_ENDOFSTREAM,
+    MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM,
 };
-use windows::Win32::System::Com::{IStream, STGM_READ, STGM_SHARE_DENY_NONE};
-use windows::Win32::UI::Shell::SHCreateStreamOnFileEx;
 
 /// What every frame of a sequence costs, all of them, before this gives up.
 ///
@@ -66,19 +43,13 @@ const RETAINED_BYTES: usize = 64 * 1024 * 1024;
 /// opening.
 const MAX_FRAMES: usize = 2048;
 
-/// The shortest a frame is held, in milliseconds.
-///
-/// The same floor the GIF and the animated WebP paths apply, and for the same reason: a
-/// container that claims a zero-length or sub-millisecond frame would otherwise spin the
-/// render loop at a rate the preview is never meant to draw at.
+// The two ends of how long a frame is held, in milliseconds. The floor is the GIF and the
+// animated WebP paths' and for the same reason: a container that claims a zero-length or
+// sub-millisecond frame would otherwise spin the render loop at a rate a preview is never
+// meant to draw at. The ceiling is a hover's — a file whose timing says one frame lasts a
+// minute is not animating, it is a broken timestamp, and a real frame that is merely slow (a
+// slideshow's two seconds) is under it.
 const MIN_FRAME_DELAY_MS: u32 = 33;
-
-/// The longest a frame is held, in milliseconds.
-///
-/// A file whose timing says one frame lasts a minute is not animating, it is a sequence
-/// with a broken timestamp — holding a hover still for a minute is not a preview. The
-/// value is a ceiling rather than the delay being taken as written, so a real frame that is
-/// merely slow (a slideshow's two seconds) is still under it.
 const MAX_FRAME_DELAY_MS: u32 = 1000;
 
 /// A sequence decoded whole: its frames, and how long each is held.
@@ -126,7 +97,7 @@ pub(crate) fn decode_sequence(
         return None;
     }
 
-    let byte_stream = open_stream(path)?;
+    let byte_stream = video_player::open_stream(path)?;
     let attributes = reader_attributes()?;
     let reader =
         unsafe { MFCreateSourceReaderFromByteStream(&byte_stream, Some(&attributes)) }.ok()?;
@@ -195,7 +166,7 @@ pub(crate) fn decode_sequence(
         // that may compose to nothing at all, so it is made opaque here rather than left
         // to the drawing code to guess at.
         if force_opaque {
-            make_opaque(&mut frame);
+            video_player::force_opaque(&mut frame);
         }
 
         retained = retained.saturating_add(frame.len());
@@ -229,9 +200,6 @@ pub(crate) fn decode_sequence(
 
 /// How long each frame is held, in milliseconds.
 ///
-/// This is the part of a sequence reader that is easy to get wrong and hard to notice, so
-/// it is written down here rather than left in the loop above.
-///
 /// Every time in this API is in **100-nanosecond units**, so a span is divided by 10,000
 /// to be milliseconds — dividing by 1,000 (as for microseconds) makes every animation
 /// run ten times too fast, and not dividing at all leaves a number that is meaningless to
@@ -247,9 +215,8 @@ pub(crate) fn decode_sequence(
 ///    timestamp, a container that did not write the timing — falls back to the track's
 ///    frame rate, and to the shared floor where the track did not say that either.
 ///
-/// The result is clamped at both ends: the floor is the render loop's (a zero-delay
-/// sequence would spin it), and the ceiling is a hover's (a broken timestamp is not a
-/// reason to hold a still picture on screen for a minute).
+/// What comes out is clamped to the two bounds above, which are the render loop's and a
+/// hover's.
 fn frame_delays_ms(times: &[i64], durations: &[i64], fallback_ms: Option<u32>) -> Vec<u32> {
     let fallback = fallback_ms
         .filter(|ms| *ms > 0)
@@ -283,14 +250,14 @@ fn frame_delays_ms(times: &[i64], durations: &[i64], fallback_ms: Option<u32>) -
 
 /// The track's frame rate as the hold of one frame, in milliseconds.
 ///
-/// `MF_MT_FRAME_RATE` is a rational packed into a `UINT64`: the numerator in the high
-/// half and the denominator in the low one, the same way `MF_MT_FRAME_SIZE` packs a size.
 /// This is the fallback for a file whose samples carry no timing of their own — a
 /// constant-rate sequence written by a camera, where the rate is the only timing there is.
 fn frame_rate_ms(media_type: &IMFMediaType) -> Option<u32> {
     let packed = unsafe { media_type.GetUINT64(&MF_MT_FRAME_RATE) }.ok()?;
 
-    milliseconds_per_frame((packed >> 32) as u32, packed as u32)
+    let (numerator, denominator) = video_player::unpack_pair(packed);
+
+    milliseconds_per_frame(numerator, denominator)
 }
 
 /// One frame's hold, in milliseconds, from a rate written as a fraction of frames a
@@ -314,14 +281,12 @@ fn milliseconds_per_frame(numerator: u32, denominator: u32) -> Option<u32> {
     u32::try_from(milliseconds).ok().filter(|ms| *ms > 0)
 }
 
-/// A media type's frame size, out of the packed `UINT64` `MF_MT_FRAME_SIZE` is.
-///
-/// The width is the high half and the height the low one, which is the reverse of the way
-/// a `(u32, u32)` reads — the mistake here is a file that opens and then decodes into a
-/// transposed frame, so it is written as the unpacking it is rather than as arithmetic.
+/// A media type's frame size, out of the packed `UINT64` `MF_MT_FRAME_SIZE` is: the high
+/// half is the width and the low one the height, which is the reverse of the way a
+/// `(u32, u32)` reads (see `video_player::unpack_pair`).
 fn frame_size(media_type: &IMFMediaType) -> Option<(u32, u32)> {
     let packed = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE) }.ok()?;
-    let (width, height) = ((packed >> 32) as u32, packed as u32);
+    let (width, height) = video_player::unpack_pair(packed);
 
     (width > 0 && height > 0).then_some((width, height))
 }
@@ -408,7 +373,7 @@ fn set_output_type(reader: &IMFSourceReader, size: (u32, u32)) -> bool {
             unsafe { frames.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video) }.is_err()
                 || unsafe { frames.SetGUID(&MF_MT_SUBTYPE, &subtype) }.is_err()
                 || unsafe {
-                    frames.SetUINT64(&MF_MT_FRAME_SIZE, pack((size.0, size.1)))
+                    frames.SetUINT64(&MF_MT_FRAME_SIZE, (u64::from(size.0) << 32) | u64::from(size.1))
                 }
                 .is_err()
                 || unsafe { frames.SetUINT32(&MF_MT_SAMPLE_SIZE, size.0.saturating_mul(4)) }
@@ -417,8 +382,10 @@ fn set_output_type(reader: &IMFSourceReader, size: (u32, u32)) -> bool {
                 // carry the container's own aspect ratio into a picture that is then
                 // stretched, since the frames are copied at the size above and nowhere
                 // else is the ratio applied.
-                || unsafe { frames.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack((1, 1))) }
-                    .is_err()
+                || unsafe {
+                    frames.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1u64 << 32) | 1)
+                }
+                .is_err()
                 || unsafe {
                     reader.SetCurrentMediaType(first_video_stream(), None, &frames)
                 }
@@ -506,65 +473,9 @@ fn sample_pixels(sample: &IMFSample, width: u32, bytes_per_frame: usize) -> Opti
     (pixels.len() == bytes_per_frame).then_some(pixels)
 }
 
-/// A frame's alpha bytes forced opaque.
-///
-/// Only reached for frames the engine produced in `RGB32`, where the fourth byte of each
-/// pixel is not a value anything wrote. It is set rather than left because the drawing
-/// side reads it: a frame of undefined alpha is blended against the backdrop and comes
-/// out as nothing, which is a preview that opens blank.
-fn make_opaque(pixels: &mut [u8]) {
-    // `as_chunks_mut` rather than `chunks_exact_mut`: a frame is a few million bytes and
-    // this is a per-pixel pass over every one of them, so the bounds check the other form
-    // carries is worth taking out. A frame that is not a whole number of pixels is left
-    // alone rather than shortened, since it is not a frame (see `sample_pixels`).
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        pixel[3] = 255;
-    }
-}
-
-/// The file as the media stack's own stream — the same shape `video_player::open_stream`
-/// opens a video through, for the same reasons.
-///
-/// The path goes in as it is, verbatim prefix and all, because `SHCreateStreamOnFileEx`
-/// is handed a path rather than being asked to resolve a URL. The name is set on the
-/// stream as well: the handler that opens a byte stream is chosen by the name it carries,
-/// and a stream made from a file has none — which for this module is the one place where
-/// the name decides anything at all, since whether Windows has a handler for `avis` or
-/// `mif1` is the question this whole file exists to ask.
-fn open_stream(path: &Path) -> Option<IMFByteStream> {
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-
-    let file: IStream = unsafe {
-        SHCreateStreamOnFileEx(
-            PCWSTR(wide.as_ptr()),
-            STGM_READ.0 | STGM_SHARE_DENY_NONE.0,
-            0,
-            false,
-            None::<&IStream>,
-        )
-    }
-    .ok()?;
-
-    let stream = unsafe { MFCreateMFByteStreamOnStream(&file) }.ok()?;
-    let attributes: IMFAttributes = stream.cast().ok()?;
-    unsafe { attributes.SetString(&MF_BYTESTREAM_ORIGIN_NAME, PCWSTR(wide.as_ptr())) }.ok()?;
-
-    Some(stream)
-}
-
 /// The stream a video is asked for, which is the first one the container has.
 fn first_video_stream() -> u32 {
     MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32
-}
-
-/// A pair packed the way `MF_MT_FRAME_SIZE` and `MF_MT_FRAME_RATE` are packed: the first
-/// of the two in the high half of a `UINT64`, the second in the low.
-fn pack(pair: (u32, u32)) -> u64 {
-    (u64::from(pair.0) << 32) | u64::from(pair.1)
 }
 
 #[cfg(test)]
@@ -587,17 +498,10 @@ mod tests {
     }
 
     /// What nothing at all decodes to: a file that is not a picture, and a file that is
-    /// not there.
-    ///
-    /// There is no real sequence fixture here, and that is deliberate rather than
-    /// convenient: **a fixture that decodes on the machine that made it is a fixture that
-    /// says nothing about any other machine**, because whether Windows opens a `mif1` or
-    /// `avis` sequence at all is a property of that machine's Media Foundation rather
-    /// than of this code. A test that encoded a sequence and asserted frames came back
-    /// would fail on every machine where the extension is not installed, and pass on
-    /// every machine where the still path would have worked anyway. What is worth
-    /// asserting is the property that holds everywhere: the paths that cannot work do not
-    /// panic, and they answer with nothing.
+    /// not there. There is no real sequence fixture here, and that is deliberate: **a fixture
+    /// that decodes on the machine that made it is a fixture that says nothing about any other
+    /// machine**, since whether Windows opens a `mif1` or `avis` sequence at all is a property
+    /// of that machine's Media Foundation rather than of this code.
     #[test]
     fn a_file_that_is_not_a_sequence_is_answered_with_nothing() {
         let not_a_container = write("not-a-container.avif", &[0x8f; 512]);
@@ -616,13 +520,9 @@ mod tests {
         );
     }
 
-    /// A container that starts correctly and then says nothing sensible.
-    ///
-    /// This is the shape of input most likely to reach this module in the wild rather than
-    /// in a test: a file with a real `ftyp` box — the brand, even the `avis` brand a
-    /// sequence declares — and no track behind it. A parser that trusts the header it has
-    /// read runs off the end of a file that stops there, and a decoder that hands such a
-    /// file to a plugin may do worse than answer nothing. Every one of these is `None`.
+    /// A container that starts correctly and then says nothing sensible — a real `ftyp` box,
+    /// even the `avis` brand a sequence declares, and no track behind it, which is the shape of
+    /// input most likely to reach this module in the wild. Every one of these is `None`.
     #[test]
     fn a_container_that_stops_after_its_header_is_answered_with_nothing() {
         let mut truncated_ftyp = Vec::new();

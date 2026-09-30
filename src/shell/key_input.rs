@@ -1,49 +1,28 @@
 //! System-wide keyboard watcher for the pin key.
 //!
-//! A preview is pinned by pressing a key while it is on screen, and the key has to
-//! be seen wherever the pointer happens to be — the preview window is not where the
-//! user's keyboard is, and Explorer owns the keyboard whenever it is the active
-//! window. A low-level keyboard hook reports the key without touching either of
-//! them, and the hook thread publishes a monotonic press counter that the preview
-//! loop consumes, exactly as the wheel watcher beside it publishes wheel ticks.
-//!
-//! The key is never swallowed: `Space` is Explorer's own key, and pinning a
-//! preview does not make it this app's. What the hook does is count, and what the
-//! preview loop does with the count is its own business (see `PIN_PRESSES`).
-//!
-//! It is asked about the *pin* only. A pinned window the user has pressed takes the
-//! focus like any other window, and the keys it answers while it has it arrive as
-//! messages rather than through here (see `pinned_key_command`); what this hook
-//! still answers is the key that puts a pin up, and the one that brings a collapsed
-//! one back.
-//!
-//! This module is also where the spelling of a key name lives — `alt`, `f8`, `a` —
-//! because two settings are written that way: the trigger key the Explorer hook
-//! watches, and the pin key watched here.
+//! A low-level keyboard hook counts the pin key wherever the pointer happens to be,
+//! and publishes a monotonic press counter the preview loop consumes, exactly as
+//! the wheel watcher beside it publishes wheel ticks. The key is never swallowed:
+//! `Space` is Explorer's own, and what the loop does with the count is its business
+//! (see `PIN_PRESSES`). Only the key that puts a pin up, and the one that brings a
+//! collapsed one back, is answered here; the keys a pressed pin answers arrive as
+//! messages to that window instead (see `pinned_key_command`).
 
 use crate::CONFIG;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
-use std::time::Duration;
-use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    HC_ACTION, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN,
-    WM_SYSKEYUP,
+    CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP,
+    WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-/// The virtual key the pin is bound to, or `0` when nothing is watched — the
-/// feature is off, or the configured name is not one this app knows. Written by
-/// `refresh`, read by the hook procedure.
+/// The virtual key the pin is bound to, or `0` when nothing is watched.
 static PIN_VK: AtomicI32 = AtomicI32::new(0);
 
-/// Pin-key presses seen since startup; the hook thread is the only writer and the
-/// preview loop is the only reader, so a press is counted once.
+/// Pin-key presses seen since startup, swapped to zero by the preview loop.
 static PIN_PRESSES: AtomicU32 = AtomicU32::new(0);
 
-/// Whether the watched key is held. The hook reports a press for every key-down
-/// message and a held key repeats, so this is what tells a press from a repeat.
+/// Whether the watched key is held, which is what tells a press from a repeat.
 static PIN_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Thread running the hook's message pump, published so shutdown can wake it.
@@ -136,57 +115,19 @@ pub(crate) fn take_presses() -> u32 {
     PIN_PRESSES.swap(0, Ordering::AcqRel)
 }
 
-/// Starts the hook thread and waits until it is ready to be stopped, so a
-/// shutdown racing with startup can still end it. `main` joins the returned
-/// handle after `request_stop`.
+/// Starts the hook thread; `main` joins the returned handle after `request_stop`.
 pub(crate) fn spawn_key_watcher() -> std::thread::JoinHandle<()> {
-    let handle = std::thread::spawn(run_key_watcher);
-
-    for _ in 0..200 {
-        if KEY_THREAD_ID.load(Ordering::SeqCst) != 0 || handle.is_finished() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-
-    handle
+    super::hook_thread::spawn(
+        &KEY_THREAD_ID,
+        WH_KEYBOARD_LL,
+        Some(key_hook_proc),
+        "keyboard",
+    )
 }
 
 /// Wakes the hook thread's message pump so `main` can join it.
 pub(crate) fn request_stop() {
-    let thread_id = KEY_THREAD_ID.load(Ordering::SeqCst);
-    if thread_id != 0 {
-        unsafe {
-            let _ = PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
-        }
-    }
-}
-
-/// Owns the low-level hook and the message pump it needs: the system calls the
-/// hook procedure on the thread that installed it, so that thread must keep
-/// dispatching messages for the life of the process.
-fn run_key_watcher() {
-    unsafe {
-        KEY_THREAD_ID.store(GetCurrentThreadId(), Ordering::SeqCst);
-
-        let module = GetModuleHandleW(None)
-            .map(|handle| HINSTANCE(handle.0))
-            .unwrap_or_default();
-        let hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_hook_proc), module, 0) {
-            Ok(hook) => hook,
-            Err(error) => {
-                eprintln!("Failed to install the keyboard hook: {:?}", error);
-                KEY_THREAD_ID.store(0, Ordering::SeqCst);
-                return;
-            }
-        };
-
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
-
-        let _ = UnhookWindowsHookEx(hook);
-        KEY_THREAD_ID.store(0, Ordering::SeqCst);
-    }
+    super::hook_thread::request_stop(&KEY_THREAD_ID)
 }
 
 unsafe extern "system" fn key_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -194,24 +135,21 @@ unsafe extern "system" fn key_hook_proc(code: i32, wparam: WPARAM, lparam: LPARA
     // return, and a hook that answers too slowly is removed by Windows. It reads
     // one number, touches two atomics, and always passes the message on — the pin
     // key is a key another window is entitled to as much as this app is.
-    if code == HC_ACTION as i32 {
-        let watched = PIN_VK.load(Ordering::Acquire);
-        if watched != 0 {
-            let event = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-            if event.vkCode as i32 == watched {
-                match wparam.0 as u32 {
-                    WM_KEYDOWN | WM_SYSKEYDOWN => {
-                        // A held key repeats, and every repeat arrives as another
-                        // key-down: what makes one a press is that the key was not
-                        // already down (see `PIN_DOWN`).
-                        if !PIN_DOWN.swap(true, Ordering::AcqRel) {
-                            PIN_PRESSES.fetch_add(1, Ordering::AcqRel);
-                        }
-                    }
-                    WM_KEYUP | WM_SYSKEYUP => PIN_DOWN.store(false, Ordering::Release),
-                    _ => {}
-                }
+    let watched = PIN_VK.load(Ordering::Acquire);
+    if watched != 0 && code == HC_ACTION as i32 {
+        let event = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        if event.vkCode as i32 != watched {
+            return CallNextHookEx(None, code, wparam, lparam);
+        }
+
+        match wparam.0 as u32 {
+            // A held key repeats, and every repeat arrives as another key-down: what
+            // makes one a press is that the key was not already down (see `PIN_DOWN`).
+            WM_KEYDOWN | WM_SYSKEYDOWN if !PIN_DOWN.swap(true, Ordering::AcqRel) => {
+                PIN_PRESSES.fetch_add(1, Ordering::AcqRel);
             }
+            WM_KEYUP | WM_SYSKEYUP => PIN_DOWN.store(false, Ordering::Release),
+            _ => {}
         }
     }
 
@@ -224,10 +162,6 @@ mod tests {
 
     #[test]
     fn every_key_the_settings_can_name_is_read_the_way_the_file_writes_it() {
-        // The spellings `config.ini` is written in: a named key, a single letter or digit, and the
-        // function keys — the same table the trigger key is read by, since the two are the same
-        // kind of setting. A name that is not one of them is nothing to watch, which is a key
-        // that is simply not bound rather than one bound to something else.
         assert_eq!(key_to_vk("space"), Some(0x20));
         assert_eq!(key_to_vk(" Space "), Some(0x20));
         assert_eq!(key_to_vk("alt"), Some(0x12));
