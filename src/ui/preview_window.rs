@@ -154,6 +154,31 @@ const STREAMING_SPINNER_MAX_MS: u64 = 1500;
 /// the moment it arrives and this interval is only a ceiling on how long a window
 /// message — a resume, a display change — waits to be noticed.
 const IDLE_WAIT_MS: u64 = 500;
+/// How long the preview thread waits when a preview is on screen but nothing in
+/// it moves: a static picture or page of text. The wait is the preview channel
+/// rather than a sleep, so a Hide/Show answers the moment it arrives and this
+/// interval is only a ceiling on polled work (pin key counts, resume flag) and
+/// window messages. ~7x/s instead of ~60x/s; pinned static ticks use their own
+/// shorter ceiling so caption buttons stay snappy (see the wait below).
+const STATIC_WAIT_MS: u64 = 150;
+/// Ceiling for a static tick while a pin is up: buttons and drags are answered
+/// in the tick, so this stays short enough to feel instant while still waking
+/// 3x less often than the frame loop.
+const STATIC_PIN_WAIT_MS: u64 = 50;
+/// How often the pointer hold region is republished while a static preview is
+/// up. The region only changes on show/move/resize/swap/hide, so a slow
+/// heartbeat plus an immediate publish on those transitions is the whole of
+/// what the hook needs, without the per-tick lock + `GetWindowRect`.
+const POINTER_HOLD_HEARTBEAT_MS: u64 = 500;
+/// Topmost re-assertion cadence split by context: a pinned video needs the
+/// tighter band (it competes with the pin's own window), a hover video does
+/// not and gets the slow one so DWM is not reordered 5x/s for a tooltip.
+const PIN_TOPMOST_REASSERT_MS: u64 = 200;
+const HOVER_TOPMOST_REASSERT_MS: u64 = 1000;
+/// How often a static tick still takes one full look at the media, so a kind
+/// change that arrives without a swap (streaming frames landing late) is
+/// noticed within half a second rather than never.
+const STATIC_MEDIA_REFRESH_MS: u64 = 500;
 const VIDEO_GEOMETRY_CACHE_MAX_ENTRIES: usize = 512;
 // Expected executable name of the playback process spawned below, used to
 // verify a recorded PID still belongs to that process before killing it.
@@ -18838,6 +18863,18 @@ pub fn run_preview_window() {
         // ticks of this loop leaves nothing to latch, so a drag begun from one would never begin at
         // all (see `settle_pinned_engine_press`).
         let mut engine_press_seen: u64 = 0;
+        // Static-tick throttle state (see `STATIC_WAIT_MS`): whether the media on
+        // screen was dynamic the last time it was fully looked at, when that look
+        // was, and which generation it was for. A swap bumps `current_generation`,
+        // which forces the next tick to look fully rather than trust the hint.
+        let mut media_dynamic_hint = true;
+        let mut last_full_media_check = Instant::now() - Duration::from_secs(10);
+        let mut last_checked_generation: u64 = u64::MAX;
+        // Pointer-hold publish throttle (see `POINTER_HOLD_HEARTBEAT_MS`): the last
+        // time the region was published and the shape it was published for, so a
+        // static preview republishes at most twice a second plus on transitions.
+        let mut last_hold_publish = Instant::now() - Duration::from_secs(10);
+        let mut last_hold_key = (false, false, false, 0u64);
         while RUNNING.load(Ordering::SeqCst) {
             // Every tick is noted, whether it does anything or not: what the note is
             // for is the Explorer hook telling a loop that is working from one that has
@@ -18915,6 +18952,18 @@ pub fn run_preview_window() {
             // The pin's own business, once a tick: the key that pins and unpins, the three
             // buttons of the caption, and whether the thing the pin is a window onto is still
             // there at all.
+            //
+            // Snapshot for the static-tick hint (see the bottom of the tick): a load,
+            // wait, generation or pin state that moves during this tick may install
+            // another kind behind the hint, which is then re-classified rather than
+            // trusted until the periodic refresh.
+            let tick_had_wait = pending_load.is_some()
+                || pin_load.is_some()
+                || pin_walk_wait.is_some()
+                || video_start.is_some()
+                || first_frame_wait.is_some();
+            let tick_generation = current_generation;
+            let tick_pinned = pinned();
             if PIN_END_REQUESTED.swap(false, Ordering::AcqRel) {
                 pin_request = Some(end_pin_state());
             }
@@ -19200,10 +19249,20 @@ pub fn run_preview_window() {
             // the one on top: what the popup floats over is the media, and the media of a video
             // FFmpeg plays is this very window. Nothing is asked of the order on the way out — the
             // next tick of this asks for the player again (see `toggle_pin_volume`).
+            //
+            // Split cadence: a pinned video competes with the pin's own window and keeps
+            // the tight band, while a hover video gets the slow one — reordering DWM
+            // 5x/s for a tooltip is what this used to cost (see
+            // `PIN_TOPMOST_REASSERT_MS` / `HOVER_TOPMOST_REASSERT_MS`).
+            let topmost_cadence_ms = if pinned() {
+                PIN_TOPMOST_REASSERT_MS
+            } else {
+                HOVER_TOPMOST_REASSERT_MS
+            };
             if current_video_path.is_some()
                 && !pin_is_collapsed()
                 && !pin_volume_open()
-                && last_topmost_check.elapsed() >= Duration::from_millis(200)
+                && last_topmost_check.elapsed() >= Duration::from_millis(topmost_cadence_ms)
             {
                 last_topmost_check = Instant::now();
                 let _ =
@@ -19212,6 +19271,19 @@ pub fn run_preview_window() {
 
             // Advance animation frames if needed
             let mut needs_repaint = false;
+            // Whether this tick takes a full look at the media behind the preview
+            // (see `STATIC_MEDIA_REFRESH_MS`): a swap, a load, a wait or a player
+            // forces one, a dynamic hint keeps the fast cadence, and a static hint
+            // still re-checks twice a second so late streaming frames are noticed.
+            let need_media_check = media_dynamic_hint
+                || pending_load.is_some()
+                || pin_load.is_some()
+                || pin_walk_wait.is_some()
+                || video_start.is_some()
+                || first_frame_wait.is_some()
+                || current_generation != last_checked_generation
+                || last_full_media_check.elapsed()
+                    >= Duration::from_millis(STATIC_MEDIA_REFRESH_MS);
 
             // The engine draws a document in a window of its own, and that window is put
             // up only once the page has arrived: what is underneath it — the spinner the
@@ -19242,8 +19314,20 @@ pub fn run_preview_window() {
                 }
             }
 
-            if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
+            // Set inside the look below; read after it to refresh the hint.
+            let mut saw_dynamic_this_tick = false;
+            // A static tick skips the lock entirely (see `need_media_check`): the
+            // guard is only taken when the tick is owed a full look, so a static
+            // picture or page of text pays no mutex here at all.
+            let media_lock = need_media_check.then(|| CURRENT_MEDIA.lock());
+            if let Some(Ok(mut media_guard)) = media_lock {
                 if let Some(ref mut media) = *media_guard {
+                    saw_dynamic_this_tick = media.frames.len() > 1
+                        || media.is_streaming()
+                        || media.media_type.is_native_video()
+                        || media.media_type.is_audio()
+                        || media.media_type.is_loading()
+                        || media.should_draw_streaming_overlay();
                     if media.advance_frame() {
                         needs_repaint = true;
                     }
@@ -19378,6 +19462,16 @@ pub fn run_preview_window() {
                         needs_repaint = true;
                     }
                 }
+            }
+            if need_media_check {
+                last_full_media_check = Instant::now();
+                last_checked_generation = current_generation;
+                media_dynamic_hint = saw_dynamic_this_tick
+                    || pending_load.is_some()
+                    || pin_load.is_some()
+                    || pin_walk_wait.is_some()
+                    || video_start.is_some()
+                    || first_frame_wait.is_some();
             }
             if needs_repaint {
                 render_layered_preview(hwnd);
@@ -21811,8 +21905,25 @@ pub fn run_preview_window() {
 
             // Keep the pointer region in step with the window rather than only
             // with the paints: the window is moved when a frame is installed, and
-            // the Explorer hook reads this on every one of its own ticks.
-            publish_pointer_hold(hwnd);
+            // the Explorer hook reads this on every one of its own ticks. Throttled
+            // (see `POINTER_HOLD_HEARTBEAT_MS`): the region only changes on
+            // show/move/resize/swap/hide — a swap bumps `current_generation`, which
+            // is part of the key — so a slow heartbeat plus an immediate publish on
+            // transitions is the whole of what the hook needs, without the per-tick
+            // locks and `GetWindowRect`.
+            let hold_key = (
+                current_show.is_some(),
+                pending_load.is_some(),
+                pinned(),
+                current_generation,
+            );
+            if hold_key != last_hold_key
+                || last_hold_publish.elapsed() >= Duration::from_millis(POINTER_HOLD_HEARTBEAT_MS)
+            {
+                publish_pointer_hold(hwnd);
+                last_hold_publish = Instant::now();
+                last_hold_key = hold_key;
+            }
 
             if current_show.is_none() && pending_load.is_none() {
                 // Nothing is on screen, which is where this thread used to spend
@@ -21834,7 +21945,47 @@ pub fn run_preview_window() {
                     }
                 };
             } else {
-                std::thread::sleep(Duration::from_millis(16)); // ~60fps loop while something is on screen
+                // Something is on screen. A tick that has something to animate —
+                // video, animation, audio card, transport, spinner, load or wait —
+                // keeps the frame cadence; a static picture or page of text waits on
+                // the channel instead, so a Hide/Show still answers the moment it
+                // arrives. Pinned static ticks keep a shorter ceiling than hover
+                // ones so caption buttons stay snappy (see `STATIC_WAIT_MS` and
+                // `STATIC_PIN_WAIT_MS`).
+                //
+                // A wait that ended, a generation that moved or a pin that came up
+                // or down may have installed another kind behind the hint: classify
+                // it again on the next tick rather than waiting for the periodic
+                // refresh, so an animation never starts half a second late.
+                let tick_has_wait = pending_load.is_some()
+                    || pin_load.is_some()
+                    || pin_walk_wait.is_some()
+                    || video_start.is_some()
+                    || first_frame_wait.is_some();
+                if (tick_had_wait && !tick_has_wait)
+                    || current_generation != tick_generation
+                    || pinned() != tick_pinned
+                {
+                    media_dynamic_hint = true;
+                }
+                let tick_dynamic = media_dynamic_hint || tick_has_wait;
+                let wait_ms = if tick_dynamic {
+                    16
+                } else if pinned() {
+                    STATIC_PIN_WAIT_MS
+                } else {
+                    STATIC_WAIT_MS
+                };
+                carried_preview_msg = match rx.recv_timeout(Duration::from_millis(wait_ms)) {
+                    Ok(message) => Some(message),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    // Nothing left that could send, so this waits a tick rather
+                    // than spinning on a channel no message can arrive on.
+                    Err(RecvTimeoutError::Disconnected) => {
+                        std::thread::sleep(Duration::from_millis(wait_ms));
+                        None
+                    }
+                };
             }
         }
 
