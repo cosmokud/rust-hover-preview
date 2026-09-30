@@ -18198,6 +18198,96 @@ unsafe fn settle_pinned_engine_drag(hwnd: HWND) {
     finish_pin_drag(hwnd);
 }
 
+/// Whether a drag is being carried on from what the hook publishes rather than from a message: one
+/// begun off the hook's press count, whose end is the same reading and not a `WM_LBUTTONUP` that
+/// is not promised to arrive (see `settle_pinned_engine_drag`).
+fn pin_drag_is_carried() -> bool {
+    PINNED
+        .lock()
+        .ok()
+        .and_then(|pinned| pinned.as_ref().and_then(|pin| pin.dragging))
+        .is_some_and(|drag| !drag.delivered)
+}
+
+/// The place a carried drag has last put its window, which is the pointer's position when it did
+/// and is how a pass is told from one that has moved anything.
+fn pin_drag_carried_to() -> (i32, i32) {
+    PINNED
+        .lock()
+        .ok()
+        .and_then(|pinned| pinned.as_ref().and_then(|pin| pin.dragging))
+        .map(|drag| drag.carried)
+        .unwrap_or((i32::MIN, i32::MIN))
+}
+
+/// Follow a drag of a pinned drawing for as long as the hand is going.
+///
+/// This is the whole of what a drag of a drawing is missing. Every other kind of pinned window has
+/// its drag carried by `WM_MOUSEMOVE` messages delivered to it, and the wait at the end of the loop
+/// wakes the moment one is queued, so it follows the hand at the pointer's own rate. A drawing's
+/// press is taken by the engine's window, on a thread of its own, and the moves went down with it
+/// to the browser's own child window — so this window is sent nothing at all, and the loop is
+/// left carrying the drag (see `settle_pinned_engine_drag`). A loop carries it at the loop's pace,
+/// which is one place per tick, and a tick of a pinned static document is `STATIC_PIN_WAIT_MS` away:
+/// eleven places a second is what that costs, which a hand on a 144 Hz display reads as a window
+/// being thrown after the pointer rather than carried by it.
+///
+/// So while a hand is going, the loop does not wait at all. It puts the window where the pointer
+/// is, gives the window procedure its turn, and asks again — which is the whole of what a window
+/// being carried is, at the pointer's rate instead of the clock's. A pass costs a `GetCursorPos`
+/// and a comparison when the pointer has not shifted (`apply_pin_drag` answers a pointer that has
+/// not moved with nothing at all), so following costs what following costs and no more.
+///
+/// Two things bound it, and both are about not being a thread that never gives the tick back. A
+/// hand that stops moving is handed back to the loop's own wait, because a drag sitting still has
+/// nothing to spend a frame rate on — but only once it has sat still for a while, so that a hand
+/// pausing between movements is not read as one that has stopped. And every pass notes the loop
+/// alive, which it is: a window being carried is a loop that is turning, and the watchdog is
+/// entitled to know so (see `note_pin_alive`).
+unsafe fn carry_pin_drag_with_the_hand(hwnd: HWND) {
+    let mut moved_at = Instant::now();
+
+    while pin_drag_is_carried() {
+        note_pin_alive();
+
+        let carried_to = pin_drag_carried_to();
+        settle_pinned_engine_drag(hwnd);
+        if pin_drag_carried_to() != carried_to {
+            moved_at = Instant::now();
+        } else if moved_at.elapsed() >= PIN_DRAG_HAND_RESTED {
+            return;
+        }
+
+        pump_window_messages();
+    }
+}
+
+/// How long a carried drag follows a hand that has stopped moving before the tick is given back.
+///
+/// Long enough that a hand which pauses between movements — which is most of them, and all of them
+/// at the moments a window is being lined up — is not mistaken for one that has let go, and short
+/// enough that a drag left down over a window nobody is touching is a pause rather than a thread
+/// that has stopped turning.
+const PIN_DRAG_HAND_RESTED: Duration = Duration::from_millis(150);
+
+/// Give the window procedures this thread owns their turn, without blocking on them.
+///
+/// The loop drains its own queue at the top of every tick, and a drag that is being carried is a
+/// tick that may not come round for a while (see `carry_pin_drag_with_the_hand`), so the drain
+/// comes in here too. It is the same drain, which is the point: a window being carried must go on
+/// answering everything a window answers, since a window that stops answering is the fault this
+/// whole arrangement of ends exists to prevent (see `settle_pinned_engine_drag`).
+fn pump_window_messages() {
+    let mut msg = MSG::default();
+
+    unsafe {
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+}
+
 /// Let go of the pointer, if this window is the one holding it.
 ///
 /// A press on a pinned window takes the pointer for the pin (`SetCapture` in `begin_pin_drag` and
@@ -19363,8 +19453,11 @@ pub fn run_preview_window() {
                 // And a drag that press began carried on, and let go of, from what the hook
                 // publishes rather than from a message — which is the only end it can have, the
                 // press having been taken by the engine's window rather than by this one (see
-                // `settle_pinned_engine_drag`).
+                // `settle_pinned_engine_drag`). And then followed at the hand's own rate rather
+                // than at the tick's, since nothing this window is sent will ever carry it (see
+                // `carry_pin_drag_with_the_hand`).
                 settle_pinned_engine_drag(hwnd);
+                carry_pin_drag_with_the_hand(hwnd);
 
                 // A step the caption's own walk buttons took is a pick like any other, and is
                 // held in the walk rather than in the pick slot: the file it stands on is the
@@ -24926,28 +25019,9 @@ mod tests {
         }
     }
 
-    /// The whole of a pinned drawing's fault, end to end and without a hand: a document the
-    /// engine draws is taken up in a pin, a press is made over the drawing and carried across
-    /// it, and the pin is then asked to answer a press on its own caption.
-    ///
-    /// The last question is the one that matters and the one nothing else can answer. A drag of
-    /// the drawing is *supposed* to move the window, so a window that moved says nothing about
-    /// whether it can be moved again; a caption button that answers afterwards says the window is
-    /// still a window. The two symptoms are what a hand reports — the drawing comes away in the
-    /// cursor, the window follows it for a while, and afterwards nothing on the window answers.
-    ///
-    /// The press over the drawing is published rather than waited for. What the Explorer hook
-    /// does is count presses and publish the button's state (`publish_pin_media_press`), and the
-    /// loop answers that publication rather than a message, because the engine's window is
-    /// somebody else's and a message of this window's never arrives. A probe with no Explorer
-    /// behind it publishes what the hook would have published, and everything downstream of that
-    /// is the production path.
-    ///
-    /// Ignored, and driven by `RHP_APP_PROBE` —
-    /// `$env:RHP_APP_PROBE = "C:\art\clock.svg"; cargo test -- --ignored --nocapture pin_drawing_drag_probe`
-    #[test]
-    #[ignore = "drives the pointer over a pinned drawing"]
-    fn pin_drawing_drag_probe() {
+    /// The document the drag probe drags: whatever `RHP_APP_PROBE` names, and a plain drawing
+    /// written out where it names nothing, so the probe can be run with nothing set up at all.
+    fn probe_document() -> PathBuf {
         let path = match std::env::var("RHP_APP_PROBE") {
             Ok(path) => PathBuf::from(path),
             Err(_) => std::env::temp_dir().join("rhp-pin-drag-probe.svg"),
@@ -24961,16 +25035,22 @@ mod tests {
             )
             .expect("a written document");
         }
+        path
+    }
 
+    /// Stand a document up in a pin the way a hover and then the pin key would, and hand back the
+    /// box its drawing is in — which is the place a hand that means to carry the window puts
+    /// itself, since a press anywhere on the media of a pin means to move it (`pinned_engine_press_action`).
+    fn pin_a_document(path: &std::path::Path) -> ScreenRegion {
         std::thread::spawn(run_preview_window);
         std::thread::sleep(Duration::from_millis(500));
 
-        show_preview(&path, 200, 200, None);
+        show_preview(path, 200, 200, None);
 
         let mut landed = false;
         for _ in 0..100 {
             std::thread::sleep(Duration::from_millis(100));
-            if crate::engines::webview_preview::showing_path().as_deref() == Some(path.as_path()) {
+            if crate::engines::webview_preview::showing_path().as_deref() == Some(path) {
                 landed = true;
                 break;
             }
@@ -24995,11 +25075,46 @@ mod tests {
         let Some(content) = pinned_content() else {
             panic!("a pinned window with no media box");
         };
-        println!("drawing at {content:?}");
         assert!(
             engine_window_is_at((content.0 + content.2) / 2, (content.1 + content.3) / 2),
             "the engine's own window is not where the drawing is",
         );
+
+        content
+    }
+
+    /// The whole of a pinned drawing's fault, end to end and without a hand: a document the
+    /// engine draws is taken up in a pin, a press is made over the drawing and carried across
+    /// it at the hand's own rate, and the pin is then asked to answer a press on its own caption.
+    ///
+    /// The last question is the one that matters and the one nothing else can answer. A drag of
+    /// the drawing is *supposed* to move the window, so a window that moved says nothing about
+    /// whether it can be moved again; a caption button that answers afterwards says the window is
+    /// still a window. The two symptoms are what a hand reports — the drawing comes away in the
+    /// cursor, the window follows it for a while, and afterwards nothing on the window answers.
+    ///
+    /// The middle question is the one before it, and it is a question of rate rather than of
+    /// arrival: the press is carried on, but carried by the loop rather than by messages, so the
+    /// window follows the hand at whatever pace the loop turns at (`drag_places_per_second`). Both
+    /// halves are in this one probe because both are the same fault read two ways — a drawing whose
+    /// press is taken by somebody else's window — and because the engine is a per-process
+    /// singleton, so a second probe standing up its own document could not have got this far.
+    ///
+    /// The press over the drawing is published rather than waited for. What the Explorer hook
+    /// does is count presses and publish the button's state (`publish_pin_media_press`), and the
+    /// loop answers that publication rather than a message, because the engine's window is
+    /// somebody else's and a message of this window's never arrives. A probe with no Explorer
+    /// behind it publishes what the hook would have published, and everything downstream of that
+    /// is the production path.
+    ///
+    /// Ignored, and driven by `RHP_APP_PROBE` —
+    /// `$env:RHP_APP_PROBE = "C:\art\clock.svg"; cargo test -- --ignored --nocapture pin_drawing_drag_probe`
+    #[test]
+    #[ignore = "drives the pointer over a pinned drawing"]
+    fn pin_drawing_drag_probe() {
+        let path = probe_document();
+        let content = pin_a_document(&path);
+        println!("drawing at {content:?}");
 
         let before = pinned_window_box().map(|(window, ..)| window);
         let latched = |()| {
@@ -25047,6 +25162,25 @@ mod tests {
             "the pin did not survive a drag of its own drawing — it was taken down rather than left"
         );
 
+        // The second drag is the other fault, and the one a hand complains about first. That the
+        // window moved at all is not in question any more; how it moved is. A drawing is carried by
+        // the loop rather than by messages delivered to the window, so the rate it follows the hand
+        // at is the rate the loop turns at — and the loop turns every `STATIC_PIN_WAIT_MS` for a
+        // pinned static document, which is a window thrown after the pointer rather than carried by
+        // it. Asked of the drawing's *current* place, since the drag above moved it.
+        let Some(content) = pinned_content() else {
+            panic!("a pinned window with no media box");
+        };
+        let rate =
+            drag_places_per_second(((content.0 + content.2) / 2, (content.1 + content.3) / 2));
+        // The hand was moved faster than any display turns, so a window that kept up with it was
+        // put at a new place at very nearly the pointer's own rate. A window carried at the loop's
+        // pace instead is put at one place per tick, however fast the hand is going.
+        assert!(
+            rate >= 100.0,
+            "a pinned drawing followed the pointer at only {rate:.0} places a second"
+        );
+
         let close = close_button_on_screen();
         send_pointer_to(close.0, close.1);
         std::thread::sleep(Duration::from_millis(120));
@@ -25076,6 +25210,80 @@ mod tests {
         );
 
         hide_preview();
+    }
+
+    /// How many places a second the pinned window was actually put at while a hand carried it from
+    /// a point, which is the rate a hand reads as smooth and which nothing else here can report.
+    ///
+    /// Every other kind of pinned window has its drag carried by `WM_MOUSEMOVE` messages
+    /// delivered to it, and the wait at the end of the loop wakes the moment one is queued, so it
+    /// follows at the pointer's own rate whatever that rate is. A drawing's press is taken by the
+    /// engine's window, so its drag is carried by the loop instead, and a loop carries a drag at
+    /// the loop's own pace — one place per tick, and a tick of a pinned static document is
+    /// `STATIC_PIN_WAIT_MS` away. The count is therefore a direct reading of the fault, and of
+    /// nothing else.
+    ///
+    /// So what is counted is distinct places the window stood at, watched from a thread of its own
+    /// so that what is measured is the window rather than the loop that is meant to be moving it.
+    /// The sampler polls far faster than the app can move the window, so every place the app put
+    /// the window in is one the sampler sees; and the pointer is stepped faster than any display
+    /// turns, so what the count is bounded by is the loop and not the hand.
+    fn drag_places_per_second(from: (i32, i32)) -> f64 {
+        const STEPS: i32 = 120;
+        const STEP_EVERY: Duration = Duration::from_millis(4);
+
+        let (cx, cy) = from;
+        send_pointer_to(cx, cy);
+        std::thread::sleep(Duration::from_millis(120));
+        send_left_button(true);
+        publish_pin_media_press(true, true);
+        std::thread::sleep(Duration::from_millis(120));
+
+        let watching = std::sync::Arc::new(AtomicBool::new(true));
+        let places = std::sync::Arc::new(Mutex::new(0usize));
+        let watcher = {
+            let watching = watching.clone();
+            let places = places.clone();
+            let hwnd = PREVIEW_HWND.load(Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let hwnd = HWND(hwnd as *mut _);
+                let mut last = None;
+                while watching.load(Ordering::Acquire) {
+                    if let Some((left, top, ..)) = window_origin(hwnd) {
+                        if last != Some((left, top)) {
+                            last = Some((left, top));
+                            *places.lock().expect("the places seen") += 1;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_micros(500));
+                }
+            })
+        };
+
+        let began = Instant::now();
+        for step in 1..=STEPS {
+            // To the right and down, where the pin has room to go: a hand that walks a window off
+            // the edge of the screen stops moving for reasons that have nothing to do with the pace
+            // being measured.
+            send_pointer_to(cx + step * 3, cy + step * 2);
+            publish_pin_media_press(true, false);
+            std::thread::sleep(STEP_EVERY);
+        }
+        let took = began.elapsed();
+        send_left_button(false);
+        publish_pin_media_press(false, false);
+        watching.store(false, Ordering::Release);
+        watcher.join().expect("the watcher");
+
+        let places = places.lock().expect("the places seen");
+        let rate = *places as f64 / took.as_secs_f64();
+        println!(
+            "a {took:?} drag of {STEPS} steps put the window at {} places — {rate:.0}/s, with the \
+             pointer itself moving at {:.0}/s",
+            *places,
+            STEPS as f64 / took.as_secs_f64(),
+        );
+        rate
     }
 
     /// Where the caption's close button is on the screen right now, found by asking the chrome
