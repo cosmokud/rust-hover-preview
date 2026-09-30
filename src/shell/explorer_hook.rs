@@ -4956,11 +4956,6 @@ impl PinUpdateWatch {
             next.focused = self.focused.clone();
             next.place = self.place.clone();
             next.arrived = self.arrived;
-            // A press already read belongs to the listing it was read in, and a swap is the same
-            // listing being shown another file — so the press after a swap is still measured
-            // against this one, and the first click after a swap is the tail of whatever was
-            // pressed before it rather than a pick of its own (see `press_is_a_pick`).
-            next.press_point = self.press_point;
             // The selection the listing holds goes with the listing, for the same reason the
             // keyboard's item does: a swap is the window being shown another file, and what the
             // listing has selected is where it was — so the first pick after one is still a
@@ -7968,42 +7963,6 @@ mod tests {
         assert!(
             PinUpdateWatch::default().press_is_a_pick(on_the_folder, tolerance),
             "the first press a watch sees is a pick"
-        );
-    }
-
-    /// A swap carries the press with it and a take-up does not: a press read against a listing the
-    /// next pin is not standing over is a press that pin has not seen.
-    #[test]
-    fn a_take_up_forgets_the_press_and_a_swap_keeps_it() {
-        let tolerance = KeyboardPointerPause::default().move_threshold_px(false, 96);
-        let point = POINT { x: 400, y: 300 };
-
-        // A watch is already showing a file, as a live one is by the time a swap can happen:
-        // the first `note_shown` is what told it the pin is up.
-        let mut watch = PinUpdateWatch {
-            showing: Some(Path::new("D:/Pictures/one.png").to_path_buf()),
-            ..PinUpdateWatch::default()
-        };
-        assert!(watch.press_is_a_pick(point, tolerance));
-
-        // A swap is the same window being shown another file, and the hand and the press it made
-        // are where they were — so the press after a swap is still measured against this one.
-        watch.note_shown(Path::new("D:/Pictures/one.png"));
-        assert!(
-            !watch.press_is_a_pick(point, tolerance),
-            "a swap carries the press with it: the listing did not change"
-        );
-
-        // A take-up is a watch beginning from nothing, so the first click after it is a pick
-        // whatever the pointer was doing before the window went up.
-        let mut taken_up = PinUpdateWatch {
-            press_point: Some(point),
-            ..PinUpdateWatch::default()
-        };
-        taken_up.note_shown(Path::new("D:/Pictures/one.png"));
-        assert!(
-            taken_up.press_is_a_pick(point, tolerance),
-            "a take-up begins from nothing, so the first click after it is a pick"
         );
     }
 
