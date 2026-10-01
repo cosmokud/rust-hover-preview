@@ -273,14 +273,24 @@ pub(super) fn take_pin_resumed() -> bool {
 /// whole of what a reader of [`pin_is_up`] is owed. A pin taken up over another one — the file
 /// it was showing was picked while it was up — is the same window showing another file, so what
 /// belongs to the window rather than to the file is carried over by the caller before this is
-/// called. A pin's keyboard claim is not carried over: it was the old file's, and the new pin
-/// has pressed nothing.
+/// called, and so is what the chrome had left for the loop: a command is a press on that
+/// window's caption, and the window is the same one.
+///
+/// A pin's keyboard claim is *not* carried over. It was the old file's, and the new pin has
+/// pressed nothing — so a swap taken over a pin with the caret on it leaves the caret on the
+/// window and stops the pin claiming it, which is what `pin_take_focus` decides again on the
+/// next press.
 pub(super) fn install(pin: PinnedPreview) {
     if let Some(mut state) = pin_state() {
+        let commands = match &mut *state {
+            PinState::Up(up) => std::mem::take(&mut up.commands),
+            _ => VecDeque::new(),
+        };
+
         *state = PinState::Up(PinUp {
             pin,
             keyboard: None,
-            commands: VecDeque::new(),
+            commands,
         });
         PIN_UP.store(true, Ordering::Release);
     }
@@ -1021,14 +1031,18 @@ mod tests {
         );
     }
 
-    /// A pin taken up over another one is the new one whole.
+    /// A pin taken up over another one is the same window, showing another file.
     ///
-    /// The pin it was is the same window showing another file, so what belongs to the window
-    /// rather than to the file — a maximized box, a level, chrome, a bound — is carried over by
-    /// the caller before the take-up. What does not carry is the claim on the keyboard: that was
-    /// the old file's, and the new pin has pressed nothing.
+    /// The pin it was is one window, so what belongs to the window rather than to the file — a
+    /// maximized box, a level, chrome, a bound — is carried over by the caller before the
+    /// take-up, and so is what the chrome had left for the loop: a command is a press on that
+    /// window's caption, and the window is the same one.
+    ///
+    /// What does not carry is the claim on the keyboard. It was the old file's, and the new pin
+    /// has pressed nothing — so a swap taken over a pin with the caret on it stops that pin
+    /// claiming it, rather than leaving a claim on a file the window is no longer showing.
     #[test]
-    fn a_pin_taken_up_over_another_one_is_the_new_one_whole() {
+    fn a_pin_taken_up_over_another_one_keeps_the_window_s_own_queue_and_drops_its_claim() {
         let _one = ONE_AT_A_TIME.lock();
 
         a_pin_holding_the_keyboard(0x2000);
@@ -1036,15 +1050,16 @@ mod tests {
 
         assert!(pin_is_up(), "the swap is a pin up like any other");
         assert_eq!(
-            keyboard(),
-            None,
-            "a pin taken up over another one has taken no keyboard, and remembers no window to \
-             hand one back to"
+            take_pin_command(),
+            Some(PinCommand::Next),
+            "the command the caption had left is a press on this window, and this window is \
+             still here"
         );
         assert_eq!(
-            take_pin_command(),
+            keyboard(),
             None,
-            "and the queue is the new pin's, not the old one's"
+            "but the keyboard claim is not carried: it was the old file's, and the new pin has \
+             pressed nothing"
         );
     }
 
