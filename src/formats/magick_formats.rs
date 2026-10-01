@@ -68,75 +68,14 @@
 //! `imagemagick_render::raw_geometry`); the engine is then told the size the file is to be read
 //! at.
 //!
-//! The list lives in `config.ini` as `[magick] extensions`, written from the built-in list
-//! on first run and read back from there, so a user can add a format the engine reads and
-//! this app does not know, or take one out. The question here is only what a file is
-//! *called*: whether the engine can read it at all is settled by the engine, and a name it
-//! cannot read is answered with no preview — once, and then remembered, so a name that was
-//! put in this list by mistake costs one conversion and never another.
+//! The list of names this answers for is a row of `crate::formats::lists` — the one table
+//! every kind's list is a row of, and the one place a list is written down, the built-in
+//! entries and the older lists this app shipped and then changed included.
 
 use crate::config::config::PreviewType;
 use crate::formats::text_formats;
 use crate::CONFIG;
 use std::path::Path;
-
-/// The extensions written to `config.ini` on first run: the picture formats ImageMagick
-/// reads and this app has no reader of its own for.
-///
-/// The camera raw formats come first in spirit if not in order — `3fr`, `arw`, `cr2`, `cr3`,
-/// `crw`, `dcr`, `dng`, `erf`, `fff`, `iiq`, `k25`, `kdc`, `mdc`, `mef`, `mos`, `mrw`,
-/// `nef`, `nrw`, `orf`, `pef`, `raf`, `raw`, `rmf`, `rw2`, `rwl`, `sr2`, `srf`, `srw` and
-/// `x3f`, from the raw decoder the engine is built with, which is every raw format a camera
-/// writes that is still met with — and they are what this list is mostly about: nothing else
-/// on a Windows machine opens one, the shell shows a thumbnail from the picture the camera
-/// left inside the file and nothing else, and a hover onto one shows nothing at all rather
-/// than the photograph.
-///
-/// What follows them, in the order the list above is written in:
-///
-/// * The formats the engine has a coder of its own for and no other list claims: the medical
-///   scanner's `dcm`, the film scanner's `dcx` and `dpx`, the astronomer's `fit`, `fits` and
-///   `fts`, the compositor's `j2c`, `j2k`, `jp2`, `jpc`, `jpm` and `jpt`, the animator's `jng`
-///   and `mng`, the illustrator's `xcf`, `xbm` and `xpm`, the painter's `sgi`, the engineer's
-///   `vicar`, the phone's `wbmp`, the cursor's `cur`, and the engine's own `miff`.
-/// * The formats the registry declares read support for that no preview was ever asked for: a
-///   pixel-art program's sprites (`ase`, `aseprite`), a floppy-era paint program's pictures
-///   (`mac`, `pix`, `rla`, `rle`, `art`, `cut`, `wbinfo`), a fax machine's pages (`fax`, `g3`,
-///   `g4`), a scanner's `pgx`, a texture of a console's (`tim`, `tm2`), an icon of a robot's
-///   (`rgf`), an embroidery machine's pattern (`pes`), a spectrum analyser's screen (`scr`), a
-///   telescope's or a satellite's frame (`hrz`, `ipl`, `fl32`, `sct`, `jnx`), a colour lookup
-///   table (`cube`), a document's provenance record (`c2pa`), a markup language (`pango`), and
-///   the rest of the names beside them. Each is a picture the engine really draws; what none of
-///   them has is a reason to have been picked over the others, and the list shipping with them
-///   is what settles that.
-/// * The second spelling of a format whose first spelling another list holds — `pict`, `sun`,
-///   `pcds`, `dxt1` and `dxt5`, `icb`, `vda` and `vst`, `picon` — which the engine reads and the
-///   engine the other spelling belongs to does not (see the module documentation above).
-/// * The raw sample dumps (`rgb`, `rgba`, `gray`, `cmyk` and their kin, and the `group4` fax
-///   bitstream), whose shape comes from their own length: a dump whose length does not settle one
-///   is a file this app shows nothing for, and one that does is read at the size that came out of
-///   it.
-///
-/// What is deliberately *not* here is named in the module documentation above: the alternatives
-/// spelling of a name another list already claims, the fonts, the documents that need a delegate,
-/// the engine's own notation, and `xwd`, which this build ships no coder for.
-pub const DEFAULT_MAGICK_EXTENSIONS: &str = "3fr,aai,art,arw,ase,aseprite,bayer,bayera,bgr,bgra,bgro,c2pa,cal,cals,cmyk,cmyka,cr2,cr3,crw,cube,cur,cut,\
-dcm,dcr,dcx,dng,dpx,dxt1,dxt5,erf,fax,fff,fit,fits,fl32,fts,ftxt,g3,g4,gray,graya,group4,hrz,icb,iiq,ipl,j2c,\
-j2k,jng,jnx,jp2,jpc,jpm,jpt,k25,kdc,mac,map,mat,mdc,mef,miff,mng,mono,mos,mpc,mrw,mtv,nef,nrw,orf,otb,pal,\
-palm,pango,pcds,pef,pes,pfm,pgx,phm,picon,pict,pix,pwp,raf,raw,rgb,rgb565,rgba,rgbo,rgf,rla,rle,rmf,rw2,rwl,\
-scr,sct,sf3,sfw,sgi,six,sixel,sr2,srf,srw,stegano,sun,tim,tm2,uyvy,vda,vicar,viff,vips,vst,wbinfo,wbmp,x3f,\
-xbm,xcf,xpm,xv,ycbcr,ycbcra,yuv";
-
-/// The built-in list as it stood while it held the camera raw formats and the pictures beside them
-/// and nothing else: what this app wrote before the names nobody had asked for were added to it,
-/// and before the raw sample dumps were.
-///
-/// A file holding exactly these entries is the app's own older list rather than a user's edit —
-/// nobody has touched it — so it is brought up to the built-in list rather than kept as written,
-/// which is what gives an installation that already exists the names added since. Without it those
-/// names would reach a fresh installation only, since every `config.ini` already written holds the
-/// list as it was (see `config::repair_older_lists`).
-pub const MAGICK_EXTENSIONS_BEFORE_THE_REST: &str = "3fr,arw,cr2,cr3,crw,cur,dcm,dcr,dcx,dng,dpx,erf,fff,fit,fits,fts,iiq,j2c,j2k,jng,jp2,jpc,jpm,jpt,k25,kdc,mdc,mef,miff,mng,mos,mrw,nef,nrw,orf,pef,pfm,raf,raw,rmf,rw2,rwl,sgi,sr2,srf,srw,vicar,wbmp,x3f,xbm,xcf,xpm";
 
 /// Whether the configured list claims `path`.
 pub fn matches_magick_list(path: &Path, extensions: &[String]) -> bool {
@@ -197,7 +136,8 @@ mod tests {
     /// worth stating rather than assuming.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS);
+        let list =
+            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_MAGICK_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         for name in [
@@ -286,7 +226,8 @@ mod tests {
     /// exists for: nothing else on the machine opens one.
     #[test]
     fn holds_the_camera_raw_formats_and_the_pictures_beside_them() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS);
+        let list =
+            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_MAGICK_EXTENSIONS);
 
         for name in [
             "shot.nef",

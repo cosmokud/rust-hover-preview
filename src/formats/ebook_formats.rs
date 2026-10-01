@@ -9,62 +9,21 @@
 //! backdrop, under the book kind's switch. See `pdf_preview` for the first and `comic_preview` for
 //! the second, and `PreviewType::Ebook` for the kind they share.
 //!
-//! The list lives in `config.ini` as `[ebook] extensions`, written from the built-in list on first
-//! run and read back from there, so which names are books is a file edit like every other list's.
-//! Two questions are asked of it rather than one, and the difference between them is the reader:
-//!
-//! * **The PDF's own spellings** — `pdf`, and the two the format's world writes beside it:
-//!   `pdfa`, the archival profile, and `epdf`, the encapsulated one, which the same reader opens
-//!   as it opens any page. They are answered by [`matches_page_name`], and a name that leaves the
-//!   list is a name this app stops drawing.
-//! * **Everything else the list holds** is a comic, and it is read out of the container by
-//!   [`crate::readers::comic_preview`]. That includes a name a user adds by hand: what the comic
-//!   reader answers for is decided by the file rather than by the name — a zip, a rar, or nothing
-//!   at all — so an album under a name of its own works, and a name whose file is not a container
-//!   of pictures shows nothing rather than the wrong thing.
-//!
-//! What is deliberately *not* here is as much of the list's design as what is:
-//!
-//! * **`chm` and `lit` are not**, although both are books and both are previewed as a page: the
-//!   pages come from the ebook engine, which is the only thing on a Windows machine that reads
-//!   either — an LZX-compressed HTML help file in an ITSF container, and an OLE compound file of
-//!   the same compression — so those two names are `[calibre]`'s and need Calibre installed to be
-//!   previewed at all. A comic needs nothing installed, because this app reads the container.
-//! * **`epub` and the Kindle and Mobipocket families are not** either, for the same reason: they
-//!   are `[calibre]`'s, and a comic is not a book that needs converting.
-//! * **And the names of the other lists are not**, which is what took `cbz` out of `[archive]` and
-//!   `chm` and `lit` out of `[peazip]`: a name sits in exactly one list, so a comic is a book here
-//!   rather than a page of contents there, and the archive list keeps the archives this app reads
-//!   as archives. A user who would rather have the file listing back adds the name to that list
-//!   again — the lists are theirs — and is asked about it in the order they are written.
+//! The list of names this answers for is a row of `crate::formats::lists` — the one table
+//! every kind's list is a row of, and the one place a list is written down, the built-in
+//! entries and the older lists this app shipped and then changed included.
 
 use crate::config::config::PreviewType;
 use crate::formats::text_formats;
 use crate::CONFIG;
 use std::path::Path;
 
-/// The extensions written to `config.ini` on first run: the PDF's own three spellings, and the
-/// three comic containers this app reads a first page out of.
+/// The book list itself, which is a row of `crate::formats::lists` like every other.
 ///
-/// The PDF's spellings are the first three letters of the family and the ones that were never a
-/// list's before: `pdf` is the format, `pdfa` the archival profile of it, and `epdf` the
-/// encapsulated one — all three drawn by the same reader, so all three are here, or a file named
-/// with the two the format's world writes beside the first would stop being previewed at all.
-///
-/// The comics are `cbz`, a zip of plates, `cbr`, a rar of them, and `cbc`, which is Calibre's own
-/// container: a zip whose entries are the pages of several comics under a folder each, with a
-/// `comics.txt` naming them. Nothing invented any of them as a drawing format — each is a box —
-/// and all three are read here rather than handed to an engine, because the engine that reads
-/// comics unpacks them, decodes every plate, rewrites it and builds a document out of the whole
-/// thing: measured against the comics this was built for, a hundred megabytes of plates is minutes
-/// of work for a preview that is one page, against milliseconds for reading that one page out of
-/// the box (see `comic_preview`).
-///
-/// Deliberately absent: the books the ebook engine converts (`azw`, `azw3`, `azw4`, `djvu`, `epub`,
-/// `fb2`, `htmlz`, `lrf`, `mobi`, `pml`, `prc`, `snb`, `tcr`, `chm`, `lit`), which are the
-/// `[calibre]` list's because none of them is a container this app can read itself, and every name
-/// the other lists carry, because a name sits in exactly one list.
-pub const DEFAULT_EBOOK_EXTENSIONS: &str = "cbc,cbr,cbz,epdf,pdf,pdfa";
+/// It is named here as well because the PDF reader's own tests still ask for it by this path, and
+/// until they are moved across the table keeps the name they reach for.
+#[cfg(test)]
+pub use crate::formats::lists::DEFAULT_EBOOK_EXTENSIONS;
 
 /// Whether the configured list claims `path`.
 pub fn matches_ebook_list(path: &Path, extensions: &[String]) -> bool {
@@ -124,7 +83,9 @@ mod tests {
     /// book the engine beside this app has to convert.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS);
+        let list = crate::formats::text_formats::sanitize_extension_list(
+            crate::formats::lists::DEFAULT_EBOOK_EXTENSIONS,
+        );
         let config = crate::config::config::AppConfig::default();
 
         let claimed_elsewhere = |path: &Path| {
@@ -231,7 +192,9 @@ mod tests {
     /// And what it does hold is the PDF's three spellings and the three comic containers.
     #[test]
     fn holds_the_pages_and_the_comics() {
-        let list = crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS);
+        let list = crate::formats::text_formats::sanitize_extension_list(
+            crate::formats::lists::DEFAULT_EBOOK_EXTENSIONS,
+        );
 
         for name in ["book.pdf", "report.pdfa", "encapsulated.epdf"] {
             let path = Path::new(name);
@@ -264,7 +227,9 @@ mod tests {
     /// configuration again would be a lock taken twice on that thread (see `matches_page_name`).
     #[test]
     fn asks_for_the_pdf_names_of_the_list_it_is_given() {
-        let list = crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS);
+        let list = crate::formats::text_formats::sanitize_extension_list(
+            crate::formats::lists::DEFAULT_EBOOK_EXTENSIONS,
+        );
 
         for name in ["book.pdf", "report.pdfa", "encapsulated.epdf"] {
             assert!(
@@ -294,7 +259,9 @@ mod tests {
     /// reader that decides that is the comic one — nothing here claims a name is a comic.
     #[test]
     fn a_name_added_by_hand_is_asked_of_the_reader_that_reads_it() {
-        let added = crate::formats::text_formats::sanitize_extension_list("cbc,cbr,cbz,myalbum,pdf,pdfa,epdf");
+        let added = crate::formats::text_formats::sanitize_extension_list(
+            "cbc,cbr,cbz,myalbum,pdf,pdfa,epdf",
+        );
 
         assert!(
             matches_ebook_list(Path::new("book.myalbum"), &added),
@@ -311,7 +278,8 @@ mod tests {
     /// other list of this app's answers a hand-edited entry.
     #[test]
     fn reads_a_list_of_bare_extensions() {
-        let extensions = crate::formats::text_formats::sanitize_extension_list(" .PDF , cbz,,cbr,pdf,pdfa");
+        let extensions =
+            crate::formats::text_formats::sanitize_extension_list(" .PDF , cbz,,cbr,pdf,pdfa");
 
         assert_eq!(extensions, vec!["pdf", "cbz", "cbr", "pdfa"]);
     }

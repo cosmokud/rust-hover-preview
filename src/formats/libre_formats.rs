@@ -18,97 +18,14 @@
 //!   or encrypted past reading — `.wpd`, `.wps`, `.abw`, `.doc` saved as one of those old
 //!   formats, and the spreadsheets and presentations of the same vintage.
 //!
-//! The list lives in `config.ini` as `[libre] extensions`, written from the built-in list
-//! on first run and read back from there, so a user can add a format the engine reads and
-//! this app does not know, or take one out. The question here is only what a file is
-//! *called*: whether the engine can read it at all is settled by the engine, and a name it
-//! cannot read is answered with no preview — once, and then remembered, so a name that was
-//! put in this list by mistake costs one conversion and never another.
-//!
-//! One document of another kind is asked of the engine as well, and it is the one case the list
-//! above is not asked about: an Office document — one whose own application is not installed
-//! on this machine, and one the tray has asked the engine for outright, under `Engine → Select
-//! Engine → Office`. There is no Word, Excel or PowerPoint to draw a page for the first, and
-//! the engine beside them reads the format; the second is a choice rather than a lack of one,
-//! and what it buys is every document of the kind drawn by the engine a user knows. Either way
-//! the page is the engine's, and it is shown under the Office kind and at the Office kind's
-//! scale rather than this one's, because the file is what it is whichever engine drew it.
-//! `engine_page_kind` is that question, and it is the one place both the callers and the
-//! engine ask it — one answer, reached through one function, for the choice and the machine
-//! together (`office_formats::page_engine`): a page asked for by one side and refused by the
-//! other is a hover that waits for a conversion nothing was ever asked to make.
+//! The list of names this answers for is a row of `crate::formats::lists` — the one table
+//! every kind's list is a row of, and the one place a list is written down, the built-in
+//! entries and the older lists this app shipped and then changed included.
 
 use crate::config::config::{OfficeEngine, PreviewType};
 use crate::formats::text_formats;
 use crate::CONFIG;
 use std::path::Path;
-
-/// The extensions written to `config.ini` on first run: the document formats the engine
-/// reads that this app has no reader of its own for.
-///
-/// Nothing here is a picture, a drawing, a video, an archive, a font or a text file — those
-/// are this app's own kinds — and nothing here is a PDF. What is here is what those kinds
-/// leave: the word processors that came before the modern one and the ones beside it
-/// (`wpd`, `wps`, `abw`, `lwp`, `cwk`, `hwp`, `602`, `wri`), the older spreadsheets (`123`,
-/// `wk1`, `wk3`, `wk4`, `wks`, `slk`, `dif`, `dbf`, `wb2`, `wq1`, `wq2`, `gnumeric`, `xlw`),
-/// the presentations (`sda`, `sdc`, `sdd`, `sdw`, `sxi`, `sti`), the drawings whose own
-/// format this app does not read (`cdr`, `cmx`, `dxf`, `wpg`, `pub`, `zmf`, `cgm`, `pct`,
-/// `met`, `svm`, and the Visio names the engine's filter declares) — and the open formats
-/// themselves, `odt`, `ods`, `odp`, `odg`, `odc`, `odb`, `odf` and their friends, which no
-/// other list claims and which the engine reads exactly.
-///
-/// What a name is asked about is settled by the engine's own filter registry rather than by
-/// the list of formats the engine is *said* to support, and those two are not the same list.
-/// A name belongs here only where a filter that imports declares that very extension — read
-/// one name at a time out of an installed engine's `share/registry/*.xcd` — because a name
-/// no filter declares is a launch that answers nothing: what the engine falls back to is the
-/// file's own content, where a filter it cannot use may spin rather than answer (see `swf`),
-/// and where it answers at all it answers with nothing. Four groups an earlier list held
-/// came out that way:
-///
-/// * `qxp` is the older QuarkXPress document. The filter reads `qxd` and `qxt`.
-/// * `pm3`, `pm4` and `pm5` are PageMaker before 6. The filter reads `pm`, `p65`, `pm6` and
-///   `pmd`.
-/// * `vssm`, `vst`, `vstm`, `vtx` and `vsx` are Visio stencils and templates. The filter
-///   reads `vdx`, `vsd`, `vsdm`, `vsdx` and `vstx`.
-/// * `epub` is a name the engine *writes* rather than reads — the one filter that declares
-///   it is an export filter, which is the wrong direction for a preview — and `agd`, `fhd`,
-///   `jtd`, `jtt`, `plt`, `pxl`, `rl`, `sdp`, `sgf`, `sgl`, `uof`, `uop`, `uos`, `uot` and
-///   `vor` are declared by no filter at all.
-///
-/// A machine whose engine does read one of those can have the name back by adding it: the
-/// list is what the user edits, and a name added to it is asked about from the next read.
-///
-/// The engine imports a few names that are deliberately not here as well, because there is
-/// nothing in them to preview — each is a file *about* a document rather than one:
-///
-/// * `ase` and `gpl` are colour palettes. LibreOffice reads them to fill a colour picker,
-///   and what a page would be drawn from one is nothing at all.
-/// * `oxt` is an extension package: a zip of the files that install something into the
-///   engine, which is not a document any more than a `.zip` is.
-/// * `smf` means StarMath to LibreOffice and a MIDI sequence to everything else that reads
-///   the name, and a hover cannot tell which one it has. A MIDI file claimed as a document
-///   would be a launch that answers nothing, every time, for a name that is not this app's.
-/// * `kth` is a Keynote theme and `iqy` is a web query: the first is a preset, the second
-///   is a line of text naming a URL, and neither is a document.
-/// * `swf` is a Flash animation rather than a document, and the engine does not draw one:
-///   asked to convert one, its filter chain spins with a core at a hundred percent and
-///   never writes a page — measured on real files, and past every bound a conversion is
-///   given. It was in this list once, and a file of that name cost a launch and a core
-///   for as long as the engine was left to it. What reads a Flash file is FFmpeg's own
-///   SWF demuxer — the drawings, the sounds and the timeline of one — so the name is in
-///   the video list, which is where it belongs, and is not here (see `video_formats`).
-pub const DEFAULT_LIBRE_EXTENSIONS: &str = "123,602,abw,cdr,cgm,cmx,cwk,dbf,dif,dxf,fodg,fodp,fodt,gnm,gnumeric,hwp,key,lwp,mcw,met,mw,numbers,odb,odc,odf,odg,odm,odp,ods,odt,oth,otg,otm,otp,ots,ott,pages,pcd,pct,pcx,pdb,pm6,pmd,psw,pub,ras,sda,sdc,sdd,sdw,slk,stc,std,sti,stw,svm,sxd,sxg,sxi,sxm,sxw,vdx,vsd,vsdm,vsdx,vstx,wb2,wk1,wk3,wk4,wks,wpg,wq1,wq2,wpd,wps,wri,xlw,zabw,zmf";
-
-/// The built-in `[libre]` list as it stood before the names the engine cannot read were
-/// taken out of it: the one `swf` was in, and the four groups above with it.
-///
-/// A file holding exactly these entries is the app's own older list rather than a user's
-/// edit — nobody has touched it — so it is brought up to the built-in list rather than kept
-/// as written, which is what takes those names out of every `config.ini` already written.
-/// What each of them cost is written beside it in the list above: a launch that answered
-/// nothing, and for `swf` a launch that never ended at all.
-pub const LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ: &str = "123,602,abw,agd,cdr,cgm,cmx,cwk,dbf,dif,dxf,epub,fhd,fodg,fodp,fodt,gnm,gnumeric,hwp,jtd,jtt,key,lwp,mcw,met,mw,numbers,odb,odc,odf,odg,odm,odp,ods,odt,oth,otg,otm,otp,ots,ott,pages,pcd,pct,pcx,pdb,plt,pm3,pm4,pm5,pm6,pmd,psw,pub,pxl,qxp,ras,rl,sda,sdc,sdd,sdp,sdw,sgf,sgl,slk,stc,std,sti,stw,svm,swf,sxd,sxg,sxi,sxm,sxw,uof,uop,uos,uot,vdx,vor,vsd,vsdm,vsdx,vssm,vst,vstm,vstx,vtx,vsx,wb2,wk1,wk3,wk4,wks,wpg,wq1,wq2,wpd,wps,wri,xlw,zabw,zmf";
 
 /// Whether the configured list claims `path`.
 pub fn matches_libre_list(path: &Path, extensions: &[String]) -> bool {
@@ -197,7 +114,8 @@ mod tests {
     /// rule is worth stating rather than assuming.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS);
+        let list =
+            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_LIBRE_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         for name in [
@@ -259,7 +177,8 @@ mod tests {
     /// of the nineties to the open formats of today.
     #[test]
     fn holds_the_documents_no_reader_of_this_app_takes() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS);
+        let list =
+            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_LIBRE_EXTENSIONS);
 
         for name in [
             "letter.wpd",
@@ -301,7 +220,8 @@ mod tests {
     /// that made it worth checking is beside them.
     #[test]
     fn hands_over_no_name_the_engine_has_no_filter_for() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS);
+        let list =
+            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_LIBRE_EXTENSIONS);
 
         for name in [
             "book.swf",
@@ -345,7 +265,9 @@ mod tests {
     #[test]
     fn a_page_the_engine_draws_answers_with_the_kind_it_is_shown_under() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.libre_extensions = text_formats::sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS);
+            config.libre_extensions = text_formats::sanitize_extension_list(
+                crate::formats::lists::DEFAULT_LIBRE_EXTENSIONS,
+            );
         }
 
         let folder = std::env::temp_dir().join("rust-hover-preview-engine-page-kind");
