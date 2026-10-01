@@ -173,13 +173,21 @@ impl Worker {
     /// The bound on the wait above, and what waits on it. Nothing is done with the answer: what a
     /// bound that runs out is for is a request that may have been made in the meantime, and the
     /// adapter's own work between two runs.
+    ///
+    /// It waits on the slot rather than for the tick: a request put down between this thread's last
+    /// look at its slot and this wait — which is where the idle hook above runs — signalled a
+    /// thread that was not yet waiting, so nothing was woken and a request a hover was already
+    /// waiting on sat in the slot for the whole of the tick. The condition is checked under the
+    /// lock, so a slot that is not empty is answered on the spot rather than after a second.
     fn wait(&self) {
         let slot = self
             .slot
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        let _ = self.ready.wait_timeout(slot, IDLE_TICK);
+        let _ = self
+            .ready
+            .wait_timeout_while(slot, IDLE_TICK, |slot| slot.is_none());
     }
 
     /// Take whatever is waiting and answer whether there was any: what a test asks when it has to
@@ -307,7 +315,7 @@ pub fn wait(child: &mut Child, give_up: Duration, poll: Duration) -> Option<Exit
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
-    use std::sync::mpsc;
+    use std::sync::{mpsc, OnceLock};
 
     /// A worker of a test's own, rather than a static the tests would share: the newest-wins rule
     /// is about a slot, and a slot two tests are putting into is a slot that answers for neither.
@@ -425,6 +433,107 @@ mod tests {
 
     fn tick() {
         TICKS.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// How long a worker may take to take up a request that is already waiting for it, well
+    /// inside the tick it waits on for itself: a request answered inside this was not left for
+    /// the tick to run out.
+    const ANSWERED: Duration = Duration::from_millis(300);
+
+    /// The worker the idle hook of the test below puts a request down for. A hook is handed
+    /// nothing, so this is where the worker that owns it is, and only this test's own worker is
+    /// ever put into it.
+    static IDLED_FOR: OnceLock<&'static Worker> = OnceLock::new();
+
+    /// How many times that hook has run, which is also how the hook knows it is the first time: a
+    /// hook that put a request down every time would leave the thread no idle to be measured in.
+    static IDLES: AtomicUsize = AtomicUsize::new(0);
+
+    /// What the work of the test below has reported. It is a record rather than a signal because
+    /// the first of those works is put down by a plain function, which cannot hold a sender.
+    static REPORTED: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+    /// The idle hook, putting one request down for the worker it belongs to on the first call and
+    /// never again. That first call is inside the gap on purpose: the thread runs it between
+    /// letting its slot go and taking it again, so the request it puts down signalled a thread
+    /// that was not yet waiting.
+    fn put_down_the_first_time() {
+        if IDLES.fetch_add(1, Ordering::AcqRel) != 0 {
+            return;
+        }
+
+        if let Some(worker) = IDLED_FOR.get() {
+            worker.request(|| report("in the gap"));
+        }
+    }
+
+    /// A request put down where the thread cannot hear it was taken up without waiting out the
+    /// tick, and the thread is still the same afterwards: it takes what comes next, and it still
+    /// waits on a slot with nothing in it rather than looking at it again and again.
+    ///
+    /// The gap is hit rather than raced into, because the idle hook runs exactly inside it — the
+    /// hook is what a gap of this kind is wide open for — so a request put down from there missed
+    /// the signal on every machine rather than on a slow one. What is left to measure is the wait,
+    /// and a wait is a number.
+    #[test]
+    fn takes_a_request_put_down_before_it_is_waiting_without_waiting_out_the_tick() {
+        let worker: &'static Worker =
+            Box::leak(Box::new(Worker::new(Some(put_down_the_first_time))));
+        assert!(
+            IDLED_FOR.set(worker).is_ok(),
+            "the hook is put into one worker of a test's own, as every other worker here is"
+        );
+        worker.wake();
+
+        assert_ran_within(ANSWERED, "in the gap");
+
+        worker.request(|| report("after the gap"));
+        assert_ran_within(ANSWERED, "after the gap");
+
+        // The same hook shows the wait is still a wait. An empty slot is found empty once and then
+        // waited on, which is one call here rather than the hundreds a thread that never slept
+        // would make of it.
+        let idles = IDLES.load(Ordering::Acquire);
+        std::thread::sleep(ANSWERED);
+        assert!(
+            IDLES.load(Ordering::Acquire) <= idles + 1,
+            "a slot with nothing in it is waited on rather than looked at again and again"
+        );
+    }
+
+    /// The whole of what a work can say to the test's thread: that it ran.
+    fn report(name: &'static str) {
+        REPORTED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(name);
+    }
+
+    /// That `name` ran inside `ceiling`, and not only once the tick has run out. It is looked for
+    /// well past the ceiling so that a failure says how long it really took rather than how long
+    /// the ceiling was, and the time it took is in the failure because what is being looked for is
+    /// a stall, and a stall is a number.
+    fn assert_ran_within(ceiling: Duration, name: &str) {
+        let start = Instant::now();
+        let watched = ceiling + IDLE_TICK;
+
+        while !reported(name) && start.elapsed() < watched {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let took = start.elapsed();
+        assert!(
+            took < ceiling && reported(name),
+            "{name:?} is taken up rather than left for the {IDLE_TICK:?} tick to run out, and \
+             took {took:?} of the {ceiling:?} it was given"
+        );
+    }
+
+    fn reported(name: &str) -> bool {
+        REPORTED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(&name)
     }
 
     /// The whole of what the in-flight record is for, in one: what is being run is said to be what
