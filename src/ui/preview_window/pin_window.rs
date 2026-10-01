@@ -35,19 +35,36 @@
 //! behind a preview thread that has stopped turning is a hook that stops answering Explorer,
 //! which is a worse failure than the one the publication exists to avoid.
 //!
-//! The seam is eight operations and nothing wider. `move` and `blit` are not here because
-//! nothing on a road out of a pin moves or paints the preview window: a take-down hands the
-//! window to the loop's ordinary take-down, and the box a pin is put up at was chosen long
-//! before any of this (see `placed_pin_box`, and ADR 6, which keeps a box and the paint that
-//! stands it up in one call). Widening a seam with operations nothing calls is the speculative
-//! half of this decision; the half that earns its keep is that the two roads now share one list,
-//! and that the list can be read back on a machine with no display and no pin in it.
+//! The seam is what the pin's own window is asked, and nothing wider. `move` and `blit` are not
+//! here because nothing on a road out of a pin moves or paints the preview window: a take-down
+//! hands the window to the loop's ordinary take-down, and the box a pin is put up at was chosen
+//! long before any of this (see `placed_pin_box`, and ADR 6, which keeps a box and the paint
+//! that stands it up in one call). Widening a seam with operations nothing calls is the
+//! speculative half of this decision; the half that earns its keep is that the two roads now
+//! share one list, and that the list can be read back on a machine with no display and no pin
+//! in it.
+//!
+//! It grew by four for a reason worth recording, because the four are not lifecycle operations
+//! at all: they are *a drag*, which is the other thing this window is asked of a pin and the
+//! only one that had no test surface. `pointer`, `window_box`, `capture` and `repaint` are the
+//! whole of what "a press becomes a carried drag, and the drag is let go of" costs the machine.
+//! They are here rather than in a second trait over the same window for the reason the two ends
+//! of the capture are here: they are two halves of one handoff, and a handoff whose halves are
+//! asked of two different objects is a handoff that can disagree with itself — which is what a
+//! window left holding the pointer for the whole desktop was (see `begin_pin_drag`).
+//!
+//! What is deliberately still *not* here is the rest of a drag: `apply_pin_drag` moves the
+//! window and resizes it, and that is a `SetWindowPos` and an `UpdateLayeredWindow` on
+//! arguments a whole frame's worth of pixels. Putting it behind this seam would mean a seam
+//! wide enough to carry a paint, and the decision worth testing there — which box a drag at
+//! these deltas produces — is arithmetic on four numbers and is tested as arithmetic (see
+//! `resize_pinned_window`).
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use super::{PinCommand, PinnedPreview};
+use super::{PinCommand, PinnedPreview, ScreenRegion};
 
 /// The message a pin's own window procedure answers to let the pointer go, which only the
 /// watchdog ever asks for.
@@ -562,6 +579,27 @@ pub(super) trait PinWindow {
     /// The window a pin is drawn in, or zero where there is none.
     fn hwnd(&self) -> isize;
 
+    /// Where the pointer is, in screen coordinates.
+    ///
+    /// Read rather than taken from a mouse message, and that is the whole of why: a window being
+    /// resized moves its own origin out from under the coordinates a message would have carried,
+    /// so the delta a message reports is measured in a frame the window has itself moved. A drag
+    /// asks the pointer where it is instead, which is a question with one answer however late the
+    /// message that should have carried it arrives.
+    fn pointer(&self) -> Option<(i32, i32)>;
+
+    /// The box the window is standing at on the screen, or nothing where it has none.
+    ///
+    /// The screen's own box and not the one the pin remembers: a window the hand has carried
+    /// since it was maximized is no longer standing where the maximize left it, and a resize
+    /// begun from the remembered box is begun from the screen's top border rather than from where
+    /// the hand left the window — which is the window snapping back the moment an edge is pulled
+    /// (see `apply_pin_drag`).
+    fn window_box(&self, hwnd: isize) -> Option<ScreenRegion>;
+
+    /// Take the pointer for this window, so every message about it arrives here.
+    fn capture(&self, hwnd: isize);
+
     /// Let go of the pointer, if this window is the one holding it.
     fn release_capture(&self, hwnd: isize);
 
@@ -588,6 +626,16 @@ pub(super) trait PinWindow {
     /// ordinary message, and a bubble is not the pin's window and is not in that message.
     fn hide_pin_bubble(&self);
 
+    /// Paint the pin's own window as it stands.
+    ///
+    /// Named rather than being folded into `hide_pin_windows` because it is the one operation
+    /// here that has a caller on a road *into* a window as well as out of one: a drag that has
+    /// just been let go of has to be drawn at where the hand left it, and the drawing is GDI on
+    /// a handle that has to be a real window. Left outside the seam, a test could only exercise
+    /// a drag's end by naming a handle it did not have — which is a repaint of somebody else's
+    /// memory rather than a test.
+    fn repaint(&self);
+
     /// Leave a message for the loop to answer, rather than making it answer now.
     fn post(&self, hwnd: isize, message: u32);
 }
@@ -602,6 +650,13 @@ pub(super) trait PinWindow {
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum PinWindowCall {
+    /// Where the pointer is, and the refusal where the machine would not say.
+    Pointer(Option<(i32, i32)>),
+    /// Where the window stands, and the refusal where it has no box to stand at.
+    WindowBox(Option<ScreenRegion>),
+    /// The pointer taken for this window, which is every mouse message on the desktop arriving
+    /// here from that moment on.
+    Capture,
     ReleaseCapture,
     SetFocusable {
         focusable: bool,
@@ -614,6 +669,9 @@ pub(super) enum PinWindowCall {
     HidePinWindows,
     /// The round bubble a collapsed pin left standing for it, taken down with the take-down.
     HidePinBubble,
+    /// The pin's own window drawn as it stands, which is what a drag's end owes after letting
+    /// go of the pointer: the window is where the hand left it and the screen has to be told.
+    Repaint,
     Post(u32),
 }
 
@@ -629,6 +687,10 @@ pub(super) enum PinWindowCall {
 #[cfg(test)]
 pub(super) struct RecordedPinWindow {
     hwnd: isize,
+    /// Where the pointer is, for a drag measured off it.
+    pointer: Option<(i32, i32)>,
+    /// Where the window stands, for a drag begun from the screen's own box rather than the pin's.
+    box_: Option<ScreenRegion>,
     calls: Mutex<Vec<PinWindowCall>>,
 }
 
@@ -636,8 +698,26 @@ pub(super) struct RecordedPinWindow {
 impl RecordedPinWindow {
     /// A recorder standing in for a window that is there, or for one that is not.
     pub(super) fn new(hwnd: isize) -> Self {
+        Self::with(hwnd, None, None)
+    }
+
+    /// A recorder for a window the pointer is on and that stands at a box of its own.
+    ///
+    /// Both halves are given rather than invented because they are the two things a drag is
+    /// measured against, and a recorder that made them up would be testing a drag against a
+    /// pointer this test invented rather than the one it says it is standing at. `None` for
+    /// either is a real answer a real desktop gives — `GetCursorPos` and `GetWindowRect` are both
+    /// refusable — and it is the answer that leaves a window holding the pointer with nothing
+    /// that will ever let go of it.
+    pub(super) fn with(
+        hwnd: isize,
+        pointer: Option<(i32, i32)>,
+        box_: Option<ScreenRegion>,
+    ) -> Self {
         Self {
             hwnd,
+            pointer,
+            box_,
             calls: Mutex::new(Vec::new()),
         }
     }
@@ -663,6 +743,21 @@ impl PinWindow for RecordedPinWindow {
         self.hwnd
     }
 
+    fn pointer(&self) -> Option<(i32, i32)> {
+        let pointer = self.pointer;
+        self.record(PinWindowCall::Pointer(pointer));
+        pointer
+    }
+
+    fn window_box(&self, _hwnd: isize) -> Option<ScreenRegion> {
+        self.record(PinWindowCall::WindowBox(self.box_));
+        self.box_
+    }
+
+    fn capture(&self, _hwnd: isize) {
+        self.record(PinWindowCall::Capture);
+    }
+
     fn release_capture(&self, _hwnd: isize) {
         self.record(PinWindowCall::ReleaseCapture);
     }
@@ -685,6 +780,10 @@ impl PinWindow for RecordedPinWindow {
 
     fn hide_pin_bubble(&self) {
         self.record(PinWindowCall::HidePinBubble);
+    }
+
+    fn repaint(&self) {
+        self.record(PinWindowCall::Repaint);
     }
 
     fn post(&self, _hwnd: isize, message: u32) {
@@ -969,6 +1068,18 @@ mod tests {
             self.inner.hwnd()
         }
 
+        fn pointer(&self) -> Option<(i32, i32)> {
+            self.inner.pointer()
+        }
+
+        fn window_box(&self, hwnd: isize) -> Option<ScreenRegion> {
+            self.inner.window_box(hwnd)
+        }
+
+        fn capture(&self, hwnd: isize) {
+            self.inner.capture(hwnd)
+        }
+
         fn release_capture(&self, hwnd: isize) {
             self.looking();
             self.inner.release_capture(hwnd);
@@ -995,6 +1106,10 @@ mod tests {
 
         fn hide_pin_bubble(&self) {
             self.inner.hide_pin_bubble();
+        }
+
+        fn repaint(&self) {
+            self.inner.repaint();
         }
 
         fn post(&self, hwnd: isize, message: u32) {
