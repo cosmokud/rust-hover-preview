@@ -11847,13 +11847,16 @@ const KEY_REPEAT: isize = 1 << 30;
 /// this, and nothing to switch off — a pin the user has not clicked is a window nobody is in,
 /// and a window nobody is in is sent no keystrokes at all.
 ///
-/// A Space is the one key that is a play/pause, and only for a sound: a card is drawn with no
-/// buttons on it and a card with no way to hold a sound is a sound that can only be listened to
-/// from beginning to end, so the key answers it here. It used to hide or swap the window, which
-/// read as a pin that got in the way of a Space typed anywhere near it; a key this window is in
-/// front of is not a key to be dismissed with, and the pin is not dismissed by this one any more.
-/// What a Space means to the file on screen is the loop's answer rather than this one's — a
-/// picture, a page, and a sound at no volume at all are all swallowed (see
+/// A Space is the one key that is a play/pause, and it is a play/pause of whatever is playing:
+/// a card is drawn with no buttons on it and a card with no way to hold a sound is a sound that
+/// can only be listened to from beginning to end, so the key holds it; a video's bar already
+/// offers the same hold under the picture, and the key is that hold asked by the keyboard rather
+/// than by a press on the bar. Which of the two a Space is, is the file in the window's answer
+/// rather than this mapping's (see `pin_toggle_target`). It used to hide or swap the window,
+/// which read as a pin that got in the way of a Space typed anywhere near it; a key this window
+/// is in front of is not a key to be dismissed with, and the pin is not dismissed by this one any
+/// more. What a Space means to the file on screen is the loop's answer rather than this one's —
+/// a picture, a page, and a sound at no volume at all are all swallowed (see
 /// `pin_command_request`).
 fn pinned_key_command(vk: i32) -> Option<PinCommand> {
     // The keys are the virtual-key codes of the message's `wParam`, which are constants
@@ -11882,8 +11885,8 @@ fn pinned_key_command(vk: i32) -> Option<PinCommand> {
 ///
 /// It is the mapping above, and one more question: is this message Windows repeating a key that
 /// is already down rather than pressing it again? A Space is the one command that cannot answer
-/// one — a sound flickering between playing and held for as long as the hand is on the key — while
-/// a walk is a thing a hand can sensibly hold down, so the arrows still repeat.
+/// one — a preview flickering between playing and held for as long as the hand is on the key —
+/// while a walk is a thing a hand can sensibly hold down, so the arrows still repeat.
 fn pinned_key_down_command(vk: i32, lparam: isize) -> Option<PinCommand> {
     let command = pinned_key_command(vk)?;
 
@@ -14150,6 +14153,73 @@ fn toggle_pinned_audio(started: &mut Option<Instant>, offset: &mut f64, paused: 
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
 }
 
+/// Which of a pin's two players a play/pause pressed in the window is a press on, which is a
+/// question about the file on screen and not about the key: the same Space is a hold on a video
+/// and a hold on a sound, and which of the two it is comes from what the window is showing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PinToggle {
+    /// The pin's own transport: a video held where it stands, or set going again.
+    Video,
+    /// A sound held where it stands, or set going again: the clock behind its card, and the only
+    /// pause a card has.
+    Audio,
+    /// No player on screen that a Space is a play/pause of, and so nothing to press.
+    None,
+}
+
+/// The player a play/pause pressed in a window showing a file of this kind is a press on.
+///
+/// It is asked of the kind rather than of the window, so the whole of the decision is answerable
+/// with nothing up: the two players are the same two the transport bar and the sound's card each
+/// act on, and a kind that has neither is a kind the key was never about (see
+/// `toggle_pinned_by_key`).
+fn pin_toggle_target(kind: Option<MediaType>) -> PinToggle {
+    match kind {
+        Some(MediaType::Video) | Some(MediaType::NativeVideo) => PinToggle::Video,
+        Some(MediaType::Audio) => PinToggle::Audio,
+        // A picture, a page and a document are drawn or laid out rather than played, and none of
+        // them has a player behind it for a key to hold. A sound with no player behind its card
+        // is a sound all the same and is answered as one — what it has is no playback, which is
+        // its own toggle's answer rather than this one's (see `toggle_pinned_audio`).
+        _ => PinToggle::None,
+    }
+}
+
+/// Answer a play/pause pressed in a pinned window, by asking the player the file on screen is
+/// actually played by.
+///
+/// A video is the pin's own transport, so the key is the pause its bar offers — the same action,
+/// asked by the keyboard rather than by a press on the bar, and the same state read the same way
+/// (see `toggle_pinned_playback`). A sound has no bar, and a card with no way to hold a sound is
+/// a sound that can only be listened to from beginning to end, so the key is the card's clock
+/// instead (see `toggle_pinned_audio`).
+///
+/// Everything else is refused, and refused by doing nothing at all: a picture and a page have no
+/// playback to hold, and a pin with no media up has nothing a key could be about. A Space in
+/// front of one of those is swallowed rather than acted on, which is the answer the key already
+/// got in the window procedure — a key this window is in front of is not a key to be dismissed
+/// with, and there is no file here for one to mean anything about.
+///
+/// And the gate on all of it is the window the key arrived at, which is the whole of it: a key
+/// is answered only because Windows routed it to a pin the user is in, and while the user is
+/// not in the pin no key arrives here at all. Nothing reads the keyboard behind this and
+/// nothing can be switched off (see `pinned_key_command` and the window procedure's
+/// `WM_KEYDOWN`).
+fn toggle_pinned_by_key(started: &mut Option<Instant>, offset: &mut f64, paused: &mut Option<f64>) {
+    match pin_toggle_target(current_media_type()) {
+        PinToggle::Video => {
+            // The same three the bar's own press reads, out of the same place: a pin with no
+            // playback state behind it has no video to hold, and the key is then a key that did
+            // nothing, which is what a Space is against a pin with no media up anyway.
+            if let Some((path, content, transport, _)) = pinned_playback_state() {
+                toggle_pinned_playback(&path, content, transport);
+            }
+        }
+        PinToggle::Audio => toggle_pinned_audio(started, offset, paused),
+        PinToggle::None => {}
+    }
+}
+
 /// Begin another player of this app's for a pinned sound, at a second of its file, in place of
 /// whatever was playing it: the whole of both a resume from a hold and a seek taken by a press
 /// on the card's bar.
@@ -14480,9 +14550,14 @@ pub(crate) enum PinCommand {
     Close,
     /// The bubble a collapsed pin left was clicked: the window goes back up.
     Restore,
-    /// Hold the sound on screen where it stands, or set it going again: what a Space in a
-    /// pinned sound is. It is the only pause a sound's card has — the transport bar is a
-    /// video's, and a card is drawn with no buttons on it (see `pinned_key_command`).
+    /// Hold what is on screen where it stands, or set it going again: what a Space in a pinned
+    /// sound or a pinned video is, and which of the two it is a question the file in the window
+    /// answers rather than the key (see `pin_toggle_target`).
+    ///
+    /// It is the only pause a sound's card has — the transport bar is a video's, and a card is
+    /// drawn with no buttons on it — and for a video it is that bar's own pause, asked by the
+    /// keyboard rather than by a press on the bar (see `toggle_pinned_audio` and
+    /// `toggle_pinned_playback`).
     TogglePlayback,
 }
 
@@ -16398,10 +16473,11 @@ fn centred_at(size: (i32, i32), centre: (i32, i32)) -> ScreenRegion {
 ///
 /// A key is answered here rather than in the window procedure because what it means is a
 /// question about the file on screen, and the player behind that file is the loop's: a Space
-/// holds a sound or lets it go, which is a player ended and another begun rather than a state
-/// this window can set (see `toggle_pinned_audio`). The card is asked for at once rather than
-/// at the cadence it watches the clock at, so that what the key did is on screen in the frame
-/// the key was pressed in.
+/// holds a video or a sound or lets it go, and which of the two players that is comes from the
+/// kind in the window. Both of them are the loop's to answer — a hold of a sound this app plays
+/// is a player ended and another begun rather than a state this window can set (see
+/// `toggle_pinned_by_key`). The card is asked for at once rather than at the cadence it watches
+/// the clock at, so that what the key did is on screen in the frame the key was pressed in.
 fn pin_command_request(
     request: &mut Option<PreviewMessage>,
     wait: &mut Option<PinWait>,
@@ -16430,7 +16506,7 @@ fn pin_command_request(
         Some(PinCommand::Previous) => step_pinned_file(-1, wait),
         Some(PinCommand::Next) => step_pinned_file(1, wait),
         Some(PinCommand::TogglePlayback) => {
-            toggle_pinned_audio(audio_started, audio_start_offset, audio_paused);
+            toggle_pinned_by_key(audio_started, audio_start_offset, audio_paused);
             None
         }
         None => None,
@@ -28402,6 +28478,61 @@ mod tests {
             pinned_key_down_command(VK_LEFT.0 as i32, held),
             Some(PinCommand::Previous),
             "while an arrow held still walks, which is what holding one is for"
+        );
+    }
+
+    /// A Space in a pin is the pause of the player the file on screen is played by, and that is
+    /// the file's answer rather than the key's: a video is played by the pin's own transport and
+    /// a sound by the clock behind its card, so the one key is two different actions.
+    ///
+    /// What a failure here means is one of the two swallowed. A video read as a sound's is a
+    /// video that cannot be held with the keyboard at all — a picture that runs to its end while
+    /// the bar underneath it holds what a press on it holds — and a sound read as a video's is a
+    /// card with no clock moved under it, drawn at a second nothing is playing to.
+    #[test]
+    fn a_space_is_the_pause_of_the_player_the_file_is_played_by() {
+        for kind in [MediaType::NativeVideo, MediaType::Video] {
+            assert_eq!(
+                pin_toggle_target(Some(kind)),
+                PinToggle::Video,
+                "{kind:?} is played by the pin's own transport, which is what a Space in one holds"
+            );
+        }
+
+        assert_eq!(
+            pin_toggle_target(Some(MediaType::Audio)),
+            PinToggle::Audio,
+            "a sound is played by the clock behind its card, and that clock is what a Space moves"
+        );
+    }
+
+    /// A Space in a pin of anything that is not being played does nothing at all, and doing
+    /// nothing is the whole of the answer.
+    ///
+    /// A picture and a page have no player behind them that a key could hold, and a pin whose
+    /// media is not there has nothing a key is about. Guessing for them would be worse than
+    /// refusing: a key answered with the wrong player's pause is a pin acting on a file that has
+    /// no playback — the exact swallowing this is, arrived at from the other side.
+    #[test]
+    fn a_space_pressed_on_something_that_is_not_playing_does_nothing() {
+        for kind in [
+            MediaType::StaticImage,
+            MediaType::AnimatedGif,
+            MediaType::Pdf,
+            MediaType::Text,
+            MediaType::Archive,
+        ] {
+            assert_eq!(
+                pin_toggle_target(Some(kind)),
+                PinToggle::None,
+                "{kind:?} is drawn rather than played, so there is no player for a Space to hold"
+            );
+        }
+
+        assert_eq!(
+            pin_toggle_target(None),
+            PinToggle::None,
+            "and a pin with no media up has no player at all for a key to be about"
         );
     }
 
