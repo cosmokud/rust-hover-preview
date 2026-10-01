@@ -134,7 +134,9 @@ use pin_window::{
     take_pin_command, PinHide, PinWindow, Reason, WM_PIN_RELEASE_POINTER,
 };
 #[cfg(test)]
-use pin_window::{pin_holds_a_keyboard, stand_pin, take_pin_for_a_test, RecordedPinWindow};
+use pin_window::{
+    pin_holds_a_keyboard, stand_pin, take_pin_for_a_test, PinWindowCall, RecordedPinWindow,
+};
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
@@ -14473,6 +14475,23 @@ impl PinWindow for Win32PinWindow {
         PREVIEW_HWND.load(Ordering::SeqCst)
     }
 
+    fn pointer(&self) -> Option<(i32, i32)> {
+        cursor_screen_point()
+    }
+
+    fn window_box(&self, hwnd: isize) -> Option<ScreenRegion> {
+        let (left, top, width, height) = window_origin(HWND(hwnd as *mut _))?;
+        Some((left, top, left + width, top + height))
+    }
+
+    fn capture(&self, hwnd: isize) {
+        // Safety: the handle is this app's own preview window, and a capture is held per thread —
+        // only the thread the press was delivered on can take one, and every caller of this is a
+        // message on this thread's own window procedure. The call is refused rather than acted on
+        // for a window that has since gone.
+        let _ = unsafe { SetCapture(HWND(hwnd as *mut _)) };
+    }
+
     fn release_capture(&self, hwnd: isize) {
         // Safety: the handle is read from the slot this app's own preview window was created
         // into and is only asked to give up a capture it may hold, which it checks before
@@ -14514,6 +14533,16 @@ impl PinWindow for Win32PinWindow {
         // The bubble is a window of this app's own and hiding it is a plain call on a handle
         // read from the slot it was created into, with nothing this fn has to be unsafe about.
         hide_pin_bubble();
+    }
+
+    fn repaint(&self) {
+        // Safety: the handle is read from the slot this app's own preview window was created
+        // into, and the paint is a layered-window blit of a surface this app drew for exactly
+        // this window. A window that has since gone is refused by the call rather than acted on.
+        let hwnd = HWND(self.hwnd() as *mut _);
+        if !hwnd.is_invalid() {
+            unsafe { render_layered_preview(hwnd) };
+        }
     }
 
     fn post(&self, hwnd: isize, message: u32) {
@@ -17844,7 +17873,7 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             pinned.pin().and_then(|pin| pin.resize_edge(x, y))
         };
         if let Some(edge) = edge {
-            begin_pin_drag(hwnd, PinDragAction::Resize(edge), true);
+            begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Resize(edge), true);
             return true;
         }
     }
@@ -17868,7 +17897,7 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             }
         }
 
-        begin_pin_drag(hwnd, PinDragAction::Move, true);
+        begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Move, true);
         return true;
     }
 
@@ -17885,7 +17914,7 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     }
 
     if pinned_content_is_the_pins(x, y) {
-        begin_pin_drag(hwnd, PinDragAction::Move, true);
+        begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Move, true);
         return true;
     }
 
@@ -18126,6 +18155,7 @@ unsafe fn settle_pinned_engine_press(hwnd: HWND, seen_presses: &mut u64) {
     pin_take_focus(hwnd);
     begin_pin_drag(
         hwnd,
+        &Win32PinWindow,
         pinned_engine_press_action(window, dpi, frame, point),
         false,
     );
@@ -18222,8 +18252,24 @@ fn pinned_engine_press_action(
     PinDragAction::Move
 }
 
-unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
-    let Some(from) = cursor_screen_point() else {
+/// What a press becomes: a drag of the window, and the pointer taken for it.
+///
+/// *When a press becomes a carried drag* is the whole of this function, and it is the decision
+/// that had no tests: the pointer is taken only once there is a drag for it, and the two were
+/// not connected. A lock this thread could not take, or a pin that had been taken down since
+/// the press was read, left the window holding the pointer for the whole desktop with nothing
+/// that would ever release it. Every mouse message then went to this window rather than to
+/// whatever the pointer was aimed at, and the cursor kept whichever shape the last edge gave
+/// it — a desktop that looked broken until some other window took the pointer for itself,
+/// which is why clicking elsewhere appeared to bring it back.
+///
+/// It is behind `PinWindow` because all three of the things it asks of the machine are: where
+/// the pointer is, where the window stands, and whether the pointer may be taken. Only the
+/// middle step — *whether there is a pin for the drag to live in* — is this file's, and it is
+/// the step that decides which of the other two is asked at all.
+fn begin_pin_drag(hwnd: HWND, window: &dyn PinWindow, action: PinDragAction, delivered: bool) {
+    let hwnd = hwnd.0 as isize;
+    let Some(from) = window.pointer() else {
         return;
     };
     // The box the window is standing at on screen, rather than the one the pin remembers: a
@@ -18231,26 +18277,16 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
     // maximize left it, and a resize begun from the remembered box is begun from the screen's
     // own top border rather than from the place the hand left the window at — which is the
     // window snapping back to the top the moment an edge is pulled (see `apply_pin_drag`).
-    let Some((left, top, width, height)) = window_origin(hwnd) else {
+    let Some(window_box) = window.window_box(hwnd) else {
         return;
     };
-    let window = (left, top, left + width, top + height);
 
-    // Whether the drag was installed at all, which is what the capture is conditioned on below.
-    //
-    // The pointer is taken only once there is a drag for it, and the two were not connected:
-    // a lock this thread could not take, or a pin that had been taken down since the press was
-    // read, left the window holding the pointer for the whole desktop with nothing that would
-    // ever release it. Every mouse message then went to this window rather than to whatever the
-    // pointer was aimed at, and the cursor kept whichever shape the last edge gave it — a
-    // desktop that looked broken until some other window took the pointer for itself, which is
-    // why clicking elsewhere appeared to bring it back.
     let installed = pin_state()
         .and_then(|mut pinned| {
             let pin = pinned.pin_mut()?;
             pin.dragging = Some(PinDrag {
                 from,
-                window,
+                window: window_box,
                 action,
                 delivered,
                 // A drag has not been carried out to anywhere yet, and `from` is a place it has
@@ -18262,9 +18298,9 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
         .is_some();
 
     if installed {
-        let _ = SetCapture(hwnd);
+        window.capture(hwnd);
     } else {
-        release_pin_capture(hwnd);
+        window.release_capture(hwnd);
     }
 }
 
@@ -18296,7 +18332,7 @@ unsafe fn settle_pinned_engine_drag(hwnd: HWND) {
         return;
     }
 
-    finish_pin_drag(hwnd);
+    finish_pin_drag(hwnd, &Win32PinWindow);
 }
 
 /// Whether a drag is being carried on from what the hook publishes rather than from a message: one
@@ -19168,7 +19204,7 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
-    finish_pin_drag(hwnd)
+    finish_pin_drag(hwnd, &Win32PinWindow)
 }
 
 /// Let go of a drag, from whichever of the two ends has arrived.
@@ -19184,14 +19220,18 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
 ///
 /// Returns whether there was a drag to let go of, which is what a caller that has other release
 /// work to do needs to know.
-unsafe fn finish_pin_drag(hwnd: HWND) -> bool {
+///
+/// The window work is the one call `begin_pin_drag` conditions, read back off the seam rather
+/// than off `GetCapture` — the two ends of a capture are one list, and a list that had to be
+/// read out of the machine in two places is a list whose two halves can disagree.
+fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
     let drag =
         pin_state().and_then(|mut pinned| pinned.pin_mut().and_then(|pin| pin.dragging.take()));
     let Some(drag) = drag else {
         return false;
     };
 
-    release_pin_capture(hwnd);
+    window.release_capture(hwnd.0 as isize);
 
     if matches!(drag.action, PinDragAction::Resize(_)) {
         if let Some(content) = pinned_content() {
@@ -19201,7 +19241,7 @@ unsafe fn finish_pin_drag(hwnd: HWND) -> bool {
         }
     }
 
-    render_layered_preview(hwnd);
+    window.repaint();
     true
 }
 
@@ -22882,6 +22922,168 @@ mod tests {
              against — a rectangle covering one display, not the union of them"
         );
     }
+
+    /// A window standing at a box, with the pointer somewhere on the desktop, for the tests
+    /// about what a press becomes.
+    ///
+    /// The box is the screen's own and not the pin's, because that is what `begin_pin_drag` asks
+    /// for: a window the hand has carried since it was maximized is no longer standing where the
+    /// maximize left it, and a drag begun from the pin's remembered box begins from the screen's
+    /// own top border rather than from where the hand left the window.
+    fn a_window_at(box_: ScreenRegion) -> RecordedPinWindow {
+        RecordedPinWindow::with(0x1000, Some((box_.0, box_.1)), Some(box_))
+    }
+
+    /// A pin up, with nothing being dragged and nothing on the keyboard.
+    fn a_pin_awaiting_a_press() {
+        stand_pin(Some(PinnedPreview::for_test()));
+    }
+
+    /// A press that lands on a pin takes the pointer for the drag it begins, and a drag it
+    /// could not begin lets the pointer go instead.
+    ///
+    /// The two halves are one decision and only one of them used to be reachable. Taking the
+    /// pointer is what a press on a pinned window is for — a drag answers nothing until the hand
+    /// lets go, so without the capture the window stops following the hand — but the capture was
+    /// taken unconditionally, and a pin taken down between the press being read and the drag being
+    /// installed left the window holding the pointer for the whole desktop with nothing that
+    /// would ever release it. Every mouse message then went to that window rather than to
+    /// whatever the pointer was aimed at, and clicking elsewhere appeared to bring it back.
+    ///
+    /// The order is load-bearing as well as the two halves: the pointer is asked for *before* the
+    /// window's own box, so a machine that will not say where the pointer is never gets asked
+    /// where its window stands — there is nothing to measure a drag against, and a drag begun
+    /// from a box alone is a drag from the wrong origin.
+    #[test]
+    fn a_press_takes_the_pointer_for_its_drag_and_a_drag_it_cannot_begin_lets_it_go() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock();
+
+        let window = a_window_at((300, 200, 700, 600));
+        let hwnd = HWND(0x1000 as *mut _);
+        a_pin_awaiting_a_press();
+        begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+
+        assert_eq!(
+            window.calls(),
+            vec![
+                PinWindowCall::Pointer(Some((300, 200))),
+                PinWindowCall::WindowBox(Some((300, 200, 700, 600))),
+                PinWindowCall::Capture,
+            ],
+            "a press that begins a drag takes the pointer, and asks for the pointer before the \
+             box because the box alone is a drag from the wrong origin"
+        );
+
+        // No pin to put the drag in, and the pointer is let go rather than left taken. This is
+        // the branch that used to be unreachable: the capture was taken on the way in and only
+        // released by a release that a window with no drag never sees.
+        let window = a_window_at((300, 200, 700, 600));
+        stand_pin(None);
+        begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+
+        assert_eq!(
+            window.calls(),
+            vec![
+                PinWindowCall::Pointer(Some((300, 200))),
+                PinWindowCall::WindowBox(Some((300, 200, 700, 600))),
+                PinWindowCall::ReleaseCapture,
+            ],
+            "a drag that could not be installed lets the pointer go, because a window holding it \
+             with nothing to release it takes every mouse message on the desktop"
+        );
+    }
+
+    /// A press on a window that cannot say where it is takes nothing at all.
+    ///
+    /// Both of the refusals are real answers a real machine gives — `GetCursorPos` and
+    /// `GetWindowRect` can both be refused — and the second one is the dangerous case: the drag
+    /// was already installed by the time the window's own box is asked for, so a refusal here
+    /// leaves a drag in the pin with no origin to measure against and no capture to have been
+    /// taken, which is a drag the loop carries on from a window that is not where it was.
+    ///
+    /// So the order is what answers it: the window's box is asked for *before* the drag is
+    /// installed, and a refusal returns with nothing installed and nothing taken.
+    #[test]
+    fn a_press_that_cannot_be_measured_takes_nothing_at_all() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock();
+
+        for window in [
+            RecordedPinWindow::with(0x1000, None, Some((300, 200, 700, 600))),
+            RecordedPinWindow::with(0x1000, Some((300, 200)), None),
+        ] {
+            a_pin_awaiting_a_press();
+            begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
+
+            assert!(
+                !window
+                    .calls()
+                    .iter()
+                    .any(|call| matches!(call, PinWindowCall::Capture)),
+                "{:?}: a drag that cannot be measured is not begun, and nothing is taken for it",
+                window.calls()
+            );
+            assert!(
+                carried_drag().is_none(),
+                "{:?}: and no drag is left installed with no box to measure against",
+                window.calls()
+            );
+        }
+    }
+
+    /// The two ends of a capture are one list, and they are asked of the same window.
+    ///
+    /// A drag begun by a message is ended by the message that releases it and a drag begun out of
+    /// the hook's published button state is ended by the tick instead, but both are the same
+    /// work: the pointer this window took for the drag is let go of. They were two hand-written
+    /// halves — a `SetCapture` on the way in and a `release_pin_capture` on the way out — and
+    /// nothing said they had to agree about which window.
+    #[test]
+    fn a_drag_lets_go_of_the_pointer_it_took() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock();
+
+        let window = a_window_at((300, 200, 700, 600));
+        let hwnd = HWND(0x1000 as *mut _);
+        a_pin_awaiting_a_press();
+        begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+        assert!(
+            finish_pin_drag(hwnd, &window),
+            "there was a drag to let go of"
+        );
+
+        assert_eq!(
+            window.calls(),
+            vec![
+                PinWindowCall::Pointer(Some((300, 200))),
+                PinWindowCall::WindowBox(Some((300, 200, 700, 600))),
+                PinWindowCall::Capture,
+                PinWindowCall::ReleaseCapture,
+                PinWindowCall::Repaint,
+            ],
+            "the pointer is taken for the drag and given back when the drag is over, and the \
+             window is drawn at where the hand left it — the pointer first, because a window \
+             still holding it after the drag has gone eats every mouse message on the desktop"
+        );
+
+        // And a second end has nothing to release: the drag is taken out of the pin by the first,
+        // so the second road finds nothing rather than releasing a pointer for a drag that has
+        // already been let go of.
+        let after_the_first_end = window.calls().len();
+        assert!(
+            !finish_pin_drag(hwnd, &window),
+            "a drag that is over is not ended twice"
+        );
+        assert_eq!(
+            window.calls().len(),
+            after_the_first_end,
+            "and the second end asks the window for nothing at all — a release and a repaint for a \
+             drag that has already been let go of would repaint a window nobody is carrying"
+        );
+    }
+
+    /// A lock the tests that share the pin's own state take, so that one of them runs at a
+    /// time: the pin is a process-wide value, so two of these at once is one test's press
+    /// answered by another's window (see `pin_window::tests::ONE_AT_A_TIME`).
+    static PIN_TESTS_ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     /// A lock the tests that publish the pointer's own state take, so that one of them
     /// runs at a time: the item box and the hold regions are one set for the whole
