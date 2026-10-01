@@ -2737,12 +2737,12 @@ fn html_is_engine_drawn(path: &Path) -> bool {
 /// Whether a preview of `path` may be shown as `kind`: that kind's own list claims it, and the
 /// tray has that kind switched on.
 ///
-/// It is one function for the eleven `is_<kind>_preview` predicates it replaces, one per module,
-/// each of which reached for the configuration's lock for itself — which is the split-lock form
-/// the deleted grep test could not see, because the lock and the read were never in one place to
-/// be matched. The lock is taken here, once, around two comparisons in memory: the row that names
-/// the kind, and the switch that hides it. Nothing on this side of it opens a file, which is the
-/// rule the whole of C4 is about (see `HoverFacts`).
+/// It is one function for the eleven `is_<kind>_preview` predicates it replaces — one per module,
+/// each of which reached for the configuration's lock for itself, which is the split-lock form the
+/// deleted grep test could not see because the lock and the read were never in one place to be
+/// matched. The lock is taken here, once, around two comparisons in memory: the row that names the
+/// kind, and the switch that hides it. Nothing on this side of it opens a file, which is the rule
+/// the whole of C4 is about (see `HoverFacts`).
 ///
 /// The video kind is deliberately not asked of this. Its two lists share `ts` and `mts` with the
 /// text lists, so answering it reads the file — and a guard held across a read is the defect this
@@ -2763,9 +2763,9 @@ fn previewed_as(path: &Path, kind: PreviewType) -> bool {
 
 /// Whether `kind`'s own list claims `path`, without asking whether that kind is switched on.
 ///
-/// It is the same two halves as [`previewed_as`] with the second one left off, for the callers
-/// that ask what a file *is* rather than whether a preview of it may be shown: the browser's own
-/// three questions about a specimen, and the manual probes' printed table of what each list says.
+/// It is the same question as [`previewed_as`] with the switch left off, for the two callers that
+/// ask what a file *is* rather than whether a preview of it may be shown: the backdrop's own
+/// question about a specimen, and the manual probes' printed table of what each list says.
 fn named_as(path: &Path, kind: PreviewType) -> bool {
     CONFIG
         .lock()
@@ -3091,17 +3091,11 @@ impl HoverFacts {
         // the reason it exists rather than a thirteenth predicate here.
         //
         // The order inside it is the one this function used to have to state: the file is read
-        // first, with nothing held, and the lists are consulted after. What is consulted is in
-        // memory, so a guard held across the consults is a guard held across a set of list
-        // comparisons — never across a `File::open`, which is what the eleven predicates below
-        // this one used to each do under it.
+        // first, with nothing held, and the lists are consulted after.
         let route = crate::formats::routing::resolve(path, &config, &probe);
 
-        // And the three answers this side has that routing does not: which of the video list's
-        // names the file carries, which gates the tray has thrown, and the scales a hover is laid
-        // out by. All three are list comparisons against what is in hand, and all three were a
-        // lock of their own before.
-        let video_named = crate::formats::routing::named_as(path, &config, PreviewType::Videos);
+        // And the four answers this side has that routing does not: which of the lists' names the
+        // file carries, which gates the tray has thrown, and the scales a hover is laid out by.
         let audio_named = crate::formats::lists::AUDIO.claims(path, &config);
         let archive_named = crate::formats::lists::ARCHIVE.claims(path, &config);
         let peazip_named = crate::formats::lists::PEAZIP.claims(path, &config);
@@ -3110,7 +3104,22 @@ impl HoverFacts {
         let text_enabled = PreviewType::Text.enabled_in(&config);
         let scales = HoverScales::of(&config);
         let follow_cursor = config.follow_cursor;
+
+        // The video lists are the one exception to "consulted after, and only in memory": the two
+        // names they share with the text lists are settled by whether the file holds MPEG-TS
+        // packets, which is a `File::open` and a read. They were copied out under the guard for
+        // exactly that reason, and this line is the second half of a fix whose first half is
+        // `media_engine_plays` doing the same: a guard held across a read is a guard every thread
+        // of the app waits on for as long as the volume takes, and this one is taken on the thread
+        // that pumps this window's own messages.
+        let video_lists = (
+            config.video_extensions.clone(),
+            config.ffmpeg_extensions.clone(),
+        );
         drop(config);
+
+        let video_named =
+            video_formats::claims_any_video_name_in(path, &video_lists.0, &video_lists.1);
 
         // And last, with the guard gone: which of this app's own readers does the work. That is
         // the one question here that still opens the file — a book's is settled by what an `.ai`
