@@ -114,11 +114,22 @@ pub fn is_pdf_file(path: &Path) -> bool {
 /// Explorer, and the whole app's other threads queue up behind it on the same lock, which is what
 /// the first PDF a pointer came to rest on used to do to it (see `explorer_hook::is_media_file`).
 pub fn is_pdf_file_in(path: &Path, extensions: &[String]) -> bool {
+    is_pdf_file_in_of(path, extensions, cloud_files::needs_download(path))
+}
+
+/// The same question, of a file whose directory entry has already been read.
+///
+/// It is the fix above generalised one step further: whether the content of an `.ai` is on this
+/// machine is a question about that entry, and asking it was a second `fs::metadata` on the
+/// thread that places the hover for the answer to six other questions about the same file. A
+/// hover reads the entry once and hands it down (see `crate::formats::head::Facts`), so the
+/// question is asked of the entry rather than of the volume.
+pub fn is_pdf_file_in_of(path: &Path, extensions: &[String], remote: bool) -> bool {
     if crate::formats::ebook_formats::matches_page_name(path, extensions) {
         return true;
     }
 
-    named(path, "ai") && !cloud_files::needs_download(path) && has_pdf_header(path)
+    named(path, "ai") && !remote && has_pdf_header(path)
 }
 
 /// Whether a PDF preview may be shown for `path`: the file a page would be read
