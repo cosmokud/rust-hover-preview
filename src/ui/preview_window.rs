@@ -11963,6 +11963,12 @@ impl ScreenBounds {
             (self.bottom - self.top).max(1) as u32,
         )
     }
+
+    /// The same room as a box on screen, which is what the sizing functions take: they measure
+    /// into a room and never read where it stands (see `scale_dimensions`).
+    fn region(self) -> ScreenRegion {
+        (self.left, self.top, self.right, self.bottom)
+    }
 }
 
 /// The work area of the primary display, for a layout that could not be anchored to
@@ -14886,10 +14892,17 @@ fn take_pin_engine_answer(
 /// same file would take; and a maximized window stays maximized, since a swap is not the gesture
 /// that takes it out of the state the user put it in.
 ///
-/// Three kinds are exceptions. A page of text and a listing keep the box exactly — they are
-/// measured against the room they are drawn in, not against a size the file holds — which is why a
-/// swap to one neither takes a bound nor gives one. A sound's card is given the box its own measure
-/// came out at, centred on the box the pin has now: the file before it left no size for a card.
+/// Four kinds are exceptions, and they are exceptions the same way. A page of text, a listing out
+/// of an archive, a page an engine draws and a sound's card hold no shape of their own: what sizes
+/// them is the room they are laid out in at the share their kind names — which is the answer a
+/// hover of the same file gives, and so the one `Scaling` names — and the box comes out centred on
+/// the box the pin has now rather than fitted into it. The bound is a size some other file came out
+/// at, and none of these four is drawn to that or fitted into it; the window keeps its place on the
+/// display and changes size about the middle of it, which is the only half of the promise a swap
+/// makes about where it stands that is kept.
+///
+/// Which is also why a swap to one neither takes a bound nor gives one: a box laid out in the room
+/// is a size the file was laid out at and no ceiling for the files after it.
 ///
 /// And a file whose box is still being read is not laid out at all: what the measure answered is
 /// the wait for a box rather than one, and a window made of it would be a square with the file's
@@ -14942,17 +14955,45 @@ fn pin_update_content(
         return Some(PinBox::Waiting);
     }
 
-    if pin_keeps_its_box(path) {
-        return Some(PinBox::Measured(space.current));
-    }
-
+    let scale = effective_preview_scale(path, current_hover_scales());
     let shape = media_dimensions(path, bounds, dpi)?;
 
-    // A box still being read is the same answer, reached the other way: the measure this call has
-    // just taken starts the read that settles it, so what the pin has of the new file is a wait to
-    // keep rather than a shape to lay out (see `pin_swap_awaits`).
+    // A box still being read is the wait for a box rather than one, whichever file it was asked
+    // for: the measure this call has just taken is what starts the read that settles it, so what
+    // the pin has of the new file is a wait to keep rather than a shape to lay out (see
+    // `pin_swap_awaits`).
     if pin_swap_awaits(path, shape) {
         return Some(PinBox::Waiting);
+    }
+
+    // A kind that holds no shape of its own — a page of text, a listing, a page an engine draws, a
+    // sound's card — is laid out in the room rather than fitted into the bound, at the share its
+    // kind names: which is the answer a hover of the same file is given, and so the one `Scaling`
+    // names. A bound is a size some *other* file came out at, and none of these four is drawn to
+    // that or fitted into it.
+    //
+    // The box it comes out with is centred on the box the pin occupies rather than fitted into the
+    // room it was laid out in, so the window keeps its place on the display the hand put it and
+    // only its size moves — the same answer a card is given, and for the same reason: a box fitted
+    // into the room is centred on the middle of the *screen* (see `pin_update_box`), which is a
+    // fresh placement rather than the one a swap promises.
+    //
+    // The maximize is left out of it deliberately, and not because a maximum cannot be given here:
+    // it is because these are already measured against this very room, so there is nothing left for
+    // it to add (see `pin_keeps_its_box`).
+    //
+    // The room is the pin's own, which is the one the file before this one left its chrome in. All
+    // four carry no transport bar and draw no chrome over their media, so what the file before it
+    // was decides only whether the room a picture left is a caption shorter than this one's — and
+    // which way that goes, every other swap in this file already measures the same way (see
+    // `pin_swap_room`).
+    if pin_keeps_its_box(path) {
+        let laid_out = pin_update_box(space.room.region(), shape, scale);
+
+        return Some(PinBox::Measured(centred_at(
+            (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1),
+            pin_swap_centre(space),
+        )));
     }
 
     if space.maximized {
@@ -14965,21 +15006,16 @@ fn pin_update_content(
         // Measured against the room every time, a walk of shapes is a window of the same
         // size showing something else — which is what every other swap in this file is for.
         return Some(PinBox::Measured(pin_update_box(
-            (
-                space.room.left,
-                space.room.top,
-                space.room.right,
-                space.room.bottom,
-            ),
+            space.room.region(),
             shape,
-            PreviewScale::FitToScreen,
+            scale,
         )));
     }
 
     Some(PinBox::Measured(pin_update_box(
         pin_swap_room(space, bounds, dpi),
         shape,
-        effective_preview_scale(path, current_hover_scales()),
+        scale,
     )))
 }
 
@@ -15024,10 +15060,6 @@ fn pin_swap_room(space: PinSwapSpace, bounds: ScreenBounds, dpi: u32) -> ScreenR
     let (room_width, room_height) =
         pinned_room(bounds, dpi, space.transport_bar, space.overlay).room();
     let (room_width, room_height) = (room_width.max(1) as i32, room_height.max(1) as i32);
-    let centre = (
-        (space.current.0 + space.current.2) / 2,
-        (space.current.1 + space.current.3) / 2,
-    );
 
     // The bound is the room's own ceiling, and a pin without one is left the whole of it — which
     // is what the file swapped into such a pin is scaled into, at the scale its kind names.
@@ -15036,7 +15068,21 @@ fn pin_swap_room(space: PinSwapSpace, bounds: ScreenBounds, dpi: u32) -> ScreenR
         None => (room_width, room_height),
     };
 
-    centred_at((width, height), centre)
+    centred_at((width, height), pin_swap_centre(space))
+}
+
+/// The middle of the box the pin occupies now: where a swap puts the box it comes out with, so a
+/// window the hand has moved keeps its place while it changes size.
+///
+/// Every file a swap lays out is centred here — one fitted into the bound as well as one laid out
+/// in the room — because that is the promise a swap makes about where it stands, and it is a
+/// promise about the middle rather than about a corner: a box whose top left stood still would walk
+/// its way across the display as its size changed (see `pin_update_content`).
+fn pin_swap_centre(space: PinSwapSpace) -> (i32, i32) {
+    (
+        (space.current.0 + space.current.2) / 2,
+        (space.current.1 + space.current.3) / 2,
+    )
 }
 
 /// The box a pinned window's media takes for another file's shape: the largest box of that shape
@@ -15060,14 +15106,19 @@ fn pin_update_box(room: ScreenRegion, shape: (u32, u32), scale: PreviewScale) ->
 }
 
 /// Whether a preview of this file is drawn to the box it is given rather than scaled into it by a
-/// shape of its own: a page of text, a listing this app or an engine reads out of an archive, and a
-/// sound's card are all measured against the room they are drawn in — there is no size in the file
-/// to take a shape from — and they are the kinds `media_dimensions` answers for itself rather than
-/// through the file's own dimensions (see `media_dimensions`).
+/// shape of its own: a page of text, a listing this app or an engine reads out of an archive, a page
+/// an engine draws, and a sound's card are all measured against the room they are drawn in — there
+/// is no size in the file to take a shape from — and they are the kinds `media_dimensions` answers
+/// for itself rather than through the file's own dimensions (see `media_dimensions`).
 ///
-/// A sound's card is asked of this for the bound alone: the box a swap gives a card is the one its
-/// own measure came out at rather than the box the pin has (see `pin_update_content`), and what the
-/// answer is for here is that a box the file was *drawn* to is no ceiling for the files after it.
+/// It decides two things about a swap, and they are the same thing said twice: the box the new
+/// file is laid out in is the display's whole room rather than the pin's bound, because a bound is
+/// a size some other file came out at and none of these is drawn to it or fitted into it; and the
+/// file neither takes a bound nor gives one, since a box laid out in the room is not a ceiling for
+/// the files after it (see `pin_update_content` and `pin_bound_after`).
+///
+/// A sound's card is here for the second of those only, as it was: the box a swap gives a card is
+/// the one its own measure came out at rather than the box the pin has (see `pin_update_content`).
 fn pin_keeps_its_box(path: &Path) -> bool {
     // Asked of the content, with the entry read before the lock rather than the whole
     // configuration copied out of it: the take-up that asks this one is a take-up that must
@@ -28839,11 +28890,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
     }
 
-    /// And the kinds that *are* drawn to their box keep it, which is what the rule above would take
-    /// from them if it were asked of everything: a page of text is measured against the room it is
-    /// drawn in, and the pin's own box is the room it is being read in (see `pin_keeps_its_box`).
+    /// A file drawn to whatever box it is given is laid out in the room rather than fitted into the
+    /// bound, which is what a sound's card is already given: the bound is a size some *other* file
+    /// came out at, and neither a page of text nor a card is drawn to that or fitted into it. The
+    /// window keeps the place it stands on the display and only its size changes about the middle of
+    /// it (see `pin_keeps_its_box`).
     #[test]
-    fn a_text_file_picked_into_a_pin_keeps_the_box_it_has() {
+    fn a_text_file_picked_into_a_pin_is_laid_out_in_the_room_and_not_fitted_into_the_bound() {
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-text");
         std::fs::create_dir_all(&folder).expect("a test folder");
         let path = folder.join("notes.txt");
@@ -28855,19 +28908,56 @@ mod tests {
             right: 1920,
             bottom: 1080,
         };
-        let space = PinSwapSpace {
+        let space = |bound| PinSwapSpace {
             current: (760, 440, 1160, 640),
-            bound: Some(400),
+            bound,
             transport_bar: false,
             overlay: false,
             maximized: false,
             room: bounds,
         };
 
+        let laid_out = |bound| {
+            let Some(PinBox::Measured(laid_out)) =
+                pin_update_content(space(bound), &path, bounds, 96)
+            else {
+                panic!("a page of text was not laid out");
+            };
+            laid_out
+        };
+
+        // The bound of the file before it is no ceiling for this one, and what says so is that the
+        // box comes out the same whatever that bound is: a page of text is measured against the
+        // room it is drawn in, so the number a picture left behind has nothing to say about it.
+        // Under the bound it would have been fitted into, the two boxes below differ by all of it.
+        let small = laid_out(Some(400));
+        let large = laid_out(Some(1600));
+
         assert_eq!(
-            pin_update_content(space, &path, bounds, 96),
-            Some(PinBox::Measured(space.current))
+            small, large,
+            "the box the file before it left was used as the ceiling for a page of text anyway"
         );
+        assert_ne!(
+            small,
+            space(Some(400)).current,
+            "the page kept the box the pin already had rather than being laid out for itself"
+        );
+
+        // The middle is the pin's own: a window the hand has moved keeps its place on the display
+        // while it changes size about it.
+        assert_eq!(
+            (small.0 + small.2) / 2,
+            (space(None).current.0 + space(None).current.2) / 2,
+            "the window moved off the place it stood rather than changing size about its middle"
+        );
+        assert_eq!(
+            (small.1 + small.3) / 2,
+            (space(None).current.1 + space(None).current.3) / 2
+        );
+
+        // And it neither takes a bound nor gives one: a box laid out in the room is a size the file
+        // was drawn to and no ceiling for the files after it (see `pin_bound_after`).
+        assert_eq!(pin_bound_after(None, true, small), None);
 
         let _ = std::fs::remove_dir_all(&folder);
     }
