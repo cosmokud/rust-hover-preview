@@ -537,6 +537,61 @@ pub fn failing_path() -> Option<PathBuf> {
     })
 }
 
+/// The file the engine is failing at before it has drawn a frame of it, if it is failing at one
+/// there: the union of the two ways a pinned window's session comes to have no picture in it,
+/// where [`failing_path`] waits out only the second of them.
+///
+/// The first is the engine saying so: `MF_MEDIA_ENGINE_EVENT_ERROR` raised into [`Notify`], the
+/// engine admitting outright that it cannot play the file it was handed rather than taking its
+/// time over it, and worth acting on the tick it arrives rather than a second later. The second
+/// is [`FIRST_FRAME_GIVE_UP`] running out with still nothing drawn, which is the engine with
+/// nothing to report because it has no pipeline to report on (see [`failing_path`]) — the same
+/// failure arrived at by silence rather than by an error, and so only ever to be found by
+/// waiting.
+///
+/// [`failing_path`] is not this and still is what it is, because a hover has shown nothing yet:
+/// it can leave a file that is merely slow to start on the engine another tick and be no worse
+/// off, while a preview taken away from the engine that could have drawn it is a real loss. A
+/// pinned window is in no such position, having been put up for this file and standing there
+/// until something else is put up instead — so the tick the engine gives up on the file is the
+/// tick the window is a box of placeholder pixels that nothing further is coming to replace, and
+/// that tick is the one this asks about.
+///
+/// A session that has drawn a frame is left out, which is the same distinction drawn the other
+/// way round: a file that played and then met a bad sector is not a file the engine cannot
+/// draw, and handing it to FFmpeg's player over a fault that has nothing to do with what plays
+/// it costs the engine its decoder for the rest of a file it was getting on with. What
+/// [`mark_unplayable`] writes down is that the probe's answer was wrong about the file, and a
+/// file that has drawn a frame is one the probe got right.
+///
+/// A paused session is left out for the reason [`failing_path`] gives, and it is the whole of
+/// it: a pin whose pause was pressed before the first frame arrived is a file this side
+/// stopped, and a window its own transport has stopped is not a broken preview to be taken away
+/// from the reader of it.
+///
+/// Only a session with a surface is asked about, as in [`failing_path`]: a sound has no frames
+/// to hand over and is never waiting for one, so an engine failing at a sound is not this
+/// either.
+pub fn failing_before_a_frame() -> Option<PathBuf> {
+    SESSION.with(|slot| {
+        let slot = slot.borrow();
+        let session = slot.as_ref()?;
+
+        // A session that was asked to pause hands nothing over because nothing was asked of it,
+        // which is not a session failing at its file: a pin whose pause was pressed before the
+        // first frame arrived is a file this side stopped.
+        if unsafe { session.engine.IsPaused() }.as_bool() {
+            return None;
+        }
+
+        (session.bitmap.is_some()
+            && !session.drew
+            && (session.failed.load(Ordering::Acquire)
+                || session.began.elapsed() >= FIRST_FRAME_GIVE_UP))
+            .then(|| session.path.clone())
+    })
+}
+
 /// Write a file down as one the media engine cannot draw, and let go of the session that was
 /// failing at it, so that what plays the file from here on is FFmpeg's player.
 ///
