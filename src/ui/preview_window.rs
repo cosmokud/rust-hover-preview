@@ -51,7 +51,6 @@ use crate::readers::tone_map;
 use crate::readers::video_player;
 use crate::readers::webp_image;
 use crate::readers::wic_image;
-use crate::shell::cloud_files;
 use crate::shell::pin_navigation;
 use crate::shell::wheel_input;
 use crate::text::archive_preview::{self, ArchivePreviewOptions};
@@ -1534,8 +1533,7 @@ impl MediaData {
                 if !streamed.queue.is_empty() {
                     // A streamed frame is made by the decoder thread and handed over once,
                     // so wrapping it here is the only allocation it ever needs.
-                    self.frames
-                        .extend(streamed.queue.drain(..).map(Arc::new));
+                    self.frames.extend(streamed.queue.drain(..).map(Arc::new));
                 }
             }
         }
@@ -2646,39 +2644,51 @@ fn engine_kind_of(path: &Path) -> Option<PreviewType> {
     // no engine window at all — so the name answers which half of that kind a file is.
     //
     // The entry is read before the lock and the lists are taken under it, so the guard is not
-    // held across the file read the content question may make (see `drawn_as_audio`).
-    let content = content_of(path);
+    // held across the file read the content question may make (see `HoverFacts`).
+    let hover = HoverFacts::read(path);
 
-    if let crate::formats::content_type::Content::Kind(kind) = content {
-        return match kind {
-            PreviewType::Vector if svg_preview::is_svg_file(path) => Some(PreviewType::Vector),
+    match hover.content {
+        // The three kinds the browser draws, and a kind that is not one of them is none of
+        // this app's business: a picture under a font's name is the picture it is, and
+        // nothing is handed to the engine for it.
+        crate::formats::content_type::Content::Kind(kind) => match kind {
+            PreviewType::Vector if hover.svg_document => Some(PreviewType::Vector),
             PreviewType::Fonts => Some(PreviewType::Fonts),
-            PreviewType::Text if html_is_engine_drawn(path) => Some(PreviewType::Text),
+            PreviewType::Text if hover.html_drawn_by_the_engine() => Some(PreviewType::Text),
             _ => None,
-        };
-    }
+        },
 
-    if svg_preview::is_svg_file(path) {
-        return Some(PreviewType::Vector);
-    }
+        // The same answer, asked of the name — a file whose bytes named a kind is settled
+        // and the router is asked about its name only where they named nothing.
+        crate::formats::content_type::Content::Unknown => {
+            // A page of HTML is a text file, so the kind it answers with is the text kind's:
+            // the gate over it is the one a text preview is switched by, and the loader reaches
+            // the engine through that same arm (see `load_media_of_kind`).
+            if hover.svg_document {
+                Some(PreviewType::Vector)
+            } else if hover.font_named {
+                Some(PreviewType::Fonts)
+            } else if hover.html_drawn_by_the_engine() {
+                Some(PreviewType::Text)
+            } else {
+                None
+            }
+        }
 
-    if font_formats::is_font_file(path) {
-        return Some(PreviewType::Fonts);
+        // A format no kind of this app previews: there is no kind to draw it as, so there is
+        // no engine to hand it to either.
+        crate::formats::content_type::Content::Foreign => None,
     }
-
-    // A page of HTML is a text file, so the kind it answers with is the text kind's: the
-    // gate over it is the one a text preview is switched by, and the loader reaches the
-    // engine through that same arm (see `load_media_of_kind`).
-    if html_is_engine_drawn(path) {
-        return Some(PreviewType::Text);
-    }
-
-    None
 }
 
 /// Whether `path` is a page of HTML the browser engine draws: the name is one of the two a
 /// page goes by, and the engine is the thing that draws it (see `webview_preview::draws`,
 /// which answers for a machine with no runtime by not drawing at all).
+///
+/// It is the one of the four questions `engine_kind_of` asks that needs nothing but the name
+/// and the machine, so it stays a function of the path: the engine's availability is asked of
+/// the run rather than of the file, and a caller that has a hover's answer in hand asks that
+/// one instead (`HoverFacts::html_drawn_by_the_engine`).
 fn html_is_engine_drawn(path: &Path) -> bool {
     crate::formats::text_formats::is_html_extension(path) && webview_preview::draws(path)
 }
@@ -2696,16 +2706,7 @@ fn current_webp_playback_fps() -> u32 {
 fn current_hover_scales() -> HoverScales {
     CONFIG
         .lock()
-        .map(|cfg| HoverScales {
-            picture: cfg.preview_scale,
-            video: cfg.video_scale,
-            animated: cfg.animated_scale,
-            ebook: cfg.ebook_scale,
-            document: cfg.document_scale,
-            font: cfg.font_scale,
-            design: cfg.design_scale,
-            vector: cfg.vector_scale,
-        })
+        .map(|cfg| HoverScales::of(&cfg))
         .unwrap_or(HoverScales {
             picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
@@ -2894,17 +2895,57 @@ fn office_render_is_due(path: &Path, width: u32) -> bool {
     }
 }
 
-/// Whether the file's own bytes name one of this app's kinds *other* than `kind`.
+/// Everything one hover needs to know about the file under the hand, asked once.
 ///
-/// It is the question an engine tier asks before it starts anything, and what it says no to
-/// is a file that is called what it is: a name and a content that agree are answered with no
-/// opinion at all, and only a disagreement — a picture under a document's name — is a file
-/// whose engine must not be started.
-fn content_names_another_kind(path: &Path, kind: PreviewType) -> bool {
-    matches!(
-        content_of(path),
-        crate::formats::content_type::Content::Kind(named) if named != kind
-    )
+/// This is the thing the layout already wants to carry. Installing a hover asks six questions
+/// about one file — what its content is, what kind its name makes it, whether it is drawn as a
+/// video, a sound, a page or an engine window, what size it is measured at, and whether what is
+/// on screen for it is a wait — and every one of them used to open the same file's directory
+/// entry for itself and take the process-wide configuration lock across the read. One hover of
+/// one file therefore paid about twenty `fs::metadata` calls for a question with one answer, on
+/// the thread that pumps this window's own messages, which is the thread a pin's caption is
+/// dispatched on.
+///
+/// It is read once, at the top of the arm that installs the hover, and the questions below are
+/// handed it rather than a path: the entry, the front of the file and what the bytes named come
+/// from [`crate::formats::content_type::Probe`], the kind and the list answers come from the one
+/// configuration read beside them, and every question that does not need one of those is a
+/// comparison against a field. What is left asking the disk is the question that genuinely has
+/// to — whether a `.ts` carries transport packets, what an `.ai` keeps at its front, whether a
+/// font parses — and each of those is answered once per file and held.
+///
+/// A caller with no hover of its own to hand builds one for the file it is asking about, which
+/// is what every site outside the `Show` arm does: it costs one entry read where the question
+/// used to make several, and it costs nothing at all after the first hover of the same version
+/// of the file, because the head and the content answer are both caches keyed by that version.
+struct HoverFacts {
+    probe: crate::formats::content_type::Probe,
+    content: crate::formats::content_type::Content,
+    /// The kind the name's lists claim, asked with the entry in hand. `None` where no list does,
+    /// which is the answer a name no list holds has always had.
+    named: Option<PreviewType>,
+    /// The four list answers the eleven predicates used to each go and take the configuration's
+    /// lock for, and the three of the tray's switches that gate them. They are asked here rather
+    /// than where they are used because they are cheap — a name compared against a list of
+    /// extensions — and because a question asked twice for one hover is two locks where one was.
+    video_named: bool,
+    audio_named: bool,
+    archive_named: bool,
+    peazip_named: bool,
+    html_named: bool,
+    font_named: bool,
+    svg_document: bool,
+    /// What of this app's own reads this file, asked with the kind already settled — which is
+    /// the contract `native_formats::job_for` is written for and the reason it takes a kind
+    /// rather than working one out. A book is the case that needed it: which half of the kind a
+    /// `.cbz` is costs a read of the file, and the loader used to ask it a second time for
+    /// itself under a lock of its own.
+    native_job: Option<native_formats::NativeJob>,
+    video_enabled: bool,
+    audio_enabled: bool,
+    text_enabled: bool,
+    scales: HoverScales,
+    follow_cursor: bool,
 }
 
 /// What a file's content says it is, with the configuration's lock not held across the file.
@@ -2920,16 +2961,127 @@ fn content_names_another_kind(path: &Path, kind: PreviewType) -> bool {
 /// first, without the lock, and the lists are taken under it for the lookup that consults
 /// them. A file that cannot be read has no entry and takes the other form, which is the same
 /// answer for a file nothing can say anything about.
+///
+/// It is now the content field of [`HoverFacts`], which is the whole of what this was for: a
+/// caller that has a hover's answer in hand reads a field.
 fn content_of(path: &Path) -> crate::formats::content_type::Content {
-    let facts = crate::formats::head::Facts::read(path);
+    HoverFacts::read(path).content
+}
 
-    let Ok(config) = CONFIG.lock() else {
-        return crate::formats::content_type::Content::Unknown;
-    };
+/// Whether the file's own bytes name one of this app's kinds *other* than `kind`.
+fn content_names_another_kind(path: &Path, kind: PreviewType) -> bool {
+    HoverFacts::read(path).names_another_kind(kind)
+}
 
-    match &facts {
-        Some(facts) => crate::formats::content_type::of_entry_read(path, &config, facts),
-        None => crate::formats::content_type::of(path, &config),
+impl HoverFacts {
+    /// Everything one hover of one file needs to know about that file.
+    ///
+    /// The two halves are read in this order and not the other way round: the file's own bytes
+    /// first, with nothing held, and the configuration's lists after — because the lists are
+    /// what the bytes' answer is turned into a kind by, and a guard held across the reading is a
+    /// guard every thread of the app waits on for as long as the volume takes to answer it (see
+    /// `is_text`, whose own account of the bug is the one this whole struct retires).
+    fn read(path: &Path) -> Self {
+        let probe = crate::formats::content_type::Probe::read(path);
+
+        let Ok(config) = CONFIG.lock() else {
+            return Self {
+                probe,
+                content: crate::formats::content_type::Content::Unknown,
+                named: None,
+                video_named: false,
+                audio_named: false,
+                archive_named: false,
+                peazip_named: false,
+                html_named: false,
+                font_named: false,
+                svg_document: false,
+                native_job: None,
+                video_enabled: false,
+                audio_enabled: false,
+                text_enabled: false,
+                scales: current_hover_scales(),
+                follow_cursor: true,
+            };
+        };
+
+        // The content is asked first because it is the answer the others are read beside: a
+        // file whose bytes named a kind is settled, and the router is asked about its name only
+        // where they named nothing.
+        let content = crate::formats::content_type::answer(&probe, &config);
+        let named = crate::formats::routing::kind_of_with_facts(path, &config, probe.facts());
+
+        Self {
+            video_named: video_formats::matches_any_video_list(path, &config),
+            audio_named: audio_formats::matches_audio_list(path, &config.audio_extensions),
+            archive_named: archive_formats::matches_archive_list(path, &config.archive_extensions),
+            peazip_named: peazip_formats::matches_peazip_list(path, &config.peazip_extensions),
+            html_named: crate::formats::text_formats::is_html_extension(path),
+            font_named: font_formats::matches_font_list(path, &config.font_extensions),
+            // The name is the whole of it, and deliberately so: an `svg` that is not a
+            // document is a drawing the browser refuses rather than a metafile, and the
+            // renderer has the last word on whether a document is a document at all (see
+            // `svg_preview::is_svg_file`).
+            svg_document: svg_preview::is_svg_file(path),
+            native_job: named
+                .and_then(|kind| native_formats::job_for(path, kind, &config, probe.facts())),
+            video_enabled: PreviewType::Videos.enabled_in(&config),
+            audio_enabled: PreviewType::Audio.enabled_in(&config),
+            text_enabled: PreviewType::Text.enabled_in(&config),
+            probe,
+            content,
+            named,
+            scales: HoverScales::of(&config),
+            follow_cursor: config.follow_cursor,
+        }
+    }
+
+    /// The kind this file is drawn as: its own bytes' answer where they named one, and the name's
+    /// after them.
+    ///
+    /// It is the loader's kind and the layout's, and it is one answer because it is asked once:
+    /// the content tier's verdict outranks the lists for the loader — a `.docx` whose bytes are
+    /// an MP4 is loaded as the video it is — and the same answer is what a file whose bytes named
+    /// nothing is measured at.
+    fn routed_kind(&self) -> Option<PreviewType> {
+        match self.content {
+            crate::formats::content_type::Content::Kind(kind) => Some(kind),
+            crate::formats::content_type::Content::Foreign => None,
+            crate::formats::content_type::Content::Unknown => self.named,
+        }
+    }
+
+    /// What of this app's own reads a book: the first plate out of the container, or the page the
+    /// PDF engine draws.
+    ///
+    /// A configuration that will not open is answered as the page a book most often is, which
+    /// is what this arm has always done (see `native_formats::page_job`).
+    fn book_job(&self) -> native_formats::NativeJob {
+        self.native_job.unwrap_or(native_formats::NativeJob::Pdf)
+    }
+
+    /// Whether an engine's listing engine would list this file, which is the file's own bytes
+    /// first and the listing list after them (see `peazip_formats::is_engine_archive`).
+    fn engine_archive(&self) -> bool {
+        match self.content {
+            crate::formats::content_type::Content::Kind(PreviewType::Peazip) => true,
+            crate::formats::content_type::Content::Kind(_)
+            | crate::formats::content_type::Content::Foreign => false,
+            crate::formats::content_type::Content::Unknown => self.peazip_named,
+        }
+    }
+
+    /// Whether this file's own bytes name one of this app's kinds *other* than `kind`.
+    ///
+    /// It is the question an engine tier asks before it starts anything, and what it says no to
+    /// is a file that is called what it is: a name and a content that agree are answered with no
+    /// opinion at all, and only a disagreement — a picture under a document's name — is a file
+    /// whose engine must not be started.
+    fn names_another_kind(&self, kind: PreviewType) -> bool {
+        matches!(
+            self.content,
+            crate::formats::content_type::Content::Kind(named) if named != kind
+        )
     }
 }
 
@@ -3200,7 +3352,8 @@ fn warm_engines_for(path: &Path) {
 fn engine_page_answer(path: &Path) -> Option<bool> {
     // Read through one clock for both callers, so a hover waiting and a pin waiting for the same
     // document in the same tick are one read of the disk rather than two.
-    static LAST_ASKED: Lazy<Mutex<Instant>> = Lazy::new(|| Mutex::new(Instant::now() - ENGINE_PAGE_POLL));
+    static LAST_ASKED: Lazy<Mutex<Instant>> =
+        Lazy::new(|| Mutex::new(Instant::now() - ENGINE_PAGE_POLL));
 
     let mut last = match LAST_ASKED.lock() {
         Ok(last) => last,
@@ -3279,6 +3432,24 @@ struct HoverScales {
     vector: PreviewScale,
 }
 
+impl HoverScales {
+    /// Every scale one hover is laid out by, read out of a configuration the caller already
+    /// holds — which is what `HoverFacts` does, so that installing a hover reads the
+    /// configuration once for its scales and for the answers below rather than once each.
+    fn of(config: &crate::config::config::AppConfig) -> Self {
+        Self {
+            picture: config.preview_scale,
+            video: config.video_scale,
+            animated: config.animated_scale,
+            ebook: config.ebook_scale,
+            document: config.document_scale,
+            font: config.font_scale,
+            design: config.design_scale,
+            vector: config.vector_scale,
+        }
+    }
+}
+
 /// The scale a preview is laid out and rendered with.
 ///
 /// A PDF page is a vector, so the engine draws it at whatever size it is asked
@@ -3345,33 +3516,40 @@ struct HoverScales {
 ///
 /// Every other format keeps the picture scale.
 fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
+    effective_preview_scale_of(&HoverFacts::read(path), path, scales)
+}
+
+/// The share one hover of one file is placed at, asked of the answer that hover already has.
+///
+/// The two arguments are the same file twice over and it is deliberate: `hover` answers what
+/// the file *is* and `path` is what the two questions below have to read for themselves — the
+/// probe's own answer and whether the file moves. Both of those are asked once per file and
+/// held, so the price of carrying the path beside the answer is a pointer.
+fn effective_preview_scale_of(
+    hover: &HoverFacts,
+    path: &Path,
+    scales: HoverScales,
+) -> PreviewScale {
     // What the file's own bytes say it is comes first, as it does for the loader that draws
     // it and for the box the layout places it at: a picture under a video's name is laid out
     // at the picture's share, and one under a document's name at the picture's share too.
     // Where the bytes have nothing to say the name decides below, which is every file that
     // is called what it is.
-    //
-    // Both questions below consult the lists, and both may read the file — so both are asked
-    // with the entry read first and the lock taken for the lists alone. This is the question a
-    // hover asks, so it is the one that was paid for on the thread that pumps this window's
-    // messages (see `content_of`).
-    let content = content_of(path);
-
-    if let crate::formats::content_type::Content::Kind(kind) = content {
-        return scale_of_kind(kind, path, scales);
+    if let crate::formats::content_type::Content::Kind(kind) = hover.content {
+        return scale_of_kind(kind, hover, scales);
     }
 
     // Two questions that are about the run rather than about the file's kind, and both come
     // before it: a page painted to the frame it is given is not scaled within it, and a video
     // whose probe has not answered yet is the spinner rather than a video. Neither can be asked
     // of the kind, which knows nothing about what the run has done so far.
-    if page_is_painted(path) {
+    if hover.is_painted_page() {
         // A listing is a page of text painted to the box it is given, whether this app read the
         // archive itself or an engine listed it, so both are the text rule.
-        return scale_of_kind(PreviewType::Text, path, scales);
+        return scale_of_kind(PreviewType::Text, hover, scales);
     }
 
-    if video_probe_due(path) {
+    if video_probe_due(hover) {
         // A video that has not been probed yet is a hover that is waiting, and what is on
         // screen for one is the waiting spinner: a wait is placed at the size it is rather
         // than fitted to the display, and what the probe answers is what the replay that
@@ -3383,13 +3561,7 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
     // is measured at is the answer the hook admitted it under and the loader draws it by (see
     // `formats::routing`). A name no list claims is measured as the picture it ends up being
     // decoded as, which is where the loader's own chain sends one.
-    let kind = CONFIG
-        .lock()
-        .ok()
-        .and_then(|config| crate::formats::routing::kind_of(path, &config))
-        .unwrap_or(PreviewType::Images);
-
-    scale_of_kind(kind, path, scales)
+    scale_of_kind(hover.named.unwrap_or(PreviewType::Images), hover, scales)
 }
 
 /// The share a preview of one kind is drawn at.
@@ -3399,7 +3571,8 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
 /// say — and both have to come out at the same share for the same kind: a picture is drawn
 /// at the picture's share whether it is called `tomcat.png` or `tomcat.mp4`, or the same
 /// bytes would be two sizes depending on the name they were left under.
-fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> PreviewScale {
+fn scale_of_kind(kind: PreviewType, hover: &HoverFacts, scales: HoverScales) -> PreviewScale {
+    let path = hover.probe.path();
     match kind {
         // A page is a vector, so the room the display has is free quality: the setting is
         // the whole of that room unless it asks for less (see `fit_reduced`).
@@ -3474,7 +3647,7 @@ fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> Preview
         // size `video_scale` names, which is the picture's rule — what a video's preview is
         // until the player's window is over it is its first frame, a bitmap.
         PreviewType::Videos => {
-            if video_probe_due(path) {
+            if video_probe_due(hover) {
                 PreviewScale::Percent(100)
             } else {
                 scales.video
@@ -3557,93 +3730,127 @@ fn fit_reduced(preview_scale: PreviewScale) -> PreviewScale {
     }
 }
 
-/// Whether the preview of `path` is a text preview.
-///
-/// It is one question rather than a chain of exclusions: what kind a file has is the router's
-/// answer, and a file is drawn as text exactly when that answer is text. It used to be written
-/// out here as "the text lists claim it and no kind asked earlier does", with the kinds listed
-/// one by one — and the list had been left short, so a name written into the text list beside a
-/// listing engine's or a picture converter's was measured as text and drawn as the other thing
-/// (see `formats::routing`).
-///
-/// What the file's own bytes say comes first, as it does for the loader that draws it and for
-/// the box it is painted into: a file whose content is another kind is not drawn as text
-/// whatever it is called, and one whose content is text is drawn as text even where the name
-/// is a kind the lists would have claimed first.
-fn is_text_preview(path: &Path) -> bool {
-    // The file's own entry, read before the lock. Both questions below consult the lists, and
-    // both of them may open the file — the content one reads four kilobytes on a miss, and the
-    // router's video claim reads a `.ts` to tell a film from a TypeScript file — so the guard
-    // used to be held across two `File::open`s on the thread that pumps this window's messages.
-    // Every other thread of the app waits on that guard, including the one that would end an
-    // engine or answer the tray.
-    let facts = crate::formats::head::Facts::read(path);
-
-    let (content, named_text) = {
-        let Ok(config) = CONFIG.lock() else {
-            return false;
-        };
-
-        let content = match &facts {
-            Some(facts) => crate::formats::content_type::of_entry_read(path, &config, facts),
-            None => crate::formats::content_type::of(path, &config),
-        };
-
-        // Only the fallback asks the router, and only when the content had no opinion: a file
-        // whose bytes named a kind is already settled, and the router would ask the same lists
-        // about a name that has been answered for.
-        let named_text = if content == crate::formats::content_type::Content::Unknown {
-            PreviewType::Text.enabled_in(&config)
-                && crate::formats::routing::kind_of(path, &config) == Some(PreviewType::Text)
-        } else {
-            false
-        };
-
-        (content, named_text)
-    };
-
-    match content {
-        crate::formats::content_type::Content::Kind(PreviewType::Text) => return true,
-        // Another kind, or a format no kind here previews at all: neither is drawn as text,
-        // and the second is drawn as nothing.
-        crate::formats::content_type::Content::Kind(_)
-        | crate::formats::content_type::Content::Foreign => return false,
-        crate::formats::content_type::Content::Unknown => {}
+impl HoverFacts {
+    /// Whether the preview of this file is a text preview.
+    ///
+    /// It is one question rather than a chain of exclusions: what kind a file has is the
+    /// router's answer, and a file is drawn as text exactly when that answer is text. It used
+    /// to be written out here as "the text lists claim it and no kind asked earlier does",
+    /// with the kinds listed one by one — and the list had been left short, so a name written
+    /// into the text list beside a listing engine's or a picture converter's was measured as
+    /// text and drawn as the other thing (see `formats::routing`).
+    ///
+    /// What the file's own bytes say comes first, as it does for the loader that draws it and
+    /// for the box it is painted into: a file whose content is another kind is not drawn as
+    /// text whatever it is called, and one whose content is text is drawn as text even where
+    /// the name is a kind the lists would have claimed first.
+    ///
+    /// Both of the questions below consult the lists, and both of them used to open the file —
+    /// the content one reads four kilobytes on a miss, and the router's video claim reads a
+    /// `.ts` to tell a film from a TypeScript file — so the guard used to be held across two
+    /// `File::open`s on the thread that pumps this window's messages, and every other thread of
+    /// the app waited on that guard, including the one that would end an engine or answer the
+    /// tray. Neither is asked again here: this is the answer (see `HoverFacts`).
+    fn is_text(&self) -> bool {
+        match self.content {
+            crate::formats::content_type::Content::Kind(PreviewType::Text) => true,
+            // Another kind, or a format no kind here previews at all: neither is drawn as
+            // text, and the second is drawn as nothing.
+            crate::formats::content_type::Content::Kind(_)
+            | crate::formats::content_type::Content::Foreign => false,
+            // The kind the hook called it, asked of the same table the hook asked: a name the
+            // text lists hold and an earlier list also claims is that earlier kind, and a
+            // preview measured as text would be placed as one and drawn as the other. The
+            // switch is part of the question, as it is wherever the text lists are asked — a
+            // kind turned off in the tray is not drawn at all.
+            crate::formats::content_type::Content::Unknown => {
+                self.text_enabled && self.named == Some(PreviewType::Text)
+            }
+        }
     }
 
-    // The kind the hook called it, asked of the same table the hook asked: a name the text
-    // lists hold and an earlier list also claims is that earlier kind, and a preview measured
-    // as text would be placed as one and drawn as the other. The switch is part of the
-    // question, as it is wherever the text lists are asked — a kind turned off in the tray is
-    // not drawn at all.
-    named_text
+    /// Whether a preview of this file is painted into the box it is given rather than scaled
+    /// within it: a text file, an archive this app read itself, and an archive an engine
+    /// listed are pages of one kind — painted at a fixed font size, so the box the layout
+    /// planned for one is the box it draws into, and the frame that comes back is that box
+    /// rather than a size to be fitted to a space.
+    ///
+    /// One question, asked in the two places that have to agree about a kind: the share it is
+    /// drawn at (`effective_preview_scale`) and the box the loader is handed, which is what
+    /// the window ends up sized to. Asking it in one place is the point — a kind left out of
+    /// one of them is a preview that is drawn at the planned size and loaded against the free
+    /// room of the display, which is a page stretched to the screen, and that is exactly what
+    /// an archive an engine listed was.
+    ///
+    /// The engine's own question is the third term, asked the way the engine asks it — the
+    /// file's bytes first and the name after them — so an archive it lists under a name no
+    /// list holds (a `.cab` renamed to `.dat`) is a page here too.
+    fn is_painted_page(&self) -> bool {
+        // A page the engine draws is not painted into the box at all, so it is not this rule.
+        if self.html_drawn_by_the_engine() {
+            return false;
+        }
+
+        self.is_text() || self.archive_named || self.engine_archive() || self.is_audio()
+    }
+
+    /// Whether this file is drawn as a video: the name the video list carries, or the bytes
+    /// of a video under a name that list does not have.
+    ///
+    /// Every question about a video goes through this one answer — whether its shape has to
+    /// be probed, whether the wait for it is shown, and whether the player takes over the
+    /// window rather than this app drawing its frames — because the loader plays the file its
+    /// bytes name, and a hover whose picture is played but whose frames are awaited would sit
+    /// on a first frame that nothing ever replaces.
+    fn is_video(&self) -> bool {
+        // It was asked from four places in one hover — the probe's due question, both
+        // dimension questions and the `Show` arm — and each of those used to read the file and
+        // take the configuration lock for it. The content is a cache hit after the first, so
+        // the entry read is all that is repeated; the lock is no longer held across the read
+        // at all (see `HoverFacts`).
+        let named = match self.content {
+            crate::formats::content_type::Content::Kind(PreviewType::Videos) => true,
+            _ => self.video_named,
+        };
+
+        named && self.video_enabled
+    }
+
+    /// Whether the preview of this file is a sound: what the file's own bytes say it is — the
+    /// verdict a probe left behind included — and, for a name no table names, the sound list.
+    ///
+    /// It is asked the way the video's is asked and for the same reason: a sound is drawn as a
+    /// card by this app rather than by a player, so the layout has to know one when it sees
+    /// one — which for a renamed file, or for a container whose streams hold only a song, is a
+    /// question about the content rather than about the name.
+    fn is_audio(&self) -> bool {
+        if !self.audio_enabled {
+            return false;
+        }
+
+        match self.content {
+            crate::formats::content_type::Content::Kind(PreviewType::Audio) => true,
+            _ => self.audio_named,
+        }
+    }
+
+    /// Whether a page of HTML is one the browser engine draws, which is the question the
+    /// scale, the box and the loader all ask about the same three names (see
+    /// `engine_kind_of`).
+    fn html_drawn_by_the_engine(&self) -> bool {
+        self.html_named && webview_preview::draws(self.probe.path())
+    }
 }
 
-/// Whether a preview of this file is painted into the box it is given rather than scaled within
-/// it: a text file, an archive this app read itself, and an archive an engine listed are pages of
-/// one kind — painted at a fixed font size, so the box the layout planned for one is the box it
-/// draws into, and the frame that comes back is that box rather than a size to be fitted to a
-/// space.
-///
-/// One question, asked in the two places that have to agree about a kind: the share it is drawn
-/// at (`effective_preview_scale`) and the box the loader is handed, which is what the window ends
-/// up sized to. Asking it in one place is the point — a kind left out of one of them is a preview
-/// that is drawn at the planned size and loaded against the free room of the display, which is a
-/// page stretched to the screen, and that is exactly what an archive an engine listed was.
-///
-/// The engine's own question is the third term, asked the way the engine asks it — the file's
-/// bytes first and the name after them — so an archive it lists under a name no list holds (a
-/// `.cab` renamed to `.dat`) is a page here too.
-fn page_is_painted(path: &Path) -> bool {
-    // A page the engine draws is not painted into the box at all, so it is not this rule.
-    if html_is_engine_drawn(path) {
-        return false;
-    }
+/// Whether the preview of `path` is a text preview — the form a caller with no hover of its own
+/// asks, which is one entry read rather than the three this used to make.
+fn is_text_preview(path: &Path) -> bool {
+    HoverFacts::read(path).is_text()
+}
 
-    is_text_preview(path)
-        || archive_formats::is_archive_file(path)
-        || peazip_formats::is_engine_archive(path)
-        || drawn_as_audio(path)
+/// Whether a preview of `path` is painted into the box it is given rather than scaled within it.
+fn page_is_painted(path: &Path) -> bool {
+    HoverFacts::read(path).is_painted_page()
 }
 
 fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32 {
@@ -6906,7 +7113,13 @@ fn load_media(
     // in the cloud is answered here rather than after a download the user never
     // asked for. The hook refuses these too; this is the boundary that reads, so
     // it decides for itself rather than trusting that nothing reaches it.
-    if cloud_files::needs_download(path) {
+    //
+    // The probe below answers that from the file's own entry, so it is not asked twice: the
+    // loader is the fourth thing to ask this file what it is in one hover, and each of them
+    // was reading the entry for itself (see `HoverFacts`).
+    let hover = HoverFacts::read(path);
+
+    if hover.probe.needs_download() {
         return None;
     }
 
@@ -6914,55 +7127,31 @@ fn load_media(
     // disagree: a `.docx` whose bytes are an MP4 is loaded as the video it is, and a format
     // no kind of this app previews is loaded as nothing at all — see `content_type` for
     // what settles that, and `load_media_of_kind` for where the kind is handed on.
-    //
-    // Asked with the lock given up before the file is read, on the loader thread: what follows
-    // is a decode, and a thread that decodes is a thread that is not answering the window (see
-    // `content_of`).
-    let content = content_of(path);
-
-    match content {
-        crate::formats::content_type::Content::Kind(kind) => {
-            return load_media_of_kind(
-                kind,
-                path,
-                max_width,
-                max_height,
-                preview_scale,
-                dpi,
-                cancel,
-            )
-        }
+    match hover.content {
+        crate::formats::content_type::Content::Kind(_) => {}
         crate::formats::content_type::Content::Foreign => return None,
         crate::formats::content_type::Content::Unknown => {}
     }
 
     // What the file is, is the router's answer: one order, asked once, and the same one the hook
-    // that admitted this hover asked (see `formats::routing`). The configuration is taken and
-    // given up around that question alone, so nothing below is holding it.
-    let kind = {
-        let Ok(config) = CONFIG.lock() else {
-            return None;
-        };
-
-        crate::formats::routing::kind_of(path, &config)
-    };
-
-    let Some(kind) = kind else {
+    // that admitted this hover asked (see `formats::routing`) — and asked of the entry already
+    // in hand rather than of a second reading of it.
+    if hover.routed_kind().is_none() {
         // A name no list claims has always been the picture path's, and a drawing among those is
         // still the drawing layer's: what it is, is its own header's answer rather than its
         // name's, and an `svg` a hand-edited list no longer names is a document this app can
         // draw. The hook refuses such a file before a hover reaches this far (see
         // `explorer_hook::is_media_file`), so this is the answer for the hover that came the
         // other way — through the content, which named no kind either.
-        if svg_preview::is_svg_file(path) {
+        if hover.svg_document {
             return webview_preview::draws(path).then(engine_svg_media);
         }
 
         return load_picture(path, max_width, max_height, preview_scale, &cancel);
-    };
+    }
 
     load_media_of_kind(
-        kind,
+        &hover,
         path,
         max_width,
         max_height,
@@ -6982,7 +7171,7 @@ fn load_media(
 /// The gates are not asked here, exactly as they are not asked by the chain: the hook
 /// asked them before a hover could reach this path at all.
 fn load_media_of_kind(
-    kind: PreviewType,
+    hover: &HoverFacts,
     path: &PathBuf,
     max_width: u32,
     max_height: u32,
@@ -6990,28 +7179,23 @@ fn load_media_of_kind(
     dpi: u32,
     cancel: Arc<AtomicBool>,
 ) -> Option<MediaData> {
-    match kind {
-        PreviewType::Videos => load_video_thumbnail(path, max_width, max_height, preview_scale),
+    match hover.routed_kind() {
+        Some(PreviewType::Videos) => {
+            load_video_thumbnail(path, max_width, max_height, preview_scale)
+        }
         // A book is one kind with two readers, and which of the two a file is, is asked of the
         // table that names them rather than assumed here: a page is the PDF engine's, a comic is
         // the first plate read out of the container it is published in, and a comic reached by
         // its *content* would otherwise be read as a page of a PDF that does not exist (see
         // `native_formats`). What cannot be read for — a configuration that will not open — is
         // answered as the page a book most often is.
-        PreviewType::Ebook => {
-            let job = CONFIG
-                .lock()
-                .ok()
-                .and_then(|config| native_formats::job_for(path, PreviewType::Ebook, &config));
-
-            match job {
-                Some(native_formats::NativeJob::Comic) => {
-                    load_comic_page(path, max_width, max_height, preview_scale)
-                }
-                _ => load_pdf_first_page(path, max_width, max_height, preview_scale),
+        Some(PreviewType::Ebook) => match hover.book_job() {
+            native_formats::NativeJob::Comic => {
+                load_comic_page(path, max_width, max_height, preview_scale)
             }
-        }
-        PreviewType::Archives => load_archive_preview(
+            _ => load_pdf_first_page(path, max_width, max_height, preview_scale),
+        },
+        Some(PreviewType::Archives) => load_archive_preview(
             path,
             max_width,
             max_height,
@@ -7020,11 +7204,11 @@ fn load_media_of_kind(
             MediaType::Archive,
             &cancel,
         ),
-        PreviewType::Document => {
+        Some(PreviewType::Document) => {
             load_office_preview(path, max_width, max_height, preview_scale, &cancel)
                 .or_else(|| load_engine_page_for_office(path, max_width, max_height, preview_scale))
         }
-        PreviewType::Libre => libreoffice_render::rendered_page(path).and_then(|page| {
+        Some(PreviewType::Libre) => libreoffice_render::rendered_page(path).and_then(|page| {
             load_engine_page(
                 &page,
                 MediaType::Libre,
@@ -7033,14 +7217,14 @@ fn load_media_of_kind(
                 preview_scale,
             )
         }),
-        PreviewType::Magick => {
+        Some(PreviewType::Magick) => {
             load_magick_picture(path, max_width, max_height, preview_scale, &cancel)
         }
         // An archive an engine listed is loaded as an archive: the listing it produced is in the
         // same cache under the same key, so the page is measured and painted from it without this
         // arm knowing where it came from — and a file the engine has not answered for yet is a
         // listing the cache does not hold, which is the wait the hover is already in.
-        PreviewType::Peazip => load_archive_preview(
+        Some(PreviewType::Peazip) => load_archive_preview(
             path,
             max_width,
             max_height,
@@ -7049,14 +7233,16 @@ fn load_media_of_kind(
             MediaType::Peazip,
             &cancel,
         ),
-        PreviewType::Calibre => calibre_render::rendered_page(path)
+        Some(PreviewType::Calibre) => calibre_render::rendered_page(path)
             .and_then(|page| load_book_page(&page, max_width, max_height, preview_scale)),
-        PreviewType::Design => load_design_preview(path, max_width, max_height, preview_scale),
+        Some(PreviewType::Design) => {
+            load_design_preview(path, max_width, max_height, preview_scale)
+        }
         // Which half of the drawing kind this is, is the name's to say here rather than the
         // content's: a document is drawn by the browser engine and a metafile by the drawing
         // layer, and the content has already answered that the file is a drawing at all.
-        PreviewType::Vector => {
-            if svg_preview::is_svg_file(path) {
+        Some(PreviewType::Vector) => {
+            if hover.svg_document {
                 webview_preview::draws(path).then(engine_svg_media)
             } else {
                 load_vector_preview(path, max_width, max_height, preview_scale)
@@ -7064,8 +7250,8 @@ fn load_media_of_kind(
         }
         // A page of HTML the engine draws is handed over the way a document is: the media carries
         // the kind and no frame, and the engine's window is the preview (see `engine_svg_media`).
-        PreviewType::Text => {
-            if html_is_engine_drawn(path) {
+        Some(PreviewType::Text) => {
+            if hover.html_drawn_by_the_engine() {
                 Some(engine_svg_media())
             } else {
                 load_text_preview(path, max_width, max_height, dpi, current_text_options())
@@ -7075,10 +7261,18 @@ fn load_media_of_kind(
         // the probe's and are already in hand — the measure that read them is what laid this
         // hover out (see `audio_box`) — and the player the card is drawn against is started by
         // the loop, where every other preview is put up.
-        PreviewType::Audio => load_audio_card(path, max_width, max_height, dpi),
-        PreviewType::Fonts => (font_preview::probe(path).is_some() && webview_preview::draws(path))
-            .then(engine_font_media),
-        PreviewType::Images => load_picture(path, max_width, max_height, preview_scale, &cancel),
+        Some(PreviewType::Audio) => load_audio_card(path, max_width, max_height, dpi),
+        Some(PreviewType::Fonts) => (font_preview::probe(path).is_some()
+            && webview_preview::draws(path))
+        .then(engine_font_media),
+        Some(PreviewType::Images) => {
+            load_picture(path, max_width, max_height, preview_scale, &cancel)
+        }
+
+        // A file whose content named no kind and whose name no list claims is the picture
+        // path's, and the caller above has already answered that one — a name no list has ever
+        // claimed is the picture it ends up decoded as.
+        None => None,
     }
 }
 
@@ -7262,31 +7456,16 @@ fn video_duration(path: &Path) -> Option<f64> {
 /// `video_probe` in the preview loop). A file the probe has already answered for is not a
 /// wait, whatever the answer was: an unmeasurable video is a video with a fallback box,
 /// not one to be probed again on every hover.
-fn video_probe_due(path: &Path) -> bool {
-    drawn_as_video(path) && cached_video_geometry(path).is_none()
+fn video_probe_due(hover: &HoverFacts) -> bool {
+    hover.is_video() && cached_video_geometry(hover.probe.path()).is_none()
 }
 
-/// Whether the preview of `path` is a video: the name the video list carries, or the bytes
-/// of a video under a name that list does not have.
-///
-/// Every question about a video goes through this one answer — whether its shape has to be
-/// probed, whether the wait for it is shown, and whether the player takes over the window
-/// rather than this app drawing its frames — because the loader plays the file its bytes
-/// name, and a hover whose picture is played but whose frames are awaited would sit on a
-/// first frame that nothing ever replaces.
+/// Whether the preview of `path` is a video — the form a caller with no hover of its own
+/// asks. See `HoverFacts::is_video` for what the answer is and why it was asked from four
+/// places in one hover, each of which used to read the file and take the configuration lock
+/// for it.
 fn drawn_as_video(path: &Path) -> bool {
-    // Asked from four places in one hover — the probe's due question, both dimension questions
-    // and the `Show` arm — and each of those used to read the file and take the configuration
-    // lock for it. The content is a cache hit after the first, so the entry read is all that
-    // is repeated; the lock is no longer held across the read at all (see `content_of`).
-    if matches!(
-        content_of(path),
-        crate::formats::content_type::Content::Kind(PreviewType::Videos)
-    ) {
-        return PreviewType::Videos.enabled();
-    }
-
-    video_formats::is_video_preview(path)
+    HoverFacts::read(path).is_video()
 }
 
 /// Which of the two engines plays a video: the media engine the media stack of Windows has, or
@@ -7505,63 +7684,16 @@ fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> 
     )
 }
 
-/// Whether the preview of `path` is a sound: what the file's own bytes say it is — the verdict a
-/// probe left behind included — and, for a name no table names, the sound list.
+/// Whether the preview of `path` is a sound — the form a caller with no hover of its own asks.
+/// See `HoverFacts::is_audio` for what the answer is.
 ///
-/// It is asked the way `drawn_as_video` is asked and for the same reason: a sound is drawn as a
-/// card by this app rather than by a player, so the layout has to know one when it sees one —
-/// which for a renamed file, or for a container whose streams hold only a song, is a question
-/// about the content rather than about the name.
-///
-/// The configuration is read for the two things this question needs and the lock let go before
-/// the content is asked of: that question is a `content_type::of`, which reads the file's first
-/// four kilobytes on a miss, and a lock held across a file read is a lock every other thread
-/// of the app waits on for as long as the disk takes — the preview thread included, which is
-/// the thread that pumps this window's own messages.
-///
-/// Only the audio list is copied out, rather than the whole configuration: this was a deep copy
-/// of sixteen `Vec<String>` — two hundred allocations and a `PathBuf` each — to read one list
-/// and one flag, paid on every hover of a sound. The list itself is one allocation.
+/// What this used to do and no longer does is worth a line: it copied the audio list out of the
+/// configuration under one lock, read the file's entry, took the lock a second time for the
+/// content answer, and then compared the list itself — a deep copy of sixteen `Vec<String>` and
+/// a `PathBuf` each, two hundred allocations, to read one list and one flag, on every hover of
+/// a sound, and two locks where one was asked for.
 fn drawn_as_audio(path: &Path) -> bool {
-    let (enabled, extensions) = {
-        let Ok(config) = CONFIG.lock() else {
-            return false;
-        };
-        (
-            config.audio_preview_enabled,
-            config.audio_extensions.clone(),
-        )
-    };
-
-    if !enabled {
-        return false;
-    }
-
-    // The entry is read before the lock is taken, so the question below is a lookup rather
-    // than a read: what the content is asked needs the lists, and the lists are in hand
-    // without a guard that is then held across a `File::open`.
-    let facts = crate::formats::head::Facts::read(path);
-
-    let drawn_as_audio = {
-        let Ok(config) = CONFIG.lock() else {
-            return false;
-        };
-        match &facts {
-            Some(facts) => {
-                crate::formats::content_type::of_entry_read(path, &config, facts)
-            }
-            None => crate::formats::content_type::of(path, &config),
-        }
-    };
-
-    if matches!(
-        drawn_as_audio,
-        crate::formats::content_type::Content::Kind(PreviewType::Audio)
-    ) {
-        return true;
-    }
-
-    audio_formats::matches_audio_list(path, &extensions)
+    HoverFacts::read(path).is_audio()
 }
 
 /// What a sound's card says, with the clock as it stands — or nothing for a file with no track
@@ -8256,14 +8388,17 @@ fn audio_clock(
     (position, track.duration)
 }
 
-/// Get original dimensions of media for positioning calculations
-fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+/// Get original dimensions of media for positioning calculations, of a file whose answer the
+/// caller already has.
+///
+/// It is asked of the answer rather than of the path because the caller is `media_dimensions`,
+/// which was handed the same answer a few lines above and used to read the file's directory
+/// entry again to get it (see `HoverFacts`).
+fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u32)> {
     // What the file's content says it is comes ahead of what its name does, where the two
     // disagree: the box a file is placed at is the box of the kind its content belongs to,
     // and a format no kind previews is placed nowhere at all — see `content_type`.
-    let content = content_of(path);
-
-    match content {
+    match hover.content {
         crate::formats::content_type::Content::Kind(kind) => {
             return media_dimensions_of_kind(kind, path)
         }
@@ -8576,19 +8711,24 @@ fn page_is_on_the_way(path: &Path) -> bool {
 /// can fit it into the space beside the cursor, and the text renderer is handed
 /// the box that comes out of that.
 fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
+    media_dimensions_of(&HoverFacts::read(path), path, bounds, dpi)
+}
+
+/// The same, of a file whose answer the caller already has — which is the form the `Show` arm
+/// asks it in, so that installing a hover reads one file's directory entry rather than the two
+/// this and `get_media_dimensions` used to read between them (see `HoverFacts`).
+fn media_dimensions_of(
+    hover: &HoverFacts,
+    path: &PathBuf,
+    bounds: ScreenBounds,
+    dpi: u32,
+) -> Option<(u32, u32)> {
     // What the file's own bytes say it is comes first, as it does for the loader that draws
     // it and for the share it is laid out at: a `.txt` whose bytes are a picture is measured
     // as the picture it is rather than read as a page of text it is not — which for a file
     // whose bytes are not text is no measurement at all, and a preview that never appears
     // for a file that would otherwise be drawn.
-    //
-    // Asked with the lock not held across the file (see `content_of`), which matters more here
-    // than anywhere else: this runs on the preview thread at the moment the `Show` arm is
-    // installing the hover, so a slow volume held the lock here held the thread that pumps
-    // this window's messages for the length of the read.
-    let content = content_of(path);
-
-    if let crate::formats::content_type::Content::Kind(kind) = content {
+    if let crate::formats::content_type::Content::Kind(kind) = hover.content {
         return match kind {
             // The three kinds measured against the room they are drawn in, which is a question
             // this side has the answer to and `media_dimensions_of_kind` does not.
@@ -8615,7 +8755,7 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
         return Some(html_page_box());
     }
 
-    if is_text_preview(path) {
+    if hover.is_text() {
         return text_box(path, bounds, dpi);
     }
 
@@ -8634,11 +8774,11 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
 
     // A sound is the fourth kind measured against its room, and the last: what a hover on one
     // asks is a card whose facts a probe has to bring back first (see `audio_box`).
-    if drawn_as_audio(path) {
+    if hover.is_audio() {
         return audio_box(path, bounds, dpi);
     }
 
-    get_media_dimensions(path)
+    get_media_dimensions_of(hover, path)
 }
 
 /// The room a page of text is measured in: the display's work area cut down to the share
@@ -8742,13 +8882,14 @@ fn peazip_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)>
 /// the whole work area, which is wider and taller than the layout is, so nothing is
 /// clamped at the setting's own start.
 fn text_preview_layout(
+    hover: &HoverFacts,
     path: &Path,
     layout: PreviewLayout,
     bounds: ScreenBounds,
     dpi: u32,
     place: impl FnOnce((u32, u32)) -> Option<PreviewLayout>,
 ) -> (PreviewLayout, Option<(u32, u32)>) {
-    if !is_text_preview(path) {
+    if !hover.is_text() {
         return (layout, None);
     }
 
@@ -14313,8 +14454,7 @@ pub(crate) enum PinCommand {
 /// grow: a caption clicked faster than the loop turns, which is a hand drumming on a button.
 /// At that rate the loop is behind anyway, and what is dropped is the oldest, so what
 /// survives is the user's latest intent rather than the first thing they asked for.
-static PIN_COMMANDS: Lazy<Mutex<VecDeque<PinCommand>>> =
-    Lazy::new(|| Mutex::new(VecDeque::new()));
+static PIN_COMMANDS: Lazy<Mutex<VecDeque<PinCommand>>> = Lazy::new(|| Mutex::new(VecDeque::new()));
 
 /// How many commands may be waiting before the oldest is dropped. A loop turns on the order of
 /// sixty times a second and a caption button is a press, so a queue this deep is already a
@@ -14991,7 +15131,7 @@ fn pin_update_content(
 /// than a wait — while a placeholder nothing is reading behind is a size that will never change,
 /// and a pick that waited on it would wait forever.
 fn pin_swap_awaits(path: &Path, shape: (u32, u32)) -> bool {
-    box_is_the_wait(shape) && (measure_waiting(path) || video_probe_due(path))
+    box_is_the_wait(shape) && (measure_waiting(path) || video_probe_due(&HoverFacts::read(path)))
 }
 
 /// Whether a measured shape is the wait for a box rather than one: the placeholder every measurer
@@ -15076,10 +15216,7 @@ fn pin_keeps_its_box(path: &Path) -> bool {
     if let crate::formats::content_type::Content::Kind(kind) = content_of(path) {
         return matches!(
             kind,
-            PreviewType::Text
-                | PreviewType::Archives
-                | PreviewType::Peazip
-                | PreviewType::Audio
+            PreviewType::Text | PreviewType::Archives | PreviewType::Peazip | PreviewType::Audio
         );
     }
 
@@ -21450,7 +21587,8 @@ pub fn run_preview_window() {
                             // listing are asked for here (see `pin_swap_awaits`, `audio_box` and
                             // `request_pin_engine_render`).
                             Some(PinPlan::Awaiting) => {
-                                if video_probe_due(&path) {
+                                let hover = HoverFacts::read(&path);
+                                if video_probe_due(&hover) {
                                     spawn_video_probe(path.clone(), current_generation);
                                 }
 
@@ -21469,7 +21607,7 @@ pub fn run_preview_window() {
                                 // the hover's own `requested.is_none` arm) — while a file no engine
                                 // can be asked about is left showing what it has.
                                 let outstanding =
-                                    measure_waiting(&path) || video_probe_due(&path) || asked;
+                                    measure_waiting(&path) || video_probe_due(&hover) || asked;
 
                                 if outstanding {
                                     pin_awaiting_box = Some(path.clone());
@@ -21684,8 +21822,13 @@ pub fn run_preview_window() {
 
                         let bounds = monitor_bounds_from_point(x, y);
                         let dpi = monitor_dpi_from_point(x, y);
-                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
-                        preview_scale = effective_preview_scale(&path, current_hover_scales());
+                        // One reading of the file and one of the configuration for the whole
+                        // of this arm: the six questions below are asked of what comes back
+                        // rather than of the path, which is what took about twenty
+                        // `fs::metadata` calls per hover down to one (see `HoverFacts`).
+                        let hover = HoverFacts::read(&path);
+                        let follow_cursor = hover.follow_cursor;
+                        preview_scale = effective_preview_scale_of(&hover, &path, hover.scales);
 
                         // A document with no page rendered for it yet has nothing to
                         // measure but the wait, so its preview is laid out as the
@@ -21702,15 +21845,15 @@ pub fn run_preview_window() {
                         // lay out as a video until the probe answers, so the hover is the
                         // wait for it — the spinner at the pointer's own corner — and is
                         // replayed when the answer lands (see `video_probe_due`).
-                        let probing = video_probe_due(&path);
+                        let probing = video_probe_due(&hover);
 
-                        if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
+                        if let Some(orig_dims) = media_dimensions_of(&hover, &path, bounds, dpi) {
                             // A box that is being read is placed at the pointer's own corner the
                             // way every other wait is: what is on screen is the spinner for a
                             // measure the layout has just started, and it belongs at the hand
                             // that asked (see `measure_waiting`).
                             let measuring = measure_waiting(&path);
-                            let is_video = drawn_as_video(&path);
+                            let is_video = hover.is_video();
                             let mut placement = HoverPlacement {
                                 orig_dims,
                                 avoid,
@@ -21720,8 +21863,13 @@ pub fn run_preview_window() {
                             };
                             let placed = compute_mouse_layout(x, y, placement, bounds, dpi);
                             if let Some(layout) = placed {
-                                let (layout, text_size) =
-                                    text_preview_layout(&path, layout, bounds, dpi, |size| {
+                                let (layout, text_size) = text_preview_layout(
+                                    &hover,
+                                    &path,
+                                    layout,
+                                    bounds,
+                                    dpi,
+                                    |size| {
                                         compute_mouse_layout(
                                             x,
                                             y,
@@ -21732,7 +21880,8 @@ pub fn run_preview_window() {
                                             bounds,
                                             dpi,
                                         )
-                                    });
+                                    },
+                                );
                                 // A text preview is placed again at the width its box came
                                 // out with, and the frame that lands is taller by the rows a
                                 // long line wraps into there. The wait re-places from the size
@@ -21775,11 +21924,14 @@ pub fn run_preview_window() {
 
                         let bounds = monitor_bounds_from_point(center.0, center.1);
                         let dpi = monitor_dpi_from_point(center.0, center.1);
-                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
-                        preview_scale = effective_preview_scale(&path, current_hover_scales());
+                        // One reading of the file and one of the configuration for the whole of
+                        // this arm, as the pointer's arm above does (see `HoverFacts`).
+                        let hover = HoverFacts::read(&path);
+                        let follow_cursor = hover.follow_cursor;
+                        preview_scale = effective_preview_scale_of(&hover, &path, hover.scales);
 
-                        if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
-                            let is_video = drawn_as_video(&path);
+                        if let Some(orig_dims) = media_dimensions_of(&hover, &path, bounds, dpi) {
+                            let is_video = hover.is_video();
                             let placement = KeyboardPlacement {
                                 item_rect: (il, it, ir, ib),
                                 avoid,
@@ -21789,8 +21941,13 @@ pub fn run_preview_window() {
                                 preview_scale,
                             };
                             if let Some(layout) = compute_keyboard_layout(placement, bounds, dpi) {
-                                let (layout, _) =
-                                    text_preview_layout(&path, layout, bounds, dpi, |size| {
+                                let (layout, _) = text_preview_layout(
+                                    &hover,
+                                    &path,
+                                    layout,
+                                    bounds,
+                                    dpi,
+                                    |size| {
                                         compute_keyboard_layout(
                                             KeyboardPlacement {
                                                 orig_dims: size,
@@ -21799,9 +21956,10 @@ pub fn run_preview_window() {
                                             bounds,
                                             dpi,
                                         )
-                                    });
+                                    },
+                                );
                                 show_is_video = is_video;
-                                show_video_probe = video_probe_due(&path);
+                                show_video_probe = video_probe_due(&hover);
                                 show_measure_probe = measure_waiting(&path);
                                 audio_card_dpi = dpi;
                                 show_layout = Some(layout);
@@ -22999,6 +23157,95 @@ mod tests {
         }
     }
 
+    /// One hover of one file, asked exactly the six questions the `Show` arm asks and in the
+    /// order it asks them — which is the shape whose entry reads the test below is about.
+    fn ask_as_the_show_arm_does(path: &PathBuf, bounds: ScreenBounds, dpi: u32) {
+        let hover = HoverFacts::read(path);
+
+        let _ = effective_preview_scale_of(&hover, path, hover.scales);
+        let _ = page_is_on_the_way(path);
+        let _ = video_probe_due(&hover);
+        let _ = media_dimensions_of(&hover, path, bounds, dpi);
+        let _ = measure_waiting(path);
+        let _ = hover.is_video();
+    }
+
+    /// Six questions about one file cost one reading of that file's directory entry, which is
+    /// what the entry is read for.
+    ///
+    /// It was one per question. The layout asked what the content was, the scale asked it
+    /// again, both dimension arms asked it again, the video question asked it again and the
+    /// text layout asked it a sixth time — and each of those six went to the volume for the
+    /// same answer, on the thread that pumps this window's own messages, which is the thread a
+    /// pin's caption is dispatched on. A hover of a file on a slow volume paid the read six
+    /// times over for a question with one answer.
+    ///
+    /// The figures are counted rather than argued about: `content_type::Probe::read` is the
+    /// one place a hover's questions reach the disk for, so its count is the count of
+    /// `fs::metadata` calls those questions made, whatever the caches above it did.
+    #[test]
+    fn a_hover_reads_the_files_entry_once() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-one-probe");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let picture = folder.join("tomcat.png");
+        write_test_png(&picture, false);
+
+        // A file the caches have never seen, so nothing below is answered from what a
+        // previous hover of the same version left behind.
+        let _ = std::fs::remove_file(&picture);
+        write_test_png(&picture, false);
+
+        crate::formats::content_type::count_entry_reads_from_now();
+        ask_as_the_show_arm_does(&picture, bounds(), TEST_DPI);
+        let reads = crate::formats::content_type::entry_reads();
+
+        assert_eq!(
+            reads, 1,
+            "six questions about one file, and the file's directory entry read {reads} times"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// The same file read once for the whole hover rather than once for each question, and the
+    /// answer is the same either way: threading the reading down changed where the answer came
+    /// from, not what it is.
+    ///
+    /// It is asked for a file each of the six questions has an opinion about — a picture under
+    /// a document's name, where the content is a picture and the name a document, so the two
+    /// answers cannot be the same question read twice.
+    #[test]
+    fn one_reading_answers_the_same_questions_six_readings_did() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-one-probe-answers");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let renamed = folder.join("report.docx");
+        write_test_png(&renamed, false);
+
+        let hover = HoverFacts::read(&renamed);
+
+        // The bytes are a picture's, so the layout measures it as the picture it is whatever
+        // it is called, and the loader is handed the picture's kind for the same reason.
+        assert_eq!(hover.routed_kind(), Some(PreviewType::Images));
+        assert!(!hover.is_video());
+        assert!(!hover.is_audio());
+        assert!(!hover.is_text());
+        assert!(!hover.is_painted_page());
+
+        // The name is still a document's, so the engine tier is still the one that asks
+        // whether this is a document a page is owed for — and says no, which is the whole of
+        // what `content_type` exists to prevent.
+        assert!(office_formats::is_office_preview(&renamed));
+        assert!(hover.names_another_kind(PreviewType::Document));
+        assert!(
+            !office_render_is_due(&renamed, 800),
+            "and no engine is started for a file whose bytes are a picture's"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
     /// A keyboard placement of one item, at the size and mode the figures are easy to
     /// read in: the media's own size at 100%, and `Best Position`, so the place comes
     /// out of the room beside the item alone. `columns` is whether the item is read as
@@ -23232,7 +23479,7 @@ mod tests {
             "and the bytes are a video's, so a video is what is drawn"
         );
         assert!(
-            video_probe_due(&renamed),
+            video_probe_due(&HoverFacts::read(&renamed)),
             "whose shape is probed like any other video's"
         );
 
