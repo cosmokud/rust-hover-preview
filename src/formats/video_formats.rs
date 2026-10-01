@@ -81,13 +81,26 @@ pub fn matches_any_video_list(path: &Path, config: &AppConfig) -> bool {
 
 /// As above, by name alone: the half of [`matches_any_video_list`] that asks nothing of the file.
 pub fn claims_any_video_name(path: &Path, config: &AppConfig) -> bool {
+    claims_any_video_name_in(
+        path,
+        crate::formats::lists::VIDEO.entries(config),
+        crate::formats::lists::FFMPEG.entries(config),
+    )
+}
+
+/// [`claims_any_video_name`] of two lists the caller already holds.
+///
+/// It is the form a caller that has to give the guard up before the question can be asked uses,
+/// which is every caller on this side of a `File::open`: this answer asks nothing of the disk, so
+/// a caller holding the configuration's lock can reach for [`matches_any_video_list`] and a caller
+/// that has copied the lists out from under it can reach for this.
+pub fn claims_any_video_name_in(path: &Path, video: &[String], ffmpeg: &[String]) -> bool {
     // The name is read once for both lists, as above (see `lookup_extension`).
     let Some(extension) = crate::formats::text_formats::lookup_extension(path) else {
         return false;
     };
 
-    list_claims_video_name(&extension, crate::formats::lists::VIDEO.entries(config))
-        || list_claims_video_name(&extension, crate::formats::lists::FFMPEG.entries(config))
+    list_claims_video_name(&extension, video) || list_claims_video_name(&extension, ffmpeg)
 }
 
 /// Whether the `[video]` row's own list claims `path`, as a question about a *name* — the two
