@@ -37,7 +37,10 @@ use crate::config::config::{AppConfig, PreviewType, TransparentBackground};
 use crate::engines::{
     calibre_render, imagemagick_render, libreoffice_render, peazip_render, webview_preview,
 };
-use crate::formats::{audio_formats, codecs, lists, native_formats::NativeJob, office_formats, video_formats};
+use crate::formats::{
+    archive_formats, audio_formats, codecs, lists, native_formats::NativeJob, office_formats,
+    video_formats,
+};
 use crate::readers::pdf_preview;
 use crate::readers::svg_preview;
 use std::path::Path;
@@ -105,21 +108,29 @@ pub fn nav_category(kind: PreviewType) -> NavCategory {
     }
 }
 
-/// One kind's claim on a file, and the kind it answers with.
+/// One kind's claim on a file: a question about one file, with the version of that file already
+/// read where reading it is what the question needs.
 ///
-/// The answer is the kind rather than a yes or a no because one list answers with a kind of
-/// its own: a drawing is not a picture, and the image list is asked last of all — so a name
-/// that list still holds and does not own is answered with the kind it belongs to. See
-/// [`claim_images`].
-/// A question about one file, with the version of that file already read where reading it is
-/// what the question needs.
+/// The answer is the kind rather than a yes or a no because one list answers with a kind of its
+/// own: a drawing is not a picture, and the image list is asked last of all — so a name that list
+/// still holds and does not own is answered with the kind it belongs to (see [`claim_images`]).
 ///
 /// The entry is `None` for a question about a name alone, which never touches the disk: the
-/// caller has already read the file, and the read that would settle the name is the one that
-/// was made. It is a parameter rather than something each claim works out for itself so that
-/// one entry read serves all fourteen (see `claims`), and it is the whole of what two of the
-/// fourteen need it for: the probe's answer is held under the version of the file it was read
-/// at, and whether an `.ai`'s content is on this machine is a question about its entry.
+/// caller has already read the file, and the read that would settle the name is the one that was
+/// made. It is a parameter rather than something each claim works out for itself so that one entry
+/// read serves all fourteen (see [`claims`]), and it is the whole of what two of the fourteen need
+/// it for: the probe's answer is held under the version of the file it was read at, and whether an
+/// `.ai`'s content is on this machine is a question about its entry.
+///
+/// Every claim is a function rather than a row of data, and the reason is that ten of the fourteen
+/// are a row's own answer and four are not: a video's two names the text lists share are the
+/// file's bytes, a sound is a container a probe found a sound in, a book is a page the PDF reader
+/// draws, and a picture is a drawing when the name is one. A table of `kind` plus `list` plus a
+/// flag for each of those four would be fourteen arms of data and a dispatch over a five-armed
+/// enum, which is more machinery than fourteen one-line functions whose prose says what each is
+/// for. The one fact they all share — which row names which kind — is not in them at all: it is
+/// [`named_as`], one exhaustive match, because that is the question eleven of the fourteen used to
+/// be asked of a list of their own inside a module apiece.
 type Claim =
     fn(&Path, &AppConfig, Asked, Option<&crate::formats::head::Facts>) -> Option<PreviewType>;
 
@@ -462,6 +473,62 @@ pub fn kind_of_with_facts(
 /// settle it has already been made on the file it came from.
 pub fn kind_of_name(path: &Path, config: &AppConfig) -> Option<PreviewType> {
     claims(path, config, Asked::Name, None)
+}
+
+/// Whether `kind`'s own list claims `path` — the question asked of one kind rather than of the
+/// order, which is what the eleven `is_<kind>_file` functions each answered for themselves.
+///
+/// The difference from [`kind_of`] is the whole of it: this asks one row, so a name two rows hold
+/// is both kinds' here and only the earlier one's there. A layout that measures each kind in turn
+/// needs that — a `.cdr` is a drawing to this app's own reader and a page to the render engine,
+/// and both measurements are wanted — while the loader, which wants one answer, asks
+/// [`kind_of`].
+///
+/// It is exhaustive over the kinds rather than answered with a default, for the reason
+/// [`nav_category`] is: a kind this app grows has to be told which rows are its own, and the one
+/// place that says so is the one that will not compile until it has.
+///
+/// **The video kind is the one that reads the file.** Its two rows share `ts` and `mts` with the
+/// text lists, so a name either of them carries is settled by whether the file holds MPEG-TS
+/// packets — a `File::open` — and a caller that is holding the configuration's lock must not ask
+/// this of a video. Every other kind's row is a comparison in memory.
+pub fn named_as(path: &Path, config: &AppConfig, kind: PreviewType) -> bool {
+    match kind {
+        // The two video lists together, because which of them carries a name is which engine
+        // plays it and not what the file is (see `video_formats::matches_any_video_list`).
+        PreviewType::Videos => video_formats::matches_any_video_list(path, config),
+        // The text kind's two rows: an extension, or a whole name for a repository file that has
+        // none — which is what `matches_text_lists` used to be, before the two rows became the
+        // only place either list is read from.
+        PreviewType::Text => lists::TEXT.claims(path, config) || lists::NAMES.claims(path, config),
+        PreviewType::Audio => lists::AUDIO.claims(path, config),
+        PreviewType::Ebook => lists::EBOOK.claims(path, config),
+        PreviewType::Archives => archive_formats::claims_in(path, lists::ARCHIVE.entries(config)),
+        PreviewType::Peazip => lists::PEAZIP.claims(path, config),
+        PreviewType::Calibre => lists::CALIBRE.claims(path, config),
+        PreviewType::Document => lists::OFFICE.claims(path, config),
+        PreviewType::Libre => lists::LIBRE.claims(path, config),
+        PreviewType::Magick => lists::MAGICK.claims(path, config),
+        PreviewType::Design => lists::DESIGN.claims(path, config),
+        PreviewType::Vector => lists::VECTOR.claims(path, config),
+        PreviewType::Fonts => lists::FONT.claims(path, config),
+        PreviewType::Images => lists::IMAGE.claims(path, config),
+    }
+}
+
+/// Whether a preview of `path` may be shown as `kind`: its own list claims it, and the tray has
+/// that kind switched on.
+///
+/// It is the question the fourteen `is_<kind>_preview` predicates each asked of a list of their
+/// own and a switch of their own, and the two halves of it are one question because a kind turned
+/// off leaves its list exactly as it is and turning it back on restores it — which is what a
+/// user's own edit to a list and the tray's own switch are: two switches over one kind.
+///
+/// The configuration is a parameter rather than read here, for the reason it is one everywhere
+/// else in this layer: a caller that has it in hand pays no lock, and one that has not must not
+/// hold the one it takes across the video kind's read (see [`named_as`]).
+pub fn previewed_as(path: &Path, config: &AppConfig, kind: PreviewType) -> bool {
+    named_as(path, config, kind) && kind.enabled_in(config)
 }
 
 fn claims(
@@ -948,8 +1015,8 @@ mod tests {
     /// Which kind each list's names belong to, by the section the list is written under.
     ///
     /// The two keys of the text section are the only pair anywhere that shares one, and they are
-    /// the same kind: the extensions and the names are the two ways a file is a text file (see
-    /// `text_formats::matches_text_lists`). Everything else is one section to one kind.
+    /// the same kind: the extensions and the names are the two ways a file is a text file
+    /// (see [`named_as`], which asks both). Everything else is one section to one kind.
     ///
     /// It is keyed by section rather than written into the table because which kind a list
     /// belongs to is a fact about this app's kinds and not about a list: the `[ffmpeg]` list is
@@ -1002,11 +1069,9 @@ mod tests {
             // archive row's compound entry is reached the only way it can be, by a name that ends
             // in it. A name row has no extension at all and is reached by the name itself.
             let paths = match list.entries {
-                crate::formats::lists::Entries::Name => list
-                    .entries(config)
-                    .iter()
-                    .map(PathBuf::from)
-                    .collect(),
+                crate::formats::lists::Entries::Name => {
+                    list.entries(config).iter().map(PathBuf::from).collect()
+                }
                 _ => list
                     .entries(config)
                     .iter()

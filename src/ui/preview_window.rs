@@ -18,19 +18,14 @@ use crate::engines::libreoffice_render;
 use crate::engines::office_render;
 use crate::engines::peazip_render;
 use crate::engines::webview_preview;
-use crate::formats::archive_formats;
 use crate::formats::audio_formats;
 use crate::formats::calibre_formats;
 use crate::formats::codecs;
-use crate::formats::design_formats;
-use crate::formats::ebook_formats;
-use crate::formats::font_formats;
 use crate::formats::libre_formats;
 use crate::formats::magick_formats;
 use crate::formats::native_formats;
 use crate::formats::office_formats;
 use crate::formats::peazip_formats;
-use crate::formats::vector_formats;
 use crate::formats::video_formats;
 use crate::paths::plain_path;
 use crate::readers::audio_seek;
@@ -2610,7 +2605,7 @@ fn web_page_of(path: &Path) -> Option<crate::formats::routing::WebPage> {
 
     if svg_preview::is_svg_file(path) {
         Some(WebPage::Svg)
-    } else if font_formats::is_font_file(path) {
+    } else if named_as(path, PreviewType::Fonts) {
         Some(WebPage::FontSpecimen)
     } else if crate::formats::text_formats::is_html_extension(path) {
         Some(WebPage::Html)
@@ -2737,6 +2732,45 @@ fn engine_kind_of(path: &Path) -> Option<PreviewType> {
 /// one instead (`HoverFacts::html_drawn_by_the_engine`).
 fn html_is_engine_drawn(path: &Path) -> bool {
     crate::formats::text_formats::is_html_extension(path) && webview_preview::draws(path)
+}
+
+/// Whether a preview of `path` may be shown as `kind`: that kind's own list claims it, and the
+/// tray has that kind switched on.
+///
+/// It is one function for the eleven `is_<kind>_preview` predicates it replaces, one per module,
+/// each of which reached for the configuration's lock for itself — which is the split-lock form
+/// the deleted grep test could not see, because the lock and the read were never in one place to
+/// be matched. The lock is taken here, once, around two comparisons in memory: the row that names
+/// the kind, and the switch that hides it. Nothing on this side of it opens a file, which is the
+/// rule the whole of C4 is about (see `HoverFacts`).
+///
+/// The video kind is deliberately not asked of this. Its two lists share `ts` and `mts` with the
+/// text lists, so answering it reads the file — and a guard held across a read is the defect this
+/// form exists to be free of. A caller that wants to know about a video asks the hover's own
+/// answer, which has already read what that question needs (`HoverFacts::is_video`).
+fn previewed_as(path: &Path, kind: PreviewType) -> bool {
+    debug_assert_ne!(
+        kind,
+        PreviewType::Videos,
+        "asked under a lock, and this kind reads the file"
+    );
+
+    CONFIG
+        .lock()
+        .map(|config| crate::formats::routing::previewed_as(path, &config, kind))
+        .unwrap_or(false)
+}
+
+/// Whether `kind`'s own list claims `path`, without asking whether that kind is switched on.
+///
+/// It is the same two halves as [`previewed_as`] with the second one left off, for the callers
+/// that ask what a file *is* rather than whether a preview of it may be shown: the browser's own
+/// three questions about a specimen, and the manual probes' printed table of what each list says.
+fn named_as(path: &Path, kind: PreviewType) -> bool {
+    CONFIG
+        .lock()
+        .map(|config| crate::formats::routing::named_as(path, &config, kind))
+        .unwrap_or(false)
 }
 
 fn current_webp_playback_fps() -> u32 {
@@ -2914,7 +2948,7 @@ fn hover_is_shown(message: &PreviewMessage, pinned: bool) -> bool {
 /// hover's room would be, which is a deck that was first previewed on a smaller
 /// display — with the render tier switched on.
 fn office_render_is_due(path: &Path, width: u32) -> bool {
-    if !office_formats::is_office_preview(path) || !office_render::enabled() {
+    if !previewed_as(path, PreviewType::Document) || !office_render::enabled() {
         return false;
     }
 
@@ -3067,10 +3101,10 @@ impl HoverFacts {
         // names the file carries, which gates the tray has thrown, and the scales a hover is laid
         // out by. All three are list comparisons against what is in hand, and all three were a
         // lock of their own before.
-        let video_named = video_formats::matches_any_video_list(path, &config);
-        let audio_named = audio_formats::matches_audio_list(path, &config.audio_extensions);
-        let archive_named = archive_formats::matches_archive_list(path, &config.archive_extensions);
-        let peazip_named = peazip_formats::matches_peazip_list(path, &config.peazip_extensions);
+        let video_named = crate::formats::routing::named_as(path, &config, PreviewType::Videos);
+        let audio_named = crate::formats::lists::AUDIO.claims(path, &config);
+        let archive_named = crate::formats::lists::ARCHIVE.claims(path, &config);
+        let peazip_named = crate::formats::lists::PEAZIP.claims(path, &config);
         let video_enabled = PreviewType::Videos.enabled_in(&config);
         let audio_enabled = PreviewType::Audio.enabled_in(&config);
         let text_enabled = PreviewType::Text.enabled_in(&config);
@@ -7588,17 +7622,14 @@ fn media_engine_plays(path: &Path) -> bool {
     // consultation is not free: the two extensions the video list shares with the text lists
     // are settled by reading the file, and that read was happening under the process-wide
     // configuration lock on the thread that pumps this window's messages.
-    let named = {
+    let extensions = {
         let Ok(config) = CONFIG.lock() else {
             return false;
         };
-        let extensions = config.video_extensions.clone();
-        drop(config);
-
-        video_formats::matches_video_list(path, &extensions)
+        config.video_extensions.clone()
     };
 
-    named && video_player::plays(path)
+    video_formats::claims_video_name(path, &extensions) && video_player::plays(path)
 }
 
 /// The box a PDF page asks for, measured off the preview thread.
@@ -8493,7 +8524,7 @@ fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u
         crate::formats::content_type::Content::Unknown => {}
     }
 
-    if video_formats::is_video_preview(path) {
+    if hover.is_video() {
         return video_box(path);
     }
 
@@ -8507,7 +8538,7 @@ fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u
     // it, beside the PDF, because the two are the same kind of preview — a page of a book — and are
     // told apart by the reader rather than by the user. A box with no plate in it is measured as
     // nothing, which is the hover that shows no preview at all (see `comic_box`).
-    if ebook_formats::is_ebook_preview(path) {
+    if previewed_as(path, PreviewType::Ebook) {
         return comic_box(path);
     }
 
@@ -8515,7 +8546,7 @@ fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u
     // where its own application is installed, and by the render engine beside it where it is
     // not. A document with neither is measured as the page it is about to get — while a page
     // is coming, which is the only case where one is.
-    if office_formats::is_office_preview(path) {
+    if previewed_as(path, PreviewType::Document) {
         return office_preview::measure(path);
     }
 
@@ -8530,7 +8561,7 @@ fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u
     // It is asked where the hook asks it — after the office list, ahead of the design list
     // — because a name can sit in two lists: CorelDRAW is a design document to this app and
     // a drawing to the engine, and it is the engine that draws it (see `libre_formats`).
-    if libre_formats::is_libre_preview(path) {
+    if previewed_as(path, PreviewType::Libre) {
         return libre_box(path);
     }
 
@@ -8538,7 +8569,7 @@ fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u
     // the documents an engine draws, ahead of the design, vector, font and image lists, none
     // of which would have claimed a `.nef` anyway. What is measured is the picture the engine
     // wrote, and one it has not written yet is the wait for it (see `magick_box`).
-    if magick_formats::is_magick_preview(path) {
+    if previewed_as(path, PreviewType::Magick) {
         return magick_box(path);
     }
 
@@ -8546,7 +8577,7 @@ fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u
     // engine and the document engines, none of whose lists would have claimed a `.mobi` anyway.
     // What is measured is the page the engine wrote, and one it has not written yet is the wait
     // for it (see `calibre_box`).
-    if calibre_formats::is_calibre_preview(path) {
+    if previewed_as(path, PreviewType::Calibre) {
         return calibre_box(path);
     }
 
@@ -8559,7 +8590,7 @@ fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u
     // a name written into the design list as well as into the vector or font list is a
     // design document, and the two questions further down would report a size for another
     // kind than the one the tray was asked to switch.
-    if design_formats::is_design_preview(path) {
+    if previewed_as(path, PreviewType::Design) {
         return design_dimensions(path);
     }
 
@@ -8590,7 +8621,7 @@ fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u
 
     // A vector drawing is measured from the records it holds: what an `.eps` keeps a
     // preview of, or what a metafile's own header declares its drawing to be.
-    if vector_formats::is_vector_preview(path) {
+    if previewed_as(path, PreviewType::Vector) {
         return vector_box(path);
     }
 
@@ -8600,7 +8631,7 @@ fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u
     // how large that box is shown. `Fonts` is the gate, and a file that will not parse as a
     // font reports no size at all: that is how a `.ttf` that is something else comes to show
     // nothing rather than a page of another font's glyphs.
-    if font_formats::is_font_preview(path) {
+    if previewed_as(path, PreviewType::Fonts) {
         if !webview_preview::can_draw() {
             return None;
         }
@@ -8776,7 +8807,7 @@ fn page_is_on_the_way(path: &Path) -> bool {
     // the same question the render tier is asked before it is asked for one: a picture left
     // under a document's name is drawn here, and placing it at the pointer as the wait for a
     // page would be a preview waiting for nothing (see `content_names_another_kind`).
-    let office = office_formats::is_office_preview(path)
+    let office = previewed_as(path, PreviewType::Document)
         && !content_names_another_kind(path, PreviewType::Document)
         && matches!(
             office_preview::source_kind(path),
@@ -8846,7 +8877,7 @@ fn media_dimensions_of(
         return text_box(path, bounds, dpi);
     }
 
-    if archive_formats::is_archive_preview(path) {
+    if previewed_as(path, PreviewType::Archives) {
         return archive_box_off_the_tick(path, bounds, dpi);
     }
 
@@ -8855,7 +8886,7 @@ fn media_dimensions_of(
     // itself, and one in this list is read by an engine. What is measured is the page the
     // engine's listing makes, and a listing that has not come back yet is the wait for one (see
     // `peazip_box`).
-    if peazip_formats::is_peazip_preview(path) {
+    if peazip_formats::is_peazip_file(path) && PreviewType::Peazip.enabled() {
         return peazip_box(path, bounds, dpi);
     }
 
@@ -15160,8 +15191,8 @@ fn pin_keeps_its_box(path: &Path) -> bool {
     }
 
     is_text_preview(path)
-        || archive_formats::is_archive_preview(path)
-        || peazip_formats::is_peazip_preview(path)
+        || previewed_as(path, PreviewType::Archives)
+        || peazip_formats::is_peazip_file(path) && PreviewType::Peazip.enabled()
         || drawn_as_audio(path)
 }
 
@@ -23917,7 +23948,7 @@ mod tests {
         // The name is still a document's, so the engine tier is still the one that asks
         // whether this is a document a page is owed for — and says no, which is the whole of
         // what `content_type` exists to prevent.
-        assert!(office_formats::is_office_preview(&renamed));
+        assert!(previewed_as(&renamed, PreviewType::Document));
         assert!(hover.names_another_kind(PreviewType::Document));
         assert!(
             !office_render_is_due(&renamed, 800),
@@ -24134,7 +24165,7 @@ mod tests {
         write_test_png(&renamed, false);
 
         assert!(
-            office_formats::is_office_preview(&renamed),
+            previewed_as(&renamed, PreviewType::Document),
             "the name is the document list's, which is what answered before this"
         );
         assert!(
@@ -24152,7 +24183,7 @@ mod tests {
         std::fs::write(&renamed, b"\x00\x00\x00\x20ftypisom").expect("a written video");
 
         assert!(
-            !crate::formats::video_formats::is_video_file(&renamed),
+            !named_as(&renamed, PreviewType::Videos),
             "the name is the picture list's, which is what answered before this"
         );
         assert!(
@@ -24171,11 +24202,7 @@ mod tests {
 
         let listed_as_text = {
             let config = CONFIG.lock().expect("the configuration");
-            crate::formats::text_formats::matches_text_lists(
-                &renamed,
-                &config.text_extensions,
-                &config.text_names,
-            )
+            crate::formats::routing::named_as(&renamed, &config, PreviewType::Text)
         };
 
         assert!(!listed_as_text, "the name is not one the text lists carry");
@@ -24208,7 +24235,7 @@ mod tests {
             // the machine, and the setting is pinned to the one that asks the machine.
             config.office_engine = OfficeEngine::MicrosoftOffice;
             config.office_extensions = crate::formats::text_formats::sanitize_extension_list(
-                office_formats::DEFAULT_OFFICE_EXTENSIONS,
+                crate::formats::lists::DEFAULT_OFFICE_EXTENSIONS,
             );
         }
 
@@ -24223,7 +24250,7 @@ mod tests {
         let installed = office_formats::app_installed(&named);
 
         assert!(
-            office_formats::is_office_preview(&named),
+            previewed_as(&named, PreviewType::Document),
             "the name is the document list's, which is what a document is known by: every \
              format of Office's is a container, and a container says nothing about itself"
         );
@@ -26616,13 +26643,7 @@ mod tests {
             println!("\n--- {} ---", path.display());
             println!(
                 "the lists call it a sound: {}, and the preview is shown: {}",
-                crate::formats::audio_formats::matches_audio_list(
-                    &path,
-                    &CONFIG
-                        .lock()
-                        .map(|config| config.audio_extensions.clone())
-                        .unwrap_or_default(),
-                ),
+                named_as(&path, PreviewType::Audio),
                 drawn_as_audio(&path)
             );
 
@@ -26632,10 +26653,7 @@ mod tests {
 
             // A container of a video's name is the case the whole verdict exists for: what the
             // video probe finds in it, and what the router says once that probe has answered.
-            let named_video = CONFIG
-                .lock()
-                .map(|config| video_formats::matches_any_video_list(&path, &config))
-                .unwrap_or(false);
+            let named_video = named_as(&path, PreviewType::Videos);
             if named_video {
                 println!(
                     "the video probe answered {}",
@@ -26778,13 +26796,7 @@ mod tests {
             );
             println!(
                 "and the name is one the `[video]` list asks the engine for: {}",
-                CONFIG
-                    .lock()
-                    .map(|config| video_formats::matches_video_list(
-                        &path,
-                        &config.video_extensions
-                    ))
-                    .unwrap_or(false)
+                named_as(&path, PreviewType::Videos)
             );
             println!(
                 "so a preview of it is played by {}",
@@ -27255,20 +27267,16 @@ mod tests {
             println!("engine available: {}", libreoffice_render::available());
             let text_lists = {
                 let config = crate::CONFIG.lock().expect("the configuration");
-                crate::formats::text_formats::matches_text_lists(
-                    &path,
-                    &config.text_extensions,
-                    &config.text_names,
-                )
+                crate::formats::routing::named_as(&path, &config, PreviewType::Text)
             };
             println!(
                 "kinds: video = {}, pdf = {}, office = {}, libre = {}, design = {}, vector = {}, text = {}",
-                crate::formats::video_formats::is_video_file(&path),
+                named_as(&path, PreviewType::Videos),
                 pdf_preview::is_pdf_file(&path),
-                office_formats::is_office_file(&path),
-                libre_formats::is_libre_file(&path),
-                design_formats::is_design_file(&path),
-                vector_formats::is_vector_file(&path),
+                named_as(&path, PreviewType::Document),
+                named_as(&path, PreviewType::Libre),
+                named_as(&path, PreviewType::Design),
+                named_as(&path, PreviewType::Vector),
                 text_lists,
             );
 
@@ -27403,7 +27411,7 @@ mod tests {
 
             let claimed = crate::CONFIG
                 .lock()
-                .map(|config| peazip_formats::matches_peazip_list(&path, &config.peazip_extensions))
+                .map(|config| crate::formats::lists::PEAZIP.claims(&path, &config))
                 .unwrap_or(false);
 
             println!(
@@ -27566,8 +27574,8 @@ mod tests {
                 .lock()
                 .map(|config| {
                     (
-                        ebook_formats::matches_ebook_list(&path, &config.ebook_extensions),
-                        ebook_formats::matches_page_name(&path, &config.ebook_extensions),
+                        crate::formats::lists::EBOOK.claims(&path, &config),
+                        crate::formats::lists::EBOOK.claims(&path, &config),
                     )
                 })
                 .unwrap_or((false, false));
@@ -27575,7 +27583,7 @@ mod tests {
             println!(
                 "kinds: ebook list = {claimed}, page name = {page_name}, comic name = {}, preview = {}",
                 claimed && !page_name,
-                ebook_formats::is_ebook_preview(&path)
+                previewed_as(&path, PreviewType::Ebook)
             );
 
             let started = Instant::now();
@@ -27701,9 +27709,7 @@ mod tests {
 
             let claimed = crate::CONFIG
                 .lock()
-                .map(|config| {
-                    calibre_formats::matches_calibre_list(&path, &config.calibre_extensions)
-                })
+                .map(|config| crate::formats::lists::CALIBRE.claims(&path, &config))
                 .unwrap_or(false);
 
             println!(

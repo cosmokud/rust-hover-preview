@@ -4,19 +4,11 @@
 //! every kind's list is a row of, and the one place a list is written down, the built-in
 //! entries and the older lists this app shipped and then changed included.
 
-use crate::config::config::{AppConfig, OfficeEngine, PreviewType};
-use crate::formats::text_formats;
+use crate::config::config::{AppConfig, OfficeEngine};
 use crate::CONFIG;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-
-/// The Office list itself, which is a row of `crate::formats::lists` like every other.
-///
-/// It is named here as well because the preview thread's own tests still ask for it by this path,
-/// and until they are moved across the table keeps the name they reach for.
-#[cfg(test)]
-pub use crate::formats::lists::DEFAULT_OFFICE_EXTENSIONS;
 
 /// The bytes a container is recognized by: an OOXML package is a zip, so it starts
 /// with the local header of its first part, and a legacy document is an OLE
@@ -62,27 +54,6 @@ impl OfficeApp {
             Self::PowerPoint => "POWERPNT.EXE",
         }
     }
-}
-
-/// Whether the configured list claims `path`.
-pub fn matches_office_list(path: &Path, extensions: &[String]) -> bool {
-    text_formats::matches_configured_extension(path, extensions)
-}
-
-/// Whether the configured list claims `path`, without asking whether Office
-/// previews are switched on.
-pub fn is_office_file(path: &Path) -> bool {
-    CONFIG
-        .lock()
-        .map(|config| matches_office_list(path, &config.office_extensions))
-        .unwrap_or(false)
-}
-
-/// Whether the file is previewed as an Office document under the current
-/// configuration. The `Document` gate is checked on top of the list, so turning
-/// document previews off leaves the list alone and turning them back on restores it.
-pub fn is_office_preview(path: &Path) -> bool {
-    is_office_file(path) && PreviewType::Document.enabled()
 }
 
 /// Which application renders a document with this name, by the family its
@@ -139,7 +110,7 @@ impl OfficeEngine {
     /// is answered does not depend on when it is asked; see `page_engine` for the answer the
     /// app goes by.
     pub fn for_document(config: &AppConfig, path: &Path) -> Option<Self> {
-        if !matches_office_list(path, &config.office_extensions) {
+        if !crate::formats::lists::OFFICE.claims(path, config) {
             return None;
         }
 

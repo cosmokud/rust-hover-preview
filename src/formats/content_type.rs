@@ -287,6 +287,35 @@ pub fn of(path: &Path, config: &AppConfig) -> Content {
     answer(&Probe::read(path), config)
 }
 
+/// The question [`of`] asks, with the configuration's lock taken here rather than handed in.
+///
+/// It is the four engine tiers' own form and it exists because those four are the only questions
+/// in this layer with no configuration of their own to be handed one through: they are asked
+/// before any hover is installed for the file — by a render tier deciding whether it is the
+/// engine that draws it — so there is nothing in hand to hand them.
+///
+/// The order is the whole of it. The file's own entry is read first, with no guard held, and the
+/// lists are taken under the guard only for the lookup that consults them: a guard held across a
+/// `content_type::of` is a guard every other thread of the app waits on for as long as the disk
+/// takes, and these are asked from the engines' own threads as well as the preview's. A
+/// configuration that will not open is answered with the one answer that needs none of them, which
+/// is what every caller that reads the lock itself already does (see `mod tests` below, which
+/// still holds).
+pub(crate) fn of_reaching_config(path: &Path) -> Content {
+    // The file's own entry, read before the lock: it is the one thing this needs from the disk,
+    // and reading it here rather than inside `of` is what keeps the guard off the file.
+    let facts = crate::formats::head::Facts::read(path);
+
+    let Ok(config) = crate::CONFIG.lock() else {
+        return Content::Unknown;
+    };
+
+    match &facts {
+        Some(facts) => of_with_facts(path, facts, &config),
+        None => of(path, &config),
+    }
+}
+
 /// The same question of a file whose own bytes have already been read into a [`Probe`].
 ///
 /// This is the half that consults the lists, and it is a separate function from [`Probe::read`]
@@ -2747,9 +2776,7 @@ fn classify(path: &Path, names: &[&str], config: &AppConfig) -> Content {
     // the name is the camera's own answer about what is inside the box (see
     // `names_the_container_of_a_raw`). Every other name is answered below, which is where a
     // `.tif` is taken for the picture it is.
-    if names_the_container_of_a_raw(names)
-        && crate::formats::magick_formats::matches_magick_list(path, &config.magick_extensions)
-    {
+    if names_the_container_of_a_raw(names) && crate::formats::lists::MAGICK.claims(path, config) {
         return Content::Kind(PreviewType::Magick);
     }
 
@@ -3913,7 +3940,7 @@ mod tests {
                 continue;
             }
 
-            if crate::formats::libre_formats::matches_libre_list(&named, &config.libre_extensions) {
+            if crate::formats::lists::LIBRE.claims(&named, &config) {
                 assert_eq!(
                     *kind,
                     PreviewType::Libre,
@@ -3922,10 +3949,7 @@ mod tests {
                 continue;
             }
 
-            if crate::formats::calibre_formats::matches_calibre_list(
-                &named,
-                &config.calibre_extensions,
-            ) {
+            if crate::formats::lists::CALIBRE.claims(&named, &config) {
                 assert_eq!(
                     *kind,
                     PreviewType::Calibre,
