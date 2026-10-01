@@ -390,13 +390,26 @@ impl PinState {
     }
 }
 
-/// Give the pin the keyboard: the window that is in front, and the pin's claim to it.
+/// Give the pin the keyboard, if the keyboard arrived in it: the window that was in front, and
+/// the pin's claim to it.
+///
+/// Whether it arrived is the caller's to report and not this module's to assume, because Windows
+/// is what decides it — the foreground lock hands the foreground to whoever had the last input,
+/// and a process that has not had it is refused when it asks — and because no test on this side of
+/// the module can put a caret into a window that does not exist here. A claim written on the
+/// *asking* is a pin that believes it holds a keyboard it was never given, holding a note of a
+/// window the user is no longer in: the handover that note exists for is then a foreground asked
+/// back from a window the user left, and it lands there.
 ///
 /// The claim and the window it came from are written together, which is what the two globals
 /// this replaced did not do: `PIN_PREVIOUS_FOREGROUND` was written before the `SetFocus` and
 /// `PIN_FOCUSED` after it, so a window procedure re-entered by either call — and both of them
 /// deliver messages — could see one without the other.
-pub(super) fn take_keyboard(behind: isize) {
+pub(super) fn take_keyboard(behind: isize, arrived: bool) {
+    if !arrived {
+        return;
+    }
+
     if let Some(mut state) = pin_state() {
         if let PinState::Up(up) = &mut *state {
             up.keyboard = Some(PinKeyboard { behind });
@@ -862,7 +875,7 @@ mod tests {
     /// A pin, up, with the keyboard taken from `behind` and one command waiting.
     fn a_pin_holding_the_keyboard(behind: isize) {
         install(a_pin());
-        take_keyboard(behind);
+        take_keyboard(behind, true);
         ask_pin(PinCommand::Next);
     }
 
@@ -987,7 +1000,7 @@ mod tests {
 
         for reason in EVERY_REASON {
             install(a_pin());
-            take_keyboard(0x2000);
+            take_keyboard(0x2000, true);
             let window = RecordedPinWindow::new(0);
             end_pin(reason, &window);
 
@@ -1250,7 +1263,7 @@ mod tests {
         let _one = ONE_AT_A_TIME.lock();
 
         install(a_pin());
-        take_keyboard(0x2000);
+        take_keyboard(0x2000, true);
         let window = RecordedPinWindow::new(0x1000);
         end_pin(Reason::Closed, &window);
         assert_eq!(
@@ -1277,7 +1290,7 @@ mod tests {
         let _one = ONE_AT_A_TIME.lock();
 
         install(a_pin());
-        take_keyboard(0);
+        take_keyboard(0, true);
         let window = RecordedPinWindow::new(0x1000);
         end_pin(Reason::Closed, &window);
 
@@ -1322,13 +1335,45 @@ mod tests {
         let _one = ONE_AT_A_TIME.lock();
 
         install(a_pin());
-        take_keyboard(0x2000);
+        take_keyboard(0x2000, true);
         release_keyboard();
         assert_eq!(keyboard(), None, "losing the focus drops the claim with it");
 
         a_pin_holding_the_keyboard(0x2000);
         end_pin(Reason::Closed, &RecordedPinWindow::new(0x1000));
         assert_eq!(keyboard(), None, "a pin that is over holds no keyboard");
+    }
+
+    /// A press the window was refused writes no claim, and a pin holding none hands nothing back.
+    ///
+    /// The foreground lock refuses the press to a process that did not have the last input, which
+    /// is what a press on a pin looks like while something else owns the input rather than a fault
+    /// in anything. The claim used to be written on the *asking*, so that pin came away from the
+    /// press believing it held a keyboard and holding a note of a window the user is no longer in
+    /// — and the take-down then asked that window for the foreground, taking the focus from
+    /// whatever the user had moved on to. The arrival is the caller's to report and this module's
+    /// to insist on: the claim is written where the keyboard demonstrably is and nowhere else, and
+    /// a caller that has not asked Windows cannot write one.
+    #[test]
+    fn a_press_the_windows_refused_leaves_no_claim_to_hand_over() {
+        let _one = ONE_AT_A_TIME.lock();
+
+        install(a_pin());
+        take_keyboard(0x2000, false);
+        assert_eq!(
+            keyboard(),
+            None,
+            "a keyboard that never arrived is not one to hold a note of a window for"
+        );
+
+        let window = RecordedPinWindow::new(0x1000);
+        end_pin(Reason::Closed, &window);
+        assert_eq!(
+            window.calls(),
+            vec![PinWindowCall::ReleaseCapture, PinWindowCall::HidePinBubble],
+            "and a pin with no claim asks the window the user left for nothing, rather than \
+             bringing it back to the front"
+        );
     }
 
     /// A pin taken for a reason is ended by the loop's own tick, and a pin the loop has given
@@ -1423,7 +1468,7 @@ mod tests {
         let _one = ONE_AT_A_TIME.lock();
 
         install(a_pin());
-        take_keyboard(0x2000);
+        take_keyboard(0x2000, true);
         ask_pin(PinCommand::Close);
         if let Some(mut state) = pin_state() {
             if let Some(pin) = state.pin_mut() {
