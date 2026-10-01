@@ -25,7 +25,7 @@
 
 use crate::config::config::{AppConfig, PreviewType};
 use crate::readers::{
-    archive_listing, metafile_image, pdf_preview, psd_image, svg_preview, wic_image,
+    archive_listing, metafile_image, psd_image, svg_preview, wic_image,
 };
 use std::path::Path;
 
@@ -216,17 +216,16 @@ fn drawing_job(path: &Path) -> NativeJob {
 
 /// A page of the `Ebook` kind: a comic where the container is one, and a PDF otherwise.
 ///
-/// The two are one kind because what they are shown as is one thing, and which of them a file
-/// is, is asked exactly as the kind was: the same question the router asks to reach this kind
-/// is the one that tells the two halves apart, so a PDF, a page spelling the list no longer
-/// holds, and an Illustrator document carrying a PDF inside it are all the PDF reader's (see
-/// `pdf_preview::is_pdf_file_in`), and everything else of the kind is a comic.
+/// Which of the two a file is is the router's own answer rather than one worked out here, and
+/// that is what this table is for: a `.cbz` and a `book.pdf` are one kind, so the file was read
+/// twice for the one question — once to reach the kind and once to pick the reader — and the
+/// second read was a read of the file, on a name three spellings of which make a page and a
+/// fourth of which is an Illustrator document carrying one (see `routing::page_of`).
 fn page_job(path: &Path, config: &AppConfig) -> NativeJob {
-    if pdf_preview::is_pdf_file_in(path, &config.ebook_extensions) {
-        return NativeJob::Pdf;
+    match crate::formats::routing::page_of(path, config) {
+        crate::formats::routing::Page::Pdf => NativeJob::Pdf,
+        crate::formats::routing::Page::Comic => NativeJob::Comic,
     }
-
-    NativeJob::Comic
 }
 
 /// A container, in the reader the container itself names: its magic first and its spelling
@@ -310,8 +309,15 @@ mod tests {
 
     /// A page is the PDF reader's or the comic reader's, and the name is what settles which:
     /// a comic is the half of the book list that is not a page.
+    ///
+    /// It is asserted against the router's own answer rather than against the names here,
+    /// because that is what the table reads: a file whose half the router settled one way and
+    /// this table another is a page drawn by the comic reader, or the reverse, and nothing
+    /// above either would notice.
     #[test]
     fn a_page_is_the_pdf_reader_or_the_comic_one() {
+        let config = AppConfig::default();
+
         for (name, job) in [
             ("book.pdf", NativeJob::Pdf),
             ("archived.pdfa", NativeJob::Pdf),
@@ -319,10 +325,21 @@ mod tests {
             ("chapter.cbr", NativeJob::Comic),
             ("chapter.cbc", NativeJob::Comic),
         ] {
+            let path = PathBuf::from(name);
+            let half = routing::page_of(&path, &config);
+
             assert_eq!(
-                job_for_name(name, PreviewType::Ebook),
+                job_for(&path, PreviewType::Ebook, &config),
                 Some(job),
                 "`{name}` is read by {job:?}"
+            );
+            assert_eq!(
+                half,
+                match job {
+                    NativeJob::Pdf => routing::Page::Pdf,
+                    _ => routing::Page::Comic,
+                },
+                "and the router's answer to which half of the kind it is is the same one"
             );
         }
     }
@@ -380,6 +397,12 @@ mod tests {
 
     /// The seam: what the router answers for a name is a kind, and every kind with a reader of
     /// this app's own has a job behind it — which is the whole route for a file, in one test.
+    ///
+    /// The last three rows are the ones this table cannot answer on its own, and they are the
+    /// reason the seam is worth a test rather than a comment: the archive half is settled by
+    /// the container's magic, the picture half by the bytes past the front, and the page half
+    /// by the router's own. A name reaching a kind whose job was worked out somewhere else is
+    /// exactly what this asserts does not happen.
     #[test]
     fn every_name_that_reaches_a_native_kind_reaches_a_job() {
         let config = AppConfig::default();

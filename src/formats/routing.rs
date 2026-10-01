@@ -235,19 +235,49 @@ fn claim_audio(
     (named || probed).then_some(PreviewType::Audio)
 }
 
-/// A page this app draws itself: a PDF, and a comic, which is the other half of the same kind.
+/// Which half of the `Ebook` kind a file is: a page the PDF engine reads, or a comic, which
+/// is the first plate out of the container it is published in.
 ///
 /// The two are one kind because what they are shown as is one thing — a page — and what a user
-/// turns off for either is books. Which of the two a file is, is asked by the reader rather
-/// than here: a comic is a container of plates and a PDF is a page, and the loader knows the
-/// difference (see `preview_window::load_media_of_kind`). The PDF's names are asked of the list
-/// in hand rather than of the gate that reads it, since the caller holds the configuration
-/// already (see `pdf_preview::is_pdf_file_in`).
+/// turns off for either is books, which is what makes them one switch and one kind. The reader
+/// that draws one is not the same for the two, so the half has to be settled by somebody: this
+/// is that somebody, because the loader used to ask the same question a second time for itself
+/// and the answer cost a read of the file (see `native_formats::page_job`).
+///
+/// The names are asked of the list in hand rather than of the gate that reads it, since the
+/// caller holds the configuration already. Three names make a page outright and an Illustrator
+/// document carrying a PDF inside it makes one of its own bytes, which is the only half here
+/// that is not the name's to answer (see `pdf_preview::is_pdf_file_in`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Page {
+    /// A page: a PDF, or a document of another name carrying one, which the PDF engine reads.
+    Pdf,
+    /// A comic, which is the container read for its first plate rather than for the book.
+    Comic,
+}
+
+/// The half of the `Ebook` kind `path` is, of the list in hand.
+///
+/// A file whose own name the book list does not carry is not a book of either half, so this is
+/// asked of the page's own question and answered as the comic for everything else rather than
+/// as nothing: which of the two a file is cannot be asked without knowing it is one of them.
+pub fn page_of(path: &Path, config: &AppConfig) -> Page {
+    if pdf_preview::is_pdf_file_in(path, &config.ebook_extensions) {
+        Page::Pdf
+    } else {
+        Page::Comic
+    }
+}
+
+/// A page this app draws itself: a PDF, and a comic, which is the other half of the same kind.
+///
+/// Which of the two a file is is [`page_of`]'s answer rather than this entry's, because the
+/// reader that draws the one is not the reader that draws the other and the loader asks for a
+/// job rather than a kind.
 fn claim_ebook(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
-    let page = pdf_preview::is_pdf_file_in(path, &config.ebook_extensions);
     let book = ebook_formats::matches_ebook_list(path, &config.ebook_extensions);
 
-    (page || book).then_some(PreviewType::Ebook)
+    (page_of(path, config) == Page::Pdf || book).then_some(PreviewType::Ebook)
 }
 
 /// An archive this app reads itself, which is a listing rather than an engine's work.
@@ -601,6 +631,81 @@ mod tests {
             unexpected.is_empty(),
             "names reached a kind their list is not written for:\n  {}",
             unexpected.join("\n  ")
+        );
+    }
+
+    /// The half of the `Ebook` kind is the one answer two tables used to work out for
+    /// themselves, and the drift it can suffer is a file whose kind is the book's and whose
+    /// reader is the comic's — which nothing above either would notice, because the kind was
+    /// right and only the page underneath it was wrong.
+    ///
+    /// It is asserted over every name the book list ships rather than over a sample, and both
+    /// ways round: each name reaches the half its own spelling settles, and the two spellings
+    /// that are a page and a comic of the same kind are told apart from each other. The first
+    /// alone would pass a table that answered every name with a comic.
+    #[test]
+    fn every_shipped_book_name_reaches_the_half_its_spelling_settles() {
+        let config = AppConfig::default();
+
+        // The names the shipped list holds that are a page and a comic, read off the list
+        // rather than written here, so a name added to either list is covered by this without
+        // being added to this.
+        let expected: Vec<(String, Page)> = config
+            .ebook_extensions
+            .iter()
+            .map(|name| {
+                let page = matches!(
+                    name.trim_start_matches('.'),
+                    "pdf" | "pdfa" | "epdf"
+                );
+                (
+                    name.clone(),
+                    if page { Page::Pdf } else { Page::Comic },
+                )
+            })
+            .collect();
+
+        assert!(
+            expected.len() >= 2,
+            "the book list has to carry a page and a comic for this to be worth saying"
+        );
+
+        let mut wrong: Vec<String> = Vec::new();
+        let mut saw_page = false;
+        let mut saw_comic = false;
+
+        for (name, expected) in &expected {
+            let path = PathBuf::from(format!("book.{name}"));
+            let reached = page_of(&path, &config);
+
+            match reached {
+                Page::Pdf => saw_page = true,
+                Page::Comic => saw_comic = true,
+            }
+
+            if reached != *expected {
+                wrong.push(format!(
+                    "`{name}` is a page's spelling, read as {reached:?}"
+                ));
+            }
+
+            // And the kind the router reaches is the book's either way: the half is what
+            // picks the reader, not whether the file is a book at all.
+            assert_eq!(
+                kind_of(&path, &config),
+                Some(PreviewType::Ebook),
+                "`{name}` is the book kind's whichever half it is"
+            );
+        }
+
+        assert!(
+            saw_page && saw_comic,
+            "the list has to hold both halves or this proves nothing about telling them apart"
+        );
+        assert!(
+            wrong.is_empty(),
+            "a book's spelling read as the wrong half of the kind:\n  {}",
+            wrong.join("\n  ")
         );
     }
 
