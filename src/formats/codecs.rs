@@ -457,9 +457,19 @@ pub fn mf_started() -> bool {
 /// preview thread that plays it — and a thread that never asked for an apartment is a
 /// thread whose objects cannot be made at all.
 ///
-/// A thread that has already asked for another apartment is answered with
-/// `RPC_E_CHANGED_MODE`, which is not a reason to give up: the tray's own thread is a
-/// single-threaded apartment, and enumerating decoders from it works.
+/// What is promised here is only that the thread ends up in an apartment of some kind,
+/// whichever one it arrived in. A concurrency model is fixed once it is chosen, so this is
+/// an offer rather than a change, and the multi-threaded one is refused on any thread that
+/// already has another. The tray's own main thread is answered with `RPC_E_CHANGED_MODE`
+/// every time — `main` puts that thread in a single-threaded apartment before any of this
+/// runs — and the answer is discarded on purpose. The decoders enumerated from there are
+/// therefore enumerated in a single-threaded apartment, which is where they are wanted.
+///
+/// Treating that refusal as a failure is the wrong turn to make here. What the callers
+/// hold is the library's started flag rather than this request's result, so a refusal read
+/// as "this machine has no media engine" and every decoder dropped out of the tray's
+/// `Codecs` submenu — on every machine, not the odd one, because the tray's own thread is
+/// always a single-threaded apartment. Enumerating decoders from it works.
 fn initialize_apartment() {
     thread_local! {
         static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
