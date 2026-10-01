@@ -80,13 +80,14 @@
 
 use crate::config::config::{AppConfig, EngineIdle, OfficeEngine, DEFAULT_LIBREOFFICE_IDLE_SECS};
 use crate::engines::document_cache::{self, Page, PageKind};
+use crate::engines::supervisor::{self, Adapter, Worker};
 use crate::CONFIG;
 use directories::BaseDirs;
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// How long a conversion is given, and the point past which the engine is a stopped one
@@ -136,10 +137,6 @@ const HOLDER_DOCUMENT: &str = concat!(
 const READY_WAIT: Duration = Duration::from_secs(3);
 /// How often the wait above looks.
 const READY_POLL: Duration = Duration::from_millis(50);
-/// How often the engine thread wakes to look at the idle setting, which is what lets a kept
-/// engine go while nothing is being asked of it. Nothing else wakes it between documents, and
-/// one look a second is nothing beside the process it is looking at.
-const IDLE_TICK: Duration = Duration::from_secs(1);
 
 /// Where LibreOffice keeps its program, for the two places it installs and for a portable
 /// copy a user may have put beside `config.ini`.
@@ -237,26 +234,44 @@ pub fn request(path: &Path) {
     // while another waits replaces it, the way the loader's slot does: the newest hover is
     // the one the pointer is on, and a document whose hover has gone is one nobody is
     // waiting for.
-    if running_source().as_deref() == Some(path) {
+    if supervisor::running_source(Adapter::LibreOffice).as_deref() == Some(path) {
         return;
     }
 
-    let (slot, ready) = &*REQUESTED;
-    if let Ok(mut requested) = slot.lock() {
-        *requested = Some(path.to_path_buf());
-    }
-    ready.notify_all();
-
-    start_engine();
+    let document = path.to_path_buf();
+    WORKER.request(move || {
+        // Whatever the engine answers — a page, or a conversion that wrote none — it is
+        // answered in the folder the pages are kept in, which is what the hover waiting
+        // on this document is watching. A panic is contained here for the same reason
+        // the loader contains one: one document's failure is that document's, and the
+        // thread goes on to the next hover — a thread that died on one document would
+        // take every document after it with it, in silence.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rendered(&document)));
+    });
 }
 
-/// The document the engine is drawing now, if it is drawing one.
-fn running_source() -> Option<PathBuf> {
-    RUNNING
-        .lock()
-        .ok()?
-        .as_ref()
-        .map(|running| running.source.clone())
+/// The thread conversions run on, and the one document waiting behind whatever is being drawn
+/// now. It is the one adapter of the four with anything to do between runs — a kept engine has
+/// to be let go of, and an engine asked for ahead of a document has to be started — so the
+/// tick is its own rather than the wait the other three have (see `on_idle`).
+static WORKER: Lazy<Worker> = Lazy::new(|| Worker::new(Some(on_idle)));
+
+/// What the engine thread does when nothing is being asked of it, which is the only thread
+/// there is to do it: an engine that is kept is let go of by the thread that would otherwise
+/// be holding it, and nobody else ever looks at the idle setting at all.
+///
+/// A warm is taken up here and not beside a request, which is the order the flag was read in
+/// when the loop that read it was this module's own. The idle time is looked at when the slot
+/// is found empty rather than when a wait has run out, so a request arriving at the same moment
+/// a kept engine's idle time runs out can find the engine already let go — which is where it
+/// would be within a second either way, and a request arriving means a hover is asking for it.
+fn on_idle() {
+    if WARM_REQUESTED.swap(false, Ordering::AcqRel) {
+        warm_kept_engine();
+        return;
+    }
+
+    let_go_if_expired();
 }
 
 /// End a conversion that has outrun the engine's give-up.
@@ -270,32 +285,22 @@ fn running_source() -> Option<PathBuf> {
 /// The engine thread holds the same bound over the conversion it is inside, so this is the
 /// same rule reached from the other side: a document asked for behind a hung engine ends it
 /// at the moment it is asked for rather than waiting for the thread to notice.
+///
+/// This is the one of the four whose give-up is not the ending of a process and nothing
+/// else, which is why it asks for the id rather than for the ending: what a conversion that
+/// has outrun its bound is ended by is the engine rather than the process that asked it for a
+/// page — a page handed to an engine that is being kept is drawn inside it, so ending the
+/// launch alone would leave the engine spinning on the same document with the seat still
+/// held. It is let go of here, and the document behind it is answered by the engine that
+/// starts in its place.
 fn end_hung_engine() {
-    let hung = RUNNING.lock().ok().and_then(|running| {
-        running
-            .as_ref()
-            .filter(|running| is_hung(running))
-            .map(|running| running.pid)
-    });
-
-    if let Some(pid) = hung {
-        // What a conversion that has outrun its bound is ended by is the engine rather than
-        // the process that asked it for a page: a page handed to an engine that is being
-        // kept is drawn inside it, so ending the launch alone would leave the engine
-        // spinning on the same document with the seat still held. It is let go of here, and
-        // the document behind it is answered by the engine that starts in its place.
+    if let Some(pid) = supervisor::hung(Adapter::LibreOffice, CONVERSION_GIVE_UP) {
         let_go();
 
         // Verified by name and start time before anything is ended, like every other
         // process this app holds a record of.
         crate::app::engine_processes::terminate_owned(pid);
     }
-}
-
-/// Whether a conversion in flight has had its chance: a document the engine has been drawing
-/// for longer than any document takes is one it is not going to finish.
-fn is_hung(running: &Running) -> bool {
-    running.started.elapsed() >= CONVERSION_GIVE_UP
 }
 
 /// The engine this app is keeping, and when it last drew a page: the process holding it,
@@ -435,10 +440,11 @@ pub fn warm() {
     }
 
     WARM_REQUESTED.store(true, Ordering::Release);
-    start_engine();
 
-    let (_, ready) = &*REQUESTED;
-    ready.notify_all();
+    // The ask is a flag and not a piece of work, so the thread is woken rather than given
+    // something to do: a request that was already waiting behind a conversion is not
+    // replaced by a launch that only gets the engine ready.
+    WORKER.wake();
 }
 
 /// Start the engine the setting keeps, where a warm asked for it and none is up: the work a
@@ -634,72 +640,6 @@ fn let_go_if_expired() {
     }
 }
 
-/// Start the thread conversions run on, once.
-///
-/// It is one of the app's threads rather than one per document: what it does between
-/// conversions is wait on its own slot, which costs nothing, and what it is asked for is
-/// one document at a time because the engine's profile is one seat.
-fn start_engine() {
-    if ENGINE_STARTED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    std::thread::spawn(|| {
-        while let Some(source) = next_request() {
-            // Whatever the engine answers — a page, or a conversion that wrote none — it is
-            // answered in the folder the pages are kept in, which is what the hover waiting
-            // on this document is watching. A panic is contained here for the same reason
-            // the loader contains one: one document's failure is that document's, and the
-            // thread goes on to the next hover — a thread that died on one document would
-            // take every document after it with it, in silence.
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rendered(&source)));
-        }
-    });
-}
-
-/// The next document to draw, waiting for one.
-///
-/// The wait is on the slot itself, so a request is taken up the moment it is made; a lock
-/// poisoned by a panic on another thread is still the same slot, and a conversion queue is
-/// not worth standing down over.
-fn next_request() -> Option<PathBuf> {
-    let (slot, ready) = &*REQUESTED;
-
-    loop {
-        // The slot is looked at and let go of again rather than held across the loop: what
-        // this thread does between two looks — starting the engine a warm asked for — is a
-        // second of work, and the lock it would hold through it is the one a hover puts its
-        // request down through (see `warm`).
-        let mut requested = match slot.lock() {
-            Ok(requested) => requested,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-
-        if let Some(source) = requested.take() {
-            return Some(source);
-        }
-
-        // An engine asked to be up before a document wanted it. Nothing is converted, and what
-        // starts is the engine a conversion would have started anyway.
-        if WARM_REQUESTED.swap(false, Ordering::AcqRel) {
-            drop(requested);
-            warm_kept_engine();
-            continue;
-        }
-
-        // The wait is bounded rather than endless, and what a bound that runs out is for is
-        // the engine: one that is kept is let go of by this thread and no other, and the
-        // idle setting is what says when (see `let_go_if_expired`).
-        let waited = match ready.wait_timeout(requested, IDLE_TICK) {
-            Ok((requested, _)) => requested,
-            Err(poisoned) => poisoned.into_inner().0,
-        };
-        drop(waited);
-
-        let_go_if_expired();
-    }
-}
-
 /// Whether the engine is the one that draws this file: a document of its own lists, named
 /// by the configured list or recognized by its own bytes, or an Office document whose own
 /// application is not installed. The question is asked where it is answered for every
@@ -811,19 +751,15 @@ fn convert(program: &Path, source: &Path) -> Option<Page> {
     crate::app::engine_processes::record(ENGINE_IMAGE, child.id());
 
     // What the engine is drawing, published for the threads that may decide it has stopped
-    // answering while this one waits (see `end_hung_engine`).
-    publish_running(Some(Running {
-        source: source.to_path_buf(),
-        pid: child.id(),
-        started: Instant::now(),
-    }));
+    // answering while this one waits.
+    supervisor::begin(Adapter::LibreOffice, source, child.id());
 
     // The conversion's own bound, which is the same give-up every other thread reads: a
     // document still being drawn and an engine that has stopped drawing look the same from
     // the outside, and time is what tells them apart.
-    let drawn = wait(&mut child, CONVERSION_GIVE_UP);
+    let drawn = supervisor::wait(&mut child, CONVERSION_GIVE_UP, CONVERSION_POLL).is_some();
 
-    publish_running(None);
+    supervisor::stop(Adapter::LibreOffice);
     crate::app::engine_processes::forget(child.id());
 
     // Whatever the engine made of the document, it has drawn what it was going to draw: the
@@ -855,51 +791,8 @@ fn convert(program: &Path, source: &Path) -> Option<Page> {
     )
 }
 
-/// Wait for a process, ending it rather than waiting past `limit`.
-fn wait(child: &mut Child, limit: Duration) -> bool {
-    let deadline = Instant::now() + limit;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return true,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(CONVERSION_POLL),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-        }
-    }
-}
-
-/// Say what the engine is drawing now, or that it has stopped.
-fn publish_running(running: Option<Running>) {
-    if let Ok(mut published) = RUNNING.lock() {
-        *published = running;
-    }
-}
-
 /// The one conversion running at a time, for the reason the engine has one profile.
 static CONVERTING: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-/// The conversion in flight: the document being drawn, the process drawing it, and since
-/// when. It is what tells a busy engine from one that has stopped answering, and it is the
-/// id a conversion that has to be ended is ended by.
-struct Running {
-    source: PathBuf,
-    pid: u32,
-    started: Instant,
-}
-
-static RUNNING: Lazy<Mutex<Option<Running>>> = Lazy::new(|| Mutex::new(None));
-
-/// The document waiting to be drawn, and the signal that one is there: a queue of one, for
-/// the reason there is one seat.
-static REQUESTED: Lazy<(Mutex<Option<PathBuf>>, Condvar)> =
-    Lazy::new(|| (Mutex::new(None), Condvar::new()));
-
-/// Whether the engine thread has been started. It is one of the app's threads rather than
-/// one per document, so it is started once and waits on its slot for the rest of the run.
-static ENGINE_STARTED: AtomicBool = AtomicBool::new(false);
 
 /// Whether an engine has been asked for ahead of a document, which is once per run: what the ask
 /// is for is the first document of a session, and from then on the engine is kept by the setting
@@ -941,17 +834,15 @@ mod tests {
     /// of the engine that its list has not claimed.
     #[test]
     fn queues_nothing_for_a_name_it_does_not_read() {
-        let (slot, _) = &*REQUESTED;
-        if let Ok(mut requested) = slot.lock() {
-            *requested = None;
-        }
+        assert!(
+            !WORKER.take_queued(),
+            "the slot is empty before anything is asked of the engine"
+        );
 
         request(Path::new("animation.swf"));
 
         assert!(
-            slot.lock()
-                .map(|requested| requested.is_none())
-                .unwrap_or(false),
+            !WORKER.take_queued(),
             "the engine is not asked about a name no list of its own holds"
         );
     }
@@ -961,6 +852,11 @@ mod tests {
     /// drawn. A process that stays up stands in for the engine — a test is not going to make
     /// LibreOffice spin on a file — recorded the way the engine is, by image name, which is
     /// the check that keeps an id from being acted on by itself.
+    ///
+    /// The bound is the one this engine gives itself rather than the one the give-up is
+    /// decided by (`supervisor`): what is being asked here is that the two ends of the
+    /// decision reach the process, and the number that decides is that module's business and
+    /// tested there.
     #[test]
     fn ends_the_engine_only_once_its_conversion_has_outrun_the_give_up() {
         let _stand_in = crate::app::engine_processes::STAND_IN
@@ -972,11 +868,6 @@ mod tests {
             .spawn()
             .expect("a process to stand in for the engine");
         let pid = engine.id();
-        let running = |started: Instant| Running {
-            source: PathBuf::from("drawing.cdr"),
-            pid,
-            started,
-        };
 
         assert!(
             crate::app::engine_processes::processes_named("ping.exe").contains(&pid),
@@ -985,85 +876,25 @@ mod tests {
         crate::app::engine_processes::record("ping.exe", pid);
 
         // A conversion that has just started is a document being drawn, and is left to it.
-        publish_running(Some(running(Instant::now())));
+        supervisor::begin(Adapter::LibreOffice, Path::new("drawing.cdr"), pid);
         end_hung_engine();
         assert!(
             crate::app::engine_processes::is_running(pid),
             "a conversion that has just started is not an engine to end"
         );
 
-        // One that has outrun the give-up is an engine that has stopped answering.
-        publish_running(Some(running(Instant::now() - CONVERSION_GIVE_UP)));
+        // One that has outrun the give-up is an engine that has stopped answering. A bound of
+        // nothing is the shortest a run can be outrun by, which says the same thing about
+        // the decision without waiting half a minute to say it.
+        supervisor::end_hung(Adapter::LibreOffice, Duration::ZERO);
         end_hung_engine();
         assert!(
             !crate::app::engine_processes::is_running(pid),
             "the engine a conversion has outrun is ended"
         );
 
-        publish_running(None);
+        supervisor::stop(Adapter::LibreOffice);
         let _ = engine.wait();
-    }
-
-    /// And the bound the engine thread holds over its own conversion: a process that ends
-    /// inside it is answered as it always was, and one that outlasts it is ended there
-    /// rather than waited on — which is what makes the give-up a bound on the engine rather
-    /// than only on a document that happens to be asked for after it.
-    #[test]
-    fn ends_a_conversion_rather_than_waiting_past_its_bound() {
-        let _stand_in = crate::app::engine_processes::STAND_IN
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut quick = std::process::Command::new("ping")
-            .args(["-n", "1", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .expect("a process that ends on its own");
-        assert!(
-            wait(&mut quick, CONVERSION_GIVE_UP),
-            "a conversion that finishes inside its bound is answered as it always was"
-        );
-
-        let mut engine = std::process::Command::new("ping")
-            .args(["-n", "30", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .expect("a process to stand in for the engine");
-        let pid = engine.id();
-        let started = Instant::now();
-
-        assert!(
-            !wait(&mut engine, Duration::from_millis(300)),
-            "a conversion that has outrun its bound is ended, not waited on"
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "and the wait ends at the bound it was given rather than when the process would have"
-        );
-        assert!(
-            !crate::app::engine_processes::is_running(pid),
-            "the engine is gone with it"
-        );
-    }
-
-    /// What the give-up is decided from: a conversion that has just started is not hung —
-    /// a document the engine can draw is seconds, and the profile's first one is a few of
-    /// them — and one that has run past the give-up is.
-    #[test]
-    fn a_conversion_is_hung_only_once_it_has_outrun_the_give_up() {
-        let running = |elapsed: Duration| Running {
-            source: PathBuf::from("drawing.cdr"),
-            pid: std::process::id(),
-            started: Instant::now() - elapsed,
-        };
-
-        assert!(!is_hung(&running(Duration::from_secs(0))));
-        assert!(!is_hung(&running(
-            CONVERSION_GIVE_UP - Duration::from_secs(1)
-        )));
-        assert!(is_hung(&running(CONVERSION_GIVE_UP)));
-        assert!(is_hung(&running(
-            CONVERSION_GIVE_UP + Duration::from_secs(30)
-        )));
     }
 
     /// And the names it does read are the CorelDRAW family and the formats of the same

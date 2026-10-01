@@ -64,15 +64,15 @@
 //! whose listing is still held costs no tool at all. See the `Engine` submenu, where the engines
 //! that *are* kept have their `… TTL` rows and this one has none.
 
+use crate::engines::supervisor::{self, Adapter, Worker};
 use crate::formats::peazip_formats::Backend;
 use once_cell::sync::Lazy;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Condvar, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, SystemTime};
 
 /// How long a listing is given, and the point past which the engine is a stopped one rather than
 /// a busy one: the run is ended where it stands, and the file it was on is remembered as one the
@@ -99,13 +99,6 @@ const LISTING_POLL: Duration = Duration::from_millis(50);
 /// bounded rather than endless for the one way it cannot be: a tool that leaves something else
 /// holding that end.
 const OUTPUT_WAIT: Duration = Duration::from_secs(5);
-
-/// How long the engine thread waits on its slot before looking again.
-///
-/// The wait is on the slot itself, so a request is taken up the moment it is made and this is only
-/// a ceiling on how long anything else — a file the engine thread is asked to give up on, a run
-/// that is ending — goes unnoticed.
-const IDLE_TICK: Duration = Duration::from_secs(1);
 
 /// What the engine's answers about a run are held for: which files it listed, and which it would
 /// not. One hover of one file asks for one answer, and a folder is swept a file at a time, so the
@@ -296,124 +289,38 @@ pub fn request(path: &Path, generation: u64) {
     // A listing that has been inside one file for longer than any of them takes has stopped
     // answering, so it is ended here rather than queued behind: what that frees is the thread it
     // was holding and the file that is waiting for it.
-    end_hung_listing();
+    supervisor::end_hung(Adapter::PeaZip, LISTING_GIVE_UP);
 
     // A request for the file already being listed is that request. One that arrives while another
     // waits replaces it, the way the loader's slot does: the newest hover is the one the pointer
     // is on, and a file whose hover has gone is one nobody is waiting for.
-    if running_source().as_deref() == Some(path) {
+    if supervisor::running_source(Adapter::PeaZip).as_deref() == Some(path) {
         return;
     }
 
-    let (slot, ready) = &*REQUESTED;
-    if let Ok(mut requested) = slot.lock() {
-        *requested = Some(Requested {
-            path: path.to_path_buf(),
-            generation,
-        });
-    }
-    ready.notify_all();
+    let file = path.to_path_buf();
+    WORKER.request(move || {
+        // Whatever the engine answers — a listing, or a run that reported none — the hover
+        // waiting on this file is told either way. A panic is contained here for the reason the
+        // loader contains one: one file's failure is that file's, and the thread goes on to the
+        // next hover.
+        let listing =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| list(&file))).unwrap_or(None);
 
-    start_engine();
-}
-
-/// The file the engine is listing now, if it is listing one.
-fn running_source() -> Option<PathBuf> {
-    RUNNING
-        .lock()
-        .ok()?
-        .as_ref()
-        .map(|running| running.source.clone())
-}
-
-/// End a listing that has outrun the engine's give-up.
-///
-/// Ending the process a listing is waiting on is what ends the wait: the engine thread reads it as
-/// a run that reported nothing, remembers the file as one the engine will not list, and takes up
-/// the file behind it. What the caller here is left with is an engine that costs nothing and the
-/// answer it would have reached anyway.
-fn end_hung_listing() {
-    let hung = RUNNING.lock().ok().and_then(|running| {
-        running
-            .as_ref()
-            .filter(|running| is_hung(running))
-            .map(|running| running.pid)
-    });
-
-    if let Some(pid) = hung {
-        // Verified by name and start time before anything is ended, like every other process this
-        // app holds a record of.
-        crate::app::engine_processes::terminate_owned(pid);
-    }
-}
-
-/// Whether a listing in flight has had its chance: a file the engine has been reading for longer
-/// than any of them takes is one it is not going to finish.
-fn is_hung(running: &Running) -> bool {
-    running.started.elapsed() >= LISTING_GIVE_UP
-}
-
-/// Start the thread listings run on, once.
-///
-/// It is one of the app's threads rather than one per file: what it does between listings is wait
-/// on its own slot, which costs nothing, and what it is asked for is one file at a time because
-/// what it is holding is one process.
-fn start_engine() {
-    if ENGINE_STARTED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    std::thread::spawn(|| {
-        while let Some(requested) = next_request() {
-            // Whatever the engine answers — a listing, or a run that reported none — the hover
-            // waiting on this file is told either way. A panic is contained here for the reason
-            // the loader contains one: one file's failure is that file's, and the thread goes on
-            // to the next hover.
-            let listing =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| list(&requested.path)))
-                    .unwrap_or(None);
-
-            let ok = listing.is_some();
-            if let Some(listing) = listing {
-                crate::readers::archive_listing::remember_engine_listing(&requested.path, listing);
-            } else {
-                refuse(&Key::of(&requested.path));
-            }
-
-            crate::ui::preview_window::notify_peazip_ready(
-                &requested.path,
-                requested.generation,
-                ok,
-            );
+        let ok = listing.is_some();
+        if let Some(listing) = listing {
+            crate::readers::archive_listing::remember_engine_listing(&file, listing);
+        } else {
+            refuse(&Key::of(&file));
         }
+
+        crate::ui::preview_window::notify_peazip_ready(&file, generation, ok);
     });
 }
 
-/// The next file to list, waiting for one.
-///
-/// The wait is on the slot itself, so a request is taken up the moment it is made; a lock poisoned
-/// by a panic on another thread is still the same slot, and a queue of one is not worth standing
-/// down over.
-fn next_request() -> Option<Requested> {
-    let (slot, ready) = &*REQUESTED;
-    let mut requested = match slot.lock() {
-        Ok(requested) => requested,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-
-    loop {
-        if let Some(requested) = requested.take() {
-            return Some(requested);
-        }
-
-        // The wait is bounded rather than endless, and what a bound that runs out is for is a
-        // request that may have been made in the meantime.
-        requested = match ready.wait_timeout(requested, IDLE_TICK) {
-            Ok((requested, _)) => requested,
-            Err(poisoned) => poisoned.into_inner().0,
-        };
-    }
-}
+/// The thread listings run on, and the one file waiting behind whatever is being listed now.
+/// Nothing is done between listings but the wait, so the thread is asked for nothing there.
+static WORKER: Lazy<Worker> = Lazy::new(|| Worker::new(None));
 
 /// List a file, by asking the tool of the installation that reads it the way a user would.
 ///
@@ -529,16 +436,12 @@ fn contents(backend: Backend, program: &Path, source: &Path) -> Option<(String, 
     });
 
     // What the engine is reading, published for the threads that may decide it has stopped
-    // answering while this one waits (see `end_hung_listing`).
-    publish_running(Some(Running {
-        source: source.to_path_buf(),
-        pid: child.id(),
-        started: Instant::now(),
-    }));
+    // answering while this one waits.
+    supervisor::begin(Adapter::PeaZip, source, child.id());
 
-    let status = wait(&mut child, LISTING_GIVE_UP);
+    let status = supervisor::wait(&mut child, LISTING_GIVE_UP, LISTING_POLL);
 
-    publish_running(None);
+    supervisor::stop(Adapter::PeaZip);
 
     let report = written_rx.recv_timeout(OUTPUT_WAIT).ok().flatten();
 
@@ -553,26 +456,6 @@ fn contents(backend: Backend, program: &Path, source: &Path) -> Option<(String, 
 /// edit applies without a restart.
 fn decode_budget() -> u64 {
     crate::config::config::decode_budget_bytes()
-}
-
-/// Wait for a process, ending it rather than waiting past `limit`.
-///
-/// The status comes back where the process ended inside the bound and nothing where it was ended
-/// here — the same distinction an image converter's wait makes, and for the same reason: a run
-/// this side gave up on is not a run whose own answer may be believed.
-fn wait(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
-    let deadline = Instant::now() + limit;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(LISTING_POLL),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
 }
 
 /// Remember that the engine will not list this file, so that it is not asked twice.
@@ -590,42 +473,10 @@ fn refuse(key: &Key) {
     }
 }
 
-/// Say what the engine is listing now, or that it has stopped.
-fn publish_running(running: Option<Running>) {
-    if let Ok(mut published) = RUNNING.lock() {
-        *published = running;
-    }
-}
-
-/// The listing in flight: the file being listed, the process listing it, and since when. It is
-/// what tells a busy engine from one that has stopped answering, and it is the id a run that has
-/// to be ended is ended by.
-struct Running {
-    source: PathBuf,
-    pid: u32,
-    started: Instant,
-}
-
-static RUNNING: Lazy<Mutex<Option<Running>>> = Lazy::new(|| Mutex::new(None));
-
-/// A file to list, and the hover that asked for it.
-struct Requested {
-    path: PathBuf,
-    generation: u64,
-}
-
-/// The file waiting to be listed, and the signal that one is there: a queue of one, for the reason
-/// there is one engine at a time.
-static REQUESTED: Lazy<(Mutex<Option<Requested>>, Condvar)> =
-    Lazy::new(|| (Mutex::new(None), Condvar::new()));
-
-/// Whether the engine thread has been started. It is one of the app's threads rather than one per
-/// file, so it is started once and waits on its slot for the rest of the run.
-static ENGINE_STARTED: AtomicBool = AtomicBool::new(false);
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     /// The engine is never started for a name its own list does not hold: an archive this app
     /// reads itself, a picture, a document and a video are all somebody else's, and asking an
@@ -667,17 +518,15 @@ mod tests {
     /// engine that its list has not claimed.
     #[test]
     fn queues_nothing_for_a_name_it_does_not_read() {
-        let (slot, _) = &*REQUESTED;
-        if let Ok(mut requested) = slot.lock() {
-            *requested = None;
-        }
+        assert!(
+            !WORKER.take_queued(),
+            "the slot is empty before anything is asked of the engine"
+        );
 
         request(Path::new("photo.png"), 7);
 
         assert!(
-            slot.lock()
-                .map(|requested| requested.is_none())
-                .unwrap_or(false),
+            !WORKER.take_queued(),
             "the engine is not asked about a name no list of its own holds"
         );
     }
@@ -710,6 +559,10 @@ mod tests {
     /// process that stays up stands in for the engine — a test is not going to make a real one
     /// spin on an archive — recorded the way the engine is, by image name, which is the check that
     /// keeps an id from being acted on by itself.
+    ///
+    /// The bound is the one this engine gives itself rather than the one the give-up is decided by
+    /// (`supervisor`): what is being asked here is that the two ends of the decision reach the
+    /// process, and the number that decides is that module's business and tested there.
     #[test]
     fn ends_a_listing_only_once_it_has_outrun_the_give_up() {
         let _stand_in = crate::app::engine_processes::STAND_IN
@@ -721,11 +574,6 @@ mod tests {
             .spawn()
             .expect("a process to stand in for the engine");
         let pid = engine.id();
-        let running = |started: Instant| Running {
-            source: PathBuf::from("backup.cab"),
-            pid,
-            started,
-        };
 
         assert!(
             crate::app::engine_processes::processes_named("ping.exe").contains(&pid),
@@ -734,79 +582,24 @@ mod tests {
         crate::app::engine_processes::record("ping.exe", pid);
 
         // A listing that has just started is a file being read, and is left to it.
-        publish_running(Some(running(Instant::now())));
-        end_hung_listing();
+        supervisor::begin(Adapter::PeaZip, Path::new("backup.cab"), pid);
+        supervisor::end_hung(Adapter::PeaZip, LISTING_GIVE_UP);
         assert!(
             crate::app::engine_processes::is_running(pid),
             "a listing that has just started is not an engine to end"
         );
 
-        // One that has outrun the give-up is an engine that has stopped answering.
-        publish_running(Some(running(Instant::now() - LISTING_GIVE_UP)));
-        end_hung_listing();
+        // One that has outrun the give-up is an engine that has stopped answering. A bound of
+        // nothing is the shortest a run can be outrun by, which says the same thing about the
+        // decision without waiting half a minute to say it.
+        supervisor::end_hung(Adapter::PeaZip, Duration::ZERO);
         assert!(
             !crate::app::engine_processes::is_running(pid),
             "the engine a listing has outrun is ended"
         );
 
-        publish_running(None);
+        supervisor::stop(Adapter::PeaZip);
         let _ = engine.wait();
-    }
-
-    /// And the bound the engine thread holds over its own run: a process that ends inside it comes
-    /// back with its own status, and one that outlasts it is ended there rather than waited on.
-    #[test]
-    fn ends_a_listing_rather_than_waiting_past_its_bound() {
-        let _stand_in = crate::app::engine_processes::STAND_IN
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut quick = std::process::Command::new("ping")
-            .args(["-n", "1", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .expect("a process that ends on its own");
-        let status = wait(&mut quick, LISTING_GIVE_UP).expect("a status");
-        assert!(
-            status.success(),
-            "a run that finishes inside its bound is answered as it always was"
-        );
-
-        let mut engine = std::process::Command::new("ping")
-            .args(["-n", "30", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .expect("a process to stand in for the engine");
-        let pid = engine.id();
-        let started = Instant::now();
-
-        assert!(
-            wait(&mut engine, Duration::from_millis(300)).is_none(),
-            "a run that has outrun its bound is ended, not waited on"
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "and the wait ends at the bound it was given rather than when the process would have"
-        );
-        assert!(
-            !crate::app::engine_processes::is_running(pid),
-            "the engine is gone with it"
-        );
-    }
-
-    /// What the give-up is decided from: a run that has just started is not hung — a listing is
-    /// under a second — and one that has run past the give-up is.
-    #[test]
-    fn a_listing_is_hung_only_once_it_has_outrun_the_give_up() {
-        let running = |elapsed: Duration| Running {
-            source: PathBuf::from("backup.cab"),
-            pid: std::process::id(),
-            started: Instant::now() - elapsed,
-        };
-
-        assert!(!is_hung(&running(Duration::from_secs(0))));
-        assert!(!is_hung(&running(LISTING_GIVE_UP - Duration::from_secs(1))));
-        assert!(is_hung(&running(LISTING_GIVE_UP)));
-        assert!(is_hung(&running(LISTING_GIVE_UP + Duration::from_secs(30))));
     }
 
     /// Every tool of the installation is found inside a PeaZip folder and nowhere else: what the app

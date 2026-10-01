@@ -54,13 +54,12 @@
 
 use crate::config::config::{read_within_budget, AppConfig};
 use crate::engines::document_cache::{self, PageKind};
+use crate::engines::supervisor::{self, Adapter, Worker};
 use once_cell::sync::Lazy;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 /// The name this engine's pages are kept under, which is what tells one of its pages from the page
 /// an Office application or an installed render engine drew for the same file (see
@@ -87,13 +86,6 @@ const CONVERSION_GIVE_UP: Duration = Duration::from_secs(60);
 
 /// How often the wait above looks.
 const CONVERSION_POLL: Duration = Duration::from_millis(100);
-
-/// How long the engine thread waits on its slot before looking again.
-///
-/// The wait is on the slot itself, so a request is taken up the moment it is made and this is only
-/// a ceiling on how long anything else — a conversion asked to be given up on, a run that is
-/// ending — goes unnoticed.
-const IDLE_TICK: Duration = Duration::from_secs(1);
 
 /// Where Calibre keeps its programs, for the two places the installer puts them and for a portable
 /// copy a user may have put beside `config.ini`.
@@ -179,23 +171,29 @@ pub fn request(path: &Path) {
     // A conversion that has been inside one book for longer than any of them takes has stopped
     // answering, so it is ended here rather than queued behind: what that frees is the thread it
     // was holding and the book that is waiting for it.
-    end_hung_conversion();
+    supervisor::end_hung(Adapter::Calibre, CONVERSION_GIVE_UP);
 
     // A request for the book already being converted is that request. One that arrives while
     // another waits replaces it, the way the loader's slot does: the newest hover is the one the
     // pointer is on, and a book whose hover has gone is one nobody is waiting for.
-    if running_source().as_deref() == Some(path) {
+    if supervisor::running_source(Adapter::Calibre).as_deref() == Some(path) {
         return;
     }
 
-    let (slot, ready) = &*REQUESTED;
-    if let Ok(mut requested) = slot.lock() {
-        *requested = Some(path.to_path_buf());
-    }
-    ready.notify_all();
-
-    start_engine();
+    let book = path.to_path_buf();
+    WORKER.request(move || {
+        // Whatever the engine makes of the book is written where a page is kept, or left
+        // unwritten as a mark: there is nothing to answer with here, and nothing to send. The
+        // side that asked reads the folder the page lands in (see `request`). A panic is
+        // contained for the reason the loader contains one: one book's failure is that book's,
+        // and the thread goes on to the next hover.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| convert(&book)));
+    });
 }
+
+/// The thread conversions run on, and the one book waiting behind whatever is being converted now.
+/// Nothing is done between conversions but the wait, so the thread is asked for nothing there.
+static WORKER: Lazy<Worker> = Lazy::new(|| Worker::new(None));
 
 /// Whether the engine is the one that reads this file: a name of its own list, or the bytes of a
 /// book it reads under a name no list holds — a `.mobi` renamed to `.dat`, say.
@@ -206,90 +204,6 @@ pub fn request(path: &Path) {
 /// engine's formats, and nothing is asked of one whose bytes are another kind's.
 fn imports(path: &Path) -> bool {
     crate::formats::calibre_formats::is_engine_ebook(path)
-}
-
-/// The book the engine is converting now, if it is converting one.
-fn running_source() -> Option<PathBuf> {
-    RUNNING
-        .lock()
-        .ok()?
-        .as_ref()
-        .map(|running| running.source.clone())
-}
-
-/// End a conversion that has outrun the engine's give-up.
-///
-/// Ending the process a conversion is waiting on is what ends the wait: the engine thread reads it
-/// as a run that wrote nothing, remembers the book as one the engine will not convert, and takes
-/// up the book behind it. What the caller here is left with is an engine that costs nothing and the
-/// answer it would have reached anyway.
-fn end_hung_conversion() {
-    let hung = RUNNING.lock().ok().and_then(|running| {
-        running
-            .as_ref()
-            .filter(|running| is_hung(running))
-            .map(|running| running.pid)
-    });
-
-    if let Some(pid) = hung {
-        // Verified by name and start time before anything is ended, like every other process this
-        // app holds a record of.
-        crate::app::engine_processes::terminate_owned(pid);
-    }
-}
-
-/// Whether a conversion in flight has had its chance: a book the engine has been reading for longer
-/// than any of them takes is one it is not going to finish.
-fn is_hung(running: &Running) -> bool {
-    running.started.elapsed() >= CONVERSION_GIVE_UP
-}
-
-/// Start the thread conversions run on, once.
-///
-/// It is one of the app's threads rather than one per book: what it does between conversions is
-/// wait on its own slot, which costs nothing, and what it is asked for is one book at a time
-/// because what it is holding is one process.
-fn start_engine() {
-    if ENGINE_STARTED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    std::thread::spawn(|| {
-        while let Some(source) = next_request() {
-            // Whatever the engine makes of the book is written where a page is kept, or left
-            // unwritten as a mark: there is nothing to answer with here, and nothing to send. The
-            // side that asked reads the folder the page lands in (see `request`). A panic is
-            // contained for the reason the loader contains one: one book's failure is that book's,
-            // and the thread goes on to the next hover.
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| convert(&source))).ok();
-        }
-    });
-}
-
-/// The next book to convert, waiting for one.
-///
-/// The wait is on the slot itself, so a request is taken up the moment it is made; a lock poisoned
-/// by a panic on another thread is still the same slot, and a queue of one is not worth standing
-/// down over.
-fn next_request() -> Option<PathBuf> {
-    let (slot, ready) = &*REQUESTED;
-    let mut requested = match slot.lock() {
-        Ok(requested) => requested,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-
-    loop {
-        if let Some(requested) = requested.take() {
-            return Some(requested);
-        }
-
-        // The wait is bounded rather than endless, and what a bound that runs out is for is a
-        // request that may have been made in the meantime.
-        requested = match ready.wait_timeout(requested, IDLE_TICK) {
-            Ok((requested, _)) => requested,
-            Err(poisoned) => poisoned.into_inner().0,
-        };
-    }
 }
 
 /// Convert `source` into a page, by running the engine the way a user would: one book in, one PDF
@@ -351,19 +265,15 @@ fn run(program: &Path, source: &Path, written: &Path) -> Option<Vec<u8>> {
     crate::app::engine_processes::record(ENGINE_IMAGE, child.id());
 
     // What the engine is converting, published for the threads that may decide it has stopped
-    // answering while this one waits (see `end_hung_conversion`).
-    publish_running(Some(Running {
-        source: source.to_path_buf(),
-        pid: child.id(),
-        started: Instant::now(),
-    }));
+    // answering while this one waits.
+    supervisor::begin(Adapter::Calibre, source, child.id());
 
     // The conversion's own bound, which is the same give-up every other thread reads: a book still
     // being converted and an engine that has stopped converting look the same from the outside,
     // and time is what tells them apart.
-    let converted = wait(&mut child, CONVERSION_GIVE_UP);
+    let converted = supervisor::wait(&mut child, CONVERSION_GIVE_UP, CONVERSION_POLL).is_some();
 
-    publish_running(None);
+    supervisor::stop(Adapter::Calibre);
     crate::app::engine_processes::forget(child.id());
 
     if !converted {
@@ -379,22 +289,6 @@ fn run(program: &Path, source: &Path, written: &Path) -> Option<Vec<u8>> {
     page.starts_with(b"%PDF-").then_some(page)
 }
 
-/// Wait for a process, ending it rather than waiting past `limit`.
-fn wait(child: &mut Child, limit: Duration) -> bool {
-    let deadline = Instant::now() + limit;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return true,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(CONVERSION_POLL),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-        }
-    }
-}
-
 /// The folder a conversion is staged in.
 ///
 /// Nothing of the user's stays in it longer than a conversion takes — it is emptied before every
@@ -404,32 +298,6 @@ fn wait(child: &mut Child, limit: Duration) -> bool {
 fn stage_folder() -> Option<PathBuf> {
     Some(document_cache::temp_folder().join("calibre"))
 }
-
-/// Say what the engine is converting now, or that it has stopped.
-fn publish_running(running: Option<Running>) {
-    if let Ok(mut published) = RUNNING.lock() {
-        *published = running;
-    }
-}
-
-/// The conversion in flight: the book being converted, the process converting it, and since when.
-/// It is what tells a busy engine from one that has stopped answering, and it is the id a
-/// conversion that has to be ended is ended by.
-struct Running {
-    source: PathBuf,
-    pid: u32,
-    started: Instant,
-}
-
-static RUNNING: Lazy<Mutex<Option<Running>>> = Lazy::new(|| Mutex::new(None));
-
-/// The book waiting to be converted, and the signal that one is there: a queue of one, for the
-/// reason there is one engine at a time.
-static REQUESTED: Lazy<(Mutex<Option<PathBuf>>, Condvar)> =
-    Lazy::new(|| (Mutex::new(None), Condvar::new()));
-
-/// Whether the engine thread has been begun.
-static ENGINE_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
 mod tests {
