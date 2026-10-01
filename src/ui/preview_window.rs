@@ -11697,6 +11697,15 @@ pub(crate) fn pin_is_focused() -> bool {
 /// It is asked for on the press rather than on the pin coming up, because a pin comes up wherever
 /// the pointer happens to be — a pin that took the focus as it appeared would take it out of
 /// whatever the user was typing, under a preview that has not been touched at all.
+///
+/// The two calls that ask are two *asks*, and what is written below is written on the answer
+/// rather than on the asking. Windows refuses them both under the foreground lock — the
+/// foreground goes to whichever process had the last input, and a process that did not have it is
+/// not given it for asking — and that refusal is ordinary rather than a fault: it is what a press
+/// on the pin looks like while something else owns the input, and the hand simply presses again.
+/// A claim written on the asking is a pin that holds a keyboard it was never given and a note of
+/// a window the user is no longer in, and the handover that note exists for is the foreground
+/// asked back from a window the user left (see `pin_release_focus`).
 unsafe fn pin_take_focus(hwnd: HWND) {
     if !pinned() {
         return;
@@ -11721,10 +11730,17 @@ unsafe fn pin_take_focus(hwnd: HWND) {
     let _ = SetForegroundWindow(hwnd);
     let _ = SetFocus(hwnd);
 
-    // The claim is written after the focus has been asked for, because that is when there is a
-    // keyboard to claim — and it is written with the window it came from rather than beside it,
-    // so a window procedure re-entered by either call above cannot see one without the other.
-    take_keyboard(behind);
+    // Whether the keyboard arrived is asked of Windows, by the same question `pin_is_focused`
+    // asks, because that is the one answer here that cannot be wrong: the caret is either in
+    // this window or it is not, and where it is says what the pin holds rather than what the
+    // calls above hoped for. A press that was refused therefore leaves the pin holding no
+    // keyboard at all — the state a pin the hand has never pressed is in — and that is a state
+    // which asks again rather than one that is stuck: the keyboard is not in the pin, so
+    // `pin_is_focused` is false on the next press and the press is answered afresh (see
+    // `WM_LBUTTONDOWN`). What such a press leaves alone is a claim an earlier one earned: the
+    // keyboard in it did arrive then, and Windows drops that claim itself the moment the pin is
+    // activated away from (see the `WM_ACTIVATE` above).
+    take_keyboard(behind, pin_is_focused());
 }
 
 /// Hand the keyboard back, from the pin having lost it: the user has clicked into another window,
@@ -28157,7 +28173,7 @@ mod tests {
 
         // Windows taking the focus away is the user clicking into something else: the window now
         // in front holds the keyboard, so there is nothing to hand over and the claim is dropped.
-        take_keyboard(0x2000);
+        take_keyboard(0x2000, true);
         pin_release_focus();
         assert!(
             !pin_holds_a_keyboard(),
@@ -28166,7 +28182,7 @@ mod tests {
 
         // A pin ending is the road that has to do the work: it drops the claim and hands the
         // keyboard back, and the handover is what that claim is asked for.
-        take_keyboard(0x2000);
+        take_keyboard(0x2000, true);
         end_pin(Reason::Closed, &Win32PinWindow);
         assert!(
             !pin_holds_a_keyboard(),
