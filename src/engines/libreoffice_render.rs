@@ -218,7 +218,7 @@ pub fn refused(path: &Path) -> bool {
 /// or the mark that says it is not coming. A hover that asked for one is replayed when it
 /// is there.
 pub fn request(path: &Path) {
-    if !imports(path) || !available() {
+    if !crate::formats::libre_formats::engine_page_kind(path).is_some() || !available() {
         return;
     }
     if rendered_page(path).is_some() || refused(path) {
@@ -640,15 +640,6 @@ fn let_go_if_expired() {
     }
 }
 
-/// Whether the engine is the one that draws this file: a document of its own lists, named
-/// by the configured list or recognized by its own bytes, or an Office document whose own
-/// application is not installed. The question is asked where it is answered for every
-/// caller — see `libre_formats::engine_page_kind` — so that a page one side asks for is a
-/// page the other side will draw.
-fn imports(path: &Path) -> bool {
-    crate::formats::libre_formats::engine_page_kind(path).is_some()
-}
-
 /// Convert a document whose page is not kept yet, and keep what the engine drew.
 ///
 /// The answer is the file the page is kept as; a document the engine would not draw is answered
@@ -824,7 +815,7 @@ mod tests {
             "animation.swf",
         ] {
             assert!(
-                !imports(Path::new(name)),
+                !crate::formats::libre_formats::engine_page_kind(Path::new(name)).is_some(),
                 "`{name}` is not one of its formats"
             );
         }
@@ -908,7 +899,10 @@ mod tests {
             "poster.pub",
             "plan.vsd",
         ] {
-            assert!(imports(Path::new(name)), "`{name}` is one of its formats");
+            assert!(
+                crate::formats::libre_formats::engine_page_kind(Path::new(name)).is_some(),
+                "`{name}` is one of its formats"
+            );
         }
     }
 

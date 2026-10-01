@@ -213,17 +213,6 @@ pub fn available_for(path: &Path) -> bool {
     BACKENDS.program(Backend::of(path)).is_some()
 }
 
-/// Whether the engine is the one that lists this file: a name of its own list, or the bytes of an
-/// archive it reads under a name no list holds — a `.cab` renamed to `.dat`, say.
-///
-/// The question is asked where it is answered for every caller — see
-/// `peazip_formats::is_engine_archive` — so that an archive one side asks about is an archive the
-/// other side will list. Nothing is asked of a file that is what it is called but is not one of
-/// the engine's formats, and nothing is asked of one whose bytes are another kind's.
-fn imports(path: &Path) -> bool {
-    crate::formats::peazip_formats::is_engine_archive(path)
-}
-
 /// A file and the version of it an answer is about: its path, what it weighed and when it was last
 /// written, which is what says it is a file to list again.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -282,7 +271,11 @@ pub fn listed(path: &Path) -> bool {
 /// what a caller watches for is the message it sends when it is done — or the mark that says the
 /// listing is not coming. A hover that asked for one is replayed when the answer lands.
 pub fn request(path: &Path, generation: u64) {
-    if !imports(path) || !available_for(path) || refused(path) || listed(path) {
+    if !crate::formats::peazip_formats::is_engine_archive(path)
+        || !available_for(path)
+        || refused(path)
+        || listed(path)
+    {
         return;
     }
 
@@ -498,7 +491,7 @@ mod tests {
             "animation.swf",
         ] {
             assert!(
-                !imports(Path::new(name)),
+                !crate::formats::peazip_formats::is_engine_archive(Path::new(name)),
                 "`{name}` is not one of its formats"
             );
         }
@@ -510,7 +503,10 @@ mod tests {
             "readme.bz2",
             "readme.zst",
         ] {
-            assert!(imports(Path::new(name)), "`{name}` is one of its formats");
+            assert!(
+                crate::formats::peazip_formats::is_engine_archive(Path::new(name)),
+                "`{name}` is one of its formats"
+            );
         }
     }
 

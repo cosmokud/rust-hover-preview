@@ -332,17 +332,6 @@ pub fn available() -> bool {
     ENGINE.is_some()
 }
 
-/// Whether the engine is the one that develops this file: a name of its own list, or the
-/// bytes of a picture it reads under a name no list holds — a `.sgi` renamed to `.bin`, say.
-///
-/// The question is asked where it is answered for every caller — see
-/// `magick_formats::is_engine_picture` — so that a picture one side asks about is a picture
-/// the other side will read. Nothing is asked of a file that is what it is called but is not
-/// one of the engine's formats, and nothing is asked of one whose bytes are another kind's.
-fn imports(path: &Path) -> bool {
-    crate::formats::magick_formats::is_engine_picture(path)
-}
-
 /// A file and the version of it an answer is about: its path, what it weighed and when it was
 /// last written, which is what says it is a file to develop again.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -533,7 +522,7 @@ struct Held {
 /// mark that says the picture is not coming. A hover that asked for one is replayed when
 /// the answer lands.
 pub fn request(path: &Path, room: (u32, u32), generation: u64) {
-    if !imports(path) || !available() || refused(path) {
+    if !crate::formats::magick_formats::is_engine_picture(path) || !available() || refused(path) {
         return;
     }
 
@@ -827,13 +816,16 @@ mod tests {
             "drawing.cdr",
         ] {
             assert!(
-                !imports(Path::new(name)),
+                !crate::formats::magick_formats::is_engine_picture(Path::new(name)),
                 "`{name}` is not one of its formats"
             );
         }
 
         for name in ["shot.nef", "shot.CR3", "shot.arw", "shot.dng", "scan.dcm"] {
-            assert!(imports(Path::new(name)), "`{name}` is one of its formats");
+            assert!(
+                crate::formats::magick_formats::is_engine_picture(Path::new(name)),
+                "`{name}` is one of its formats"
+            );
         }
     }
 
