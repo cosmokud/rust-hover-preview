@@ -42,20 +42,35 @@ encrypted. Nothing bypasses a password, and no password is ever stored.
 
 ## What the app does not do
 
-- No network connections except the update check below. Nothing else in the app
+- No network connections except the update check below. Nothing this app writes
   opens a socket, and nothing is ever sent anywhere: the check asks this
   project's own GitHub releases for two files, and it carries nothing about you,
   your machine, or anything you have previewed beyond what any HTTPS request
   carries. No telemetry, no analytics, no crash reports.
+  A `.html` file previewed under **Render HTML** is handed whole to the WebView2
+  runtime, which is a full browser: the sandbox it runs in denies every
+  navigation, and the browser is started with `--host-resolver-rules="MAP *
+  ~NOTFOUND"`, so a name cannot resolve and nothing a page references is
+  fetched. A page cannot open a socket, and it has no `fetch`, no `XMLHttpRequest`
+  and no `<img src>` that reaches anything. `--allow-file-access-from-files` is
+  deliberately **not** passed either, so a page reaches its own file and nothing
+  beside it. Treat a rendered page as untrusted code running with no network.
 - No keylogging. The app polls the pressed-or-not state of a few specific
   keys (your trigger key, the navigation keys, the letters and digits a name is
   typed with in Explorer, mouse buttons, and Ctrl+C while text is selected) to
-  drive previews, and it watches one key with a keyboard hook so that a preview
-  can be pinned. Keystrokes are never recorded, stored, or sent, and nothing you
-  type is ever read: what is compared is a key's number. A pinned window you have
-  clicked takes the ordinary Windows keyboard focus, and the handful of keys it
-  answers (arrows, `Escape`) arrive at it as keystrokes sent to that window —
-  nothing is polled system-wide for them, and nothing is recorded.
+  drive previews, and it uses a **system-wide low-level keyboard hook**
+  (`WH_KEYBOARD_LL`) to watch the key you chose for pinning (`Space` by default)
+  and to read the click, press and release that pin a preview. Keystrokes are
+  never recorded, stored, or sent: the hook compares a key's *number* against the
+  keys the app answers and counts presses, and it keeps no text, no string and no
+  history. Turning **Enable Pin** off unbinds the pin key, and the hook then
+  compares against nothing at all for it. A pinned window you have clicked takes
+  the ordinary Windows keyboard focus, and the handful of keys it answers
+  (arrows, `Escape`, `Space`) arrive at it as keystrokes sent to that window —
+  those are not polled system-wide, and nothing is recorded. A page shown under
+  **Render HTML** takes the pointer and the keyboard where you clicked it, so a
+  running page receives keystrokes; that is the page's own business and nothing
+  is recorded of it.
 - No screen scraping of other apps. The preview is the app's own window,
   painted by itself.
 - No code injection into Explorer. It asks Explorer which item is under the
@@ -132,8 +147,9 @@ run during normal use.
 - **External processes:** only `ffplay`/`ffprobe`/`ffmpeg` (your install, and
   only when it is installed), your Office apps (`WINWORD`/`EXCEL`/`POWERPNT`),
   and the WebView2 browser Windows ships with (`msedgewebview2.exe`) for SVG
-  previews. Office is started hidden unless you already had that app open — your
-  open instance is never hidden, quit, or killed, and neither is a browser
+  previews and, under **Render HTML**, for running a `.html` page. Office is
+  started hidden unless you already had that app open — your open instance is
+  never hidden, quit, or killed, and neither is a browser
   another application owns.
   Everything this app starts is put in a Windows job object and written to a
   small file under `%LOCALAPPDATA%\rust-hover-preview\engines`, so that a crash,
@@ -151,9 +167,11 @@ run during normal use.
 Your file content is handed to these local programs only, never over a
 network: your Microsoft Office (Office previews), your FFmpeg binaries (video
 previews, if you have them), the Windows media engine and the Windows PDF engine
-(video and PDF previews), and the WebView2 runtime (SVG previews, which it is
-given with all network access denied). Their
-own vendor privacy statements apply to them; this app adds no reporting on top.
+(video and PDF previews), and the WebView2 runtime (SVG previews, and a `.html`
+page under **Render HTML** — given with all network access denied: every
+navigation is sandboxed off, no host name resolves, and the files beside the
+page are not reachable). Their own vendor privacy statements apply to them; this
+app adds no reporting on top.
 
 GitHub is the one service this app talks to at all, and only for the update
 check: it is asked whether a newer release exists, and for the installer when you
