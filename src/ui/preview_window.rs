@@ -188,6 +188,99 @@ const STATIC_WAIT_MS: u64 = 150;
 /// pointer's pace rather than at this pace — this stays short so caption
 /// buttons still feel instant while waking 3x less often than the frame loop.
 const STATIC_PIN_WAIT_MS: u64 = 50;
+/// How long the preview thread waits between the frames of something that is moving. The wait
+/// wakes on window input as well as on this interval, so this is a ceiling and not a rate: a
+/// drag follows the hand because the wait ends when the pointer does, not because a tick came
+/// round.
+const FRAME_WAIT_MS: u64 = 16;
+
+/// How long the preview thread waits before it comes round again, which is the loop's whole
+/// cadence in one place.
+///
+/// Four bands, and which one a tick is in is a decision rather than an arithmetic result: it is
+/// the difference between a loop that wakes sixty times a second for the life of the process
+/// doing nothing, and one that wakes twice a second and still answers every button.
+///
+/// *Nothing on screen* does not answer to its cadence at all. There is nothing to animate,
+/// nothing to repaint and nothing left to keep in step, so the wait becomes the preview channel
+/// itself and a hover is answered as it arrives rather than on the next tick. `dynamic` and
+/// `pinned` are ignored in that band and are named that way rather than left to the caller to
+/// work out, because a caller that has to decide which arguments matter has to re-decide the
+/// question this answers.
+///
+/// *Something moving* is the frame rate, and it is held for anything that has a picture to
+/// advance: a video, an animation, a sound's card, a transport bar, a spinner.
+///
+/// *Something still* is the band the two settings above divide, and the split is the whole of
+/// the argument for having two: a pinned static document wakes at `STATIC_PIN_WAIT_MS` and a
+/// hover's at `STATIC_WAIT_MS`, because a pin's caption carries the buttons that close it and a
+/// static preview's carries nothing at all. Three times as often is not three times the CPU —
+/// both bands sleep on the channel and wake on input — but it is the difference between a
+/// caption that feels instant and one that does not.
+///
+/// Two commits tuned these numbers and disagreed with each other, which is what a decision
+/// with nowhere to be tested goes: there was no place to ask whether the number was still right,
+/// so each change was argued from what it seemed to cost.
+fn wait_before_the_next_tick(nothing_on_screen: bool, dynamic: bool, pinned: bool) -> u64 {
+    if nothing_on_screen {
+        IDLE_WAIT_MS
+    } else if dynamic {
+        FRAME_WAIT_MS
+    } else if pinned {
+        STATIC_PIN_WAIT_MS
+    } else {
+        STATIC_WAIT_MS
+    }
+}
+
+/// Whether this tick takes a full look at the media behind the preview, or trusts the hint.
+///
+/// A full look is the expensive one — it takes the media lock and reads what is on screen — and
+/// a static tick skips it entirely, which is what made the loop cheap enough to run on a
+/// battery. Four things force one anyway, and each of them is a way the hint can be wrong:
+///
+/// * `dynamic` — the hint says something moved, and a hint that is wrong here costs a stale
+///   frame rather than a late one.
+/// * `a_wait` — a load, a walk, a video's start or a first frame is outstanding, and what is on
+///   screen is a stand-in for something that has not arrived.
+/// * `generation_moved` — a swap bumps the generation, and a new hover's media is a different
+///   answer from the last one's.
+/// * `since_the_last_one` — the backstop, and the only one of the four that catches a kind that
+///   changes without a swap: streaming frames that land after the fact, which is a file whose
+///   type this app only discovers by looking. Without it those frames are noticed on the next
+///   swap rather than within half a second, which is a preview that stays a spinner under a
+///   stream that is already playing.
+///
+/// The backstop is the one arm here that exists because of a symptom rather than a principle,
+/// and it is also the one most likely to be argued away as a cost — so it is named rather than
+/// left as a bare `elapsed()` in a four-hundred-line loop.
+fn needs_a_full_media_look(
+    dynamic_hint: bool,
+    a_wait: bool,
+    generation_moved: bool,
+    since_the_last_one: Duration,
+) -> bool {
+    dynamic_hint
+        || a_wait
+        || generation_moved
+        || since_the_last_one >= Duration::from_millis(STATIC_MEDIA_REFRESH_MS)
+}
+
+/// How often the player's window is put back in front, which is split by what is competing with
+/// it for the top of the z-order.
+///
+/// A pinned video competes with the pin's own window and so keeps the tight band; a hover's
+/// video competes with nothing, and re-asserting topmost for a tooltip is five DWM reorders a
+/// second spent on a window that was in front when nobody clicked anything. This is the one
+/// number in the loop that was moved for that reason alone, and it is two arms of an `if` where
+/// the arms are the decision.
+fn topmost_cadence_ms(pinned: bool) -> u64 {
+    if pinned {
+        PIN_TOPMOST_REASSERT_MS
+    } else {
+        HOVER_TOPMOST_REASSERT_MS
+    }
+}
 
 /// How often the page an engine is drawing is looked for on disk.
 ///
@@ -19939,13 +20032,8 @@ pub fn run_preview_window() {
             //
             // Split cadence: a pinned video competes with the pin's own window and keeps
             // the tight band, while a hover video gets the slow one — reordering DWM
-            // 5x/s for a tooltip is what this used to cost (see
-            // `PIN_TOPMOST_REASSERT_MS` / `HOVER_TOPMOST_REASSERT_MS`).
-            let topmost_cadence_ms = if pinned() {
-                PIN_TOPMOST_REASSERT_MS
-            } else {
-                HOVER_TOPMOST_REASSERT_MS
-            };
+            // 5x/s for a tooltip is what this used to cost (see `topmost_cadence_ms`).
+            let topmost_cadence_ms = topmost_cadence_ms(pinned());
             if current_video_path.is_some()
                 && !pin_is_collapsed()
                 && !pin_volume_open()
@@ -19958,19 +20046,22 @@ pub fn run_preview_window() {
 
             // Advance animation frames if needed
             let mut needs_repaint = false;
-            // Whether this tick takes a full look at the media behind the preview
-            // (see `STATIC_MEDIA_REFRESH_MS`): a swap, a load, a wait or a player
-            // forces one, a dynamic hint keeps the fast cadence, and a static hint
-            // still re-checks twice a second so late streaming frames are noticed.
-            let need_media_check = media_dynamic_hint
-                || pending_load.is_some()
-                || pin_load.is_some()
-                || pin_walk_wait.is_some()
-                || video_start.is_some()
-                || first_frame_wait.is_some()
-                || current_generation != last_checked_generation
-                || last_full_media_check.elapsed()
-                    >= Duration::from_millis(STATIC_MEDIA_REFRESH_MS);
+            // Whether this tick takes a full look at the media behind the preview: a
+            // swap, a load, a wait or a player forces one, a dynamic hint keeps the fast
+            // cadence, and a static hint still re-checks twice a second so late streaming
+            // frames are noticed. Named rather than written out inline, because the backstop
+            // is the arm most likely to be argued away and the one that cannot be argued away
+            // on a machine where nothing happens to stream (see `needs_a_full_media_look`).
+            let need_media_check = needs_a_full_media_look(
+                media_dynamic_hint,
+                pending_load.is_some()
+                    || pin_load.is_some()
+                    || pin_walk_wait.is_some()
+                    || video_start.is_some()
+                    || first_frame_wait.is_some(),
+                current_generation != last_checked_generation,
+                last_full_media_check.elapsed(),
+            );
 
             // The engine draws a document in a window of its own, and that window is put
             // up only once the page has arrived: what is underneath it — the spinner the
@@ -22695,17 +22786,15 @@ pub fn run_preview_window() {
                 // resume, a display change — waits to be noticed. The wait wakes
                 // on window input at once, so a drag never queues behind it (see
                 // `wait_preview_channel`).
-                carried_preview_msg = wait_preview_channel(&rx, IDLE_WAIT_MS);
+                carried_preview_msg =
+                    wait_preview_channel(&rx, wait_before_the_next_tick(true, false, pinned()));
             } else {
-                // Something is on screen. A tick that has something to animate —
-                // video, animation, audio card, transport, spinner, load or wait —
-                // keeps the frame cadence; a static picture or page of text waits on
-                // the channel instead, so a Hide/Show still answers within a slice
-                // of it. Pinned static ticks keep a shorter ceiling than hover
-                // ones so caption buttons stay snappy (see `STATIC_WAIT_MS` and
-                // `STATIC_PIN_WAIT_MS`), and a drag is dispatched at the pointer's
-                // pace either way since the wait wakes on input (see
-                // `wait_preview_channel`).
+                // Something is on screen, and which band of the cadence it lands in is
+                // `wait_before_the_next_tick`'s question — a tick that has something to
+                // animate keeps the frame cadence, a static picture waits on the channel, and a
+                // pinned static one keeps a shorter ceiling so the caption's buttons stay
+                // snappy. A drag is dispatched at the pointer's pace either way since the wait
+                // wakes on input (see `wait_preview_channel`).
                 //
                 // A wait that ended, a generation that moved or a pin that came up
                 // or down may have installed another kind behind the hint: classify
@@ -22722,14 +22811,8 @@ pub fn run_preview_window() {
                 {
                     media_dynamic_hint = true;
                 }
-                let tick_dynamic = media_dynamic_hint || tick_has_wait;
-                let wait_ms = if tick_dynamic {
-                    16
-                } else if pinned() {
-                    STATIC_PIN_WAIT_MS
-                } else {
-                    STATIC_WAIT_MS
-                };
+                let wait_ms =
+                    wait_before_the_next_tick(false, media_dynamic_hint || tick_has_wait, pinned());
                 carried_preview_msg = wait_preview_channel(&rx, wait_ms);
             }
         }
@@ -23266,6 +23349,116 @@ mod tests {
             design: PreviewScale::Percent(17),
             font: PreviewScale::Percent(18),
         }
+    }
+
+    /// A loop with nothing on screen does not wake for a caption that is not there, and one with a
+    /// caption that is does not wait as long.
+    ///
+    /// The four bands and what each is for, in one list, because the numbers were tuned twice by
+    /// two commits that disagreed with each other and there was nowhere to ask whether a change
+    /// had broken the band next to it. The ordering is the claim: each band is strictly longer
+    /// than the one before it except where the caption says it should not be, and a band that
+    /// moved past its neighbour without anybody noticing is exactly what two tunings disagree
+    /// about looks like from the outside.
+    ///
+    /// Nothing on screen is the slowest band and it ignores the other two entirely: there is no
+    /// picture to advance and no button to press, so the only thing the interval bounds is how
+    /// long a window message waits to be noticed.
+    #[test]
+    fn the_loop_s_own_cadence_is_the_slowest_thing_it_does() {
+        assert_eq!(
+            wait_before_the_next_tick(true, false, false),
+            IDLE_WAIT_MS,
+            "nothing on screen waits the longest, and is not a function of whether a pin is up"
+        );
+        assert_eq!(
+            wait_before_the_next_tick(true, true, true),
+            IDLE_WAIT_MS,
+            "a pin and a wait do not make an idle loop turn: there is nothing to draw either"
+        );
+
+        assert_eq!(
+            wait_before_the_next_tick(false, true, false),
+            FRAME_WAIT_MS,
+            "something moving turns at the frame rate, whatever is behind it"
+        );
+        assert_eq!(
+            wait_before_the_next_tick(false, true, true),
+            FRAME_WAIT_MS,
+            "and a pin does not slow that down — a pinned video is still a video"
+        );
+
+        assert!(
+            wait_before_the_next_tick(false, false, true)
+                < wait_before_the_next_tick(false, false, false),
+            "a pin's static tick is shorter than a hover's, because a pin's caption carries the \
+             buttons that close it and a static preview's carries nothing: {} against {}",
+            wait_before_the_next_tick(false, false, true),
+            wait_before_the_next_tick(false, false, false)
+        );
+        assert!(
+            wait_before_the_next_tick(false, false, false) < IDLE_WAIT_MS,
+            "and anything on screen is more work than nothing on screen"
+        );
+    }
+
+    /// A static tick skips the media lock, and the four things that stop it are each a way the
+    /// hint can be wrong.
+    ///
+    /// The backstop is the one that matters and the one that costs. It exists because a file's
+    /// kind can change without a swap — streaming frames land after the fact, and this app
+    /// discovers a stream is a video by looking at it — and without it those frames are noticed
+    /// on the next swap rather than within half a second: a preview that stays a spinner over a
+    /// stream that is already playing. It is also the arm most likely to be argued away as a
+    /// cost on a machine where nothing streams, which is why it is a named argument rather than
+    /// a bare `elapsed()` four hundred lines from where it is decided.
+    #[test]
+    fn a_static_tick_looks_at_the_media_only_when_the_hint_cannot_be_trusted() {
+        let just_looked = Duration::ZERO;
+        let long_untouched = Duration::from_millis(STATIC_MEDIA_REFRESH_MS);
+
+        assert!(
+            !needs_a_full_media_look(false, false, false, just_looked),
+            "a static tick that just looked, with nothing new and nothing waited for, looks again \
+             not at all — this is the arm that made the loop cheap enough to leave running"
+        );
+
+        for (dynamic, a_wait, generation_moved, what) in [
+            (true, false, false, "the hint says something moved"),
+            (
+                false,
+                true,
+                false,
+                "a load, a walk or a player is outstanding",
+            ),
+            (false, false, true, "a swap has installed a different hover"),
+        ] {
+            assert!(
+                needs_a_full_media_look(dynamic, a_wait, generation_moved, just_looked),
+                "{what}, so the hint is not worth trusting this tick"
+            );
+        }
+
+        // And the backstop, which is the only arm that fires with nothing new at all.
+        assert!(
+            needs_a_full_media_look(false, false, false, long_untouched),
+            "and after half a second of nothing the media is looked at anyway, so a kind that \
+             changed without a swap — a stream that turned out to be a video — is noticed within \
+             half a second rather than on the next hover"
+        );
+    }
+
+    /// A pin's video keeps the place at the top and a hover's does not, because a hover's
+    /// competes with nothing and re-asserting topmost for a tooltip is five DWM reorders a
+    /// second spent on a window that was in front when nobody clicked anything.
+    #[test]
+    fn only_a_pinned_players_window_is_put_back_in_front_often() {
+        assert_eq!(topmost_cadence_ms(true), PIN_TOPMOST_REASSERT_MS);
+        assert_eq!(topmost_cadence_ms(false), HOVER_TOPMOST_REASSERT_MS);
+        assert!(
+            topmost_cadence_ms(true) < topmost_cadence_ms(false),
+            "a pin competes with the pin's own window for the top and so keeps the tighter band"
+        );
     }
 
     /// Every kind follows the one setting it names, and the share that comes back says which.
