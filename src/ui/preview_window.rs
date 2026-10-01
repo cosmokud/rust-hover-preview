@@ -2511,67 +2511,61 @@ pub(crate) fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
     bgra
 }
 
-/// The backdrop a picture is drawn over — and every other preview that is not a
-/// document: a PDF page, a painted frame, a page Office rendered.
-fn current_image_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.image_background)
-        .unwrap_or(DEFAULT_IMAGE_BACKGROUND)
-}
-
-/// The backdrop a font specimen is drawn over, which is a page of its own: a document's
-/// backdrop is the one its shapes are drawn on, and a specimen's is the one its glyphs are.
-fn current_font_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.font_background)
-        .unwrap_or(DEFAULT_FONT_BACKGROUND)
-}
-
-/// The backdrop a `.dds` texture is drawn over, which the tray keeps apart from a
-/// picture's: a texture's alpha channel is as often a mask or a channel nobody filled in as
-/// it is transparency, so what is behind one is a question of its own (see `dds_image`).
-fn current_dds_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.dds_background)
-        .unwrap_or(DEFAULT_DDS_BACKGROUND)
-}
-
-/// The backdrop a design document is drawn over, which the tray keeps apart from a
-/// picture's: what is previewed is the picture the file keeps of the whole document, and
-/// a designer's transparency is the document's own rather than a photograph's.
-fn current_design_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.design_background)
-        .unwrap_or(DEFAULT_DESIGN_BACKGROUND)
-}
-
-/// The backdrop a vector drawing is drawn over, which the tray keeps apart from a
-/// picture's.
+/// The backdrop a preview of one of the six is drawn over, out of the one configuration.
 ///
-/// The kind holds two halves that answer this the same way for different reasons: a
-/// metafile says what was drawn and nothing about the sheet under it, so what stands
-/// behind the marks is this app's (see `metafile_image`), and an SVG document is drawn on
-/// a page of the engine's own, so what it is given is a colour (see `webview_preview`).
-fn current_vector_background() -> TransparentBackground {
+/// It was six functions, each of which took the lock for one scalar, and each of which was asked
+/// from one place that had to remember which of the six a file fell in. `routing::Backdrop` is
+/// the one exhaustive answer and this is the one read that turns it into a colour — see
+/// `routing::backdrop_of` for the judgement behind each of the six, and for why a texture and a
+/// design document keep a backdrop a picture does not.
+fn current_background(backdrop: crate::formats::routing::Backdrop) -> TransparentBackground {
     CONFIG
         .lock()
-        .map(|cfg| cfg.vector_background)
-        .unwrap_or(DEFAULT_VECTOR_BACKGROUND)
+        .map(|cfg| crate::formats::routing::backdrop_value(backdrop, &cfg))
+        .unwrap_or(match backdrop {
+            crate::formats::routing::Backdrop::Image => DEFAULT_IMAGE_BACKGROUND,
+            crate::formats::routing::Backdrop::Font => DEFAULT_FONT_BACKGROUND,
+            crate::formats::routing::Backdrop::Dds => DEFAULT_DDS_BACKGROUND,
+            crate::formats::routing::Backdrop::Design => DEFAULT_DESIGN_BACKGROUND,
+            crate::formats::routing::Backdrop::Vector => DEFAULT_VECTOR_BACKGROUND,
+            crate::formats::routing::Backdrop::Html => DEFAULT_HTML_BACKGROUND,
+        })
 }
 
-/// The backdrop a page of HTML is drawn over, which the tray keeps apart from a vector
-/// drawing's: a document the browser is handed is a page already — it brings its own markup
-/// and its own stylesheet — so what is behind it is the page to read it against rather than
-/// a transparency to look through, which is why it does not borrow the drawing's answer.
-fn current_html_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.html_background)
-        .unwrap_or(DEFAULT_HTML_BACKGROUND)
+/// Which of the three the browser draws, for a file whose own bytes have not already said.
+///
+/// It is asked of the name because that is what these three are told apart by, and it is one
+/// function rather than three predicates because the loader asks the same question when it hands
+/// the hover over, the layout asks it when it decides the size, and the paint asks it when it
+/// picks the backdrop — three places that had each been picking out of the same three names.
+fn web_page_of(path: &Path) -> Option<crate::formats::routing::WebPage> {
+    use crate::formats::routing::WebPage;
+
+    if svg_preview::is_svg_file(path) {
+        Some(WebPage::Svg)
+    } else if font_formats::is_font_file(path) {
+        Some(WebPage::FontSpecimen)
+    } else if crate::formats::text_formats::is_html_extension(path) {
+        Some(WebPage::Html)
+    } else {
+        None
+    }
+}
+
+/// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the same
+/// way it decides everything else about a document. The one engine draws all the kinds this app
+/// hands it, and each of the three answers for itself — a font file's specimen is a page of its
+/// own, an SVG document is a vector drawing, and a page of HTML is a page, so the backdrop the
+/// tray keeps for the kind is the one it is given.
+///
+/// It asks the router's one answer for which of the three a file is rather than repeating the
+/// three-name test, so the backdrop, the layout's size and the loader's hand-over cannot be
+/// three readings of the same question (see `routing::WebPage`).
+fn engine_background(path: &Path) -> TransparentBackground {
+    current_background(crate::formats::routing::backdrop_of(
+        PreviewType::Vector,
+        web_page_of(path),
+    ))
 }
 
 /// How loud a video is played, which is read when one is started rather than when the
@@ -2613,21 +2607,6 @@ fn current_audio_options() -> AudioPreviewOptions {
         })
 }
 
-/// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the
-/// same way it decides everything else about a document. The one engine draws all the kinds
-/// this app hands it, and each of the three answers for itself — a font file's specimen is a
-/// page of its own, an SVG document is a vector drawing, and a page of HTML is a page, so
-/// the backdrop the tray keeps for the kind is the one it is given.
-fn engine_background(path: &Path) -> TransparentBackground {
-    if font_formats::is_font_file(path) {
-        current_font_background()
-    } else if crate::formats::text_formats::is_html_extension(path) {
-        current_html_background()
-    } else {
-        current_vector_background()
-    }
-}
-
 /// The kind of engine-drawn preview `path` would get, when it is one of the three the browser
 /// draws: a document, a font file's specimen, or a page of HTML.
 ///
@@ -2643,37 +2622,37 @@ fn engine_kind_of(path: &Path) -> Option<PreviewType> {
     // document, and the drawing layer replays a metafile or a PostScript program, which is
     // no engine window at all — so the name answers which half of that kind a file is.
     //
-    // The entry is read before the lock and the lists are taken under it, so the guard is not
-    // held across the file read the content question may make (see `HoverFacts`).
+    // All of that is now one read of the router's answer rather than four questions asked of
+    // the file in this order, which is what it used to be: the content, then the router, then
+    // three names. A kind this app grows is an arm of `routing::drawn_by_of` rather than a fourth
+    // question here (see `HoverFacts`).
     let hover = HoverFacts::read(path);
 
-    match hover.content {
-        // The three kinds the browser draws, and a kind that is not one of them is none of
-        // this app's business: a picture under a font's name is the picture it is, and
-        // nothing is handed to the engine for it.
-        crate::formats::content_type::Content::Kind(kind) => match kind {
-            PreviewType::Vector if hover.svg_document => Some(PreviewType::Vector),
-            PreviewType::Fonts => Some(PreviewType::Fonts),
-            PreviewType::Text if hover.html_drawn_by_the_engine() => Some(PreviewType::Text),
+    match hover.route.content {
+        // A file the bytes named as another kind is that kind, whatever the name says, and a
+        // kind that is not one of the browser's three is none of this app's business: a picture
+        // under a font's name is the picture it is, and nothing is handed to the engine for it.
+        crate::formats::content_type::Content::Kind(_) => match hover.routed_kind() {
+            Some(PreviewType::Vector) => Some(PreviewType::Vector),
+            Some(PreviewType::Fonts) => Some(PreviewType::Fonts),
+            // A page of HTML is a text file, so the kind it answers with is the text kind's: the
+            // gate over it is the one a text preview is switched by, and the loader reaches the
+            // engine through that same arm (see `load_media_of_kind`).
+            Some(PreviewType::Text) if hover.html_drawn_by_the_engine() => Some(PreviewType::Text),
             _ => None,
         },
 
-        // The same answer, asked of the name — a file whose bytes named a kind is settled
-        // and the router is asked about its name only where they named nothing.
-        crate::formats::content_type::Content::Unknown => {
-            // A page of HTML is a text file, so the kind it answers with is the text kind's:
-            // the gate over it is the one a text preview is switched by, and the loader reaches
-            // the engine through that same arm (see `load_media_of_kind`).
-            if hover.svg_document {
-                Some(PreviewType::Vector)
-            } else if hover.font_named {
-                Some(PreviewType::Fonts)
-            } else if hover.html_drawn_by_the_engine() {
-                Some(PreviewType::Text)
-            } else {
-                None
-            }
-        }
+        // Where the bytes named nothing, the name's answer is what the browser draws, and it is
+        // the router's — so a file whose name is a specimen's and whose bytes are nothing in
+        // particular is a specimen, and a file no list claims is nothing at all.
+        crate::formats::content_type::Content::Unknown => match hover.route.drawn_by {
+            crate::formats::routing::DrawnBy::WebView(web) => match web {
+                crate::formats::routing::WebPage::Svg => Some(PreviewType::Vector),
+                crate::formats::routing::WebPage::FontSpecimen => Some(PreviewType::Fonts),
+                crate::formats::routing::WebPage::Html => Some(PreviewType::Text),
+            },
+            _ => None,
+        },
 
         // A format no kind of this app previews: there is no kind to draw it as, so there is
         // no engine to hand it to either.
@@ -2920,30 +2899,30 @@ fn office_render_is_due(path: &Path, width: u32) -> bool {
 /// of the file, because the head and the content answer are both caches keyed by that version.
 struct HoverFacts {
     probe: crate::formats::content_type::Probe,
-    content: crate::formats::content_type::Content,
-    /// The kind the name's lists claim, asked with the entry in hand. `None` where no list does,
-    /// which is the answer a name no list holds has always had.
-    named: Option<PreviewType>,
+    /// What this file is, in one answer: its own bytes' kind, the kind its name's lists claim,
+    /// which half of a book or a drawing it is, and who draws it. This is
+    /// [`crate::formats::routing::resolve`]'s answer, and the predicates below are its fields —
+    /// which is what turns twelve scattered answers to one question into lookups.
+    route: crate::formats::routing::Route,
     /// The four list answers the eleven predicates used to each go and take the configuration's
-    /// lock for, and the three of the tray's switches that gate them. They are asked here rather
-    /// than where they are used because they are cheap — a name compared against a list of
-    /// extensions — and because a question asked twice for one hover is two locks where one was.
+    /// lock for. They are asked here rather than where they are used because they are cheap — a
+    /// name compared against a list of extensions — and because a question asked twice for one
+    /// hover is two locks where one was.
     video_named: bool,
     audio_named: bool,
     archive_named: bool,
     peazip_named: bool,
-    html_named: bool,
-    font_named: bool,
-    svg_document: bool,
+    /// The three of the tray's switches that gate the three kinds whose gate changes what is
+    /// drawn rather than whether it is, and so are asked inside the predicates that gate.
+    video_enabled: bool,
+    audio_enabled: bool,
+    text_enabled: bool,
     /// What of this app's own reads this file, asked with the kind already settled — which is
     /// the contract `native_formats::job_for` is written for and the reason it takes a kind
     /// rather than working one out. A book is the case that needed it: which half of the kind a
     /// `.cbz` is costs a read of the file, and the loader used to ask it a second time for
     /// itself under a lock of its own.
     native_job: Option<native_formats::NativeJob>,
-    video_enabled: bool,
-    audio_enabled: bool,
-    text_enabled: bool,
     scales: HoverScales,
     follow_cursor: bool,
 }
@@ -2965,7 +2944,7 @@ struct HoverFacts {
 /// It is now the content field of [`HoverFacts`], which is the whole of what this was for: a
 /// caller that has a hover's answer in hand reads a field.
 fn content_of(path: &Path) -> crate::formats::content_type::Content {
-    HoverFacts::read(path).content
+    HoverFacts::read(path).route.content
 }
 
 /// Whether the file's own bytes name one of this app's kinds *other* than `kind`.
@@ -2985,46 +2964,46 @@ impl HoverFacts {
         let probe = crate::formats::content_type::Probe::read(path);
 
         let Ok(config) = CONFIG.lock() else {
+            // Nothing is claimed, so nothing is drawn, and a file a hover cannot read its
+            // configuration for is the answer every kind's gate gives when the tray is
+            // shut (see `PreviewType::enabled`).
+            let route = crate::formats::routing::resolve(path, &AppConfig::default(), &probe);
+
             return Self {
                 probe,
-                content: crate::formats::content_type::Content::Unknown,
-                named: None,
+                route,
                 video_named: false,
                 audio_named: false,
                 archive_named: false,
                 peazip_named: false,
-                html_named: false,
-                font_named: false,
-                svg_document: false,
-                native_job: None,
                 video_enabled: false,
                 audio_enabled: false,
                 text_enabled: false,
+                native_job: None,
                 scales: current_hover_scales(),
                 follow_cursor: true,
             };
         };
 
-        // The content is asked first because it is the answer the others are read beside: a
-        // file whose bytes named a kind is settled, and the router is asked about its name only
-        // where they named nothing.
+        // One answer to every question this hover is going to ask, asked of the file's own bytes
+        // and the configuration's lists together — which is what `routing::resolve` is for, and
+        // the reason it exists rather than a thirteenth predicate here.
         //
-        // Both are lookups against a head already in hand, which is what makes it right to ask
-        // them under the guard: `Probe::read` brought the whole window with it wherever the front
-        // settled nothing, so there is nothing here for the guard to be held across.
-        let content = crate::formats::content_type::answer(&probe, &config);
-        let named = crate::formats::routing::kind_of_with_facts(path, &config, probe.facts());
+        // The order inside it is the one this function used to have to state: the file is read
+        // first, with nothing held, and the lists are consulted after. What is consulted is in
+        // memory, so a guard held across the consults is a guard held across a set of list
+        // comparisons — never across a `File::open`, which is what the eleven predicates below
+        // this one used to each do under it.
+        let route = crate::formats::routing::resolve(path, &config, &probe);
 
+        // And the three answers this side has that routing does not: which of the video list's
+        // names the file carries, which gates the tray has thrown, and the scales a hover is laid
+        // out by. All three are list comparisons against what is in hand, and all three were a
+        // lock of their own before.
         let video_named = video_formats::matches_any_video_list(path, &config);
         let audio_named = audio_formats::matches_audio_list(path, &config.audio_extensions);
         let archive_named = archive_formats::matches_archive_list(path, &config.archive_extensions);
         let peazip_named = peazip_formats::matches_peazip_list(path, &config.peazip_extensions);
-        let html_named = crate::formats::text_formats::is_html_extension(path);
-        let font_named = font_formats::matches_font_list(path, &config.font_extensions);
-        // The name is the whole of it, and deliberately so: an `svg` that is not a document is a
-        // drawing the browser refuses rather than a metafile, and the renderer has the last word
-        // on whether a document is a document at all (see `svg_preview::is_svg_file`).
-        let svg_document = svg_preview::is_svg_file(path);
         let video_enabled = PreviewType::Videos.enabled_in(&config);
         let audio_enabled = PreviewType::Audio.enabled_in(&config);
         let text_enabled = PreviewType::Text.enabled_in(&config);
@@ -3032,16 +3011,15 @@ impl HoverFacts {
         let follow_cursor = config.follow_cursor;
         drop(config);
 
-        // And last, with the guard gone. Which of this app's own readers does the work is the
-        // one question here that still opens the file — a book's is settled by what an `.ai`
+        // And last, with the guard gone: which of this app's own readers does the work. That is
+        // the one question here that still opens the file — a book's is settled by what an `.ai`
         // keeps at an offset, a picture's by its own head — so it is the one that must not be
-        // asked with a guard in hand. It is asked of the entry read above, which makes it a
-        // lookup rather than a second `fs::metadata`, and it takes the lock for the one list it
-        // consults and gives it back at once.
+        // asked with a guard in hand. It takes the entry read above, which makes it a lookup
+        // rather than a second `fs::metadata`, and it takes the lock for the one list it consults.
         //
         // A configuration that will not open is answered as the page a book most often is, which
         // is what this arm has always done (see `native_formats::page_job`).
-        let native_job = named.and_then(|kind| {
+        let native_job = route.named.and_then(|kind| {
             CONFIG
                 .lock()
                 .ok()
@@ -3050,19 +3028,15 @@ impl HoverFacts {
 
         Self {
             probe,
-            content,
-            named,
+            route,
             video_named,
             audio_named,
             archive_named,
             peazip_named,
-            html_named,
-            font_named,
-            svg_document,
-            native_job,
             video_enabled,
             audio_enabled,
             text_enabled,
+            native_job,
             scales,
             follow_cursor,
         }
@@ -3076,10 +3050,10 @@ impl HoverFacts {
     /// an MP4 is loaded as the video it is — and the same answer is what a file whose bytes named
     /// nothing is measured at.
     fn routed_kind(&self) -> Option<PreviewType> {
-        match self.content {
+        match self.route.content {
             crate::formats::content_type::Content::Kind(kind) => Some(kind),
             crate::formats::content_type::Content::Foreign => None,
-            crate::formats::content_type::Content::Unknown => self.named,
+            crate::formats::content_type::Content::Unknown => self.route.named,
         }
     }
 
@@ -3095,7 +3069,7 @@ impl HoverFacts {
     /// Whether an engine's listing engine would list this file, which is the file's own bytes
     /// first and the listing list after them (see `peazip_formats::is_engine_archive`).
     fn engine_archive(&self) -> bool {
-        match self.content {
+        match self.route.content {
             crate::formats::content_type::Content::Kind(PreviewType::Peazip) => true,
             crate::formats::content_type::Content::Kind(_)
             | crate::formats::content_type::Content::Foreign => false,
@@ -3111,9 +3085,29 @@ impl HoverFacts {
     /// whose engine must not be started.
     fn names_another_kind(&self, kind: PreviewType) -> bool {
         matches!(
-            self.content,
+            self.route.content,
             crate::formats::content_type::Content::Kind(named) if named != kind
         )
+    }
+
+    /// Whether this file is an SVG document rather than a drawing the drawing layer replays.
+    ///
+    /// The name is the whole of it, and deliberately so: an `svg` that is not a document is a
+    /// drawing the browser refuses rather than a metafile, and the renderer has the last word on
+    /// whether a document is a document at all (see `svg_preview::is_svg_file`).
+    fn svg_document(&self) -> bool {
+        self.route.drawing == crate::formats::routing::Drawing::Svg
+    }
+
+    /// Whether a page of HTML is one the browser engine draws.
+    ///
+    /// It is the one term of the route that is about the machine rather than about the file, so
+    /// it is asked where a caller already has the route rather than picked out of three names
+    /// a fourth time (see `web_page_of` for the form a caller with no route asks).
+    fn html_drawn_by_the_engine(&self) -> bool {
+        self.route.drawn_by
+            == crate::formats::routing::DrawnBy::WebView(crate::formats::routing::WebPage::Html)
+            && webview_preview::draws(self.probe.path())
     }
 }
 
@@ -3548,26 +3542,23 @@ impl HoverScales {
 ///
 /// Every other format keeps the picture scale.
 fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
-    effective_preview_scale_of(&HoverFacts::read(path), path, scales)
+    effective_preview_scale_of(&HoverFacts::read(path), scales)
 }
 
 /// The share one hover of one file is placed at, asked of the answer that hover already has.
 ///
-/// The two arguments are the same file twice over and it is deliberate: `hover` answers what
-/// the file *is* and `path` is what the two questions below have to read for themselves — the
-/// probe's own answer and whether the file moves. Both of those are asked once per file and
-/// held, so the price of carrying the path beside the answer is a pointer.
-fn effective_preview_scale_of(
-    hover: &HoverFacts,
-    path: &Path,
-    scales: HoverScales,
-) -> PreviewScale {
+/// Everything this asks is a field of `hover` or something `hover` holds: the file's kind, the
+/// one probe that runs off the thread and is remembered per file and version, and whether the
+/// file's own head says it moves. That is the whole of what a hover's scale is — which is why
+/// the path is not beside it, and why the scale and the box a preview is laid out at cannot
+/// disagree: they are asked of one answer.
+fn effective_preview_scale_of(hover: &HoverFacts, scales: HoverScales) -> PreviewScale {
     // What the file's own bytes say it is comes first, as it does for the loader that draws
     // it and for the box the layout places it at: a picture under a video's name is laid out
     // at the picture's share, and one under a document's name at the picture's share too.
     // Where the bytes have nothing to say the name decides below, which is every file that
     // is called what it is.
-    if let crate::formats::content_type::Content::Kind(kind) = hover.content {
+    if let crate::formats::content_type::Content::Kind(kind) = hover.route.content {
         return scale_of_kind(kind, hover, scales);
     }
 
@@ -3593,7 +3584,11 @@ fn effective_preview_scale_of(
     // is measured at is the answer the hook admitted it under and the loader draws it by (see
     // `formats::routing`). A name no list claims is measured as the picture it ends up being
     // decoded as, which is where the loader's own chain sends one.
-    scale_of_kind(hover.named.unwrap_or(PreviewType::Images), hover, scales)
+    scale_of_kind(
+        hover.route.named.unwrap_or(PreviewType::Images),
+        hover,
+        scales,
+    )
 }
 
 /// The share a preview of one kind is drawn at.
@@ -3784,7 +3779,7 @@ impl HoverFacts {
     /// the app waited on that guard, including the one that would end an engine or answer the
     /// tray. Neither is asked again here: this is the answer (see `HoverFacts`).
     fn is_text(&self) -> bool {
-        match self.content {
+        match self.route.content {
             crate::formats::content_type::Content::Kind(PreviewType::Text) => true,
             // Another kind, or a format no kind here previews at all: neither is drawn as
             // text, and the second is drawn as nothing.
@@ -3796,7 +3791,7 @@ impl HoverFacts {
             // switch is part of the question, as it is wherever the text lists are asked — a
             // kind turned off in the tray is not drawn at all.
             crate::formats::content_type::Content::Unknown => {
-                self.text_enabled && self.named == Some(PreviewType::Text)
+                self.text_enabled && self.route.named == Some(PreviewType::Text)
             }
         }
     }
@@ -3840,7 +3835,7 @@ impl HoverFacts {
         // take the configuration lock for it. The content is a cache hit after the first, so
         // the entry read is all that is repeated; the lock is no longer held across the read
         // at all (see `HoverFacts`).
-        let named = match self.content {
+        let named = match self.route.content {
             crate::formats::content_type::Content::Kind(PreviewType::Videos) => true,
             _ => self.video_named,
         };
@@ -3860,17 +3855,10 @@ impl HoverFacts {
             return false;
         }
 
-        match self.content {
+        match self.route.content {
             crate::formats::content_type::Content::Kind(PreviewType::Audio) => true,
             _ => self.audio_named,
         }
-    }
-
-    /// Whether a page of HTML is one the browser engine draws, which is the question the
-    /// scale, the box and the loader all ask about the same three names (see
-    /// `engine_kind_of`).
-    fn html_drawn_by_the_engine(&self) -> bool {
-        self.html_named && webview_preview::draws(self.probe.path())
     }
 }
 
@@ -7159,7 +7147,7 @@ fn load_media(
     // disagree: a `.docx` whose bytes are an MP4 is loaded as the video it is, and a format
     // no kind of this app previews is loaded as nothing at all — see `content_type` for
     // what settles that, and `load_media_of_kind` for where the kind is handed on.
-    match hover.content {
+    match hover.route.content {
         crate::formats::content_type::Content::Kind(_) => {}
         crate::formats::content_type::Content::Foreign => return None,
         crate::formats::content_type::Content::Unknown => {}
@@ -7175,7 +7163,7 @@ fn load_media(
         // draw. The hook refuses such a file before a hover reaches this far (see
         // `explorer_hook::is_media_file`), so this is the answer for the hover that came the
         // other way — through the content, which named no kind either.
-        if hover.svg_document {
+        if hover.svg_document() {
             return webview_preview::draws(path).then(engine_svg_media);
         }
 
@@ -7274,7 +7262,7 @@ fn load_media_of_kind(
         // content's: a document is drawn by the browser engine and a metafile by the drawing
         // layer, and the content has already answered that the file is a drawing at all.
         Some(PreviewType::Vector) => {
-            if hover.svg_document {
+            if hover.svg_document() {
                 webview_preview::draws(path).then(engine_svg_media)
             } else {
                 load_vector_preview(path, max_width, max_height, preview_scale)
@@ -7490,14 +7478,6 @@ fn video_duration(path: &Path) -> Option<f64> {
 /// not one to be probed again on every hover.
 fn video_probe_due(hover: &HoverFacts) -> bool {
     hover.is_video() && cached_video_geometry(hover.probe.path()).is_none()
-}
-
-/// Whether the preview of `path` is a video — the form a caller with no hover of its own
-/// asks. See `HoverFacts::is_video` for what the answer is and why it was asked from four
-/// places in one hover, each of which used to read the file and take the configuration lock
-/// for it.
-fn drawn_as_video(path: &Path) -> bool {
-    HoverFacts::read(path).is_video()
 }
 
 /// Which of the two engines plays a video: the media engine the media stack of Windows has, or
@@ -8430,7 +8410,7 @@ fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u
     // What the file's content says it is comes ahead of what its name does, where the two
     // disagree: the box a file is placed at is the box of the kind its content belongs to,
     // and a format no kind previews is placed nowhere at all — see `content_type`.
-    match hover.content {
+    match hover.route.content {
         crate::formats::content_type::Content::Kind(kind) => {
             return media_dimensions_of_kind(kind, path)
         }
@@ -8760,7 +8740,7 @@ fn media_dimensions_of(
     // as the picture it is rather than read as a page of text it is not — which for a file
     // whose bytes are not text is no measurement at all, and a preview that never appears
     // for a file that would otherwise be drawn.
-    if let crate::formats::content_type::Content::Kind(kind) = hover.content {
+    if let crate::formats::content_type::Content::Kind(kind) = hover.route.content {
         return match kind {
             // The three kinds measured against the room they are drawn in, which is a question
             // this side has the answer to and `media_dimensions_of_kind` does not.
@@ -9953,17 +9933,7 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         // the one it keeps for the picture a design document is previewed from, each a
         // setting of its own for the reason `dds_image` gives. A document is composited by
         // the engine, over the backdrop of its own, and none of them reaches here.
-        let background = if media.media_type.is_loading() {
-            TransparentBackground::Transparent
-        } else if matches!(media.media_type, MediaType::Dds) {
-            current_dds_background()
-        } else if matches!(media.media_type, MediaType::Design) {
-            current_design_background()
-        } else if matches!(media.media_type, MediaType::Vector) {
-            current_vector_background()
-        } else {
-            current_image_background()
-        };
+        let background = preview_background(media.media_type);
         let bits = ensure_layered_surface(hwnd.0 as isize, width, height)?;
         let out = unsafe { std::slice::from_raw_parts_mut(bits, expected_size) };
 
@@ -13206,17 +13176,21 @@ fn pinned_media_box(orig_dims: (u32, u32), room: ScreenBounds, scale: PreviewSca
 /// What a kind of preview is composited over, which is a question a hover and a pinned window
 /// both ask: a texture has a backdrop of its own, the drawing of a design document another,
 /// and everything else the picture's (see the `Background` submenu).
+///
+/// It is the same exhaustive match the hover's own answer is composed with, so a media type
+/// this app grows and a kind it grows cannot each need remembering here: the three that are not
+/// a picture's are named by the one router table that says which of the tray's six backdrops
+/// stands behind what.
 fn preview_background(kind: MediaType) -> TransparentBackground {
     if kind.is_loading() {
         TransparentBackground::Transparent
-    } else if matches!(kind, MediaType::Dds) {
-        current_dds_background()
-    } else if matches!(kind, MediaType::Design) {
-        current_design_background()
-    } else if matches!(kind, MediaType::Vector) {
-        current_vector_background()
     } else {
-        current_image_background()
+        current_background(match kind {
+            MediaType::Dds => crate::formats::routing::Backdrop::Dds,
+            MediaType::Design => crate::formats::routing::Backdrop::Design,
+            MediaType::Vector => crate::formats::routing::Backdrop::Vector,
+            _ => crate::formats::routing::Backdrop::Image,
+        })
     }
 }
 
@@ -21860,7 +21834,7 @@ pub fn run_preview_window() {
                         // `fs::metadata` calls per hover down to one (see `HoverFacts`).
                         let hover = HoverFacts::read(&path);
                         let follow_cursor = hover.follow_cursor;
-                        preview_scale = effective_preview_scale_of(&hover, &path, hover.scales);
+                        preview_scale = effective_preview_scale_of(&hover, hover.scales);
 
                         // A document with no page rendered for it yet has nothing to
                         // measure but the wait, so its preview is laid out as the
@@ -21960,7 +21934,7 @@ pub fn run_preview_window() {
                         // this arm, as the pointer's arm above does (see `HoverFacts`).
                         let hover = HoverFacts::read(&path);
                         let follow_cursor = hover.follow_cursor;
-                        preview_scale = effective_preview_scale_of(&hover, &path, hover.scales);
+                        preview_scale = effective_preview_scale_of(&hover, hover.scales);
 
                         if let Some(orig_dims) = media_dimensions_of(&hover, &path, bounds, dpi) {
                             let is_video = hover.is_video();
@@ -23194,7 +23168,7 @@ mod tests {
     fn ask_as_the_show_arm_does(path: &PathBuf, bounds: ScreenBounds, dpi: u32) {
         let hover = HoverFacts::read(path);
 
-        let _ = effective_preview_scale_of(&hover, path, hover.scales);
+        let _ = effective_preview_scale_of(&hover, hover.scales);
         let _ = page_is_on_the_way(path);
         let _ = video_probe_due(&hover);
         let _ = media_dimensions_of(&hover, path, bounds, dpi);
@@ -23507,7 +23481,7 @@ mod tests {
             "the name is the picture list's, which is what answered before this"
         );
         assert!(
-            drawn_as_video(&renamed),
+            HoverFacts::read(&renamed).is_video(),
             "and the bytes are a video's, so a video is what is drawn"
         );
         assert!(
@@ -26110,7 +26084,10 @@ mod tests {
             .map(PathBuf::from)
         {
             println!("\n--- {} ---", path.display());
-            println!("the preview is shown: {}", drawn_as_video(&path));
+            println!(
+                "the preview is shown: {}",
+                HoverFacts::read(&path).is_video()
+            );
 
             let started = Instant::now();
             let can_play = video_player::can_play(&path);
