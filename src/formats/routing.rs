@@ -347,19 +347,54 @@ fn claim_fonts(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&cra
     font_formats::matches_font_list(path, &config.font_extensions).then_some(PreviewType::Fonts)
 }
 
+/// Which half of the `Vector` kind a file is: an SVG document the browser engine draws, or a
+/// Windows metafile or an encapsulated PostScript file the drawing layer replays.
+///
+/// The two are one kind because a drawing is a drawing whichever way it is drawn, and which of
+/// the two is settled by the name in both directions: an `svg` a hand-edited image list still
+/// names is a drawing rather than the picture its name says (see [`claim_images`]), and a
+/// metafile is the drawing layer's rather than the browser engine's whatever engine is
+/// installed (see `native_formats::drawing_job`). Both of those used to ask the name for
+/// themselves, which is one question with two owners and a drift nobody would see — a
+/// metafile answered as an SVG document is a window the browser never fills.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Drawing {
+    /// An SVG document, including the gzipped spelling of the same document, which is drawn by
+    /// the browser engine in a window of its own.
+    Svg,
+    /// A metafile or an encapsulated PostScript file, replayed by the drawing layer into a
+    /// frame this app composites itself.
+    Replayed,
+}
+
+/// The half of the `Vector` kind `path` is, which is its name and nothing else.
+///
+/// The name is the whole of it, and deliberately so: an `svg` that is not a document is a
+/// drawing the browser refuses rather than a metafile, and the renderer has the last word on
+/// whether a document is a document at all (see `svg_preview::is_svg_file`). Reading the front
+/// of the file here would settle the wrong half of the wrong question.
+pub fn drawing_of(path: &Path) -> Drawing {
+    if svg_preview::is_svg_file(path) {
+        Drawing::Svg
+    } else {
+        Drawing::Replayed
+    }
+}
+
 /// A picture — and the one entry that can answer with a kind that is not its own.
 ///
 /// A drawing is not a picture, and the image list is where the drawings of that kind were until
 /// they were given a kind of their own: an `svg` a hand-edited image list still names is
-/// answered as the drawing it is rather than as the picture its name says (see
-/// `svg_preview::is_svg_file`). It is asked inside this entry rather than as an entry of its
-/// own so that the order the other kinds are asked in is not disturbed by it.
+/// answered as the drawing it is rather than as the picture its name says. It is asked inside
+/// this entry rather than as an entry of its own so that the order the other kinds are asked in
+/// is not disturbed by it — which is the one thing that decides which of the two halves of a
+/// drawing a name in this list is, so it is [`drawing_of`]'s answer and not a second reading.
 fn claim_images(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     if !image_formats::matches_image_list(path, &config.image_extensions) {
         return None;
     }
 
-    Some(if svg_preview::is_svg_file(path) {
+    Some(if drawing_of(path) == Drawing::Svg {
         PreviewType::Vector
     } else {
         PreviewType::Images
@@ -705,6 +740,86 @@ mod tests {
         assert!(
             wrong.is_empty(),
             "a book's spelling read as the wrong half of the kind:\n  {}",
+            wrong.join("\n  ")
+        );
+    }
+
+    /// The half of a drawing is the second answer two tables used to work out for themselves,
+    /// and it is asked in both directions: the image list asks it to reach the drawing's kind
+    /// rather than the picture's, and the loader asks it to pick the reader. A name the two
+    /// answered differently about is a metafile handed to the browser engine, so the assertion
+    /// is that both directions agree for every shipped name — and that a name reaching either
+    /// kind from the *other* list is still the drawing it is.
+    #[test]
+    fn every_shipped_drawing_name_reaches_one_half_and_the_list_agrees() {
+        let config = AppConfig::default();
+
+        let mut wrong: Vec<String> = Vec::new();
+        let mut saw_svg = false;
+        let mut saw_replayed = false;
+
+        // The drawings this app ships, read off the two lists that hold them rather than
+        // written here, so a name added to either is covered by this without being added here.
+        let shipped: Vec<(String, PreviewType)> = config
+            .vector_extensions
+            .iter()
+            .map(|name| (name.clone(), PreviewType::Vector))
+            .chain(
+                config
+                    .image_extensions
+                    .iter()
+                    .map(|name| (name.clone(), PreviewType::Images)),
+            )
+            .collect();
+
+        for (name, listed_as) in shipped {
+            let path = PathBuf::from(format!("drawing.{name}"));
+            let half = drawing_of(&path);
+            let reached = kind_of(&path, &config);
+
+            let (expected_half, expected_kind) = match half {
+                Drawing::Svg => {
+                    saw_svg = true;
+                    (Drawing::Svg, PreviewType::Vector)
+                }
+                Drawing::Replayed => {
+                    saw_replayed = true;
+                    (Drawing::Replayed, listed_as)
+                }
+            };
+
+            assert_eq!(
+                half, expected_half,
+                "`{name}`'s own half, which is what both tables read"
+            );
+
+            if let Some(reached) = reached {
+                if reached != expected_kind {
+                    wrong.push(format!(
+                        "`{name}` is the {expected_kind:?} kind's half, reached {reached:?}"
+                    ));
+                }
+            }
+
+            // A drawing is reached from the vector list, and from the image list only where a
+            // hand-edited entry left it there — never the other way round, which is the whole
+            // of what the image entry is for.
+            if reached == Some(PreviewType::Vector) && listed_as == PreviewType::Images {
+                wrong.push(format!(
+                    "`{name}` was reached as a drawing through the image list, which is the \
+                     one direction that order allows"
+                ));
+            }
+        }
+
+        assert!(
+            saw_svg && saw_replayed,
+            "the shipped names have to carry both halves or this proves nothing about telling \
+             them apart"
+        );
+        assert!(
+            wrong.is_empty(),
+            "a drawing's name reached a kind its half is not:\n  {}",
             wrong.join("\n  ")
         );
     }
