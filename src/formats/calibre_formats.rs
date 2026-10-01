@@ -85,7 +85,6 @@
 //! is the engine's whatever it is called (see `content_type::SIGNATURES`).
 
 use crate::config::config::PreviewType;
-use crate::formats::text_formats;
 use crate::CONFIG;
 use std::path::Path;
 
@@ -95,31 +94,6 @@ use std::path::Path;
 /// and until they are moved across the table keeps the name they reach for.
 #[cfg(test)]
 pub use crate::formats::lists::DEFAULT_CALIBRE_EXTENSIONS;
-
-/// Whether the configured list claims `path`.
-pub fn matches_calibre_list(path: &Path, extensions: &[String]) -> bool {
-    text_formats::matches_configured_extension(path, extensions)
-}
-
-/// Whether the configured list claims `path`, without asking whether these previews are switched
-/// on. The gate is asked beside it by the hook, the way every other kind's is.
-pub fn is_calibre_file(path: &Path) -> bool {
-    CONFIG
-        .lock()
-        .map(|config| matches_calibre_list(path, &config.calibre_extensions))
-        .unwrap_or(false)
-}
-
-/// Whether a preview may be shown for `path`: the file the configured list claims, and the
-/// `Calibre` gate in the tray's `Preview Types` submenu.
-///
-/// Both halves ask it where a kind can be switched off under a preview that is already on screen:
-/// a hover is not sent for a kind that is off, and the layout places nothing for a file whose kind
-/// is off, which is how a preview of that kind comes down when the switch does. See
-/// `PreviewType::enabled`.
-pub fn is_calibre_preview(path: &Path) -> bool {
-    is_calibre_file(path) && PreviewType::Calibre.enabled()
-}
 
 /// Whether the engine is the one that reads this file at all: a name its own list carries, or the
 /// bytes of a book it reads under a name no list holds — a `.mobi` renamed to `.dat`, say.
@@ -140,37 +114,24 @@ pub fn is_engine_ebook(path: &Path) -> bool {
     match content {
         Content::Kind(PreviewType::Calibre) => true,
         Content::Kind(_) | Content::Foreign => false,
-        Content::Unknown => is_calibre_file(path),
+        Content::Unknown => CONFIG
+            .lock()
+            .map(|config| crate::formats::lists::CALIBRE.claims(path, &config))
+            .unwrap_or(false),
     }
 }
 
-/// What a file's content says it is, with the configuration's lock not held across the file.
+/// The file's own bytes, asked in the shape the lock rule wants it: the entry read first with
+/// nothing held, and the lists taken under the guard for the lookup that consults them.
 ///
-/// The one question the four engine tiers all ask, in the shape the rule wants it: the file's
-/// own entry read first without the lock, and the lists taken under it for the lookup that
-/// consults them. Those four are the only places in this layer that may take that lock at all,
-/// because they are the only questions in it with no configuration of their own to be handed
-/// one through — and they were the only places allowed to take it for exactly that long (see
-/// `mod tests::the_configuration_is_locked_only_where_the_engines_ask`, which still holds).
-///
-/// A guard held across a `content_type::of` is a guard every other thread of the app waits on
-/// for as long as the disk takes, and these are asked from the engine's own thread as well as
-/// the preview's.
-pub(crate) fn content_of(path: &Path) -> crate::formats::content_type::Content {
-    use crate::formats::content_type;
-
-    // The file's own entry, read before the lock: it is the one thing this needs from the disk,
-    // and reading it here rather than inside `of` is what keeps the guard off the file.
-    let facts = crate::formats::head::Facts::read(path);
-
-    let Ok(config) = crate::CONFIG.lock() else {
-        return content_type::Content::Unknown;
-    };
-
-    match &facts {
-        Some(facts) => content_type::of_with_facts(path, facts, &config),
-        None => content_type::of(path, &config),
-    }
+/// It is `content_type`'s own function rather than one written out here, because the question is
+/// that module's and it used to live in this file only because this was where a reader of the
+/// ebook list happened to be asked — and four siblings then reached across to it for their own
+/// engine's question, which is the shape a question gets asked in when nothing owns it. What
+/// owns it now is the module whose answer it is, and the four engine tiers ask it as
+/// `content_type::of_reaching_config`.
+fn content_of(path: &Path) -> crate::formats::content_type::Content {
+    crate::formats::content_type::of_reaching_config(path)
 }
 
 #[cfg(test)]
@@ -182,46 +143,22 @@ mod tests {
     /// file are all answered elsewhere, and none of them is here.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = text_formats::sanitize_extension_list(
-            crate::formats::lists::DEFAULT_CALIBRE_EXTENSIONS,
-        );
         let config = crate::config::config::AppConfig::default();
 
         let claimed_elsewhere = |path: &Path| {
-            crate::formats::image_formats::matches_image_list(path, &config.image_extensions)
-                || crate::formats::vector_formats::matches_vector_list(
-                    path,
-                    &config.vector_extensions,
-                )
-                || crate::formats::design_formats::matches_design_list(
-                    path,
-                    &config.design_extensions,
-                )
-                || crate::formats::font_formats::matches_font_list(path, &config.font_extensions)
-                || crate::formats::libre_formats::matches_libre_list(path, &config.libre_extensions)
-                || crate::formats::magick_formats::matches_magick_list(
-                    path,
-                    &config.magick_extensions,
-                )
+            crate::formats::lists::IMAGE.claims(path, &config)
+                || crate::formats::lists::VECTOR.claims(path, &config)
+                || crate::formats::lists::DESIGN.claims(path, &config)
+                || crate::formats::lists::FONT.claims(path, &config)
+                || crate::formats::lists::LIBRE.claims(path, &config)
+                || crate::formats::lists::MAGICK.claims(path, &config)
                 || crate::formats::video_formats::matches_any_video_list(path, &config)
-                || crate::formats::archive_formats::matches_archive_list(
-                    path,
-                    &config.archive_extensions,
-                )
-                || crate::formats::office_formats::matches_office_list(
-                    path,
-                    &config.office_extensions,
-                )
-                || crate::formats::ebook_formats::matches_ebook_list(path, &config.ebook_extensions)
-                || crate::formats::peazip_formats::matches_peazip_list(
-                    path,
-                    &config.peazip_extensions,
-                )
-                || crate::formats::text_formats::matches_text_lists(
-                    path,
-                    &config.text_extensions,
-                    &config.text_names,
-                )
+                || crate::formats::lists::ARCHIVE.claims(path, &config)
+                || crate::formats::lists::OFFICE.claims(path, &config)
+                || crate::formats::lists::EBOOK.claims(path, &config)
+                || crate::formats::lists::PEAZIP.claims(path, &config)
+                || crate::formats::lists::TEXT.claims(path, &config)
+                || crate::formats::lists::NAMES.claims(path, &config)
         };
 
         for name in [
@@ -240,7 +177,7 @@ mod tests {
                 "`{name}` is read by another kind, so this expectation is written the wrong way round"
             );
             assert!(
-                !matches_calibre_list(path, &list),
+                !crate::formats::lists::CALIBRE.claims(path, &config),
                 "`{name}` is read by another kind, so the engine is not asked about it"
             );
         }
@@ -254,7 +191,7 @@ mod tests {
             "a PDF is this app's own to draw"
         );
         assert!(
-            !matches_calibre_list(pdf, &list),
+            !crate::formats::lists::CALIBRE.claims(pdf, &config),
             "so the engine is not asked about one either"
         );
 
@@ -264,21 +201,21 @@ mod tests {
         // the judgement `peazip_formats` carries the other half of.
         let book = Path::new("book.lit");
         assert!(
-            matches_calibre_list(book, &list),
+            crate::formats::lists::CALIBRE.claims(book, &config),
             "a Microsoft Reader book is a page only this engine can draw"
         );
         assert!(
-            !crate::formats::peazip_formats::matches_peazip_list(book, &config.peazip_extensions),
+            !crate::formats::lists::PEAZIP.claims(book, &config),
             "and it is not the listing engine's any more: one name, one answer"
         );
 
         let help = Path::new("help.chm");
         assert!(
-            crate::formats::peazip_formats::matches_peazip_list(help, &config.peazip_extensions),
+            crate::formats::lists::PEAZIP.claims(help, &config),
             "a compiled help file is the listing engine's, which answers immediately"
         );
         assert!(
-            !matches_calibre_list(help, &list),
+            !crate::formats::lists::CALIBRE.claims(help, &config),
             "and it is not this engine's: a help file is not a page to wait two seconds for"
         );
 
@@ -288,11 +225,11 @@ mod tests {
         // one as well.
         let palm = Path::new("book.pdb");
         assert!(
-            crate::formats::libre_formats::matches_libre_list(palm, &config.libre_extensions),
+            crate::formats::lists::LIBRE.claims(palm, &config),
             "a Palm ebook is the render engine's, by the name that lists it"
         );
         assert!(
-            !matches_calibre_list(palm, &list),
+            !crate::formats::lists::CALIBRE.claims(palm, &config),
             "and not this engine's, so the two cannot both be asked about one file"
         );
     }
@@ -302,9 +239,7 @@ mod tests {
     /// of the dedicated readers.
     #[test]
     fn holds_the_ebooks_no_reader_here_opens() {
-        let list = text_formats::sanitize_extension_list(
-            crate::formats::lists::DEFAULT_CALIBRE_EXTENSIONS,
-        );
+        let config = crate::config::config::AppConfig::default();
 
         for name in [
             "book.azw",
@@ -322,7 +257,7 @@ mod tests {
             "book.tcr",
         ] {
             assert!(
-                matches_calibre_list(Path::new(name), &list),
+                crate::formats::lists::CALIBRE.claims(Path::new(name), &config),
                 "`{name}` is one of the engine's ebooks"
             );
         }
@@ -333,7 +268,7 @@ mod tests {
     #[test]
     fn reads_a_list_of_bare_extensions() {
         let extensions =
-            text_formats::sanitize_extension_list(" .MOBI , epub,,book*.azw ,epub,tcr");
+            crate::formats::lists::sanitize_extension_list(" .MOBI , epub,,book*.azw ,epub,tcr");
 
         assert_eq!(extensions, vec!["mobi", "epub", "tcr"]);
     }
@@ -345,7 +280,7 @@ mod tests {
     #[test]
     fn asks_the_engine_about_a_file_by_its_bytes_before_its_name() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.calibre_extensions = text_formats::sanitize_extension_list(
+            config.calibre_extensions = crate::formats::lists::sanitize_extension_list(
                 crate::formats::lists::DEFAULT_CALIBRE_EXTENSIONS,
             );
         }
