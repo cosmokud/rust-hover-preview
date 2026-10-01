@@ -89,7 +89,7 @@
 //! entries and the older lists this app shipped and then changed included.
 
 use crate::config::config::PreviewType;
-use crate::formats::text_formats;
+use crate::formats::{lists, text_formats};
 use crate::CONFIG;
 use std::path::Path;
 
@@ -173,13 +173,8 @@ impl Backend {
     }
 }
 
-/// Whether the configured list claims `path`.
-pub fn matches_peazip_list(path: &Path, extensions: &[String]) -> bool {
-    text_formats::matches_configured_extension(path, extensions)
-}
-
-/// Whether the configured list claims `path`, without asking whether these previews are switched
-/// on, and without claiming a file a reader of this app's own already reads.
+/// Whether this kind's list claims `path`, without asking whether these previews are switched on,
+/// and without claiming a file a reader of this app's own already reads.
 ///
 /// The second half is what keeps a tarball out of the engine's hands. This list carries the bare
 /// `gz` a single compressed stream is named by, and the archive list carries the dotted `tar.gz`
@@ -188,26 +183,21 @@ pub fn matches_peazip_list(path: &Path, extensions: &[String]) -> bool {
 /// list look per question; what it buys is that a file this app reads itself is never a file an
 /// engine is started for, whatever a user's own edit to either list says. The gate is asked
 /// beside it by the hook, the way every other kind's is.
-pub fn is_peazip_file(path: &Path) -> bool {
-    let claimed = CONFIG
-        .lock()
-        .map(|config| matches_peazip_list(path, &config.peazip_extensions))
-        .unwrap_or(false);
-
-    // Asked after the lock is given up rather than inside it: the archive list's own question
-    // takes the same lock, and one lock taken twice on a thread is a deadlock.
-    claimed && !crate::formats::archive_formats::is_archive_file(path)
-}
-
-/// Whether a preview may be shown for `path`: the file the configured list claims, and the
-/// `Peazip` gate in the tray's `Preview Types` submenu.
 ///
-/// Both halves ask it where a kind can be switched off under a preview that is already on
-/// screen: a hover is not sent for a kind that is off, and the layout places nothing for a file
-/// whose kind is off, which is how a preview of that kind comes down when the switch does. See
-/// `PreviewType::enabled`.
-pub fn is_peazip_preview(path: &Path) -> bool {
-    is_peazip_file(path) && PreviewType::Peazip.enabled()
+/// Both halves are asked under one guard rather than under two, which is the shape this had when
+/// the archive list's question took the same lock the peazip one had given up: one lock taken
+/// twice on a thread is a deadlock, and the two list comparisons are both in memory.
+pub fn is_peazip_file(path: &Path) -> bool {
+    CONFIG
+        .lock()
+        .map(|config| {
+            lists::PEAZIP.claims(path, &config)
+                && !crate::formats::archive_formats::claims_in(
+                    path,
+                    lists::ARCHIVE.entries(&config),
+                )
+        })
+        .unwrap_or(false)
 }
 
 /// Whether the engine is the one that lists this file at all: a name its own list carries, or the
@@ -225,8 +215,8 @@ pub fn is_engine_archive(path: &Path) -> bool {
     use crate::formats::content_type::Content;
 
     // The entry is read before the lock, so the guard is not held across the read (see
-    // `calibre_formats::content_of`).
-    let content = crate::formats::calibre_formats::content_of(path);
+    // `content_type::of_reaching_config`).
+    let content = crate::formats::content_type::of_reaching_config(path);
 
     match content {
         Content::Kind(PreviewType::Peazip) => true,
@@ -244,45 +234,22 @@ mod tests {
     /// picture are all answered elsewhere, and none of them is here.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list =
-            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_PEAZIP_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         let claimed_elsewhere = |path: &Path| {
-            crate::formats::image_formats::matches_image_list(path, &config.image_extensions)
-                || crate::formats::vector_formats::matches_vector_list(
-                    path,
-                    &config.vector_extensions,
-                )
-                || crate::formats::design_formats::matches_design_list(
-                    path,
-                    &config.design_extensions,
-                )
-                || crate::formats::font_formats::matches_font_list(path, &config.font_extensions)
-                || crate::formats::libre_formats::matches_libre_list(path, &config.libre_extensions)
-                || crate::formats::magick_formats::matches_magick_list(
-                    path,
-                    &config.magick_extensions,
-                )
+            crate::formats::lists::IMAGE.claims(path, &config)
+                || crate::formats::lists::VECTOR.claims(path, &config)
+                || crate::formats::lists::DESIGN.claims(path, &config)
+                || crate::formats::lists::FONT.claims(path, &config)
+                || crate::formats::lists::LIBRE.claims(path, &config)
+                || crate::formats::lists::MAGICK.claims(path, &config)
                 || crate::formats::video_formats::matches_any_video_list(path, &config)
-                || crate::formats::archive_formats::matches_archive_list(
-                    path,
-                    &config.archive_extensions,
-                )
-                || crate::formats::office_formats::matches_office_list(
-                    path,
-                    &config.office_extensions,
-                )
-                || crate::formats::ebook_formats::matches_ebook_list(path, &config.ebook_extensions)
-                || crate::formats::calibre_formats::matches_calibre_list(
-                    path,
-                    &config.calibre_extensions,
-                )
-                || crate::formats::text_formats::matches_text_lists(
-                    path,
-                    &config.text_extensions,
-                    &config.text_names,
-                )
+                || crate::formats::lists::ARCHIVE.claims(path, &config)
+                || crate::formats::lists::OFFICE.claims(path, &config)
+                || crate::formats::lists::EBOOK.claims(path, &config)
+                || crate::formats::lists::CALIBRE.claims(path, &config)
+                || crate::formats::lists::TEXT.claims(path, &config)
+                || crate::formats::lists::NAMES.claims(path, &config)
         };
 
         for name in [
@@ -310,7 +277,7 @@ mod tests {
                 "`{name}` is read by another kind, so this expectation is written the wrong way round"
             );
             assert!(
-                !matches_peazip_list(path, &list),
+                !crate::formats::lists::PEAZIP.claims(path, &config),
                 "`{name}` is read by another kind, so the engine is not asked about it"
             );
         }
@@ -323,14 +290,11 @@ mod tests {
         // `is_peazip_file`).
         let tarball = Path::new("sources.tar.gz");
         assert!(
-            crate::formats::archive_formats::matches_archive_list(
-                tarball,
-                &config.archive_extensions
-            ),
+            crate::formats::lists::ARCHIVE.claims(tarball, &config),
             "a tarball is the archive list's, by the dotted entry that names it"
         );
         assert!(
-            matches_peazip_list(tarball, &list),
+            crate::formats::lists::PEAZIP.claims(tarball, &config),
             "and this list names its tail, which is why the difference exists at all"
         );
         assert!(
@@ -343,8 +307,7 @@ mod tests {
     /// single-stream compressors, and the disk images whose names are their own.
     #[test]
     fn holds_the_archives_no_reader_here_opens() {
-        let list =
-            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_PEAZIP_EXTENSIONS);
+        let config = crate::config::config::AppConfig::default();
 
         for name in [
             "backup.arj",
@@ -374,7 +337,7 @@ mod tests {
             "archive.lzh",
         ] {
             assert!(
-                matches_peazip_list(Path::new(name), &list),
+                crate::formats::lists::PEAZIP.claims(Path::new(name), &config),
                 "`{name}` is one of the engine's archives"
             );
         }
@@ -452,7 +415,7 @@ mod tests {
     #[test]
     fn reads_a_list_of_bare_extensions() {
         let extensions =
-            text_formats::sanitize_extension_list(" .CAB , arj,,archive*.iso ,cab,msi");
+            crate::formats::lists::sanitize_extension_list(" .CAB , arj,,archive*.iso ,cab,msi");
 
         assert_eq!(extensions, vec!["cab", "arj", "msi"]);
     }

@@ -16,13 +16,17 @@
 //! and a synchronizing provider's placeholder is a directory entry that can be answered for but a
 //! file that must not be opened, because opening it is what starts the download.
 
-use crate::config::config::PreviewType;
 use crate::formats::text_formats;
 use std::path::Path;
 
-/// Whether either form of the configured list claims `path`: its last extension,
-/// or a dotted tail of its name for the two-part formats.
-pub fn matches_archive_list(path: &Path, extensions: &[String]) -> bool {
+/// Whether the `[archive]` row's list claims `path`: its last extension, or a dotted tail of its
+/// whole name for the two-part formats.
+///
+/// The list-taking form is what `lists` asks for and what its own test uses, because a caller that
+/// has a list in hand — the row, or a test that built one — is a caller asking about that list
+/// rather than about the archive kind. Everything else asks `routing::named_as`, which asks the
+/// row and so asks this.
+pub fn claims_in(path: &Path, extensions: &[String]) -> bool {
     if text_formats::matches_configured_extension(path, extensions) {
         return true;
     }
@@ -37,25 +41,8 @@ pub fn matches_archive_list(path: &Path, extensions: &[String]) -> bool {
         .any(|extension| extension.contains('.') && name.ends_with(&format!(".{extension}")))
 }
 
-/// Whether the configured list claims `path`, without asking whether archive
-/// previews are switched on.
-pub fn is_archive_file(path: &Path) -> bool {
-    crate::CONFIG
-        .lock()
-        .map(|config| matches_archive_list(path, &config.archive_extensions))
-        .unwrap_or(false)
-}
-
-/// Whether the file is previewed as an archive under the current configuration.
-/// The `Archives` gate is checked on top of the list, so turning archive previews
-/// off leaves the list alone and turning them back on restores it.
-pub fn is_archive_preview(path: &Path) -> bool {
-    is_archive_file(path) && PreviewType::Archives.enabled()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::formats::lists::{sanitize_archive_extension_list, DEFAULT_ARCHIVE_EXTENSIONS};
     use std::path::PathBuf;
 
@@ -76,32 +63,21 @@ mod tests {
 
     #[test]
     fn matches_names_the_way_the_list_writes_them() {
-        let extensions = list();
-        assert!(matches_archive_list(
-            &PathBuf::from(r"C:\downloads\release.zip"),
-            &extensions
-        ));
-        assert!(matches_archive_list(
-            &PathBuf::from(r"C:\downloads\sources.tar.gz"),
-            &extensions
-        ));
-        assert!(matches_archive_list(
-            &PathBuf::from(r"C:\downloads\sources.TAR.GZ"),
-            &extensions
-        ));
-        assert!(matches_archive_list(
-            &PathBuf::from(r"C:\downloads\archive.tgz"),
-            &extensions
-        ));
+        let config = crate::config::config::AppConfig::default();
+
+        assert!(crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\release.zip"), &config));
+        assert!(crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\sources.tar.gz"), &config));
+        assert!(crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\sources.TAR.GZ"), &config));
+        assert!(crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\archive.tgz"), &config));
         // `tar` is in the list, `gzip` is not, and a bare `.gz` is not an
         // archive: its table is not in the file to read.
-        assert!(!matches_archive_list(
-            &PathBuf::from(r"C:\downloads\notes.gz"),
-            &extensions
-        ));
-        assert!(!matches_archive_list(
-            &PathBuf::from(r"C:\downloads\report.docx"),
-            &extensions
-        ));
+        assert!(!crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\notes.gz"), &config));
+        assert!(!crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\report.docx"), &config));
     }
 }

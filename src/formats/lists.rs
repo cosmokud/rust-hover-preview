@@ -18,12 +18,13 @@
 //! So the lists are rows here. A row says where the file writes the list, what it holds on the
 //! first run, what this app held of it before, what an entry of it may be, and which field of
 //! the configuration it is; everything that used to name those things one list at a time — the
-//! read out of a file, the write into one, the two resets, and the repair that brings a file an
-//! older build wrote up to the list of now — walks this table instead, and a kind added to the
-//! app is a row added to it.
+//! read out of a file, the write into one, the two resets, the repair that brings a file an older
+//! build wrote up to the list of now, and the lookup each list is asked through — walks this table
+//! instead, and a kind added to the app is a row added to it.
 
 use crate::config::config::AppConfig;
 use configparser::ini::Ini;
+use std::path::Path;
 
 /// What the entries of one list are allowed to be, which is the whole of what sixteen
 /// sanitizers differed on once fourteen of them were one function.
@@ -772,6 +773,43 @@ impl List {
     /// The built-in list in the form the lookups compare against.
     pub(crate) fn built_in(&self) -> Vec<String> {
         self.entries.sanitize(self.defaults)
+    }
+
+    /// The list the configuration holds for this row, which is what a lookup of it is read
+    /// against.
+    ///
+    /// It is the row's own `held` under a name a caller can write, and that is the whole of it:
+    /// the alternative is the field of the configuration behind the row, and a list read by field
+    /// is a list read from a second place — which is what the sixteen modules this table replaced
+    /// were, each holding its list's one read of the configuration and its own copy of the
+    /// question.
+    pub(crate) fn entries<'a>(&self, config: &'a AppConfig) -> &'a [String] {
+        (self.held)(config)
+    }
+
+    /// Whether the configuration's list for this row claims `path`.
+    ///
+    /// What an entry of a list may be and how one of them is compared against a file's name are
+    /// the same question asked twice, and for three of the four rules the second follows from the
+    /// first: a bare extension, a `C#`-shaped one and a whole file name are each looked up the way
+    /// that rule reads them. The fourth is the archive row's, where a compound entry names a whole
+    /// file rather than an extension — `tar.gz` — and so is matched against the end of the name as
+    /// well as against the extension; that one is asked of `archive_formats`, which is where that
+    /// half of the rule is written down.
+    ///
+    /// It is the row's question and not the router's: nothing here opens the file, nothing is
+    /// probed and no half of a kind is settled, so it answers what a name is written in. What kind
+    /// a file is, is `routing::kind_of`, which is the same rows asked in an order.
+    pub(crate) fn claims(&self, path: &Path, config: &AppConfig) -> bool {
+        let entries = self.entries(config);
+
+        match self.entries {
+            Entries::Bare | Entries::Hashed => {
+                crate::formats::text_formats::matches_configured_extension(path, entries)
+            }
+            Entries::Compound => crate::formats::archive_formats::claims_in(path, entries),
+            Entries::Name => crate::formats::text_formats::matches_configured_name(path, entries),
+        }
     }
 
     /// One list as the file has it: the entries its key names, or the built-in list when the key is

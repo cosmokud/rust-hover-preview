@@ -93,24 +93,37 @@ pub fn matches_configured_name(path: &Path, names: &[String]) -> bool {
     names.contains(&name)
 }
 
-/// Whether either configured list claims `path`.
-///
-/// This is the classification without the gate: the lists as they stand, so a
-/// caller that already holds the configuration can ask what kind of preview a
-/// file is without asking whether that kind is switched on — which is how the
-/// router asks it, and what the hook, the loader and the layout all end up
-/// asking (`routing::kind_of`).
-///
-/// It is the configured lists' own answer rather than the app's: a name these
-/// lists hold and an earlier list claims as well is that earlier kind, and what
-/// kind a file is, is asked of the one order every side asks it in.
-pub fn matches_text_lists(path: &Path, extensions: &[String], names: &[String]) -> bool {
-    matches_configured_extension(path, extensions) || matches_configured_name(path, names)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one rule every list in the app is read through, and it used to be written out
+    /// fourteen times: a leading dot is what a user types, an entry that is not a bare
+    /// extension is dropped rather than matched against, and a repeat is not a second entry.
+    ///
+    /// It is pinned here and not only through the row that uses it because the rule is what
+    /// every list has in common: the tests beside the ones that do use the rule through a row
+    /// pin one hand-typed string per list, and a rule cannot be pinned by a sample of the
+    /// strings it reads.
+    #[test]
+    fn a_sanitized_list_drops_a_leading_dot_a_duplicate_and_anything_that_is_not_an_extension() {
+        let typed = sanitize_extension_list(" .ZIP , zip,,book*.azw,epub,..,tar.gz");
+
+        // `book*.azw` is a path fragment and `tar.gz` a compound name: neither is a bare
+        // extension, so neither is in a list that is matched against one.
+        assert_eq!(typed, vec!["zip", "epub"]);
+    }
+
+    /// `tar.gz` is a name rather than an extension, and the archive list matches it against
+    /// the end of a whole file name - so a sanitiser that dropped the dot would silently
+    /// stop the list claiming the format it exists to claim. This is the only difference
+    /// between the two lists, and it is the reason they are two functions.
+    #[test]
+    fn the_archive_list_is_the_one_that_keeps_a_dotted_compound_name() {
+        let typed = sanitize_archive_extension_list(" .ZIP , zip,,nonsense*,docx,tar.gz");
+
+        assert_eq!(typed, vec!["zip", "docx", "tar.gz"]);
+    }
 
     /// A page of HTML is a page of HTML under either of its two names and under no other
     /// one: `.xhtml` is XML, which the text preview still reads, and a file with no
