@@ -10,90 +10,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::config::theme_files;
-use crate::formats::archive_formats::{
-    ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS, DEFAULT_ARCHIVE_EXTENSIONS,
-};
-use crate::formats::calibre_formats::{
-    CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS, CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE,
-    DEFAULT_CALIBRE_EXTENSIONS,
-};
-use crate::formats::design_formats::{
-    DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
-    DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE, DESIGN_EXTENSIONS_WITH_CDR,
-};
-use crate::formats::ebook_formats::DEFAULT_EBOOK_EXTENSIONS;
-use crate::formats::font_formats::DEFAULT_FONT_EXTENSIONS;
-use crate::formats::image_formats::{
-    DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_AVCI,
-    IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS, IMAGE_EXTENSIONS_BEFORE_DDS,
-    IMAGE_EXTENSIONS_BEFORE_SVG, IMAGE_EXTENSIONS_WITH_SVG,
-};
-use crate::formats::libre_formats::{
-    DEFAULT_LIBRE_EXTENSIONS, LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ,
-};
-use crate::formats::magick_formats::{
-    DEFAULT_MAGICK_EXTENSIONS, MAGICK_EXTENSIONS_BEFORE_THE_REST,
-};
-use crate::formats::office_formats::DEFAULT_OFFICE_EXTENSIONS;
-use crate::formats::peazip_formats::{
-    DEFAULT_PEAZIP_EXTENSIONS, PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS,
-    PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS, PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE,
-};
-use crate::formats::text_formats::{
-    sanitize_archive_extension_list, sanitize_extension_list, sanitize_extensions, sanitize_names,
-    DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
-};
-use crate::formats::vector_formats::{
-    DEFAULT_VECTOR_EXTENSIONS, VECTOR_EXTENSIONS_BEFORE_SVG,
-    VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS,
-};
-use crate::formats::audio_formats::DEFAULT_AUDIO_EXTENSIONS;
-use crate::formats::video_formats::{
-    DEFAULT_FFMPEG_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS, VIDEO_EXTENSIONS_BEFORE_THE_SPLIT,
-};
+use crate::formats::lists;
 use crate::readers::tone_map::Curve;
 
 const CONFIG_SECTION: &str = "settings";
-/// The image extension list lives in its own section so the one long value stays
-/// easy to find and edit by hand.
-const IMAGE_SECTION: &str = "image";
-/// The video extension list lives in its own section for the same reason: what the media
-/// engine Windows has is asked to play.
-const VIDEO_SECTION: &str = "video";
-/// And the list beside it, for the video formats only FFmpeg's player reads: the two are the
-/// one list a video preview used to carry, split where the engines are.
-const FFMPEG_SECTION: &str = "ffmpeg";
-/// And the sound list beside it, for the same reason: the formats this app plays rather than
-/// one it draws.
-const AUDIO_SECTION: &str = "audio";
-/// The text-preview extension list lives in its own section so the one long
-/// value stays easy to find and edit by hand.
-const TEXT_SECTION: &str = "text";
-/// The archive extension list lives in its own section for the same reason.
-const ARCHIVE_SECTION: &str = "archive";
-/// The office extension list lives in its own section for the same reason.
-const OFFICE_SECTION: &str = "office";
-/// The font extension list lives in its own section for the same reason.
-const FONT_SECTION: &str = "font";
-/// The design extension list lives in its own section for the same reason.
-const DESIGN_SECTION: &str = "design";
-/// The vector extension list lives in its own section for the same reason.
-const VECTOR_SECTION: &str = "vector";
-/// The list of documents the render engine is asked about lives in its own section for the
-/// same reason: what this app hands to LibreOffice rather than reading itself.
-const LIBRE_SECTION: &str = "libre";
-/// And the list of pictures the ImageMagick engine is asked about, for the same reason:
-/// what this app hands to it rather than reading itself.
-const MAGICK_SECTION: &str = "magick";
-/// And the list of archives the PeaZip engine is asked about, for the same reason: the
-/// formats this app hands to it rather than reading itself.
-const PEAZIP_SECTION: &str = "peazip";
-/// And the list of books the Calibre engine is asked about, for the same reason: the ebook formats
-/// this app hands to it rather than reading itself.
-const CALIBRE_SECTION: &str = "calibre";
-/// And the list of pages this app draws itself, for the same reason: the PDF and the comics — the
-/// names of the `Ebook` kind, which is the one list that holds two readers' worth of names.
-const EBOOK_SECTION: &str = "ebook";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 /// The volume a video is played at unless the file says otherwise: silent, so a hover
@@ -1945,29 +1865,38 @@ impl Default for AppConfig {
             hdr_exposure: DEFAULT_HDR_EXPOSURE,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
-            image_extensions: sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS),
-            video_extensions: sanitize_extension_list(DEFAULT_VIDEO_EXTENSIONS),
-            ffmpeg_extensions: sanitize_extension_list(DEFAULT_FFMPEG_EXTENSIONS),
-            audio_extensions: crate::formats::text_formats::sanitize_extension_list(DEFAULT_AUDIO_EXTENSIONS),
-            text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
-            text_names: sanitize_names(DEFAULT_TEXT_NAMES),
-            archive_extensions: crate::formats::text_formats::sanitize_archive_extension_list(DEFAULT_ARCHIVE_EXTENSIONS),
-            office_extensions: crate::formats::text_formats::sanitize_extension_list(DEFAULT_OFFICE_EXTENSIONS),
-            font_extensions: crate::formats::text_formats::sanitize_extension_list(DEFAULT_FONT_EXTENSIONS),
-            design_extensions: sanitize_extension_list(DEFAULT_DESIGN_EXTENSIONS),
-            libre_extensions: sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS),
-            magick_extensions: sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS),
-            peazip_extensions: sanitize_extension_list(DEFAULT_PEAZIP_EXTENSIONS),
-            calibre_extensions: sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS),
-            ebook_extensions: crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS),
-            vector_extensions: sanitize_extension_list(DEFAULT_VECTOR_EXTENSIONS),
+            image_extensions: Vec::new(),
+            video_extensions: Vec::new(),
+            ffmpeg_extensions: Vec::new(),
+            audio_extensions: Vec::new(),
+            text_extensions: Vec::new(),
+            text_names: Vec::new(),
+            archive_extensions: Vec::new(),
+            office_extensions: Vec::new(),
+            font_extensions: Vec::new(),
+            design_extensions: Vec::new(),
+            libre_extensions: Vec::new(),
+            magick_extensions: Vec::new(),
+            peazip_extensions: Vec::new(),
+            calibre_extensions: Vec::new(),
+            ebook_extensions: Vec::new(),
+            vector_extensions: Vec::new(),
         }
+        .with_built_in_lists()
     }
 }
 
-/// Whether a list holds exactly the entries the built-in list holds, order aside.
-fn same_entries(list: &[String], canonical: &[String]) -> bool {
-    list.len() == canonical.len() && canonical.iter().all(|entry| list.contains(entry))
+impl AppConfig {
+    /// This configuration with every extension list at what this build ships it with.
+    ///
+    /// The lists are not written out here one field each, which is what they used to be: what
+    /// each one holds is a row of the table in `formats::lists`, and a kind added to the app is a
+    /// row added to that. So the sixteen empty lists above are the only mention of them in this
+    /// file, and it is this line that says what they are for.
+    fn with_built_in_lists(mut self) -> Self {
+        lists::reset_built_in(&mut self);
+        self
+    }
 }
 
 /// The headings the settings section is written under, in the order the tray lists its
@@ -2207,166 +2136,6 @@ fn ordered_text(ini: &Ini) -> String {
     out
 }
 
-/// One list as the file has it: the entries its key names, or the built-in list when the key is
-/// gone — which is a file to write, since what it holds is then not what the app is using (see
-/// `differs`).
-///
-/// What is read here is what the file says: a list anyone has edited keeps its own
-/// entries and its own order, and an empty value is a list with nothing in it rather than
-/// a missing one. A list this app itself wrote and has since added entries to was dealt
-/// with before this ran, by the repair the file is put through as it is read (see
-/// `repair_older_lists`), so by the time a list is read here it is either the user's or the
-/// list of now.
-fn configured_list(
-    ini: &Ini,
-    section: &str,
-    key: &str,
-    defaults: &str,
-    sanitize: fn(&str) -> Vec<String>,
-) -> Vec<String> {
-    match ini.get(section, key) {
-        Some(value) => sanitize(&value),
-        None => sanitize(defaults),
-    }
-}
-
-/// The built-in lists this app shipped and then changed, brought up to the list of now.
-///
-/// A list is only ever read out of a file — nothing in the tray edits one — so a list that
-/// differs from the built-in one is either this app's own older list, written before an entry
-/// was added to it or before its entries were put in alphabetical order, or an edit somebody made
-/// by hand. The two are told apart by their entries, and only one of them is rewritten: a list
-/// holding exactly the entries of a list this app shipped is this app's own — nobody typed it —
-/// so it is replaced with the built-in list, while a list with any one entry added, removed or
-/// spelled differently is the user's and is kept exactly as it is. Without this, an entry added
-/// to a built-in list would reach a fresh installation only, since every file already written
-/// holds the list as it was.
-///
-/// Telling them apart by their entries costs one thing, and it is worth saying out loud: an entry
-/// a user took out can come back, because a list trimmed to exactly the entries this app shipped
-/// before that entry existed is this app's own as far as this can tell, and is read as one. What
-/// that buys is the other half — the formats added since, which a list nobody had touched would
-/// otherwise never be given.
-fn repair_older_lists(ini: &mut Ini) -> bool {
-    let mut repaired = false;
-
-    // Bound to the same type once each, rather than coerced at all ten rows. An array's
-    // elements have to be one type, and ten sanitizers of the same signature are ten distinct
-    // fn items, so the coercions were only ever there to make the array typecheck. There are
-    // two of them now rather than ten: the archive list holds a dotted compound name and
-    // everything else is a bare extension (see `text_formats::sanitize_extension_list`).
-    let plain: fn(&str) -> Vec<String> = sanitize_extension_list;
-    let compound: fn(&str) -> Vec<String> =
-        crate::formats::text_formats::sanitize_archive_extension_list;
-
-    for (section, defaults, previous, sanitize) in [
-        (
-            ARCHIVE_SECTION,
-            DEFAULT_ARCHIVE_EXTENSIONS,
-            &[ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS][..],
-            compound,
-        ),
-        (
-            IMAGE_SECTION,
-            DEFAULT_IMAGE_EXTENSIONS,
-            &[
-                IMAGE_EXTENSIONS_BEFORE_AVCI,
-                IMAGE_EXTENSIONS_BEFORE_DDS,
-                IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS,
-                IMAGE_EXTENSIONS_BEFORE_SVG,
-                IMAGE_EXTENSIONS_WITH_SVG,
-            ][..],
-            plain,
-        ),
-        (
-            DESIGN_SECTION,
-            DEFAULT_DESIGN_EXTENSIONS,
-            &[
-                DESIGN_EXTENSIONS_BEFORE_AI,
-                DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
-                DESIGN_EXTENSIONS_WITH_CDR,
-            ][..],
-            plain,
-        ),
-        (
-            LIBRE_SECTION,
-            DEFAULT_LIBRE_EXTENSIONS,
-            &[LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ][..],
-            plain,
-        ),
-        (
-            MAGICK_SECTION,
-            DEFAULT_MAGICK_EXTENSIONS,
-            &[MAGICK_EXTENSIONS_BEFORE_THE_REST][..],
-            plain,
-        ),
-        (
-            CALIBRE_SECTION,
-            DEFAULT_CALIBRE_EXTENSIONS,
-            &[
-                CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS,
-                CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE,
-            ][..],
-            plain,
-        ),
-        (
-            PEAZIP_SECTION,
-            DEFAULT_PEAZIP_EXTENSIONS,
-            &[
-                PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS,
-                PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS,
-                PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE,
-            ][..],
-            plain,
-        ),
-        (
-            VIDEO_SECTION,
-            DEFAULT_VIDEO_EXTENSIONS,
-            &[VIDEO_EXTENSIONS_BEFORE_THE_SPLIT][..],
-            plain,
-        ),
-        (
-            FFMPEG_SECTION,
-            DEFAULT_FFMPEG_EXTENSIONS,
-            // The section is new, so there is no list of this app's older than the built-in one:
-            // a file that has it has an edit somebody made by hand, and a file that has not is
-            // given the built-in list as it is read.
-            &[][..],
-            plain,
-        ),
-        (
-            VECTOR_SECTION,
-            DEFAULT_VECTOR_EXTENSIONS,
-            &[
-                VECTOR_EXTENSIONS_BEFORE_SVG,
-                VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS,
-            ][..],
-            plain,
-        ),
-    ] {
-        let Some(value) = ini.get(section, "extensions") else {
-            continue;
-        };
-
-        let list = sanitize(&value);
-        let canonical = sanitize(defaults);
-        let written_by_the_app = same_entries(&list, &canonical)
-            || previous
-                .iter()
-                .any(|older| same_entries(&list, &sanitize(older)));
-
-        // A list that already agrees with the built-in one, entry for entry and in order,
-        // is left alone rather than written out again: a write moves the mtime, and the
-        // watcher would read the file back for a change that was not one.
-        if written_by_the_app && list != canonical {
-            ini.set(section, "extensions", Some(canonical.join(",")));
-            repaired = true;
-        }
-    }
-
-    repaired
-}
-
 /// Whether a file is one whose settings were grouped the way an earlier build grouped them.
 ///
 /// A heading is a comment, so a file grouped by one arrangement holds exactly the settings of a
@@ -2406,81 +2175,6 @@ fn headings_are_old(text: &str) -> bool {
     let written: Vec<&str> = SETTING_GROUPS.iter().map(|(heading, _)| *heading).collect();
 
     listed != written
-}
-
-/// Every extension list the configuration holds, moved as one piece.
-///
-/// The two resets are the reason it exists: one puts every setting back at what this build
-/// recommends and must leave the lists exactly as they are, the other puts the lists back and
-/// must leave everything else alone, and both are one move with this in between. A list added
-/// to `AppConfig` later belongs here too — a field this does not name is one the settings
-/// reset would reset along with the settings.
-struct ExtensionLists {
-    image: Vec<String>,
-    video: Vec<String>,
-    ffmpeg: Vec<String>,
-    audio: Vec<String>,
-    text: Vec<String>,
-    names: Vec<String>,
-    archive: Vec<String>,
-    office: Vec<String>,
-    font: Vec<String>,
-    design: Vec<String>,
-    libre: Vec<String>,
-    magick: Vec<String>,
-    peazip: Vec<String>,
-    calibre: Vec<String>,
-    ebook: Vec<String>,
-    vector: Vec<String>,
-}
-
-impl ExtensionLists {
-    /// The lists taken out of a configuration, which is left holding empty ones.
-    fn take(config: &mut AppConfig) -> Self {
-        Self {
-            image: std::mem::take(&mut config.image_extensions),
-            video: std::mem::take(&mut config.video_extensions),
-            ffmpeg: std::mem::take(&mut config.ffmpeg_extensions),
-            audio: std::mem::take(&mut config.audio_extensions),
-            text: std::mem::take(&mut config.text_extensions),
-            names: std::mem::take(&mut config.text_names),
-            archive: std::mem::take(&mut config.archive_extensions),
-            office: std::mem::take(&mut config.office_extensions),
-            font: std::mem::take(&mut config.font_extensions),
-            design: std::mem::take(&mut config.design_extensions),
-            libre: std::mem::take(&mut config.libre_extensions),
-            magick: std::mem::take(&mut config.magick_extensions),
-            peazip: std::mem::take(&mut config.peazip_extensions),
-            calibre: std::mem::take(&mut config.calibre_extensions),
-            ebook: std::mem::take(&mut config.ebook_extensions),
-            vector: std::mem::take(&mut config.vector_extensions),
-        }
-    }
-
-    /// Put them back, one field each.
-    fn put(self, config: &mut AppConfig) {
-        config.image_extensions = self.image;
-        config.video_extensions = self.video;
-        config.ffmpeg_extensions = self.ffmpeg;
-        config.audio_extensions = self.audio;
-        config.text_extensions = self.text;
-        config.text_names = self.names;
-        config.archive_extensions = self.archive;
-        config.office_extensions = self.office;
-        config.font_extensions = self.font;
-        config.design_extensions = self.design;
-        config.libre_extensions = self.libre;
-        config.magick_extensions = self.magick;
-        config.peazip_extensions = self.peazip;
-        config.calibre_extensions = self.calibre;
-        config.ebook_extensions = self.ebook;
-        config.vector_extensions = self.vector;
-    }
-
-    /// The lists a configuration that has just been made holds: the built-in ones.
-    fn built_in() -> Self {
-        Self::take(&mut AppConfig::default())
-    }
 }
 
 /// The two files the installer leaves behind for the app to find, taken as it starts.
@@ -2529,7 +2223,8 @@ impl AppConfig {
     ///
     /// The file is read in one of two ways: there is none, so a fresh installation is written —
     /// or there is one, and the lists it holds that are this app's own older ones are brought up
-    /// before anything is read from it (`repair_older_lists`), and the settings it holds under
+    /// before anything is read from it (`formats::lists::repair_older_lists`), and the settings
+    /// it holds under
     /// headings an older build wrote are grouped again the way this build groups them
     /// (`headings_are_old`) — since the file is what the user edits and a key left missing would
     /// be repaired again on every load. It is written back where that left something to write,
@@ -2564,7 +2259,7 @@ impl AppConfig {
                 let old_headings = headings_are_old(&text);
 
                 if ini.read(text).is_ok() {
-                    let repaired = repair_older_lists(&mut ini) || old_headings;
+                    let repaired = lists::repair_older_lists(&mut ini) || old_headings;
                     config.apply_ini(&ini);
 
                     // The file is written again where the repair had a list to bring up or a
@@ -2622,7 +2317,7 @@ impl AppConfig {
                 let old_headings = headings_are_old(&text);
 
                 if ini.read(text).is_ok() {
-                    let repaired = repair_older_lists(&mut ini) || old_headings;
+                    let repaired = lists::repair_older_lists(&mut ini) || old_headings;
                     self.apply_ini(&ini);
 
                     if repaired || self.differs(&ini) {
@@ -2654,17 +2349,17 @@ impl AppConfig {
     /// that follows from one. `is_first_run` is not a setting and is carried across: a reset
     /// asked for during a first run is still a first run.
     pub fn reset_to_recommended(&mut self) {
-        let lists = ExtensionLists::take(self);
+        let taken = lists::held(self);
         let is_first_run = self.is_first_run;
 
         *self = Self::default();
         self.is_first_run = is_first_run;
-        lists.put(self);
+        lists::put(self, taken);
     }
 
     /// Every extension list back at the built-in one, with every other setting left alone.
     pub fn reset_extension_lists(&mut self) {
-        ExtensionLists::built_in().put(self);
+        lists::reset_built_in(self);
     }
 
     /// The settings that do not hold what this build recommends, as `(key, now, recommended)`.
@@ -3073,86 +2768,9 @@ impl AppConfig {
                     .to_string(),
             ),
         );
-        ini.set(
-            IMAGE_SECTION,
-            "extensions",
-            Some(sanitize_extension_list(&self.image_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            VIDEO_SECTION,
-            "extensions",
-            Some(sanitize_extension_list(&self.video_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            FFMPEG_SECTION,
-            "extensions",
-            Some(sanitize_extension_list(&self.ffmpeg_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            AUDIO_SECTION,
-            "extensions",
-            Some(crate::formats::text_formats::sanitize_extension_list(&self.audio_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            TEXT_SECTION,
-            "extensions",
-            Some(sanitize_extensions(&self.text_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            TEXT_SECTION,
-            "names",
-            Some(sanitize_names(&self.text_names.join(",")).join(",")),
-        );
-        ini.set(
-            ARCHIVE_SECTION,
-            "extensions",
-            Some(crate::formats::text_formats::sanitize_archive_extension_list(&self.archive_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            OFFICE_SECTION,
-            "extensions",
-            Some(crate::formats::text_formats::sanitize_extension_list(&self.office_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            FONT_SECTION,
-            "extensions",
-            Some(crate::formats::text_formats::sanitize_extension_list(&self.font_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            DESIGN_SECTION,
-            "extensions",
-            Some(sanitize_extension_list(&self.design_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            LIBRE_SECTION,
-            "extensions",
-            Some(sanitize_extension_list(&self.libre_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            MAGICK_SECTION,
-            "extensions",
-            Some(sanitize_extension_list(&self.magick_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            PEAZIP_SECTION,
-            "extensions",
-            Some(sanitize_extension_list(&self.peazip_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            CALIBRE_SECTION,
-            "extensions",
-            Some(sanitize_extension_list(&self.calibre_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            EBOOK_SECTION,
-            "extensions",
-            Some(crate::formats::text_formats::sanitize_extension_list(&self.ebook_extensions.join(",")).join(",")),
-        );
-        ini.set(
-            VECTOR_SECTION,
-            "extensions",
-            Some(sanitize_extension_list(&self.vector_extensions.join(",")).join(",")),
-        );
+        // Every list the configuration holds is one row of the table to write (see
+        // `formats::lists`).
+        lists::write_all(self, &mut ini);
         ini
     }
 
@@ -3591,181 +3209,20 @@ impl AppConfig {
             self.text_scroll_far_edge_grace_pixels =
                 sanitize_text_scroll_far_edge_grace_pixels(value as f32);
         }
-        // A list is what the file says it is, and a key that is gone is a list the
-        // file no longer has: the built-in entries are put back, and the file is written out
-        // again because it does not say what the app is using. An empty value is not the same
-        // thing — it is a list the user emptied, and it is kept as written.
+        // Every list the configuration holds is read out of the file by the table, one row
+        // each (see `formats::lists`).
         //
-        // The image list is read as the file has it. What an older file's list needs —
-        // `svg` and `svgz` given up to the vector list, the formats Windows has a codec
-        // for, `dds`, and the order the entries are written in — was seen to by
-        // `repair_older_lists`, which ran over the file before this did.
-        let list = configured_list(
-            ini,
-            IMAGE_SECTION,
-            "extensions",
-            DEFAULT_IMAGE_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.image_extensions = list;
-        let list = configured_list(
-            ini,
-            VIDEO_SECTION,
-            "extensions",
-            DEFAULT_VIDEO_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.video_extensions = list;
-        let list = configured_list(
-            ini,
-            FFMPEG_SECTION,
-            "extensions",
-            DEFAULT_FFMPEG_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.ffmpeg_extensions = list;
-        let list = configured_list(
-            ini,
-            TEXT_SECTION,
-            "extensions",
-            DEFAULT_TEXT_EXTENSIONS,
-            sanitize_extensions,
-        );
-        self.text_extensions = list;
-        let list = configured_list(
-            ini,
-            TEXT_SECTION,
-            "names",
-            DEFAULT_TEXT_NAMES,
-            sanitize_names,
-        );
-        self.text_names = list;
-        let list = configured_list(
-            ini,
-            ARCHIVE_SECTION,
-            "extensions",
-            DEFAULT_ARCHIVE_EXTENSIONS,
-            sanitize_archive_extension_list,
-        );
-        self.archive_extensions = list;
-        let list = configured_list(
-            ini,
-            OFFICE_SECTION,
-            "extensions",
-            DEFAULT_OFFICE_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.office_extensions = list;
-        // The sound list, new with its kind: an older file has no section at all, so the key is
-        // gone, the built-in entries come back with it, and the file is written out again
-        // holding them.
-        let list = configured_list(
-            ini,
-            AUDIO_SECTION,
-            "extensions",
-            DEFAULT_AUDIO_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.audio_extensions = list;
-        // The font list is one whose built-in entries are new with the kind itself, so an
-        // older file simply has no section: the key is gone, the built-in entries come back
-        // with it, and the file is written out again with them.
-        let list = configured_list(
-            ini,
-            FONT_SECTION,
-            "extensions",
-            DEFAULT_FONT_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.font_extensions = list;
-        // The design list is new with the kind itself, the way the font list above is: an
-        // older file has no section at all, so the key is gone, the built-in entries come
-        // back with it, and the file is written out again holding them. Its entries have
-        // grown since — `ai` is the one that did — and that is `repair_older_lists`' business
-        // rather than this read's.
-        let list = configured_list(
-            ini,
-            DESIGN_SECTION,
-            "extensions",
-            DEFAULT_DESIGN_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.design_extensions = list;
-        // The render engine's list, new with its kind: an older file has no section at all, so
-        // the key is gone and the built-in entries come back with it. What a file holds is read
-        // back like every other list — a name a user added is asked about from the next read, and
-        // one they took out is not — and the entries the engine has no filter for, which an
-        // earlier list carried, are taken out of a file by `repair_older_lists` before this runs.
-        let list = configured_list(
-            ini,
-            LIBRE_SECTION,
-            "extensions",
-            DEFAULT_LIBRE_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.libre_extensions = list;
-        // And the ImageMagick engine's, the same shape once more: the camera raw formats above
-        // all, written from the built-in list on the first run and read back from there, so a
-        // user can add a format the engine reads and this app does not know.
-        let list = configured_list(
-            ini,
-            MAGICK_SECTION,
-            "extensions",
-            DEFAULT_MAGICK_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.magick_extensions = list;
-        // And the PeaZip engine's, the same shape once more: the archives its console archiver
-        // reads and this app has no reader of its own for — the cabinet files, isos, disk
-        // images and single-stream compressors — written from the built-in list on the first
-        // run and read back from there, so a user can add a format the engine reads and this app
-        // does not know, or take one out.
-        let list = configured_list(
-            ini,
-            PEAZIP_SECTION,
-            "extensions",
-            DEFAULT_PEAZIP_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.peazip_extensions = list;
-        // And the Calibre engine's, the same shape once more: the ebook formats its converter
-        // reads and this app has no reader of its own for, written from the built-in list on the
-        // first run and read back from there. It is new with its kind, so an older file has no
-        // section at all and the built-in entries come back with the key.
-        let list = configured_list(
-            ini,
-            CALIBRE_SECTION,
-            "extensions",
-            DEFAULT_CALIBRE_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.calibre_extensions = list;
-        // And the ebook list, which is the one list that is two readers' worth of names: the PDF's
-        // three spellings and the three comic containers, which are the same kind of preview to a
-        // user — a page of a book — and are drawn by two readers behind it (see `ebook_formats`).
-        // It is new with its kind, so an older file has no section at all and the built-in entries
-        // come back with the key.
-        let list = configured_list(
-            ini,
-            EBOOK_SECTION,
-            "extensions",
-            DEFAULT_EBOOK_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.ebook_extensions = list;
-        // And the vector list, new with its kind: an older file has no section at all, so
-        // the key is gone and the built-in entries come back with it. Its entries have
-        // grown since — `svg` and `svgz`, which were entries of the image list until the
-        // kind they belong to was given them — and that, too, is `repair_older_lists`'
-        // business rather than this read's.
-        let list = configured_list(
-            ini,
-            VECTOR_SECTION,
-            "extensions",
-            DEFAULT_VECTOR_EXTENSIONS,
-            sanitize_extension_list,
-        );
-        self.vector_extensions = list;
+        // A list is what the file says it is, and a key that is gone is a list the file no
+        // longer has: the built-in entries are put back, and the file is written out again
+        // because it does not say what the app is using. An empty value is not the same thing
+        // — it is a list the user emptied, and it is kept as written.
+        //
+        // What an older file’s list needs — `svg` and `svgz` given up to the vector list, the
+        // formats Windows has a codec for, `dds`, the order the entries are written in, and a
+        // list this app has since changed a name in or out of — was seen to by the repair that
+        // ran over the file before this did, and which list it walks is a fact about the row
+        // rather than about this read.
+        lists::read_all(ini, self);
     }
 }
 
@@ -4237,8 +3694,15 @@ mod tests {
     #[test]
     fn reads_which_files_the_pin_steps_through_from_its_own_key() {
         let mut ini = Ini::new();
-        ini.set(CONFIG_SECTION, "pin_nav_file_types", Some("category".to_string()));
-        assert_eq!(read_file(&mut ini).pin_nav_file_types, PinNavFileTypes::Category);
+        ini.set(
+            CONFIG_SECTION,
+            "pin_nav_file_types",
+            Some("category".to_string()),
+        );
+        assert_eq!(
+            read_file(&mut ini).pin_nav_file_types,
+            PinNavFileTypes::Category
+        );
 
         let mut unknown = Ini::new();
         unknown.set(
@@ -4326,11 +3790,15 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(
             config.font_extensions,
-            crate::formats::text_formats::sanitize_extension_list(DEFAULT_FONT_EXTENSIONS)
+            crate::formats::text_formats::sanitize_extension_list(lists::DEFAULT_FONT_EXTENSIONS)
         );
 
         let mut ini = Ini::new();
-        ini.set(FONT_SECTION, "extensions", Some(".OTF,ttf".to_string()));
+        ini.set(
+            lists::FONT.section,
+            "extensions",
+            Some(".OTF,ttf".to_string()),
+        );
 
         let config = read_file(&mut ini);
         assert_eq!(config.font_extensions, vec!["otf", "ttf"]);
@@ -4343,7 +3811,7 @@ mod tests {
         let config = read_file(&mut ini);
         assert_eq!(
             config.font_extensions,
-            crate::formats::text_formats::sanitize_extension_list(DEFAULT_FONT_EXTENSIONS)
+            crate::formats::text_formats::sanitize_extension_list(lists::DEFAULT_FONT_EXTENSIONS)
         );
         assert!(
             config.differs(&ini),
@@ -4381,11 +3849,15 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(
             config.magick_extensions,
-            sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS)
+            lists::sanitize_extension_list(lists::DEFAULT_MAGICK_EXTENSIONS)
         );
 
         let mut ini = Ini::new();
-        ini.set(MAGICK_SECTION, "extensions", Some(".NEF, cr3".to_string()));
+        ini.set(
+            lists::MAGICK.section,
+            "extensions",
+            Some(".NEF, cr3".to_string()),
+        );
 
         let config = read_file(&mut ini);
         assert_eq!(config.magick_extensions, vec!["nef", "cr3"]);
@@ -4398,7 +3870,7 @@ mod tests {
         let config = read_file(&mut ini);
         assert_eq!(
             config.magick_extensions,
-            sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS)
+            lists::sanitize_extension_list(lists::DEFAULT_MAGICK_EXTENSIONS)
         );
         assert!(
             config.differs(&ini),
@@ -4410,15 +3882,15 @@ mod tests {
         // of now — which is how an installation that already exists is given them.
         let mut ini = Ini::new();
         ini.set(
-            MAGICK_SECTION,
+            lists::MAGICK.section,
             "extensions",
-            Some(MAGICK_EXTENSIONS_BEFORE_THE_REST.to_string()),
+            Some(lists::MAGICK_EXTENSIONS_BEFORE_THE_REST.to_string()),
         );
 
         let config = read_file(&mut ini);
         assert_eq!(
             config.magick_extensions,
-            sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS)
+            lists::sanitize_extension_list(lists::DEFAULT_MAGICK_EXTENSIONS)
         );
         for name in ["sun", "pict", "rgb", "ase", "fax"] {
             assert!(
@@ -4439,7 +3911,7 @@ mod tests {
         assert!(PreviewType::Libre.enabled_in(&config));
         assert_eq!(
             config.magick_extensions,
-            sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS)
+            lists::sanitize_extension_list(lists::DEFAULT_MAGICK_EXTENSIONS)
         );
 
         PreviewType::Images.set_enabled_in(&mut config, true);
@@ -4459,12 +3931,12 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(
             config.calibre_extensions,
-            sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS)
+            lists::sanitize_extension_list(lists::DEFAULT_CALIBRE_EXTENSIONS)
         );
 
         let mut ini = Ini::new();
         ini.set(
-            CALIBRE_SECTION,
+            lists::CALIBRE.section,
             "extensions",
             Some(".MOBI, epub".to_string()),
         );
@@ -4480,7 +3952,7 @@ mod tests {
         let config = read_file(&mut ini);
         assert_eq!(
             config.calibre_extensions,
-            sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS)
+            lists::sanitize_extension_list(lists::DEFAULT_CALIBRE_EXTENSIONS)
         );
         assert!(
             config.differs(&ini),
@@ -4495,7 +3967,7 @@ mod tests {
         assert!(!PreviewType::Ebook.enabled_in(&config));
         assert_eq!(
             config.calibre_extensions,
-            sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS)
+            lists::sanitize_extension_list(lists::DEFAULT_CALIBRE_EXTENSIONS)
         );
 
         PreviewType::Ebook.set_enabled_in(&mut config, true);
@@ -4576,7 +4048,7 @@ mod tests {
     /// A file as the app reads one: what it has wrong or missing is put right first, and then
     /// what the configuration reads is what the file says.
     fn read_file(ini: &mut Ini) -> AppConfig {
-        repair_older_lists(ini);
+        lists::repair_older_lists(ini);
 
         let mut config = AppConfig::default();
         config.apply_ini(ini);
@@ -4590,16 +4062,16 @@ mod tests {
     fn a_list_holding_the_apps_own_older_image_entries_takes_the_ones_added_to_it() {
         let mut ini = Ini::new();
         ini.set(
-            IMAGE_SECTION,
+            lists::IMAGE.section,
             "extensions",
-            Some(IMAGE_EXTENSIONS_BEFORE_SVG.to_string()),
+            Some(lists::IMAGE_EXTENSIONS_BEFORE_SVG.to_string()),
         );
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
-            sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
     }
@@ -4611,23 +4083,23 @@ mod tests {
     /// about the half it can read, and the rest of the old list is written down beside it.
     #[test]
     fn a_video_list_from_before_the_split_is_read_as_the_two_lists_of_now() {
-        let mut ini = written_file_before_this_build(&[FFMPEG_SECTION]);
+        let mut ini = written_file_before_this_build(&[lists::FFMPEG.section]);
         ini.set(
-            VIDEO_SECTION,
+            lists::VIDEO.section,
             "extensions",
-            Some(VIDEO_EXTENSIONS_BEFORE_THE_SPLIT.to_string()),
+            Some(lists::VIDEO_EXTENSIONS_BEFORE_THE_SPLIT.to_string()),
         );
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.video_extensions,
-            sanitize_extension_list(DEFAULT_VIDEO_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_VIDEO_EXTENSIONS),
             "the engine is asked about the names it can read"
         );
         assert_eq!(
             config.ffmpeg_extensions,
-            sanitize_extension_list(DEFAULT_FFMPEG_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_FFMPEG_EXTENSIONS),
             "and the rest of the old list is the player's"
         );
         assert!(
@@ -4642,20 +4114,20 @@ mod tests {
     /// now, since a section the file does not have is one the app writes.
     #[test]
     fn a_video_list_of_the_users_own_is_left_as_it_is() {
-        let mut ini = written_file_before_this_build(&[FFMPEG_SECTION]);
-        let edited = format!("{},film-of-mine", VIDEO_EXTENSIONS_BEFORE_THE_SPLIT);
-        ini.set(VIDEO_SECTION, "extensions", Some(edited.clone()));
+        let mut ini = written_file_before_this_build(&[lists::FFMPEG.section]);
+        let edited = format!("{},film-of-mine", lists::VIDEO_EXTENSIONS_BEFORE_THE_SPLIT);
+        ini.set(lists::VIDEO.section, "extensions", Some(edited.clone()));
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.video_extensions,
-            sanitize_extension_list(&edited),
+            lists::sanitize_extension_list(&edited),
             "an edit is read as the edit it is"
         );
         assert_eq!(
             config.ffmpeg_extensions,
-            sanitize_extension_list(DEFAULT_FFMPEG_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_FFMPEG_EXTENSIONS),
             "and the player's list is the one this build writes"
         );
     }
@@ -4670,16 +4142,16 @@ mod tests {
     fn a_list_holding_the_apps_own_peazip_entries_takes_the_backends_added_to_them() {
         let mut ini = Ini::new();
         ini.set(
-            PEAZIP_SECTION,
+            lists::PEAZIP.section,
             "extensions",
-            Some(PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS.to_string()),
+            Some(lists::PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS.to_string()),
         );
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.peazip_extensions,
-            sanitize_extension_list(DEFAULT_PEAZIP_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_PEAZIP_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
         for name in ["arc", "zpaq", "br", "bcm", "lpaq8"] {
@@ -4703,36 +4175,38 @@ mod tests {
     fn a_list_holding_the_apps_own_entries_loses_the_names_that_became_books() {
         let mut ini = Ini::new();
         ini.set(
-            ARCHIVE_SECTION,
+            lists::ARCHIVE.section,
             "extensions",
-            Some(ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS.to_string()),
+            Some(lists::ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS.to_string()),
         );
         ini.set(
-            PEAZIP_SECTION,
+            lists::PEAZIP.section,
             "extensions",
-            Some(PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE.to_string()),
+            Some(lists::PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE.to_string()),
         );
         ini.set(
-            CALIBRE_SECTION,
+            lists::CALIBRE.section,
             "extensions",
-            Some(CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE.to_string()),
+            Some(lists::CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE.to_string()),
         );
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.archive_extensions,
-            crate::formats::text_formats::sanitize_archive_extension_list(DEFAULT_ARCHIVE_EXTENSIONS),
+            crate::formats::text_formats::sanitize_archive_extension_list(
+                lists::DEFAULT_ARCHIVE_EXTENSIONS
+            ),
             "a comic is not an archive any more"
         );
         assert_eq!(
             config.peazip_extensions,
-            sanitize_extension_list(DEFAULT_PEAZIP_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_PEAZIP_EXTENSIONS),
             "and the help file the engine had taken is the archiver's again"
         );
         assert_eq!(
             config.calibre_extensions,
-            sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_CALIBRE_EXTENSIONS),
             "and the engine's list is without it, with the Microsoft Reader book it kept"
         );
 
@@ -4761,7 +4235,7 @@ mod tests {
         // entries come back with the key rather than the names being lost on the way over.
         assert_eq!(
             config.ebook_extensions,
-            crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS),
+            crate::formats::text_formats::sanitize_extension_list(lists::DEFAULT_EBOOK_EXTENSIONS),
             "a file with no `[ebook]` section is given the built-in list"
         );
         assert!(
@@ -4778,16 +4252,16 @@ mod tests {
     fn a_list_holding_the_names_the_engine_cannot_read_loses_them() {
         let mut ini = Ini::new();
         ini.set(
-            LIBRE_SECTION,
+            lists::LIBRE.section,
             "extensions",
-            Some(LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ.to_string()),
+            Some(lists::LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ.to_string()),
         );
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.libre_extensions,
-            sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_LIBRE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
         for name in ["swf", "epub", "qxp", "pm3", "vssm", "uof"] {
@@ -4832,18 +4306,18 @@ mod tests {
         ini.set(CONFIG_SECTION, "avoid_filename", Some("true".to_string()));
         ini.set(CONFIG_SECTION, "svg_scale", Some("75".to_string()));
         ini.set(
-            IMAGE_SECTION,
+            lists::IMAGE.section,
             "extensions",
-            Some(IMAGE_EXTENSIONS_BEFORE_DDS.to_string()),
+            Some(lists::IMAGE_EXTENSIONS_BEFORE_DDS.to_string()),
         );
         ini.set(
-            DESIGN_SECTION,
+            lists::DESIGN.section,
             "extensions",
-            Some(DESIGN_EXTENSIONS_BEFORE_AI.to_string()),
+            Some(lists::DESIGN_EXTENSIONS_BEFORE_AI.to_string()),
         );
 
         assert!(
-            repair_older_lists(&mut ini),
+            lists::repair_older_lists(&mut ini),
             "the lists are what the repair has to do with a file like this"
         );
 
@@ -5098,20 +4572,20 @@ mod tests {
     fn a_file_the_repair_has_been_through_is_left_alone() {
         let mut ini = written_file();
         ini.set(
-            IMAGE_SECTION,
+            lists::IMAGE.section,
             "extensions",
-            Some(IMAGE_EXTENSIONS_BEFORE_SVG.to_string()),
+            Some(lists::IMAGE_EXTENSIONS_BEFORE_SVG.to_string()),
         );
 
         assert!(
-            repair_older_lists(&mut ini),
+            lists::repair_older_lists(&mut ini),
             "the file had a list of the app's own from before it grew"
         );
 
         let once = ordered_text(&ini);
 
         assert!(
-            !repair_older_lists(&mut ini),
+            !lists::repair_older_lists(&mut ini),
             "the file it made is one there is nothing left to do to"
         );
         assert_eq!(
@@ -5130,9 +4604,9 @@ mod tests {
     fn an_entry_taken_out_of_a_list_can_come_back() {
         let mut ini = Ini::new();
         ini.set(
-            IMAGE_SECTION,
+            lists::IMAGE.section,
             "extensions",
-            Some(sanitize_extension_list(IMAGE_EXTENSIONS_BEFORE_DDS).join(",")),
+            Some(lists::sanitize_extension_list(lists::IMAGE_EXTENSIONS_BEFORE_DDS).join(",")),
         );
 
         let config = read_file(&mut ini);
@@ -5150,30 +4624,34 @@ mod tests {
     #[test]
     fn a_list_holding_the_apps_own_design_entries_takes_the_ones_added_to_them() {
         for shipped in [
-            DESIGN_EXTENSIONS_BEFORE_AI,
-            DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
+            lists::DESIGN_EXTENSIONS_BEFORE_AI,
+            lists::DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
         ] {
             let mut ini = Ini::new();
-            ini.set(DESIGN_SECTION, "extensions", Some(shipped.to_string()));
+            ini.set(
+                lists::DESIGN.section,
+                "extensions",
+                Some(shipped.to_string()),
+            );
 
             let config = read_file(&mut ini);
 
             assert_eq!(
                 config.design_extensions,
-                sanitize_extension_list(DEFAULT_DESIGN_EXTENSIONS),
+                lists::sanitize_extension_list(lists::DEFAULT_DESIGN_EXTENSIONS),
                 "the list the app shipped before (`{shipped}`) is read as the list it ships now"
             );
         }
 
-        let edited = format!("dng,{DESIGN_EXTENSIONS_BEFORE_AI}");
+        let edited = format!("dng,{}", lists::DESIGN_EXTENSIONS_BEFORE_AI);
         let mut ini = Ini::new();
-        ini.set(DESIGN_SECTION, "extensions", Some(edited.clone()));
+        ini.set(lists::DESIGN.section, "extensions", Some(edited.clone()));
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.design_extensions,
-            sanitize_extension_list(&edited),
+            lists::sanitize_extension_list(&edited),
             "a list with an entry of its own is the user's and is kept as written"
         );
     }
@@ -5186,16 +4664,16 @@ mod tests {
     fn a_list_holding_the_apps_own_image_entries_takes_the_codec_formats_added_to_them() {
         let mut ini = Ini::new();
         ini.set(
-            IMAGE_SECTION,
+            lists::IMAGE.section,
             "extensions",
-            Some(IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS.to_string()),
+            Some(lists::IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS.to_string()),
         );
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
-            sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
         for extension in ["avif", "heic", "heif", "jxl"] {
@@ -5214,16 +4692,16 @@ mod tests {
     fn a_list_holding_the_apps_own_image_entries_gives_the_documents_up() {
         let mut ini = Ini::new();
         ini.set(
-            IMAGE_SECTION,
+            lists::IMAGE.section,
             "extensions",
-            Some(IMAGE_EXTENSIONS_WITH_SVG.to_string()),
+            Some(lists::IMAGE_EXTENSIONS_WITH_SVG.to_string()),
         );
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
-            sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
         assert!(!config.image_extensions.contains(&"svg".to_string()));
@@ -5237,16 +4715,16 @@ mod tests {
     fn a_list_holding_the_apps_own_vector_entries_takes_the_documents_added_to_them() {
         let mut ini = Ini::new();
         ini.set(
-            VECTOR_SECTION,
+            lists::VECTOR.section,
             "extensions",
-            Some(VECTOR_EXTENSIONS_BEFORE_SVG.to_string()),
+            Some(lists::VECTOR_EXTENSIONS_BEFORE_SVG.to_string()),
         );
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.vector_extensions,
-            sanitize_extension_list(DEFAULT_VECTOR_EXTENSIONS),
+            lists::sanitize_extension_list(lists::DEFAULT_VECTOR_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
         for extension in ["svg", "svgz"] {
@@ -5264,16 +4742,16 @@ mod tests {
     fn a_list_holding_the_apps_own_vector_entries_takes_the_eps_spellings_added_to_them() {
         let mut ini = Ini::new();
         ini.set(
-            VECTOR_SECTION,
+            lists::VECTOR.section,
             "extensions",
-            Some(VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS.to_string()),
+            Some(lists::VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS.to_string()),
         );
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.vector_extensions,
-            sanitize_extension_list(DEFAULT_VECTOR_EXTENSIONS)
+            lists::sanitize_extension_list(lists::DEFAULT_VECTOR_EXTENSIONS)
         );
         for extension in ["epsf", "epi", "ept", "ept2", "ept3"] {
             assert!(
@@ -5290,16 +4768,16 @@ mod tests {
     fn a_list_holding_the_apps_own_image_entries_takes_the_avc_still_added_to_them() {
         let mut ini = Ini::new();
         ini.set(
-            IMAGE_SECTION,
+            lists::IMAGE.section,
             "extensions",
-            Some(IMAGE_EXTENSIONS_BEFORE_AVCI.to_string()),
+            Some(lists::IMAGE_EXTENSIONS_BEFORE_AVCI.to_string()),
         );
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
-            sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS)
+            lists::sanitize_extension_list(lists::DEFAULT_IMAGE_EXTENSIONS)
         );
         assert!(config.image_extensions.contains(&"avci".to_string()));
     }
@@ -5308,16 +4786,16 @@ mod tests {
     /// the app's: the entries added since are left out of it.
     #[test]
     fn an_image_list_anyone_has_edited_is_kept_as_written() {
-        let written = format!("dng,{IMAGE_EXTENSIONS_BEFORE_SVG}");
+        let written = format!("dng,{}", lists::IMAGE_EXTENSIONS_BEFORE_SVG);
 
         let mut ini = Ini::new();
-        ini.set(IMAGE_SECTION, "extensions", Some(written.clone()));
+        ini.set(lists::IMAGE.section, "extensions", Some(written.clone()));
 
         let config = read_file(&mut ini);
 
         assert_eq!(
             config.image_extensions,
-            sanitize_extension_list(&written),
+            lists::sanitize_extension_list(&written),
             "what the file says is what the list is"
         );
         assert!(!config.image_extensions.contains(&"svg".to_string()));
@@ -5374,7 +4852,11 @@ mod tests {
             "image_background",
             Some("white".to_string()),
         );
-        ini.set(IMAGE_SECTION, "extensions", Some("png,jpg".to_string()));
+        ini.set(
+            lists::IMAGE.section,
+            "extensions",
+            Some("png,jpg".to_string()),
+        );
 
         assert_eq!(
             ordered_text(&ini),
@@ -5533,7 +5015,11 @@ extensions=png,jpg
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "avoid_mode", Some("details".to_string()));
         ini.set(CONFIG_SECTION, "hover_delay_ms", Some("200".to_string()));
-        ini.set(VECTOR_SECTION, "extensions", Some("svg,svgz".to_string()));
+        ini.set(
+            lists::VECTOR.section,
+            "extensions",
+            Some("svg,svgz".to_string()),
+        );
 
         let mut read_back = Ini::new();
         read_back
@@ -5549,7 +5035,7 @@ extensions=png,jpg
             Some("200".to_string())
         );
         assert_eq!(
-            read_back.get(VECTOR_SECTION, "extensions"),
+            read_back.get(lists::VECTOR.section, "extensions"),
             Some("svg,svgz".to_string())
         );
     }
@@ -5743,7 +5229,7 @@ something_new=1
             image_cache_mb: 16,
             document_cache_mb: 2048,
             preview_enabled: false,
-            image_extensions: sanitize_extension_list("png,dng"),
+            image_extensions: lists::sanitize_extension_list("png,dng"),
             ..Default::default()
         };
 
@@ -5773,7 +5259,7 @@ something_new=1
     fn the_lists_reset_restores_the_built_in_lists_alone() {
         let mut config = AppConfig {
             image_cache_mb: 16,
-            image_extensions: sanitize_extension_list("png,dng"),
+            image_extensions: lists::sanitize_extension_list("png,dng"),
             ebook_extensions: Vec::new(),
             ..Default::default()
         };
@@ -5782,11 +5268,11 @@ something_new=1
 
         assert_eq!(
             config.image_extensions,
-            sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS)
+            lists::sanitize_extension_list(lists::DEFAULT_IMAGE_EXTENSIONS)
         );
         assert_eq!(
             config.ebook_extensions,
-            crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS),
+            crate::formats::text_formats::sanitize_extension_list(lists::DEFAULT_EBOOK_EXTENSIONS),
             "a list emptied by hand is a list this puts back"
         );
         assert_eq!(config.image_cache_mb, 16, "and nothing else was touched");
@@ -5807,7 +5293,7 @@ something_new=1
     fn the_differences_are_named_by_the_keys_the_file_writes() {
         let config = AppConfig {
             image_cache_mb: 16,
-            image_extensions: sanitize_extension_list("png,dng"),
+            image_extensions: lists::sanitize_extension_list("png,dng"),
             ..Default::default()
         };
 

@@ -9,6 +9,7 @@ pub(crate) mod font_formats;
 pub(crate) mod head;
 pub(crate) mod image_formats;
 pub(crate) mod libre_formats;
+pub(crate) mod lists;
 pub(crate) mod magick_formats;
 pub(crate) mod native_formats;
 pub(crate) mod office_formats;
