@@ -1837,6 +1837,54 @@ fn paint_title(
     );
 }
 
+/// The longest beginning of `title` that fits `budget` pixels, with an ellipsis after it.
+///
+/// Searched rather than walked. A prefix only ever gets wider, so the longest beginning that
+/// fits is found in about seven measurements whatever the length of the name — where walking it
+/// was one `GetTextExtentPoint32W` per character, over a deep folder path, on every repaint
+/// that only moved a playhead.
+///
+/// It asks a `width` rather than a font, which is what let it be tested at all: the walk it
+/// replaced and the search that replaced it had each been written out a second time in the
+/// tests, so the tests agreed with the search and said nothing whatever about the one the
+/// caption is actually drawn from. One definition, two callers, is the only shape in which
+/// breaking this one is visible.
+///
+/// A name whose first character is already too wide for the ellipsis is not a name with room
+/// cut off it, so nothing comes back rather than an ellipsis alone.
+fn longest_prefix_that_fits(
+    title: &str,
+    budget: i32,
+    width: &mut dyn FnMut(&str) -> i32,
+) -> String {
+    let boundaries: Vec<usize> = title
+        .char_indices()
+        .skip(1)
+        .map(|(index, _)| index)
+        .collect();
+
+    // How many of the boundaries fit, which is the one the walk used to arrive at by stopping at
+    // the first that did not.
+    let mut low = 0usize;
+    let mut high = boundaries.len();
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if width(&title[..boundaries[middle]]) <= budget {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+
+    // The last boundary is the one before the final character: a name cut at the very last
+    // character is a name with a character missing, and it is cut where the width ran out
+    // rather than as late as it could be.
+    match low.checked_sub(1).map(|index| boundaries[index]) {
+        Some(best) => format!("{}…", &title[..best]),
+        None => String::new(),
+    }
+}
+
 /// The longest beginning of `title` that fits `available` pixels, with an ellipsis after it
 /// where any of the name had to be left out. Measured rather than guessed: a caption is the
 /// file's own name, and a name cut by a character count is either a name with room to spare
@@ -1886,34 +1934,7 @@ fn fit_title(
         } else {
             let ellipsis = measured("…", &mut wide);
             let budget = (available - ellipsis).max(0);
-
-            // Searched rather than walked. A prefix only ever gets wider, so the longest
-            // beginning that fits is found in about seven measurements whatever the length
-            // of the name — where walking it was one `GetTextExtentPoint32W` per character,
-            // over a deep folder path, on every repaint that only moved a playhead.
-            let boundaries: Vec<usize> = title.char_indices().skip(1).map(|(index, _)| index).collect();
-            let fits =
-                |index: usize, wide: &mut Vec<u16>| measured(&title[..index], wide) <= budget;
-
-            // How many of the boundaries fit, which is the one the walk used to arrive at by
-            // stopping at the first that did not.
-            let mut low = 0usize;
-            let mut high = boundaries.len();
-            while low < high {
-                let middle = low + (high - low) / 2;
-                if fits(boundaries[middle], &mut wide) {
-                    low = middle + 1;
-                } else {
-                    high = middle;
-                }
-            }
-
-            // A name whose first character is already too wide for the ellipsis is not a name
-            // with room cut off it, so nothing is drawn rather than an ellipsis alone.
-            match low.checked_sub(1).map(|index| boundaries[index]) {
-                Some(best) => format!("{}…", &title[..best]),
-                None => String::new(),
-            }
+            longest_prefix_that_fits(title, budget, &mut |text| measured(text, &mut wide))
         };
 
         let _ = SelectObject(surface.dc, previous);
@@ -2283,6 +2304,7 @@ fn draw_cross(
 ///
 /// Walked in whole pixels rather than in `stroke_segment` because a vertex is the whole of
 /// what a chevron says: an anti-aliased stroke a pixel wide rounds its own point off.
+#[allow(clippy::too_many_arguments)] // Which way it points is a fact about the mark, not a drawing flag.
 fn draw_chevron(
     buffer: &mut [u8],
     width: i32,
@@ -2426,46 +2448,22 @@ fn draw_open_with_list(
 mod tests {
     use super::*;
 
-    /// The prefix search, over a width function rather than a font — the same shape as the
-    /// search in `fit_title`, which is the part that has to be right and the part that cannot
-    /// be reached without a GDI surface.
-    fn longest_prefix_that_fits(title: &str, budget: i32, width: fn(&str) -> i32) -> String {
-        let boundaries: Vec<usize> = title.char_indices().skip(1).map(|(index, _)| index).collect();
-
-        let mut low = 0usize;
-        let mut high = boundaries.len();
-        while low < high {
-            let middle = low + (high - low) / 2;
-            if width(&title[..boundaries[middle]]) <= budget {
-                low = middle + 1;
-            } else {
-                high = middle;
-            }
-        }
-
-        match low.checked_sub(1).map(|index| boundaries[index]) {
-            Some(best) => format!("{}…", &title[..best]),
-            None => String::new(),
-        }
-    }
-
     #[test]
     fn a_cut_name_is_the_whole_name_where_it_fits_and_the_longest_beginning_where_it_does_not() {
-        // Six pixels a character, so a budget of 24 is four characters and no more.
-        let width = |text: &str| text.chars().count() as i32 * 6;
+        // Six pixels a character, so a budget of 24 is four characters and no more. The width is
+        // a closure rather than a font so the arithmetic of a name can be pinned down exactly;
+        // `a_real_font_cuts_the_name_where_the_measured_width_runs_out` is what pins the font.
+        let mut width = |text: &str| text.chars().count() as i32 * 6;
 
-        assert_eq!(longest_prefix_that_fits("abcdef", 24, width), "abcd…");
-        // The last boundary is the one before the final character: a name cut at the very last
-        // character is a name with a character missing, and it is cut where the width ran out
-        // rather than as late as it could be.
-        assert_eq!(longest_prefix_that_fits("abcdef", 30, width), "abcde…");
+        assert_eq!(longest_prefix_that_fits("abcdef", 24, &mut width), "abcd…");
+        assert_eq!(longest_prefix_that_fits("abcdef", 30, &mut width), "abcde…");
         // Nothing fits beside the ellipsis, so nothing is drawn — a lone ellipsis is not a name.
-        assert_eq!(longest_prefix_that_fits("abcdef", 0, width), "");
-        assert_eq!(longest_prefix_that_fits("abcdef", 5, width), "");
+        assert_eq!(longest_prefix_that_fits("abcdef", 0, &mut width), "");
+        assert_eq!(longest_prefix_that_fits("abcdef", 5, &mut width), "");
         // One boundary that fits, and the name is kept to its first character.
-        assert_eq!(longest_prefix_that_fits("abcdef", 6, width), "a…");
+        assert_eq!(longest_prefix_that_fits("abcdef", 6, &mut width), "a…");
         // A single character has no boundary to cut at, so it is not cut either.
-        assert_eq!(longest_prefix_that_fits("a", 0, width), "");
+        assert_eq!(longest_prefix_that_fits("a", 0, &mut width), "");
     }
 
     #[test]
@@ -2473,25 +2471,34 @@ mod tests {
         // A name of multi-byte characters: every boundary the search tries is the start of a
         // character, so a cut cannot land in the middle of one and leave half a glyph.
         let title = "äöüäöüäöü";
-        let width = |text: &str| text.chars().count() as i32 * 10;
+        let mut width = |text: &str| text.chars().count() as i32 * 10;
 
-        let cut = longest_prefix_that_fits(title, 25, width);
+        let cut = longest_prefix_that_fits(title, 25, &mut width);
 
         assert_eq!(cut, "äö…");
         assert!(title.starts_with(cut.trim_end_matches('…')));
         assert!(cut.is_char_boundary(cut.len()));
     }
 
+    /// The search and the walk it replaced must answer the same thing for every budget, because
+    /// the search is the walk with fewer measurements and the whole claim of the change is that
+    /// the caption is not shorter for it.
+    ///
+    /// The property is asked of `longest_prefix_that_fits`, which is the function `fit_title`
+    /// draws its name through — a second copy of the search would agree with this loop whatever
+    /// the caption did, which is how the three tests above it came to pass with `fit_title`
+    /// deleted outright.
     #[test]
     fn the_search_agrees_with_walking_it() {
-        // The search replaced a walk that stopped at the first prefix too wide, so the two must
-        // answer the same thing for every budget — which is the whole claim of the change.
         let title = "D:\\some\\folder\\a rather long file name.txt";
         let width = |text: &str| text.chars().count() as i32 * 7;
 
         for budget in 0..(title.chars().count() as i32 * 7) {
-            let boundaries: Vec<usize> =
-                title.char_indices().skip(1).map(|(index, _)| index).collect();
+            let boundaries: Vec<usize> = title
+                .char_indices()
+                .skip(1)
+                .map(|(index, _)| index)
+                .collect();
 
             let mut walked = 0usize;
             for &index in &boundaries {
@@ -2508,9 +2515,66 @@ mod tests {
             };
 
             assert_eq!(
-                longest_prefix_that_fits(title, budget, width),
+                longest_prefix_that_fits(title, budget, &mut |text| width(text)),
                 expected,
                 "the search and the walk differ at a budget of {budget}"
+            );
+        }
+    }
+
+    /// A caption is cut by what its own font measures, and not by anything a test can arrange:
+    /// every width above is six or ten pixels a character because a real one is not, and a name
+    /// cut at the wrong place in a real font is a name with its last character gone.
+    ///
+    /// So the search is asked through `fit_title` on a surface with a font in it — the path
+    /// that has no test at all when the search is copied rather than shared, which is what left
+    /// this function free to be wrong for as long as it was here.
+    #[test]
+    fn a_real_font_cuts_the_name_where_the_measured_width_runs_out() {
+        let palette = ChromePalette {
+            background: [250, 250, 250],
+            foreground: [30, 30, 30],
+            accent: [10, 90, 200],
+            dark: false,
+        };
+        let surface = DibSurface::create(600, 30).expect("a surface");
+        let style = caption_style(palette.foreground);
+        let title = "D:\\some\\folder\\a rather long file name.txt";
+
+        // The whole name where it fits, exactly, and something cut a character or two off where
+        // it does not — measured rather than counted, so the last few characters go in the order
+        // their own widths say they can and not in the order a name reads.
+        let whole = measure_text(&surface, &style, title, 1.0);
+        assert_eq!(fit_title(&surface, &style, title, whole, 1.0), title);
+
+        let cut = fit_title(&surface, &style, title, whole - 1, 1.0);
+        assert!(
+            title.starts_with(cut.strip_suffix('…').unwrap_or_default()),
+            "`{cut}` is not a beginning of `{title}`"
+        );
+        assert!(
+            title.len() - cut.trim_end_matches('…').len() > 1,
+            "a name one pixel too wide loses the ellipsis and at least one character to it"
+        );
+
+        // And nothing at all where even the first character will not fit beside the ellipsis,
+        // which a search over a made-up width could not have shown.
+        assert_eq!(fit_title(&surface, &style, title, 1, 1.0), "");
+        assert_eq!(fit_title(&surface, &style, title, 0, 1.0), "");
+
+        // Every room in between: what comes back is a beginning of the name with an ellipsis
+        // after it, it is not the whole name, and it is as wide as the room allows — never
+        // wider, which is the whole claim of measuring rather than counting.
+        for available in 1..whole {
+            let fitted = fit_title(&surface, &style, title, available, 1.0);
+            assert!(
+                title.starts_with(fitted.strip_suffix('…').unwrap_or(&fitted)),
+                "`{fitted}` is not a beginning of `{title}`"
+            );
+            assert_ne!(fitted, title, "a name that does not fit was not cut");
+            assert!(
+                measure_text(&surface, &style, &fitted, 1.0) <= available,
+                "`{fitted}` is wider than the {available} pixels it was given"
             );
         }
     }
@@ -2904,8 +2968,8 @@ mod tests {
     ) {
         for row in 0..height as usize {
             for column in 0..source_width as usize {
-                let from = ((row * source_width as usize + column) * 4) as usize;
-                let to = ((row * width as usize + x as usize + column) * 4) as usize;
+                let from = (row * source_width as usize + column) * 4;
+                let to = (row * width as usize + x as usize + column) * 4;
                 if to + 3 < out.len() && from + 3 < source.len() {
                     out[to..to + 4].copy_from_slice(&source[from..from + 4]);
                 }
@@ -3032,8 +3096,7 @@ mod tests {
                 );
 
                 let painted = surface.pixels();
-                let ink =
-                    |x: usize, y: usize| painted[((y * side as usize + x) * 4) as usize] < 128;
+                let ink = |x: usize, y: usize| painted[(y * side as usize + x) * 4] < 128;
 
                 // The mark's own bounds in the surface it was painted into, as the min and
                 // max of every row and column that carries any ink at all.
@@ -3056,7 +3119,7 @@ mod tests {
                 // The mark sits in the middle of its own button, which is the half of "beauty"
                 // a row of glyphs is judged on that no single-glyph test can see: a mark one
                 // pixel off its centre is a mark the hand does not aim where the eye is.
-                let middle = (side / 2) as i32;
+                let middle = side / 2;
                 let (across, down) = ((low.0 + high.0) / 2 - middle, (low.1 + high.1) / 2 - middle);
                 assert!(
                     across.abs() <= 1 && down.abs() <= 1,
