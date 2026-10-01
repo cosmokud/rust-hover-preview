@@ -128,9 +128,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 mod pin_window;
 
-use pin_window::{take_pin_down, PinExit, PinHide, PinWindow, WM_PIN_RELEASE_POINTER};
+use pin_window::{
+    ask_pin, end_pin, give_the_keyboard_back, install, pin_state, release_keyboard, take_keyboard,
+    take_pin_command, PinHide, PinWindow, Reason, WM_PIN_RELEASE_POINTER,
+};
 #[cfg(test)]
-use pin_window::{PinWindowCall, RecordedPinWindow};
+use pin_window::{pin_holds_a_keyboard, stand_pin, take_pin_for_a_test, RecordedPinWindow};
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
@@ -366,11 +369,12 @@ fn note_pin_alive() {
 /// The state and the window are one call now, because they were one thing and this thread
 /// had drifted a copy of its own: it cleared the pin and two flags and left the keyboard
 /// the pin had claimed, the focusable window, and the queued walk all standing. So the
-/// road is named — `PinExit::Watchdog` — and the only thing it changes is what this thread
-/// may do of the window directly, which is the pointer (a capture belongs to the thread
-/// that took it) and the hide (a window procedure that is the thing being waited on would
-/// only make this wait too). Losing this thread costs nothing; losing the only one that can
-/// take a window down costs the window.
+/// caller says why the pin is going rather than choosing a road — `Reason::Hung`, which is
+/// the only reason that is not the loop's own tick — and the road is derived from it. What
+/// the road changes is what this thread may do of the window directly, which is the pointer
+/// (a capture belongs to the thread that took it) and the hide (a window procedure that is
+/// the thing being waited on would only make this wait too). Losing this thread costs
+/// nothing; losing the only one that can take a window down costs the window.
 fn spawn_pin_watchdog() {
     std::thread::spawn(|| {
         while RUNNING.load(Ordering::Acquire) {
@@ -393,13 +397,11 @@ fn spawn_pin_watchdog() {
             // was the one that drifted — it kept the keyboard the pin had claimed, kept the
             // window focusable, and left the walk a caption button had queued to be answered
             // into a pin that no longer existed, so a pin killed for being hung left a desktop
-            // nothing could be clicked on. Both halves are now one call with the road as its
-            // only argument, and the road is the whole of what differs between them (see
-            // `pin_window::take_pin_down`).
+            // nothing could be clicked on. Both halves are now one call with the reason as its
+            // only argument, and the reason is what says which end is taking it (see
+            // `pin_window::end_pin`).
             let window = Win32PinWindow;
-            let owed = take_pin_down(PinExit::Watchdog, &window, &mut |window| {
-                end_pin_state_guards(window)
-            });
+            let owed = end_pin(Reason::Hung, &window);
 
             // What is not done on this thread is the window work, because the loop is the
             // thread that owns the windows and this one is the thread that has given up on
@@ -787,22 +789,6 @@ static RESUME_FROM_SLEEP: AtomicBool = AtomicBool::new(false);
 // is put back by the loop, which is the side that holds the hover it came from.
 static DISPLAY_RESET: AtomicBool = AtomicBool::new(false);
 
-/// Whether a preview is pinned: the preview that stopped being a hover and became a
-/// window of its own, with a caption of its own, that stays until it is closed.
-///
-/// Every hover-side path asks this. Nothing is spawned while it is up — a pointer
-/// crossing a folder is answered with nothing at all — and nothing is despawned
-/// either: the dismissals the Explorer hook sends twenty times a second would
-/// otherwise take the pinned window down the moment the pointer moved. What the pin
-/// is *for* is being read, and a preview that came and went under the pointer while
-/// it was being read would be no better than the hover it came from (see
-/// `PinnedPreview`).
-static PIN_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-/// Whether the pinned preview is collapsed into the round bubble that stands in for it.
-/// A collapsed pin is still a pin: previews stay quiet until it is restored and closed.
-static PIN_COLLAPSED: AtomicBool = AtomicBool::new(false);
-
 /// Whether the left mouse button is down, as the Explorer hook's last read of the buttons
 /// found it.
 ///
@@ -820,28 +806,12 @@ static PIN_MEDIA_LEFT_DOWN: AtomicBool = AtomicBool::new(false);
 /// way: what this side asks is whether the count has moved, which is the question a press is.
 static PIN_MEDIA_LEFT_PRESSES: AtomicU64 = AtomicU64::new(0);
 
-/// Whether this app took the keyboard and has not given it back yet.
-///
-/// This is not what decides whether a key belongs to the pin — that is asked of Windows
-/// (see `pin_is_focused`) — but a note that the keyboard was taken, so that the pin can put it
-/// back when it ends. A window that is hidden while it still holds the focus leaves Windows to
-/// pick what to activate next, and a `WS_EX_TOOLWINDOW` popup is not reliably followed by the
-/// Explorer window that was in front a moment ago; so the handover has to be a thing this app
-/// does rather than one it hopes for (see `pin_drop_focus`).
-static PIN_FOCUSED: AtomicBool = AtomicBool::new(false);
-
-/// A pin was asked to come down, by the Explorer hook (previews were turned off, or the
+/// A pin was asked to come down, by the Explorer hook (previews were turned off, or the</path>
 /// trigger key is holding them back), by the tray, or by the resumption of the machine
 /// from sleep. What a pin *is* — a window and the media under it — belongs to the
 /// preview loop, so this is a request rather than a take-down: the loop ends it on its
 /// next tick, through the same path its own close button takes.
 static PIN_END_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-/// A pin has been closed since this was last asked. The Explorer hook reads it once to
-/// know that what is under the pointer is a *new* hover: the file it was on when the pin
-/// went up is not a hover it has already answered, and the delay a re-hover of the same
-/// file is given is a delay that belongs to a file the pointer left and came back to.
-static PIN_RESUMED: AtomicBool = AtomicBool::new(false);
 
 /// The wait a pinned window is in, in the form a repaint can draw: the millisecond its arc
 /// began turning at, counted from [`PIN_ARC_BASE`], and `0` for a window that is waiting for
@@ -1753,15 +1723,19 @@ impl MediaData {
 /// Whether a preview is pinned — a window of its own with a caption, which stays until it
 /// is closed. The Explorer hook asks this every tick: while it is true nothing is spawned
 /// and nothing is taken down, which is the whole of what "the preview mode is paused"
-/// means (see `PIN_ACTIVE`).
+/// means (see `pin_window::pin_is_up`).
 pub fn pinned() -> bool {
-    PIN_ACTIVE.load(Ordering::Acquire)
+    pin_window::pin_is_up()
 }
 
 /// Ask for the pinned preview to come down, from any thread. What a pin is belongs to the
 /// preview loop, so the loop is what ends it — on its next tick, by the same path its own
 /// close button takes. Asking twice is asking once.
-pub fn end_pin() {
+///
+/// Named for what it is rather than `end_pin`, because it is not an end: it is a request, and
+/// the end is the loop's own `end_pin_state(Reason::Asked)`, which is the same call the
+/// caption's cross makes and the only place a pin actually ends on this road.
+pub fn request_pin_end() {
     PIN_END_REQUESTED.store(true, Ordering::Release);
 }
 
@@ -1769,19 +1743,16 @@ pub fn end_pin() {
 /// per tick to know that what is under the pointer is a hover it has not answered yet: the
 /// file it was on when the pin went up is not a file the pointer has left and come back to,
 /// and treating it as one would hold the next preview back for the re-hover delay (see
-/// `PIN_RESUMED`).
+/// `pin_window::take_pin_resumed`).
 pub fn take_pin_resumed() -> bool {
-    PIN_RESUMED.swap(false, Ordering::AcqRel)
+    pin_window::take_pin_resumed()
 }
 
 /// The file the pinned window is showing, if there is one. It is what the Explorer hook reads
 /// to know whether the file the pointer picks is a file the pin is already showing, and it is
-/// the file a *new* pin is told apart from an old one by (see `PINNED`).
+/// the file a *new* pin is told apart from an old one by (see `PinState`).
 pub fn pinned_path() -> Option<PathBuf> {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.path.clone()))
+    pin_state().and_then(|state| state.pin().map(|pin| pin.path.clone()))
 }
 
 /// Ask for the pinned window to be shown another file, from any thread: the Explorer hook's
@@ -10277,8 +10248,8 @@ struct PinTooltipPaint {
 /// `pin_media_is_alive`, which lets go for the same reason).
 fn pinned_paint() -> Option<PinnedPaint> {
     let mut paint = {
-        let pinned = PINNED.lock().ok()?;
-        let pin = pinned.as_ref()?;
+        let pinned = pin_state()?;
+        let pin = pinned.pin()?;
         let (width, height) = pin.window_size();
 
         PinnedPaint {
@@ -11589,8 +11560,14 @@ unsafe fn reset_preview_after_display_change(hwnd: HWND) {
 
 /// Whether the pin that is up is collapsed into the bubble that stands for it: a state in which
 /// nothing of anybody else's belongs on top of the bubble — a player's window included.
+///
+/// Asked of the pin rather than of a flag beside it, because the two had to be written together
+/// and nothing said so: a collapse set `pin.collapsed` under the pin’s lock and `PIN_COLLAPSED`
+/// beside it, and a reader of the flag believed it rather than looking — and the question this
+/// answers is about the window the user is looking at, so a flag that could be set without a
+/// pin was a flag that could be wrong about one.
 fn pin_is_collapsed() -> bool {
-    PIN_COLLAPSED.load(Ordering::Acquire)
+    pin_state().is_some_and(|state| state.pin().is_some_and(|pin| pin.collapsed))
 }
 
 /// Whether the pinned window is the window the user is in, and so whether a key belongs to it.
@@ -11625,8 +11602,15 @@ unsafe fn pin_take_focus(hwnd: HWND) {
     }
 
     // Where the keyboard is being taken from, remembered before it is taken: this is the only
-    // moment the window in front is still the one the user was in (see `PIN_PREVIOUS_FOREGROUND`).
-    PIN_PREVIOUS_FOREGROUND.store(GetForegroundWindow().0 as isize, Ordering::Release);
+    // moment the window in front is still the one the user was in. A window that is hidden
+    // while it is still the one holding the focus leaves Windows to pick whatever it likes to
+    // activate next, and for a `WS_EX_TOOLWINDOW` popup that is not reliably the Explorer
+    // window that was in front a moment ago — the arrangement that leaves a desktop on which
+    // nothing answers the keyboard. A popup has no owner to ask either: a window with no parent
+    // has no `GW_OWNER` at all, so the window the caret was in is the one that was in front a
+    // moment before the press, and the only moment it can be read is the moment the pin takes
+    // over from it (see `pin_window::take_keyboard`).
+    let behind = GetForegroundWindow().0 as isize;
 
     // The window is only focusable while a pin is up, so the style is asked to change
     // before the focus is asked for: `SetFocus` on a `WS_EX_NOACTIVATE` window is refused
@@ -11635,7 +11619,11 @@ unsafe fn pin_take_focus(hwnd: HWND) {
 
     let _ = SetForegroundWindow(hwnd);
     let _ = SetFocus(hwnd);
-    PIN_FOCUSED.store(true, Ordering::Release);
+
+    // The claim is written after the focus has been asked for, because that is when there is a
+    // keyboard to claim — and it is written with the window it came from rather than beside it,
+    // so a window procedure re-entered by either call above cannot see one without the other.
+    take_keyboard(behind);
 }
 
 /// Hand the keyboard back, from the pin having lost it: the user has clicked into another window,
@@ -11645,55 +11633,12 @@ unsafe fn pin_take_focus(hwnd: HWND) {
 /// is the kind of thing that brings a window up over the user. What is dropped is the claim: the
 /// pin is not the window the user is in, so the keys the caption walks its folder with are the keys
 /// of whatever is in front of it, which is the ordinary arrangement everywhere else in Windows.
+///
+/// The claim goes with the window it came from, so there is nothing left to hand over to: a pin
+/// holding a note of a window that took the keyboard a moment ago is a pin that will ask for the
+/// foreground back from a window the user is no longer in.
 fn pin_release_focus() {
-    PIN_FOCUSED.store(false, Ordering::Release);
-}
-
-/// The window that was in front when the pin took the focus, so that the pin can hand it back.
-///
-/// This has to be remembered rather than asked for on the way out. A window that is hidden while
-/// it is still the one holding the focus leaves Windows to pick whatever it likes to activate next,
-/// and for a `WS_EX_TOOLWINDOW` popup that is not reliably the Explorer window that was in front a
-/// moment ago — the arrangement that leaves a desktop on which nothing answers the keyboard. A
-/// popup has no owner to ask either: a window with no parent has no `GW_OWNER` at all, so the
-/// window the caret was in is the one that was in front a moment before the press, and the only
-/// moment it can be read is the moment the pin takes over from it.
-static PIN_PREVIOUS_FOREGROUND: AtomicIsize = AtomicIsize::new(0);
-
-/// Give the keyboard up entirely, from the pin that owned it having ended: the claim is dropped and
-/// the window goes back to being a window nobody types into, because the window this one lives in
-/// is put up again as an ordinary hover preview the moment the pin is over.
-///
-/// The keyboard is handed over rather than merely let go of, which is why this is not the same as
-/// `pin_release_focus`: that is what losing the focus means, and it is the window now in front that
-/// already holds the keyboard. This is the pin that is going away, and the keyboard is somewhere it
-/// has to be put back by hand.
-///
-/// It asks the window rather than doing it, because the watchdog used to do this by hand and
-/// did not: a pin it cleared kept the focus it had claimed and the foreground it had stolen,
-/// which is a desktop with no caret in it (see `pin_window`).
-fn pin_drop_focus(window: &dyn PinWindow) {
-    if !PIN_FOCUSED.swap(false, Ordering::AcqRel) {
-        return;
-    }
-
-    let hwnd = window.hwnd();
-    let behind = PIN_PREVIOUS_FOREGROUND.swap(0, Ordering::AcqRel);
-    if hwnd == 0 {
-        return;
-    }
-
-    // The window behind is the one that was in front a moment ago, and a handle to one that
-    // has since gone is refused by the call rather than acted on (see `Win32PinWindow`).
-
-    // The focus is given up before the style is changed, because a window that has been made
-    // non-activating while it still holds the focus holds it in a state Windows does not expect.
-    window.set_focus(0);
-    window.set_focusable(hwnd, false);
-
-    if behind != 0 {
-        window.set_foreground(behind);
-    }
+    release_keyboard();
 }
 
 /// Whether a pinned window can take the focus at all, which is what `WS_EX_NOACTIVATE` takes away
@@ -11821,8 +11766,8 @@ fn media_point(x: i32, y: i32) -> (i32, i32) {
         return (x, y);
     }
 
-    let caption = PINNED.lock().ok().and_then(|pinned| {
-        let pin = pinned.as_ref()?;
+    let caption = pin_state().and_then(|pinned| {
+        let pin = pinned.pin()?;
         (!pin.collapsed && !pin.overlay).then(|| pinned_caption_height(pin.dpi))
     });
 
@@ -11909,9 +11854,9 @@ unsafe extern "system" fn window_proc(
             // media under it and the claim on the keyboard. On a pin, a close is a close. On a
             // hover, of which there is no window to close and no claim to drop, it is nothing at
             // all, exactly as it was before this window could be activated (see
-            // `pin_drop_focus`).
+            // `pin_window::Reason::Closed`).
             if pinned() {
-                end_pin();
+                request_pin_end();
             }
             LRESULT(0)
         }
@@ -12003,8 +11948,8 @@ unsafe extern "system" fn window_proc(
             // Whatever a pinned window was doing with the pointer is over: a capture lost to
             // another window is a drag that is not coming back.
             if pinned() {
-                if let Ok(mut pinned) = PINNED.lock() {
-                    if let Some(pin) = pinned.as_mut() {
+                if let Some(mut pinned) = pin_state() {
+                    if let Some(pin) = pinned.pin_mut() {
                         pin.dragging = None;
                         pin.pressed = None;
                         pin.transport.pressed = None;
@@ -12052,7 +11997,7 @@ unsafe extern "system" fn window_proc(
             // holds is not something a resume can put back. The hook is told, and the loop takes
             // the pin down on its next tick, which is the same path its close button takes.
             if pinned() {
-                end_pin();
+                request_pin_end();
             }
             LRESULT(0)
         }
@@ -13202,14 +13147,10 @@ fn preview_background(kind: MediaType) -> TransparentBackground {
 /// that says who takes it down and what the pointer is doing on it.
 ///
 /// It is written by the preview loop, which holds the window and the media, and read by the
-/// window procedure and every repaint — which is why it is a global rather than a local of
-/// the loop. `PIN_ACTIVE` is the same answer as an atomic for the threads that ask it without
-/// wanting a lock, and the two are written in one order at both ends: the state under this
-/// lock first, the flag after — set once a pin is in place, cleared once it is gone (see
-/// `end_pin_state`). A reader that finds `pinned()` true therefore finds the pin, or the tail
-/// of one being taken down, which is an answer its own `None` already handles.
-static PINNED: Lazy<Mutex<Option<PinnedPreview>>> = Lazy::new(|| Mutex::new(None));
-
+/// window procedure and every repaint — which is why it is a field of the pin's state rather
+/// than a local of the loop (see `pin_window::PinState`). A pin is up or it is not, and the
+/// value that says so is behind the pin's own lock; `pinned()` is the same answer published
+/// for the threads that ask it without wanting a lock.
 struct PinnedPreview {
     /// The file that is pinned — the hover the pin came from, kept by name so that a box that
     /// changes can be laid out again without asking the Explorer hook anything.
@@ -13285,6 +13226,37 @@ struct PinnedPreview {
     /// The level this pin plays at, which belongs to this window rather than to the setting it was
     /// read from (see `PinVolume`).
     volume: PinVolume,
+}
+
+#[cfg(test)]
+impl PinnedPreview {
+    /// A pin with nothing asked of it and nothing answered about it: the state a test needs to
+    /// stand a pin up in, without a box to place or a media to show.
+    ///
+    /// It is the same pin `overlay_pin` builds, at a box that fits on screen, so a test that
+    /// wants a particular box or a particular chrome says so rather than starting here.
+    pub(crate) fn for_test() -> PinnedPreview {
+        Self {
+            path: PathBuf::from("picture.png"),
+            bound: Some(100),
+            content: (0, 0, 100, 100),
+            restore: None,
+            dpi: 96,
+            transport_bar: false,
+            transport_live: false,
+            frame: PinFrame::Shaped,
+            overlay: true,
+            chrome: PinChrome::always(),
+            collapsed: false,
+            bubble_pause: None,
+            hovered: None,
+            pressed: None,
+            tooltip: PinTooltip::default(),
+            dragging: None,
+            transport: PinTransport::default(),
+            volume: PinVolume::default(),
+        }
+    }
 }
 
 /// What a pin's collapse into its bubble parked, and what it takes to put it back.
@@ -13578,8 +13550,8 @@ struct PinVolume {
 
 /// Answer about the pin that is up with a change to it, where there is one.
 fn with_pin(change: impl FnOnce(&mut PinnedPreview)) {
-    if let Ok(mut pinned) = PINNED.lock() {
-        if let Some(pin) = pinned.as_mut() {
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
             change(pin);
         }
     }
@@ -13588,10 +13560,8 @@ fn with_pin(change: impl FnOnce(&mut PinnedPreview)) {
 /// The level the pin that is up is playing at, and the setting where there is no pin: what a
 /// player this app starts for a pinned file is given (see `restart_pinned_player`).
 fn pinned_volume_level() -> u32 {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.volume.level))
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.level))
         .unwrap_or_else(current_video_volume)
 }
 
@@ -13599,10 +13569,8 @@ fn pinned_volume_level() -> u32 {
 /// the player's window is held off by: the popup is drawn over the media, and the media of a video
 /// FFmpeg plays is that window.
 fn pin_volume_open() -> bool {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.volume.open && !pin.collapsed))
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.open && !pin.collapsed))
         .unwrap_or(false)
 }
 
@@ -13610,8 +13578,8 @@ fn pin_volume_open() -> bool {
 /// owes a repaint for it.
 fn close_pin_volume() -> bool {
     let mut closed = false;
-    if let Ok(mut pinned) = PINNED.lock() {
-        if let Some(pin) = pinned.as_mut() {
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
             closed = pin.volume.open;
             pin.volume.open = false;
             pin.volume.dragging = false;
@@ -13923,8 +13891,8 @@ fn pin_is_playing(transport: &PinTransport) -> bool {
 /// What the transport's own actions need of the pin: the file being played, the box the player's
 /// window fills, where its playback is, and the level it is playing at.
 fn pinned_playback_state() -> Option<(PathBuf, ScreenRegion, PinTransport, PinVolume)> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     Some((pin.path.clone(), pin.content, pin.transport, pin.volume))
 }
 
@@ -14448,44 +14416,9 @@ pub(crate) enum PinCommand {
     TogglePlayback,
 }
 
-/// The commands the window procedure has left for the preview loop, oldest first.
-///
-/// A queue rather than a slot, and the reason is a double-click. A slot holds one command and
-/// the next write over it, so a double-click on `Next` — two presses, the second within the
-/// system double-click time, both delivered as separate `WM_LBUTTONUP`s — left one command
-/// where the user asked for two, and the second file was not walked to. Two `Next` clicks are
-/// the ordinary way to move two files along, so the loss was on the commonest button.
-///
-/// Bounded because the loop that drains it is the one that would have to be stopped for it to
-/// grow: a caption clicked faster than the loop turns, which is a hand drumming on a button.
-/// At that rate the loop is behind anyway, and what is dropped is the oldest, so what
-/// survives is the user's latest intent rather than the first thing they asked for.
-static PIN_COMMANDS: Lazy<Mutex<VecDeque<PinCommand>>> = Lazy::new(|| Mutex::new(VecDeque::new()));
-
-/// How many commands may be waiting before the oldest is dropped. A loop turns on the order of
-/// sixty times a second and a caption button is a press, so a queue this deep is already a
-/// loop that is not keeping up rather than a hand that is ahead of it.
-const PIN_COMMANDS_MAX: usize = 16;
-
-/// Leave a command for the preview loop to act on.
-pub(crate) fn ask_pin(command: PinCommand) {
-    let Ok(mut commands) = PIN_COMMANDS.lock() else {
-        return;
-    };
-    if commands.len() >= PIN_COMMANDS_MAX {
-        commands.pop_front();
-    }
-    commands.push_back(command);
-}
-
-/// Take the command the chrome left, if one was left.
-///
-/// `false` says the queue was already empty, which is the whole of what the loop asks for
-/// beyond the command itself: the read is destructive, so a command nobody wanted any more is
-/// gone rather than acted on by a later tick.
-fn take_pin_command() -> Option<PinCommand> {
-    PIN_COMMANDS.lock().ok()?.pop_front()
-}
+// The commands the window procedure has left for the preview loop are a field of the pin's own
+// state, beside the window they are about (see `pin_window::ask_pin` and
+// `pin_window::take_pin_command`).
 
 /// A pinned window's box, kept on a display: a window dragged past an edge leaves a caption's
 /// worth of itself behind, and a window dragged wholly off one is put back on it. The display
@@ -14608,31 +14541,27 @@ fn pin_screen_is_settled(media: Option<MediaType>, engine_draws: bool) -> bool {
     media.is_some_and(|kind| !kind.is_loading())
 }
 
-/// Take the pin down, answering with the message that does it.
+/// Take the pin down from the loop's own tick, answering with the message that does it.
 ///
 /// The state goes first, and that is the whole of what this function is: what follows is the
 /// ordinary take-down a hover's dismissal goes through — the window comes down, the player is
 /// ended, the media goes — and it must not be refused by the pin's own guards. The bubble a
-/// collapsed pin left goes with it, and so does the record of a pin being up at all, which is
-/// what lets the next hover through (see `PIN_ACTIVE` and `PIN_RESUMED`).
+/// collapsed pin left goes with it, and so does the record of a pin having been up at all,
+/// which is what lets the next hover through (see `pin_window::end_pin`).
 ///
-/// The road is named rather than written out, because the watchdog used to write this one out
-/// again by hand and the copy drifted: a pin the watchdog cleared kept the keyboard it had
+/// `reason` is said rather than chosen as a road, because the road used to be a free choice and
+/// the watchdog's copy of this list is what that cost: a pin it cleared kept the keyboard it had
 /// claimed, kept a focusable window, and left a queued walk to be answered into a pin that no
-/// longer existed. Both roads now go through `take_pin_down`, and this one adds the bubble
-/// because the loop's own take-down does not.
-fn end_pin_state() -> PreviewMessage {
-    let window = Win32PinWindow;
-    let mut settle = |window: &dyn PinWindow| end_pin_state_guards(window);
-    let owed = take_pin_down(PinExit::Loop, &window, &mut settle);
+/// longer existed. Every reason but `Reason::Hung` is this road, and the bubble is taken down
+/// here because the loop's own take-down does not know about it.
+fn end_pin_state(reason: Reason) -> PreviewMessage {
+    let owed = end_pin(reason, &Win32PinWindow);
 
     debug_assert_eq!(
         owed,
         PinHide::WithTheTakeDown,
         "the loop's own tick brings the window down as part of the message below"
     );
-
-    hide_pin_bubble();
 
     PreviewMessage::Hide
 }
@@ -14687,6 +14616,12 @@ impl PinWindow for Win32PinWindow {
         }
     }
 
+    fn hide_pin_bubble(&self) {
+        // The bubble is a window of this app's own and hiding it is a plain call on a handle
+        // read from the slot it was created into, with nothing this fn has to be unsafe about.
+        hide_pin_bubble();
+    }
+
     fn post(&self, hwnd: isize, message: u32) {
         // Safety: the handle is read from the slot the window was created into, and the message
         // asks only for something this window does to itself. A window that has since gone is
@@ -14695,48 +14630,22 @@ impl PinWindow for Win32PinWindow {
     }
 }
 
-/// Everything about a pin that has to be true of every road out of it, in one place.
+/// The rest of what a pin's end has to settle, which is not the pin.
 ///
-/// The pin is a window, a caption, a claim on the keyboard, a pointer that may have been taken,
-/// a walk that may be queued and a command that may be waiting to be acted on — and each of
-/// those is a separate piece of state with a separate owner. This is the one exit through all
-/// of them, so that "a pin is over" has exactly one meaning rather than one meaning per caller.
+/// The pin's own window, its keyboard claim and the commands its chrome had queued are fields
+/// of its state, and `pin_window::end_pin` settles those with the window work in one list. The
+/// three things here are each somebody else's: the walk the planner is working on, the bubble's
+/// drag latch and the box a drag had left the window at. They stay where they are because their
+/// owners are elsewhere — the planner holds its lock across a `Condvar::wait_timeout`, and the
+/// bubble and the box are windows of their own — but they are settled from the same one exit, so
+/// a fourth road out of a pin cannot leave them standing.
 ///
-/// It used to be the body of `end_pin_state` with the window work left out, and the watchdog
-/// had its own hand-written copy of the same list. The copy is what made a pin killed by the
-/// watchdog keep the keyboard it had taken and the foreground it had stolen: everything this
-/// now settles was in the other list, which had drifted by four items. It is called by
-/// `take_pin_down` rather than by either road, so the two cannot drift apart again, and it is
-/// handed the window because the keyboard handover in the middle of it is window work.
-///
-/// Nothing here takes `PINNED` while holding it across anything else, and nothing here is a
-/// window message except the handover, which is taken outside the lock because
-/// `SetForegroundWindow` is a message to the window behind.
-fn end_pin_state_guards(window: &dyn PinWindow) {
-    if let Ok(mut pinned) = PINNED.lock() {
-        *pinned = None;
-    }
-
-    // The window goes back to being a window nobody types into, and the keyboard goes back to
-    // where it came from, because a hover preview uses this same window and must never be able
-    // to take the focus (see `pin_set_focusable`).
-    pin_drop_focus(window);
-
-    PIN_ACTIVE.store(false, Ordering::Release);
-    PIN_COLLAPSED.store(false, Ordering::Release);
-    // A pin that is over is a pointer that is on something new: the file the pin was of is not
-    // a hover the hook has already answered, and one is due the moment the pin is gone rather
-    // than after the delay a re-hover of the same file is given (see `PIN_RESUMED`).
-    PIN_RESUMED.store(true, Ordering::Release);
-
-    // A command left in the slot when a pin ends is a command about a window that is no longer
-    // there, fired against whatever pin comes next: the chrome is drawn for the file now on
-    // screen, so a Close that belonged to the last one closes this one. A walk is the same
-    // answer to the same question — a caption button asking for the next file, worked out for a
-    // pin that has gone.
-    if let Ok(mut commands) = PIN_COMMANDS.lock() {
-        commands.clear();
-    }
+/// It is a separate function and not part of the state for the same reason it is separate from
+/// the teardown's own list: it holds three locks in turn, none of them the pin's, and a reader
+/// that wanted one lock for a pin's end would be holding the planner's.
+fn end_pin_beside_the_state() {
+    // A walk is the same answer to the same question a queued command is — a caption button
+    // asking for the next file, worked out for a pin that has gone.
     if let Ok(mut jobs) = PIN_JOBS.0.lock() {
         *jobs = None;
     }
@@ -14925,8 +14834,8 @@ fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
 /// `PinnedPreview::bound` and `pin_swap_room`).
 fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
     let (space, volume, collapsed, showing) = {
-        let pinned = PINNED.lock().ok()?;
-        let pin = pinned.as_ref()?;
+        let pinned = pin_state()?;
+        let pin = pinned.pin()?;
         (
             pin_swap_space(pin),
             pin.volume.level,
@@ -14969,8 +14878,8 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
 /// maximized afterwards asks for. What the engine is asked for is what a hover asks for, so the
 /// two share what comes back.
 fn pin_engine_room() -> Option<(u32, u32)> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
 
     if pin.collapsed {
         return None;
@@ -15817,15 +15726,15 @@ struct AudioCardClock {
 /// The file and the display scale a pin is showing, for the work that has to lay its media out
 /// again — read in one look so that the lock is not held across it.
 fn pinned_media_owner() -> Option<(PathBuf, u32)> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     Some((pin.path.clone(), pin.dpi))
 }
 
 /// The box a pinned window is standing at, if one is up.
 fn pinned_window_box() -> Option<(ScreenRegion, i32, i32)> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     let window = pin.window_box();
     Some((
         window,
@@ -15903,8 +15812,8 @@ fn place_pinned_siblings() {
 /// The media box of the pin that is up, or nothing when there is no pin or it is collapsed: a
 /// collapsed pin has no bands for anybody else's window to stand in.
 fn pinned_content() -> Option<ScreenRegion> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     (!pin.collapsed).then_some(pin.content)
 }
 
@@ -15923,8 +15832,8 @@ fn ensure_pinned_sibling_box(content: ScreenRegion) {
 /// back into the work area where it does not, and the media is laid out again for the display
 /// it ended up on.
 fn replace_pinned_window() -> Option<PreviewMessage> {
-    let mut pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_mut()?;
+    let mut pinned = pin_state()?;
+    let pin = pinned.pin_mut()?;
 
     pin.dpi = monitor_dpi_from_point(pin.content.0, pin.content.1);
     let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
@@ -16008,11 +15917,9 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     // already queued, so the right answer is to leave it to that rather than to lay out over the
     // top of it — which is a decision not to write, so it is made beside the write and not
     // before it.
-    let written = PINNED
-        .lock()
-        .ok()
+    let written = pin_state()
         .and_then(|mut pinned| {
-            let pin = pinned.as_mut()?;
+            let pin = pinned.pin_mut()?;
             if pin.path != path || pin.restore != maximize {
                 return None;
             }
@@ -16115,8 +16022,8 @@ struct PinMaximizeInputs {
 }
 
 fn pin_maximize_inputs() -> Option<PinMaximizeInputs> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
 
     Some(PinMaximizeInputs {
         path: pin.path.clone(),
@@ -16245,7 +16152,7 @@ fn pin_command_request(
 ) -> Option<PinStep> {
     let step = match take_pin_command() {
         Some(PinCommand::Close) => {
-            *request = Some(end_pin_state());
+            *request = Some(end_pin_state(Reason::Closed));
             None
         }
         Some(PinCommand::Minimize) => {
@@ -16269,8 +16176,11 @@ fn pin_command_request(
         None => None,
     };
 
+    // The thing the pin is a window onto came apart: the player's process is gone, or the engine
+    // took a document and never drew it. This is the half of "until it is closed, or it comes
+    // apart" that is not a button (see `pin_media_is_alive`).
     if !pin_media_is_alive() {
-        *request = Some(end_pin_state());
+        *request = Some(end_pin_state(Reason::MediaGone));
     }
 
     step
@@ -16663,10 +16573,10 @@ static PIN_BUBBLE_MOVED: AtomicBool = AtomicBool::new(false);
 /// `settle_bubble_playback`).
 fn collapse_pin() {
     let anchor = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return;
         };
         if pin.collapsed {
@@ -16674,7 +16584,6 @@ fn collapse_pin() {
         }
 
         pin.collapsed = true;
-        PIN_COLLAPSED.store(true, Ordering::Release);
 
         // A bubble has no bar and no level to be read off: the popup goes with the window it was
         // drawn over, and a pin put back up is put back up without it.
@@ -16691,12 +16600,12 @@ fn collapse_pin() {
     // that takes its place cannot be — it is a circle standing in for a window, and it is made the
     // way every preview is. The keyboard goes back now rather than whenever Windows notices the
     // window has gone, so that a pin collapsed with the caret on it does not leave the caret on a
-    // window that is not there (see `pin_drop_focus`).
+    // window that is not there.
     //
     // Asked for outside the lock above because giving a focus up is a message to this app's own
     // window procedure, and a window procedure that arrives back here while the lock is held would
     // be a second thread waiting on it — this one, from its own loop.
-    pin_drop_focus(&Win32PinWindow);
+    give_the_keyboard_back(&Win32PinWindow);
 
     unsafe {
         hide_pinned_windows();
@@ -16745,10 +16654,10 @@ fn pinned_minimize_box(pin: &PinnedPreview) -> ScreenRegion {
 /// the collapse parked is started again by the tick this runs in (see `settle_bubble_playback`).
 fn restore_pin() {
     {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return;
         };
         if !pin.collapsed {
@@ -16756,7 +16665,6 @@ fn restore_pin() {
         }
 
         pin.collapsed = false;
-        PIN_COLLAPSED.store(false, Ordering::Release);
 
         // The window goes back up where a preview of it would have been put at the pointer the
         // bubble was clicked with, rather than where it stood when it was collapsed: the bubble is
@@ -16808,8 +16716,8 @@ fn restore_pin() {
 
 /// What the bubble a collapsed pin left has parked, if anything (see `BubblePause`).
 fn pin_bubble_pause() -> Option<BubblePause> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     pin.bubble_pause
 }
 
@@ -16836,10 +16744,10 @@ fn update_pin_bubble_pause(park: Option<BubblePause>) {
 /// would be a picture on screen next to the one thing a collapse leaves there.
 fn settle_bubble_playback(audio_started: &mut Option<Instant>, audio_start_offset: &mut f64) {
     let (collapsed, parked) = {
-        let Ok(pinned) = PINNED.lock() else {
+        let Some(pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_ref() else {
+        let Some(pin) = pinned.pin() else {
             return;
         };
 
@@ -17549,10 +17457,10 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     };
 
     let dragging = {
-        let Ok(pinned) = PINNED.lock() else {
+        let Some(pinned) = pin_state() else {
             return;
         };
-        pinned.as_ref().and_then(|pin| pin.dragging)
+        pinned.pin().and_then(|pin| pin.dragging)
     };
 
     if dragging.is_some() {
@@ -17585,10 +17493,10 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         })
         .flatten();
     let changed = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return;
         };
 
@@ -17626,11 +17534,9 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
             })
             .flatten()
     });
-    let transport_changed = PINNED
-        .lock()
-        .ok()
+    let transport_changed = pin_state()
         .and_then(|mut pinned| {
-            let pin = pinned.as_mut()?;
+            let pin = pinned.pin_mut()?;
             let changed = pin.transport.hovered != transport_hovered;
             pin.transport.hovered = transport_hovered;
             Some(changed)
@@ -17656,8 +17562,8 @@ struct PinnedCaption {
 }
 
 fn pinned_caption_geometry() -> Option<PinnedCaption> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     (!pin.collapsed).then(|| {
         let (width, _) = pin.window_size();
         PinnedCaption {
@@ -17687,8 +17593,8 @@ struct PinnedTransportBar {
 }
 
 fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     if pin.collapsed || !pin.transport_bar {
         return None;
     }
@@ -17768,10 +17674,8 @@ unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
         return false;
     };
 
-    let dragging = PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.transport.seeking.is_some()));
+    let dragging =
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.transport.seeking.is_some()));
 
     if dragging != Some(true) {
         return false;
@@ -17787,10 +17691,10 @@ unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
 /// that has let go of the bar takes the file to where the hand stopped.
 unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
     let (part, seeking, transport) = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return false;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return false;
         };
 
@@ -17860,10 +17764,8 @@ unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
 fn pinned_volume_geometry() -> Option<pin_chrome::VolumePopup> {
     let bar = pinned_transport_geometry()?;
 
-    PINNED
-        .lock()
-        .ok()?
-        .as_ref()?
+    pin_state()?
+        .pin()?
         .volume
         .open
         .then(|| pin_chrome::volume_popup_layout(bar.width, bar.top.max(0), bar.height, bar.dpi))
@@ -17871,10 +17773,8 @@ fn pinned_volume_geometry() -> Option<pin_chrome::VolumePopup> {
 
 /// Whether the popup's knob is being held.
 fn pin_volume_dragging() -> bool {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.volume.dragging))
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.dragging))
         .unwrap_or(false)
 }
 
@@ -17941,10 +17841,10 @@ unsafe fn pinned_volume_drag(hwnd: HWND, y: i32) -> bool {
 /// being started at one is settled with it (see `settle_pin_volume`).
 unsafe fn pinned_volume_release(hwnd: HWND) -> bool {
     let dragging = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return false;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return false;
         };
 
@@ -17973,10 +17873,10 @@ unsafe fn pinned_volume_release(hwnd: HWND) -> bool {
 /// is not painting and the player is in front of it again on the tick.
 unsafe fn toggle_pin_volume(hwnd: HWND) {
     let opened = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return;
         };
 
@@ -18042,10 +17942,10 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
 
     if framed {
         let edge = {
-            let Ok(pinned) = PINNED.lock() else {
+            let Some(pinned) = pin_state() else {
                 return false;
             };
-            pinned.as_ref().and_then(|pin| pin.resize_edge(x, y))
+            pinned.pin().and_then(|pin| pin.resize_edge(x, y))
         };
         if let Some(edge) = edge {
             begin_pin_drag(hwnd, PinDragAction::Resize(edge), true);
@@ -18061,8 +17961,8 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             let button =
                 pin_chrome::button_at(x, y, caption.width, caption.height, caption.dpi, framed);
             if let Some(button) = button {
-                if let Ok(mut pinned) = PINNED.lock() {
-                    if let Some(pin) = pinned.as_mut() {
+                if let Some(mut pinned) = pin_state() {
+                    if let Some(pin) = pinned.pin_mut() {
                         pin.pressed = Some(button);
                     }
                 }
@@ -18198,10 +18098,10 @@ unsafe fn pinned_set_cursor(hwnd: HWND) -> bool {
     };
 
     let (frame, hovering, dragging) = {
-        let Ok(pinned) = PINNED.lock() else {
+        let Some(pinned) = pin_state() else {
             return false;
         };
-        let Some(pin) = pinned.as_ref() else {
+        let Some(pin) = pinned.pin() else {
             return false;
         };
         if pin.collapsed {
@@ -18394,8 +18294,8 @@ fn pin_media_press_count() -> u64 {
 /// The box, display scale and frame of the pin that is up, for a press that landed on the window
 /// standing in its media band — read in one look, so that the lock is not held across the answer.
 fn pinned_window_frame() -> Option<(ScreenRegion, u32, PinFrame)> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     Some((pin.window_box(), pin.dpi, pin.frame))
 }
 
@@ -18449,11 +18349,9 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
     // pointer was aimed at, and the cursor kept whichever shape the last edge gave it — a
     // desktop that looked broken until some other window took the pointer for itself, which is
     // why clicking elsewhere appeared to bring it back.
-    let installed = PINNED
-        .lock()
-        .ok()
+    let installed = pin_state()
         .and_then(|mut pinned| {
-            let pin = pinned.as_mut()?;
+            let pin = pinned.pin_mut()?;
             pin.dragging = Some(PinDrag {
                 from,
                 window,
@@ -18488,10 +18386,7 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
 /// A drag this window *was* given its release for is left alone: it ends in `pinned_release`, and
 /// its capture is this window's own to hold until that message arrives.
 unsafe fn settle_pinned_engine_drag(hwnd: HWND) {
-    let Some(drag) = PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().and_then(|pin| pin.dragging))
+    let Some(drag) = pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging))
     else {
         return;
     };
@@ -18526,10 +18421,7 @@ fn pin_drag_carried_to() -> (i32, i32) {
 /// The drag of a pinned drawing the loop is carrying, read in one look: what a pass needs both
 /// the liveness and the last place from, so the two are not read under the lock separately.
 fn carried_drag() -> Option<PinDrag> {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().and_then(|pin| pin.dragging))
+    pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging))
 }
 
 /// Follow a drag of a pinned drawing for as long as the hand is going.
@@ -18735,10 +18627,10 @@ unsafe fn release_pin_capture(hwnd: HWND) {
 /// the box the window had when it began.
 unsafe fn apply_pin_drag(hwnd: HWND) {
     let (drag, dpi, transport, overlay, frame) = {
-        let Ok(pinned) = PINNED.lock() else {
+        let Some(pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_ref() else {
+        let Some(pin) = pinned.pin() else {
             return;
         };
         let Some(drag) = pin.dragging else {
@@ -18775,10 +18667,10 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
     let content = content_box_of(window, dpi, transport, overlay);
 
     {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return;
         };
         // A hand that pulled the box to a size is the box's new bound as well as its size: the
@@ -19289,8 +19181,8 @@ unsafe fn settle_open_with_dialog(hwnd: HWND) {
 /// dialog is up is a tick that finds the pointer somewhere the button is not, and the name
 /// would outlive the hover that earned it by however long the dialog is left standing.
 fn put_pin_tooltip_away() {
-    if let Ok(mut pinned) = PINNED.lock() {
-        if let Some(pin) = pinned.as_mut() {
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
             pin.tooltip.shown = None;
         }
     }
@@ -19319,10 +19211,10 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
     // tick instead (see `settle_pinned_engine_drag`). A window's own press does not press a
     // caption button and drag the window at once, so the two are not in competition.
     let (pressed, caption_height, dpi, width, framed) = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return false;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return false;
         };
 
@@ -19397,10 +19289,8 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
 /// Returns whether there was a drag to let go of, which is what a caller that has other release
 /// work to do needs to know.
 unsafe fn finish_pin_drag(hwnd: HWND) -> bool {
-    let drag = PINNED
-        .lock()
-        .ok()
-        .and_then(|mut pinned| pinned.as_mut().and_then(|pin| pin.dragging.take()));
+    let drag =
+        pin_state().and_then(|mut pinned| pinned.pin_mut().and_then(|pin| pin.dragging.take()));
     let Some(drag) = drag else {
         return false;
     };
@@ -19799,7 +19689,7 @@ pub fn run_preview_window() {
             let tick_generation = current_generation;
             let tick_pinned = pinned();
             if PIN_END_REQUESTED.swap(false, Ordering::AcqRel) {
-                pin_request = Some(end_pin_state());
+                pin_request = Some(end_pin_state(Reason::Asked));
             }
 
             // The key is drained whether or not it is watched, so that a press made while the
@@ -19971,8 +19861,8 @@ pub fn run_preview_window() {
 
                 // Where the player's window belongs while a pin is up: the media band of the
                 // pin, which is what the tick's own re-assertion below is handed.
-                if let Ok(pinned) = PINNED.lock() {
-                    if let Some(pin) = pinned.as_ref() {
+                if let Some(pinned) = pin_state() {
+                    if let Some(pin) = pinned.pin() {
                         video_pos = (
                             pin.content.0,
                             pin.content.1,
@@ -19984,14 +19874,8 @@ pub fn run_preview_window() {
 
                 // A transport bar's playhead moves while its file plays, so the window is painted
                 // again at a clock's own pace rather than only where the picture changes.
-                let transport_showing = PINNED
-                    .lock()
-                    .ok()
-                    .and_then(|pinned| {
-                        pinned
-                            .as_ref()
-                            .map(|pin| pin.transport_bar && !pin.collapsed)
-                    })
+                let transport_showing = pin_state()
+                    .and_then(|pinned| pinned.pin().map(|pin| pin.transport_bar && !pin.collapsed))
                     .unwrap_or(false);
 
                 if transport_showing
@@ -21013,7 +20897,7 @@ pub fn run_preview_window() {
                                     .is_some_and(|kind| !kind.enabled());
 
                             if switched_off {
-                                pin_request = Some(end_pin_state());
+                                pin_request = Some(end_pin_state(Reason::SwitchedOff));
                             }
                         } else if latest_preview_msg.is_none() {
                             match (current_media_kind(), current_show.clone()) {
@@ -21042,7 +20926,7 @@ pub fn run_preview_window() {
                     // way its own close button takes it.
                     PreviewMessage::PinChanged => {
                         if pinned() && !pin_enabled() {
-                            pin_request = Some(end_pin_state());
+                            pin_request = Some(end_pin_state(Reason::SwitchedOff));
                         }
                     }
                     // The file the user picked while a preview was pinned, which the pin is to be
@@ -21132,8 +21016,8 @@ pub fn run_preview_window() {
                                 // worse than no name.
                                 PinPlanned::OpenWith { path, name } => {
                                     if pinned_path().as_deref() == Some(path.as_path()) {
-                                        if let Ok(mut pinned) = PINNED.lock() {
-                                            if let Some(pin) = pinned.as_mut() {
+                                        if let Some(mut pinned) = pin_state() {
+                                            if let Some(pin) = pinned.pin_mut() {
                                                 pin.tooltip.default_app = name;
                                             }
                                         }
@@ -21211,8 +21095,8 @@ pub fn run_preview_window() {
             // is asked of a pin that is not up, and nothing of one whose chrome is not drawn over
             // its media, which is the answer both of those questions are asked through.
             if pinned() {
-                let changed = PINNED.lock().ok().and_then(|mut pinned| {
-                    let pin = pinned.as_mut()?;
+                let changed = pin_state().and_then(|mut pinned| {
+                    let pin = pinned.pin_mut()?;
                     let now = Instant::now();
                     Some(refresh_pin_chrome(pin, now, cursor_screen_point()))
                 });
@@ -21492,7 +21376,7 @@ pub fn run_preview_window() {
                     && !webview_preview::is_showing();
 
                 if pinned_engine_failed {
-                    pin_request = Some(end_pin_state());
+                    pin_request = Some(end_pin_state(Reason::MediaGone));
                 }
             }
 
@@ -22156,8 +22040,8 @@ pub fn run_preview_window() {
                         // across either (see `cached_video_geometry`).
                         let duration = video_duration(&path);
 
-                        let carried = PINNED.lock().ok().and_then(|pinned| {
-                            pinned.as_ref().map(|pin| {
+                        let carried = pin_state().and_then(|pinned| {
+                            pinned.pin().map(|pin| {
                                 (pin.restore, pin.chrome, pin.volume, pin.overlay, pin.bound)
                             })
                         });
@@ -22194,15 +22078,15 @@ pub fn run_preview_window() {
                         // longer: the state below replaces it whole, and the pointer a press on
                         // this window took goes with the drag it was taken for. It is let go
                         // here rather than left to the release that is never coming, and it is
-                        // let go before `PINNED` is taken rather than inside it, because
-                        // `ReleaseCapture` delivers `WM_CAPTURECHANGED` and the window procedure
-                        // asks for that same lock (see the note above, and `pinned_release` for
-                        // the release this stands in for).
+                        // let go before the pin's own lock is taken rather than inside it,
+                        // because `ReleaseCapture` delivers `WM_CAPTURECHANGED` and the window
+                        // procedure asks for that same lock (see the note above, and
+                        // `pinned_release` for the release this stands in for).
                         release_pin_capture(hwnd);
 
-                        if let Ok(mut pinned) = PINNED.lock() {
+                        {
                             let now = Instant::now();
-                            *pinned = Some(PinnedPreview {
+                            let pin = PinnedPreview {
                                 path: path.clone(),
                                 content,
                                 // A pin taken up over another one keeps the bound the window has:
@@ -22274,15 +22158,17 @@ pub fn run_preview_window() {
                                         ..Default::default()
                                     },
                                 },
-                            });
+                            };
+
+                            // The pin is published as up inside this, after the state it publishes
+                            // is written (see `pin_window::install`).
+                            install(pin);
                         }
 
-                        PIN_ACTIVE.store(true, Ordering::Release);
-                        PIN_COLLAPSED.store(false, Ordering::Release);
                         // A pin comes up under a pointer that may be anywhere, including inside a
                         // name being renamed, so it may take the focus but is not given it until
-                        // the hand presses it (see `pin_set_focusable`).
-                        PIN_FOCUSED.store(false, Ordering::Release);
+                        // the hand presses it (see `pin_set_focusable`). The pin holds no keyboard
+                        // at all until then, so there is nothing here to clear.
                         pin_set_focusable(hwnd, true);
 
                         // A text preview is the one kind a pin *changes* rather than frames: it
@@ -25672,12 +25558,8 @@ mod tests {
         println!("drawing at {content:?}");
 
         let before = pinned_window_box().map(|(window, ..)| window);
-        let latched = |()| {
-            PINNED
-                .lock()
-                .ok()
-                .and_then(|pin| pin.as_ref().map(|pin| pin.dragging.is_some()))
-        };
+        let latched =
+            |()| pin_state().and_then(|state| state.pin().map(|pin| pin.dragging.is_some()));
 
         // The drag: a press on the drawing, carried across it a step at a time, and let go of.
         let (cx, cy) = ((content.0 + content.2) / 2, (content.1 + content.3) / 2);
@@ -27461,40 +27343,36 @@ mod tests {
     ///
     /// The note is what makes a handover happen at all. A window hidden while it still holds the
     /// focus leaves Windows to pick what to activate next, and a `WS_EX_TOOLWINDOW` popup is not
-    /// reliably followed by the Explorer window that was in front a moment ago — so the flag is
-    /// what `pin_drop_focus` asks before it goes to the trouble of putting the keyboard back, and
+    /// reliably followed by the Explorer window that was in front a moment ago — so the claim is
+    /// what a teardown asks before it goes to the trouble of putting the keyboard back, and
     /// leaving it standing on a road out is what strands a caret on a window that is not there.
     ///
-    /// Which window the user is in is not asked here, because it is not this flag's job: that is
+    /// Which window the user is in is not asked here, because it is not this claim's job: that is
     /// `GetFocus` (see `pin_is_focused`), which is the one answer that cannot be wrong.
     #[test]
-    fn the_keyboard_is_given_back_on_every_road_out_of_a_pin() {
-        // A pin that has just come up has taken nothing, and so owes nobody a handover.
+    fn the_keyboard_is_dropped_on_every_road_out_of_a_pin() {
+        install(PinnedPreview::for_test());
         assert!(
-            !PIN_FOCUSED.swap(true, Ordering::AcqRel),
-            "a pin nobody pressed holds no keyboard to give back"
+            !pin_holds_a_keyboard(),
+            "a pin that has just come up has taken no keyboard, so owes nobody a handover"
         );
 
         // Windows taking the focus away is the user clicking into something else: the window now
-        // in front holds the keyboard, so there is nothing to hand over and the note is dropped.
+        // in front holds the keyboard, so there is nothing to hand over and the claim is dropped.
+        take_keyboard(0x2000);
         pin_release_focus();
         assert!(
-            !PIN_FOCUSED.swap(true, Ordering::AcqRel),
-            "losing the focus drops the note as well"
+            !pin_holds_a_keyboard(),
+            "losing the focus drops the claim with it"
         );
 
-        // A pin ending is the road that has to do the work: it drops the note and remembers where
-        // the keyboard came from, and the handover is what that note is asked for.
-        PIN_FOCUSED.store(true, Ordering::Release);
-        pin_drop_focus(&Win32PinWindow);
+        // A pin ending is the road that has to do the work: it drops the claim and hands the
+        // keyboard back, and the handover is what that claim is asked for.
+        take_keyboard(0x2000);
+        end_pin(Reason::Closed, &Win32PinWindow);
         assert!(
-            !PIN_FOCUSED.swap(true, Ordering::AcqRel),
-            "a pin that is over holds no keyboard"
-        );
-        assert_eq!(
-            PIN_PREVIOUS_FOREGROUND.swap(0, Ordering::AcqRel),
-            0,
-            "a pin that is over remembers no window to hand the keyboard back to"
+            !pin_holds_a_keyboard(),
+            "a pin that is over holds no keyboard, and remembers no window to hand it back to"
         );
     }
 
@@ -27557,106 +27435,23 @@ mod tests {
         );
     }
 
-    /// Every command a caption's button asks for survives the trip out of the window procedure
-    /// and back, and a tick drains one of them and leaves the rest alone. The codes are the
-    /// whole of the crossing — the loop and the window procedure share nothing else — so a
-    /// button whose code nothing reads back is a button that does nothing at all.
+    /// The three things a pin's end settles that are not the pin, from every road out of it.
     ///
-    /// The last of them is not a button's: it is what a Space in a window the keyboard is in
-    /// leaves, which is the same crossing for the same reason (see `pinned_key_command`).
+    /// The walk the planner is working on, the bubble's drag latch and the box a drag had left
+    /// the window at are each somebody else's state, so each has its own owner and its own lock —
+    /// but they are settled from the one exit rather than by each road remembering to, which is
+    /// the same drift the pin's own state had: a road that forgot one left it standing for a pin
+    /// that was gone.
     #[test]
-    fn every_command_a_caption_asks_for_comes_back_to_the_loop() {
-        for command in [
-            PinCommand::Previous,
-            PinCommand::Next,
-            PinCommand::Minimize,
-            PinCommand::Maximize,
-            PinCommand::Close,
-            PinCommand::Restore,
-            PinCommand::TogglePlayback,
+    fn no_road_out_of_a_pin_leaves_what_it_left_behind_standing() {
+        for reason in [
+            Reason::Closed,
+            Reason::Asked,
+            Reason::SwitchedOff,
+            Reason::MediaGone,
+            Reason::Hung,
         ] {
-            ask_pin(command);
-            assert_eq!(
-                take_pin_command(),
-                Some(command),
-                "{command:?} does not survive being left for the loop"
-            );
-        }
-
-        // Two asks are two commands, in the order they were made. A single slot dropped the
-        // first: a double-click on `Next` is two `WM_LBUTTONUP`s, and moving two files along is
-        // what double-clicking a `Next` is for.
-        ask_pin(PinCommand::Previous);
-        ask_pin(PinCommand::Next);
-        assert_eq!(take_pin_command(), Some(PinCommand::Previous));
-        assert_eq!(take_pin_command(), Some(PinCommand::Next));
-        assert_eq!(take_pin_command(), None, "a command is taken once");
-    }
-
-    #[test]
-    fn a_command_queue_drops_the_oldest_rather_than_growing_without_end() {
-        // A loop that cannot keep up with a hand drumming on a button must not be the reason a
-        // session ends. What goes is the oldest, so what survives is what was last asked for.
-        for _ in 0..(PIN_COMMANDS_MAX + 4) {
-            ask_pin(PinCommand::Next);
-        }
-
-        let mut drained = Vec::new();
-        while let Some(command) = take_pin_command() {
-            drained.push(command);
-        }
-
-        assert_eq!(
-            drained.len(),
-            PIN_COMMANDS_MAX,
-            "the queue is bounded, however many asks are made of it"
-        );
-    }
-
-    #[test]
-    fn every_road_out_of_a_pin_leaves_no_command_behind_it() {
-        // A command left in the slot when a pin ends is a command about a window that is gone,
-        // fired against whatever pin comes next — the caption is drawn for the file now on
-        // screen, so a `Close` that belonged to the last one closes this one.
-        ask_pin(PinCommand::Close);
-        end_pin_state_guards(&Win32PinWindow);
-
-        assert_eq!(
-            take_pin_command(),
-            None,
-            "a pin that is over leaves nothing waiting to be acted on"
-        );
-    }
-
-    /// The one teardown settles every part of a pin, from every road out of it, so the parts
-    /// cannot drift apart.
-    ///
-    /// Every item here is a thing a pin is holding that belongs to no window and no other
-    /// object: the state, the keyboard claim, the pointer, a queued walk, a queued command, the
-    /// bubble's drag, and the box a drag left the window at. The watchdog had its own
-    /// hand-written list of four of them and left the rest standing, which is how a pin killed
-    /// because its loop was stuck ended still holding the keyboard and a focusable window.
-    ///
-    /// It is asserted for both roads and not one of them, because the two lists were separate
-    /// and one of them was the copy. The window half is asserted whole as well, and through a
-    /// recorder rather than through the desktop, because the part that drifted was the window
-    /// work and the part that drifted is the part a live desktop will not tell you about until
-    /// a pin has been killed and a desktop has stopped answering the mouse.
-    ///
-    /// A test that asserts the whole list is what stops the list from being two lists again.
-    #[test]
-    fn the_one_teardown_settles_every_part_of_a_pin() {
-        for exit in [PinExit::Loop, PinExit::Watchdog] {
-            // A pin holding all of it: state up and collapsed, the keyboard claimed with a
-            // window in front of it, a walk queued and a command left, a bubble mid-drag, and a
-            // box a drag has left the window at.
-            if let Ok(mut pinned) = PINNED.lock() {
-                *pinned = Some(overlay_pin((0, 0, 100, 100), PinChrome::always()));
-            }
-            PIN_ACTIVE.store(true, Ordering::Release);
-            PIN_COLLAPSED.store(true, Ordering::Release);
-            PIN_FOCUSED.store(true, Ordering::Release);
-            PIN_PREVIOUS_FOREGROUND.store(0x1234, Ordering::Release);
+            install(PinnedPreview::for_test());
             PIN_BUBBLE_MOVED.store(true, Ordering::Release);
             if let Ok(mut drag) = PIN_BUBBLE_DRAG.lock() {
                 *drag = Some(((0, 0), (10, 10)));
@@ -27664,7 +27459,6 @@ mod tests {
             if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
                 *request = Some((0, 0, 10, 10));
             }
-            ask_pin(PinCommand::Close);
             assert!(
                 queue_pin_job(PinJob::OpenWith {
                     path: PathBuf::from("x")
@@ -27672,78 +27466,29 @@ mod tests {
                 "a walk is queued for the pin going down"
             );
 
-            let window = RecordedPinWindow::new(0x1000);
-            let mut settle = |window: &dyn PinWindow| end_pin_state_guards(window);
-            take_pin_down(exit, &window, &mut settle);
+            end_pin(reason, &RecordedPinWindow::new(0x1000));
 
             assert!(
-                PINNED.lock().ok().is_some_and(|pinned| pinned.is_none()),
-                "{exit:?}: the state is gone"
-            );
-            assert!(
-                !PIN_ACTIVE.load(Ordering::Acquire),
-                "{exit:?}: no pin is up"
-            );
-            assert!(
-                !PIN_COLLAPSED.load(Ordering::Acquire),
-                "{exit:?}: no pin is collapsed"
-            );
-            assert!(
-                !PIN_FOCUSED.load(Ordering::Acquire),
-                "{exit:?}: the keyboard is given back, by every road out"
-            );
-            assert_eq!(
-                PIN_PREVIOUS_FOREGROUND.load(Ordering::Acquire),
-                0,
-                "{exit:?}: and no window is remembered to give it back to"
-            );
-            assert_eq!(
-                take_pin_command(),
-                None,
-                "{exit:?}: no command is left over"
-            );
-            assert!(
                 PIN_JOBS.0.lock().ok().is_some_and(|jobs| jobs.is_none()),
-                "{exit:?}: the queued walk is dropped with the pin it was worked out for"
+                "{reason:?}: the queued walk is dropped with the pin it was worked out for"
             );
             assert!(
                 !PIN_BUBBLE_MOVED.load(Ordering::Acquire),
-                "{exit:?}: the bubble's drag latch does not outlive the pin"
+                "{reason:?}: the bubble's drag latch does not outlive the pin"
             );
             assert!(
                 PIN_BUBBLE_DRAG
                     .lock()
                     .ok()
                     .is_some_and(|drag| drag.is_none()),
-                "{exit:?}: nor the drag it was latched for"
+                "{reason:?}: nor the drag it was latched for"
             );
             assert!(
                 PIN_BOX_REQUEST
                     .lock()
                     .ok()
                     .is_some_and(|box_| box_.is_none()),
-                "{exit:?}: nor the box a drag had left a window that is going away at"
-            );
-
-            // The window half, whole, and with the order in it. Every road hands the keyboard
-            // back the same way — the focus off, the style off, the window that had it back in
-            // front — because the watchdog's copy did not do it at all, and this is the list
-            // that says so.
-            let mut expected = vec![
-                PinWindowCall::SetFocus,
-                PinWindowCall::SetFocusable { focusable: false },
-                PinWindowCall::SetForeground,
-            ];
-            if exit.may_release_pointer() {
-                expected.insert(0, PinWindowCall::ReleaseCapture);
-            } else {
-                expected.push(PinWindowCall::Post(WM_PIN_RELEASE_POINTER));
-            }
-
-            assert_eq!(
-                window.calls(),
-                expected,
-                "{exit:?}: the whole of what this road asked of the window, in the order it asked"
+                "{reason:?}: nor the box a drag had left a window that is going away at"
             );
         }
     }
@@ -27801,24 +27546,10 @@ mod tests {
     /// media and whose chrome is drawn over it.
     fn overlay_pin(content: ScreenRegion, chrome: PinChrome) -> PinnedPreview {
         PinnedPreview {
-            path: PathBuf::from("picture.png"),
             bound: Some((content.2 - content.0).max(content.3 - content.1).max(1)),
             content,
-            restore: None,
-            dpi: 96,
-            transport_bar: false,
-            transport_live: false,
-            frame: PinFrame::Shaped,
-            overlay: true,
             chrome,
-            collapsed: false,
-            bubble_pause: None,
-            hovered: None,
-            pressed: None,
-            tooltip: PinTooltip::default(),
-            dragging: None,
-            transport: PinTransport::default(),
-            volume: PinVolume::default(),
+            ..PinnedPreview::for_test()
         }
     }
 
@@ -28217,16 +27948,14 @@ mod tests {
     #[test]
     fn a_level_moved_on_a_pin_is_the_pins_and_not_the_setting() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let mut video = create_loading_media(320, 240);
         video.media_type = MediaType::NativeVideo;
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = Some(video);
         }
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(overlay_pin((100, 100, 420, 340), PinChrome::always()));
-        }
+        stand_pin(Some(overlay_pin((100, 100, 420, 340), PinChrome::always())));
 
         let setting = current_video_volume();
         set_pin_volume(12);
@@ -28238,9 +27967,7 @@ mod tests {
             "`Volume → Video` is left exactly where the user put it"
         );
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -29993,7 +29720,7 @@ mod tests {
     #[test]
     fn an_engine_coming_up_for_a_pinned_document_is_not_a_pin_that_came_apart() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-engine");
         std::fs::create_dir_all(&folder).expect("a test folder");
@@ -30012,9 +29739,7 @@ mod tests {
 
         let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
         pin.path = path.clone();
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(pin);
-        }
+        stand_pin(Some(pin));
 
         // The browser is coming up for this document: the engine owes it, and no window exists yet.
         webview_preview::publish_want_for_test(&path);
@@ -30031,9 +29756,7 @@ mod tests {
             "a document the engine no longer owes and no window shows is a window onto nothing"
         );
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -30044,7 +29767,7 @@ mod tests {
     #[test]
     fn a_player_the_bubble_parked_is_not_a_pin_that_came_apart() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let mut video = create_loading_media(8, 8);
         video.media_type = MediaType::Video;
@@ -30055,9 +29778,7 @@ mod tests {
         let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
         pin.collapsed = true;
         pin.bubble_pause = Some(BubblePause::Player(12.5));
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(pin);
-        }
+        stand_pin(Some(pin));
 
         assert!(
             pin_media_is_alive(),
@@ -30070,9 +29791,7 @@ mod tests {
             "and a video whose player is simply gone is what it always was"
         );
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -30082,7 +29801,7 @@ mod tests {
     #[test]
     fn a_pinned_sound_is_not_a_pin_that_came_apart_between_passes() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-sound");
         let path = folder.join("pass.mp3");
@@ -30097,9 +29816,7 @@ mod tests {
 
         let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
         pin.path = path.clone();
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(pin);
-        }
+        stand_pin(Some(pin));
 
         assert!(
             pin_media_is_alive(),
@@ -30108,9 +29825,7 @@ mod tests {
              every pass"
         );
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -30586,7 +30301,7 @@ mod tests {
     #[test]
     fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let mut video = create_loading_media(320, 240);
         video.media_type = MediaType::NativeVideo;
@@ -30603,38 +30318,36 @@ mod tests {
         let cases: [(Option<f64>, Option<f64>); 2] = [(Some(30.0), Some(90.0)), (None, None)];
 
         for (paused_at, wanted) in cases {
-            if let Ok(mut pinned) = PINNED.lock() {
-                *pinned = Some(PinnedPreview {
-                    path: path.clone(),
-                    bound: Some(320),
-                    content: (0, 0, 320, 240),
-                    restore: None,
-                    dpi: 96,
-                    transport_bar: true,
-                    transport_live: true,
-                    frame: PinFrame::Shaped,
-                    overlay: true,
-                    chrome: PinChrome::on_arrival(Instant::now()),
-                    collapsed: false,
-                    bubble_pause: None,
-                    hovered: None,
-                    pressed: None,
-                    tooltip: PinTooltip::default(),
-                    dragging: None,
-                    transport: PinTransport {
-                        duration: Some(120.0),
-                        paused_at,
-                        ..Default::default()
-                    },
-                    volume: PinVolume::default(),
-                });
-            }
+            stand_pin(Some(PinnedPreview {
+                path: path.clone(),
+                bound: Some(320),
+                content: (0, 0, 320, 240),
+                restore: None,
+                dpi: 96,
+                transport_bar: true,
+                transport_live: true,
+                frame: PinFrame::Shaped,
+                overlay: true,
+                chrome: PinChrome::on_arrival(Instant::now()),
+                collapsed: false,
+                bubble_pause: None,
+                hovered: None,
+                pressed: None,
+                tooltip: PinTooltip::default(),
+                dragging: None,
+                transport: PinTransport {
+                    duration: Some(120.0),
+                    paused_at,
+                    ..Default::default()
+                },
+                volume: PinVolume::default(),
+            }));
 
             seek_pinned_playback(&path, (0, 0, 320, 240), 90.0);
 
-            let transport = PINNED.lock().ok().and_then(|pinned| {
-                pinned
-                    .as_ref()
+            let transport = pin_state().and_then(|state| {
+                state
+                    .pin()
                     .map(|pin| (pin.transport.paused_at, pin.transport.seeking))
             });
 
@@ -30646,9 +30359,7 @@ mod tests {
             );
         }
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
