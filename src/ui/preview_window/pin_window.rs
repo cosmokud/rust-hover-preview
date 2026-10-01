@@ -19,9 +19,9 @@
 //! What the type buys is that the illegal orders have no spelling. A pin the watchdog killed
 //! used to be able to keep `PIN_FOCUSED` and the foreground it had stolen, because those were
 //! two globals with nothing saying they belonged to a pin that had gone; here they are a field
-//! of a pin that exists, so `Ending` cannot be holding a keyboard. A walk queued before a kill
-//! used to be answerable after it, for the same reason; here the queue is a field of the pin
-//! too, and `end` empties it in the same move that takes the window away.
+//! of a pin that exists, so `Ending(_)` cannot be holding a keyboard. A walk queued before a
+//! kill used to be answerable after it, for the same reason; here the queue is a field of the
+//! pin too, and `end` empties it in the same move that takes the window away.
 //!
 //! Four things are deliberately *not* in here, and each was written down rather than left to be
 //! found. The pin's own geometry and press handling stay where they were — this is the
@@ -35,7 +35,7 @@
 //! behind a preview thread that has stopped turning is a hook that stops answering Explorer,
 //! which is a worse failure than the one the publication exists to avoid.
 //!
-//! The seam is seven operations and nothing wider. `move` and `blit` are not here because
+//! The seam is eight operations and nothing wider. `move` and `blit` are not here because
 //! nothing on a road out of a pin moves or paints the preview window: a take-down hands the
 //! window to the loop's ordinary take-down, and the box a pin is put up at was chosen long
 //! before any of this (see `placed_pin_box`, and ADR 6, which keeps a box and the paint that
@@ -82,8 +82,59 @@ impl PinExit {
     /// press was delivered on can let it go; a watchdog that called `ReleaseCapture` would
     /// release a capture it does not hold — a press belonging to another window — and hand
     /// that press to a window the hand is not aimed at.
-    pub(super) fn may_release_pointer(self) -> bool {
+    fn may_release_pointer(self) -> bool {
         self == PinExit::Loop
+    }
+}
+
+/// Why a pin is being taken down, and therefore which of the two ends is taking it down.
+///
+/// This is what every caller of `end_pin` now says instead of choosing a road for itself. The
+/// road was a free choice before, which is how the watchdog's copy of the teardown came to
+/// exist: three callers, three hand-written lists, and the copy that drifted was nobody's
+/// mistake at the point it was written down — the caller could not tell which list it was
+/// supposed to be writing. Naming the reason and deriving the road from it makes the two the
+/// same question, and it is a question with an answer: every reason but [`Reason::Hung`] is
+/// the loop's own tick.
+///
+/// [`Reason::Hung`] is the one that is not, and it is not a choice anybody makes: it is the
+/// watchdog's own. That is the whole of why the two ends are different roads — a loop that
+/// has stopped turning cannot be asked for anything, so a kill made from outside it can only
+/// post and hand the hide to a thread of its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Reason {
+    /// The pin's own close: the caption's cross, a close sent to the window, or the key that
+    /// closes it. Answered by the loop, because the window is the loop's and so is the player
+    /// and the browser under it.
+    Closed,
+    /// Something outside the loop asked for it: previews were turned off, the trigger key is
+    /// holding them back, the tray's `Pin Mode → Enable` row was switched off, or the machine
+    /// resumed from sleep. The request is not the take-down — what a pin *is* belongs to the
+    /// loop — so the loop is what ends it, on its next tick.
+    Asked,
+    /// The kind behind the pin, or the pin's own key, was switched off in the tray.
+    SwitchedOff,
+    /// The thing the pin is a window onto came apart: the player's process is gone, or the
+    /// engine took a document and never drew it. This is the half of "until it is closed, or it
+    /// comes apart" that is not a button.
+    MediaGone,
+    /// The loop stopped turning while a window the user is looking at was up, and a thread
+    /// that has given up on the loop ended the pin anyway. The only reason whose road is not
+    /// the loop's own.
+    Hung,
+}
+
+impl Reason {
+    /// Which of the two ends is taking this pin down.
+    ///
+    /// Derived rather than asked, so a caller cannot put the watchdog's road on a close or
+    /// the loop's road on a kill — the mistake that let the two teardowns drift in the first
+    /// place was each caller choosing.
+    pub(super) fn exit(self) -> PinExit {
+        match self {
+            Reason::Hung => PinExit::Watchdog,
+            _ => PinExit::Loop,
+        }
     }
 }
 
@@ -147,9 +198,9 @@ struct PinKeyboard {
 /// Which of the three places a pin is in.
 ///
 /// `Down` and `Ending` are both "no pin is up", and they are separate because a pin that is
-/// *over* still has to be answerable for having been, which is the same thing said after a
-/// road out of it as before one. The pin's own value is only in `Up`, so there is no way to
-/// write a state that is over and still holding a pin.
+/// *over* still has to be answerable for having been: `Ending` remembers why, which is what
+/// makes the reason a caller passed testable rather than asserted. The pin's own value is
+/// only in `Up`, so there is no way to write a state that is over and still holding a pin.
 ///
 /// The variants are a window and two words, and that is deliberate rather than boxed: the value
 /// lives behind one lock and a lock hands out a pointer, so the size of the largest variant is
@@ -161,9 +212,9 @@ pub(super) enum PinState {
     Down,
     /// A pin is up, and this is everything it is holding.
     Up(PinUp),
-    /// A pin is over. Nothing is held: the state that could hold something has been taken by
-    /// the move that got here.
-    Ending,
+    /// A pin is over and this is the end that took it. Nothing is held: the state that could
+    /// hold something has been taken by the move that got here.
+    Ending(#[cfg_attr(not(test), allow(dead_code))] Reason),
 }
 
 /// The pin's lifecycle, in one value and behind one lock.
@@ -273,6 +324,15 @@ impl PinState {
         }
     }
 
+    /// Why the last pin ended, where one has ended.
+    #[cfg(test)]
+    fn reason(&self) -> Option<Reason> {
+        match self {
+            PinState::Ending(reason) => Some(*reason),
+            _ => None,
+        }
+    }
+
     /// Take the command the chrome left, if one was left.
     fn take_command(&mut self) -> Option<PinCommand> {
         match self {
@@ -281,20 +341,20 @@ impl PinState {
         }
     }
 
-    /// Take this pin down, handing back what the window work still needs.
+    /// Take this pin down for `reason`, handing back what the window work still needs.
     ///
     /// The keyboard claim is *returned* rather than read afterwards, which is what makes a pin
     /// that is over unable to still be holding one: the claim leaves with the pin, and
-    /// `Ending` has nowhere to put it. The command queue goes the same way — it is a field
+    /// `Ending(_)` has nowhere to put it. The command queue goes the same way — it is a field
     /// of the pin, so a walk queued before a kill cannot be answered after it, because there
     /// is nothing left to answer it into.
-    fn end(&mut self) -> Option<PinKeyboard> {
-        let PinState::Up(mut up) = std::mem::replace(self, PinState::Ending) else {
+    fn end(&mut self, reason: Reason) -> Option<PinKeyboard> {
+        let PinState::Up(mut up) = std::mem::replace(self, PinState::Ending(reason)) else {
             // A pin that is not up is already over, and the end it is being given is recorded
             // rather than refused: two roads racing on the same pin is normal (the watchdog and
             // the loop's own tick both watch for a hung one), and the second one must not be the
             // one that leaves the keyboard claimed.
-            *self = PinState::Ending;
+            *self = PinState::Ending(reason);
             return None;
         };
 
@@ -365,19 +425,26 @@ pub(super) enum PinHide {
 
 /// Take a pin down, from one of the two ends, on the window that end may act on.
 ///
-/// This is the window half of the teardown, and it is one list for the same reason the state
-/// half is: what the loop's tick and the watchdog's thread have in common they do here once,
-/// and what they may not do differently is the road.
+/// This is the whole of a road out of a pin. The state goes first and with it everything the
+/// pin was holding — the keyboard claim, the command queue — because the three callers that
+/// used to write this out by hand had drifted apart by four items, and the copy that had
+/// drifted was the one made off the loop. Then the window work happens, and what that work is
+/// says only which of the two ends is doing it.
 ///
-/// `settle` is the pin's own state teardown, called in the middle of this rather than around
-/// it, and it is handed the same window because the keyboard handover in the middle of it is
-/// window work: a pin that took the focus has to put it back where it came from.
-pub(super) fn take_pin_down(
-    exit: PinExit,
-    window: &dyn PinWindow,
-    settle: &mut dyn FnMut(&dyn PinWindow),
-) -> PinHide {
+/// Nothing here takes the pin's lock across a window call. That is not tidiness: the window
+/// calls here deliver messages back into this same thread's window procedure, which asks for
+/// the pin's lock on every one of them (see `ReleaseCapture` and `WM_CAPTURECHANGED`), so a
+/// guard held across them is a thread waiting on a lock it owns. The claim is taken out under
+/// the lock and the keyboard is handed back outside it, which is the same order the old
+/// `pin_drop_focus` was written in and for the same reason.
+///
+/// The lock is read *through* where it is poisoned, which is the one place it is, and the
+/// difference is the whole of what a poisoning is: a thread that unwound mid-teardown left the
+/// pin up with its keyboard claimed, and a pin that cannot be taken down because the lock it is
+/// in is poisoned is the defect this module was written to remove.
+pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
     let hwnd = window.hwnd();
+    let exit = reason.exit();
 
     // The pointer goes before the state does, and only where this thread is the one holding
     // it: `ReleaseCapture` delivers `WM_CAPTURECHANGED` back into this thread's own window
@@ -387,37 +454,52 @@ pub(super) fn take_pin_down(
         window.release_capture(hwnd);
     }
 
-    settle(window);
+    // The state, and everything the pin was holding, in one move under one lock. This is the
+    // list the watchdog's hand-written copy of had four items missing from.
+    let keyboard = PIN_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .end(reason);
+
+    // The keyboard goes back to the window it came from, outside the lock: `SetFocus` and
+    // `SetForegroundWindow` are messages to this app's own window and to the one behind it,
+    // and both arrive back here.
+    if let Some(keyboard) = keyboard {
+        hand_keyboard_back(&keyboard, hwnd, window);
+    }
+
+    PIN_UP.store(false, Ordering::Release);
+    // A pin that is over is a pointer that is on something new: the file the pin was of is not
+    // a hover the hook has already answered, and one is due the moment the pin is gone rather
+    // than after the delay a re-hover of the same file is given (see `PIN_RESUMED`).
+    PIN_RESUMED.store(true, Ordering::Release);
+
+    // What the pin left behind that is not the pin: the walk the planner is working on, the
+    // bubble's drag latch and the box a drag had left the window at. Each is somebody else's
+    // state and each has its own owner, so the list is theirs — but it is called from here, so
+    // there is still one place a road out of a pin is written down.
+    super::end_pin_beside_the_state();
 
     match exit {
-        PinExit::Loop => PinHide::WithTheTakeDown,
+        PinExit::Loop => {
+            // The loop's own take-down is the ordinary one a hover's dismissal goes through, so
+            // the bubble — which is a window of this app's own, standing in for a pin that has
+            // gone — goes with it here rather than with the message below. A collapsed pin
+            // whose state has been cleared but whose bubble is still on screen is a window
+            // nothing will ever take away again.
+            window.hide_pin_bubble();
+            PinHide::WithTheTakeDown
+        }
         PinExit::Watchdog => {
+            // Asked by message rather than taken: the loop being given up on is the thing that
+            // must not be waited on, and a loop that was slow rather than gone does come back
+            // to a window that is still holding the pointer.
             if hwnd != 0 {
                 window.post(hwnd, WM_PIN_RELEASE_POINTER);
             }
             PinHide::OnItsOwnThread
         }
     }
-}
-
-/// Put a pin down for good, whatever is holding it, and publish that none is up.
-///
-/// Everything the pin was holding goes with it in the one move: the keyboard claim and the
-/// command queue are fields of the pin, so `Ending` is a state in which neither can be read
-/// (see `PinState::end`).
-pub(super) fn put_the_pin_down() {
-    if let Some(mut state) = pin_state() {
-        state.end();
-    }
-    PIN_UP.store(false, Ordering::Release);
-}
-
-/// Note that a pin is over, for the hook's own answer about what is under the pointer.
-///
-/// Published rather than held, like `PIN_UP`: the Explorer hook reads it once per tick and
-/// cannot be answered off the pin's lock.
-pub(super) fn note_pin_ended() {
-    PIN_RESUMED.store(true, Ordering::Release);
 }
 
 /// Put the keyboard back where it came from, while the pin itself stays up.
@@ -489,6 +571,13 @@ pub(super) trait PinWindow {
     /// call in it.
     fn hide_pin_windows(&self);
 
+    /// Take down the round bubble a collapsed pin leaves standing for it.
+    ///
+    /// A window of this app's own, and the one thing a take-down owes that the ordinary
+    /// take-down does not do: the loop's own hide brings the pin's windows down as part of the
+    /// ordinary message, and a bubble is not the pin's window and is not in that message.
+    fn hide_pin_bubble(&self);
+
     /// Leave a message for the loop to answer, rather than making it answer now.
     fn post(&self, hwnd: isize, message: u32);
 }
@@ -513,6 +602,8 @@ pub(super) enum PinWindowCall {
     /// screen. Recorded rather than done inside the teardown, because the thread that can run
     /// it is the caller's to choose and the two callers choose differently.
     HidePinWindows,
+    /// The round bubble a collapsed pin left standing for it, taken down with the take-down.
+    HidePinBubble,
     Post(u32),
 }
 
@@ -582,6 +673,10 @@ impl PinWindow for RecordedPinWindow {
         self.record(PinWindowCall::HidePinWindows);
     }
 
+    fn hide_pin_bubble(&self) {
+        self.record(PinWindowCall::HidePinBubble);
+    }
+
     fn post(&self, _hwnd: isize, message: u32) {
         self.record(PinWindowCall::Post(message));
     }
@@ -641,6 +736,15 @@ mod tests {
     /// transitions over a shared machine is a suite where one test's pin is another's.
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
+    /// Every reason there is, which is what a road out of a pin is asked for.
+    const EVERY_REASON: [Reason; 5] = [
+        Reason::Closed,
+        Reason::Asked,
+        Reason::SwitchedOff,
+        Reason::MediaGone,
+        Reason::Hung,
+    ];
+
     /// The pin's own value, with nothing asked of it and nothing answered about it.
     fn a_pin() -> PinnedPreview {
         PinnedPreview::for_test()
@@ -654,6 +758,10 @@ mod tests {
     }
 
     /// The keyboard the pin is holding, and where it came from, or nothing while it holds none.
+    ///
+    /// Asked of the claim itself rather than of the pin, because a pin that is over holds none
+    /// and a reader that could only see a pin could not tell "ended, and gave it back" from
+    /// "ended, and kept it" — which is the whole of what these tests are asking.
     fn keyboard() -> Option<PinKeyboard> {
         match pin_state()?.keyboard_mut() {
             Some(keyboard) => *keyboard,
@@ -661,31 +769,12 @@ mod tests {
         }
     }
 
-    /// The window a teardown settled, standing in for this app's own.
-    fn settle_pin(behind: isize) -> RecordedPinWindow {
-        let window = RecordedPinWindow::new(0x1000);
-        let keyboard = pin_state().and_then(|mut state| match state.keyboard_mut() {
-            Some(keyboard) => keyboard.take(),
-            None => None,
-        });
-        if let Some(keyboard) = keyboard {
-            if window.hwnd() != 0 {
-                window.set_focus(0);
-                window.set_focusable(window.hwnd(), false);
-                if keyboard.behind != 0 {
-                    window.set_foreground(keyboard.behind);
-                }
-            }
-        }
-        PIN_UP.store(false, Ordering::Release);
-        PIN_RESUMED.store(true, Ordering::Release);
-        stand_pin(None);
-        let _ = behind;
-        window
+    /// Why the last pin ended, where one has.
+    fn why() -> Option<Reason> {
+        pin_state()?.reason()
     }
 
-    /// The pointer is let go before the state settles, and only where this thread is the one
-    /// holding it.
+    /// The pointer goes before the state and only where this thread holds it.
     ///
     /// The order is load-bearing rather than incidental. `ReleaseCapture` delivers
     /// `WM_CAPTURECHANGED` back into the window procedure this same thread is running, and
@@ -695,28 +784,27 @@ mod tests {
     /// And only the loop's own tick may do it at all. A capture belongs to the thread that
     /// took it, so a watchdog asking for one releases nothing — or, if some other window on
     /// that thread is holding one, releases that window's press and hands it to a pin the
-    /// hand is not aimed at.
+    /// hand is not aimed at. That is why the watchdog's road asks by message instead.
     #[test]
     fn the_pointer_goes_before_the_state_and_only_where_this_thread_holds_it() {
         let _one = ONE_AT_A_TIME.lock();
 
         install(a_pin());
         let loop_window = RecordedPinWindow::new(0x1000);
-        let mut settle = |_: &dyn PinWindow| {};
         assert_eq!(
-            take_pin_down(PinExit::Loop, &loop_window, &mut settle),
+            end_pin(Reason::Closed, &loop_window),
             PinHide::WithTheTakeDown
         );
         assert_eq!(
             loop_window.calls(),
-            vec![PinWindowCall::ReleaseCapture],
+            vec![PinWindowCall::ReleaseCapture, PinWindowCall::HidePinBubble],
             "the release is taken while this thread can still end the drag it belongs to"
         );
 
         install(a_pin());
         let watchdog_window = RecordedPinWindow::new(0x1000);
         assert_eq!(
-            take_pin_down(PinExit::Watchdog, &watchdog_window, &mut settle),
+            end_pin(Reason::Hung, &watchdog_window),
             PinHide::OnItsOwnThread
         );
         assert_eq!(
@@ -726,30 +814,209 @@ mod tests {
         );
     }
 
+    /// The whole of what each road owes the window, for a pin holding all of it.
+    ///
+    /// One test for the whole list rather than a sample, because the defect this seam exists
+    /// for is a list that had become two: the watchdog's hand-written copy of the window work
+    /// had four of the six items below missing or wrong, and every one of them was invisible
+    /// until a pin was killed for being hung. A test that asserts the first item and moves on
+    /// would have passed against the copy.
+    #[test]
+    fn the_whole_of_what_each_road_owes_the_window() {
+        let _one = ONE_AT_A_TIME.lock();
+
+        a_pin_holding_the_keyboard(0x2000);
+        let loop_window = RecordedPinWindow::new(0x1000);
+        end_pin(Reason::Closed, &loop_window);
+        assert_eq!(
+            loop_window.calls(),
+            vec![
+                PinWindowCall::ReleaseCapture,
+                PinWindowCall::SetFocus,
+                PinWindowCall::SetFocusable { focusable: false },
+                PinWindowCall::SetForeground,
+                PinWindowCall::HidePinBubble,
+            ],
+            "the loop releases the pointer, hands the keyboard back, and takes the bubble down \
+             itself — the ordinary take-down that follows brings the pinned window with it"
+        );
+
+        a_pin_holding_the_keyboard(0x2000);
+        let watchdog_window = RecordedPinWindow::new(0x1000);
+        end_pin(Reason::Hung, &watchdog_window);
+        assert_eq!(
+            watchdog_window.calls(),
+            vec![
+                PinWindowCall::SetFocus,
+                PinWindowCall::SetFocusable { focusable: false },
+                PinWindowCall::SetForeground,
+                PinWindowCall::Post(WM_PIN_RELEASE_POINTER),
+            ],
+            "the watchdog hands the keyboard back first — that item is not optional — and asks \
+             for the pointer afterwards, because by then the drag it belonged to is gone. The \
+             bubble it leaves to the thread of its own that will do the hiding."
+        );
+    }
+
+    /// A road out of a pin with no window behind it asks it for nothing of that window.
+    ///
+    /// Zero is a handle this app has not been given yet, which is what the window procedure
+    /// sees before the window exists and what the watchdog sees if the app is on its way down.
+    /// A teardown that assumed a window would post a message to handle zero and try to release
+    /// a capture of zero, both of which are calls on a handle that may since be somebody else's.
+    ///
+    /// The hide is asked for either way, because the bubble is a window of this app's own read
+    /// from its own slot rather than from the handle the road was given: a take-down that
+    /// skipped it where the pin's own window had already gone would leave a bubble standing that
+    /// nothing would ever take away.
+    ///
+    /// The state settles regardless, which is the half that does not need a window at all: a pin
+    /// is over whether or not there was anything to take down.
+    #[test]
+    fn a_road_with_no_window_asks_it_for_nothing() {
+        let _one = ONE_AT_A_TIME.lock();
+
+        for reason in EVERY_REASON {
+            install(a_pin());
+            take_keyboard(0x2000);
+            let window = RecordedPinWindow::new(0);
+            end_pin(reason, &window);
+
+            let mut expected = Vec::new();
+            if reason.exit() == PinExit::Loop {
+                expected.push(PinWindowCall::HidePinBubble);
+            }
+
+            assert_eq!(
+                window.calls(),
+                expected,
+                "{reason:?}: nothing is asked of a handle \
+                that is not there"
+            );
+            assert!(!pin_is_up(), "{reason:?}: and the pin is still over");
+        }
+    }
+
+    /// The pin's own lock is not held across a window call.
+    ///
+    /// The window calls a teardown makes deliver messages back into this same thread's
+    /// window procedure, which asks for the pin's lock on every one of them. A guard held
+    /// across them is a thread waiting on a lock it owns — so the claim is taken out under
+    /// the lock and the keyboard is handed back outside it, and the order is observable: by
+    /// the time the focus is given up, the pin is already gone.
+    #[test]
+    fn the_pin_s_own_lock_is_not_held_across_a_window_call() {
+        let _one = ONE_AT_A_TIME.lock();
+
+        a_pin_holding_the_keyboard(0x2000);
+        let window = LookingWindow::new();
+        end_pin(Reason::Closed, &window);
+
+        assert_eq!(
+            window.looked(),
+            vec![true, false, false, false],
+            "the pointer is let go while the pin is still there to end the drag for, and every \
+             window call after it is made with the state already gone and the lock let go — \
+             which is what lets a window procedure re-entered by one of them find no pin and \
+             end nothing twice"
+        );
+    }
+
+    /// A recorder that looks the pin up on every call it is asked for, standing in for the
+    /// window procedure every one of these calls is delivered back into.
+    struct LookingWindow {
+        inner: RecordedPinWindow,
+        /// Whether a pin was up at each call, in the order the calls were made.
+        looked: Mutex<Vec<bool>>,
+    }
+
+    impl LookingWindow {
+        fn new() -> Self {
+            Self {
+                inner: RecordedPinWindow::new(0x1000),
+                looked: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// Whether a pin was up, for each call, in the order the calls were made.
+        fn looked(&self) -> Vec<bool> {
+            self.looked
+                .lock()
+                .map(|looked| looked.clone())
+                .unwrap_or_default()
+        }
+
+        /// What a window procedure does on every message it is sent: look the pin up.
+        fn looking(&self) {
+            if let Ok(mut looked) = self.looked.lock() {
+                looked.push(pin_state().is_some_and(|state| state.is_up()));
+            }
+        }
+    }
+
+    impl PinWindow for LookingWindow {
+        fn hwnd(&self) -> isize {
+            self.inner.hwnd()
+        }
+
+        fn release_capture(&self, hwnd: isize) {
+            self.looking();
+            self.inner.release_capture(hwnd);
+        }
+
+        fn set_focusable(&self, hwnd: isize, focusable: bool) {
+            self.looking();
+            self.inner.set_focusable(hwnd, focusable);
+        }
+
+        fn set_focus(&self, hwnd: isize) {
+            self.looking();
+            self.inner.set_focus(hwnd);
+        }
+
+        fn set_foreground(&self, hwnd: isize) {
+            self.looking();
+            self.inner.set_foreground(hwnd);
+        }
+
+        fn hide_pin_windows(&self) {
+            self.inner.hide_pin_windows();
+        }
+
+        fn hide_pin_bubble(&self) {
+            self.inner.hide_pin_bubble();
+        }
+
+        fn post(&self, hwnd: isize, message: u32) {
+            self.inner.post(hwnd, message);
+        }
+    }
+
     /// A pin that has just come up answers that it is up, and a pin that is over answers that
     /// it is not — and the two copies of that answer never disagree.
     ///
     /// The Explorer hook asks on every tick and cannot be answered off the lock, so the phase
-    /// is published as well as held, and the two are written in one order at both ends.
+    /// is published as well as held, and the two are written in one order at both ends. That
+    /// pairing is only checkable from here: a flag that ran ahead of the state would have
+    /// previews held back over no window, and one that ran behind would have hovers answered
+    /// over a window nothing would ever take down.
     #[test]
     fn the_published_flag_and_the_state_never_disagree() {
         let _one = ONE_AT_A_TIME.lock();
 
         install(a_pin());
         assert!(pin_is_up(), "installed: a pin is published as up");
-        assert!(
+        assert_eq!(
+            pin_is_up(),
             pin_state().is_some_and(|state| state.is_up()),
             "and the state agrees"
         );
 
-        let window = RecordedPinWindow::new(0x1000);
-        let mut settle = |_: &dyn PinWindow| {
-            settle_pin(0);
-        };
-        take_pin_down(PinExit::Loop, &window, &mut settle);
+        end_pin(Reason::Closed, &RecordedPinWindow::new(0x1000));
         assert!(!pin_is_up(), "ended: and as down");
-        assert!(
-            !pin_state().is_some_and(|state| state.is_up()),
+        assert_eq!(
+            pin_is_up(),
+            pin_state().is_some_and(|state| state.is_up()),
             "and the state agrees"
         );
     }
@@ -757,9 +1024,9 @@ mod tests {
     /// A pin taken up over another one is the new one whole.
     ///
     /// The pin it was is the same window showing another file, so what belongs to the window
-    /// rather than to the file is carried over by the caller before the take-up. What does not
-    /// carry is the claim on the keyboard: that was the old file's, and the new pin has pressed
-    /// nothing.
+    /// rather than to the file — a maximized box, a level, chrome, a bound — is carried over by
+    /// the caller before the take-up. What does not carry is the claim on the keyboard: that was
+    /// the old file's, and the new pin has pressed nothing.
     #[test]
     fn a_pin_taken_up_over_another_one_is_the_new_one_whole() {
         let _one = ONE_AT_A_TIME.lock();
@@ -782,7 +1049,10 @@ mod tests {
     }
 
     /// Every command a caption's button asks for survives the trip out of the window procedure
-    /// and back, and a pin's end leaves none of them behind.
+    /// and back.
+    ///
+    /// The codes are the whole of the crossing — the loop and the window procedure share
+    /// nothing else — so a button whose code nothing reads back is a button that does nothing.
     #[test]
     fn every_command_a_caption_asks_for_comes_back_to_the_loop() {
         let _one = ONE_AT_A_TIME.lock();
@@ -805,16 +1075,14 @@ mod tests {
             );
         }
 
-        // A command left in the queue when a pin ends is a command about a window that is gone,
-        // fired against whatever pin comes next.
-        install(a_pin());
-        ask_pin(PinCommand::Close);
-        stand_pin(None);
-        assert_eq!(
-            take_pin_command(),
-            None,
-            "a pin that is over leaves none behind"
-        );
+        // Two asks are two commands, in the order they were made. A single slot dropped the
+        // first: a double-click on `Next` is two `WM_LBUTTONUP`s, and moving two files along is
+        // what double-clicking a `Next` is for.
+        ask_pin(PinCommand::Previous);
+        ask_pin(PinCommand::Next);
+        assert_eq!(take_pin_command(), Some(PinCommand::Previous));
+        assert_eq!(take_pin_command(), Some(PinCommand::Next));
+        assert_eq!(take_pin_command(), None, "a command is taken once");
     }
 
     /// A command queue drops the oldest rather than growing without end.
@@ -842,37 +1110,83 @@ mod tests {
         );
     }
 
-    /// No road out of a pin leaves the keyboard claimed.
+    /// The keyboard goes back to the window it came from.
     ///
-    /// This is the defect the type exists for. `PIN_FOCUSED` and `PIN_PREVIOUS_FOREGROUND` were
-    /// two globals with nothing saying they belonged to a pin that had gone, so a pin the
-    /// watchdog killed kept the keyboard it had claimed and the foreground it had stolen: a
-    /// desktop with no caret in it.
+    /// A window that is hidden while it still holds the focus leaves Windows to pick what to
+    /// activate next, and for a `WS_EX_TOOLWINDOW` popup that is not reliably the Explorer
+    /// window that was in front a moment ago.
     #[test]
-    fn no_road_out_of_a_pin_leaves_the_keyboard_claimed() {
+    fn the_keyboard_goes_back_to_the_window_it_came_from() {
         let _one = ONE_AT_A_TIME.lock();
 
-        for exit in [PinExit::Loop, PinExit::Watchdog] {
-            a_pin_holding_the_keyboard(0x2000);
-            let window = RecordedPinWindow::new(0x1000);
-            let mut settle = |_: &dyn PinWindow| {
-                settle_pin(0x2000);
-            };
-            take_pin_down(exit, &window, &mut settle);
-
-            assert_eq!(
-                keyboard(),
-                None,
-                "{exit:?}: a pin that is over holds no keyboard, so there is nothing for a \
-                 later pin to inherit and nothing for a reader to find"
-            );
-        }
+        install(a_pin());
+        take_keyboard(0x2000);
+        let window = RecordedPinWindow::new(0x1000);
+        end_pin(Reason::Closed, &window);
+        assert_eq!(
+            window.calls(),
+            vec![
+                PinWindowCall::ReleaseCapture,
+                PinWindowCall::SetFocus,
+                PinWindowCall::SetFocusable { focusable: false },
+                PinWindowCall::SetForeground,
+                PinWindowCall::HidePinBubble,
+            ],
+            "the window behind is put back in front, so a keyboard handed back lands where it \
+             came from"
+        );
     }
 
-    /// The note that the keyboard was taken is dropped with the focus.
+    /// A pin that took the keyboard from nothing hands it back to nothing.
+    ///
+    /// There is sometimes no window behind: a `WS_POPUP` with no parent has no `GW_OWNER` at
+    /// all, so the handover is the focus going to nothing rather than to a window that was
+    /// never there.
+    #[test]
+    fn a_pin_that_took_the_keyboard_from_nothing_hands_it_back_to_nothing() {
+        let _one = ONE_AT_A_TIME.lock();
+
+        install(a_pin());
+        take_keyboard(0);
+        let window = RecordedPinWindow::new(0x1000);
+        end_pin(Reason::Closed, &window);
+
+        assert!(
+            window
+                .calls()
+                .iter()
+                .all(|call| !matches!(call, PinWindowCall::SetForeground)),
+            "there is no window behind a pin that took the keyboard from nothing"
+        );
+    }
+
+    /// A pin with nothing on the keyboard owes nobody a handover.
+    ///
+    /// A pin nobody pressed holds no keyboard to give back, so a teardown of one does not go
+    /// near the focus at all — which is the item the old `pin_drop_focus` asked `PIN_FOCUSED`
+    /// about before doing anything.
+    #[test]
+    fn a_pin_with_nothing_on_the_keyboard_owes_nobody_a_handover() {
+        let _one = ONE_AT_A_TIME.lock();
+
+        install(a_pin());
+        let window = RecordedPinWindow::new(0x1000);
+        end_pin(Reason::Closed, &window);
+
+        assert_eq!(
+            window.calls(),
+            vec![PinWindowCall::ReleaseCapture, PinWindowCall::HidePinBubble],
+            "nothing is asked of a window this pin never took anything from"
+        );
+    }
+
+    /// The note that the keyboard was taken is dropped with the pin, or with the focus.
     ///
     /// Windows taking the focus away is the user clicking into something else: the window now
-    /// in front holds the keyboard, so there is nothing to hand over and the claim goes.
+    /// in front holds the keyboard, so there is nothing to hand over and the claim goes. That
+    /// is the one road out that does not do the handover, and it is the same shape as ending
+    /// the pin — one field that says whether there is a keyboard to give back, rather than a
+    /// bit and a handle that could be set one without the other.
     #[test]
     fn the_note_that_the_keyboard_was_taken_is_dropped_with_the_focus() {
         let _one = ONE_AT_A_TIME.lock();
@@ -881,30 +1195,150 @@ mod tests {
         take_keyboard(0x2000);
         release_keyboard();
         assert_eq!(keyboard(), None, "losing the focus drops the claim with it");
+
+        a_pin_holding_the_keyboard(0x2000);
+        end_pin(Reason::Closed, &RecordedPinWindow::new(0x1000));
+        assert_eq!(keyboard(), None, "a pin that is over holds no keyboard");
     }
 
-    /// A pin with nothing on the keyboard owes nobody a handover.
-    ///
-    /// A pin nobody pressed holds no keyboard to give back, so a teardown of one does not go
-    /// near the focus at all.
+    /// A pin taken for a reason is ended by the loop's own tick, and a pin the loop has given
+    /// up on is ended by a thread of its own — and no other pairing exists.
     #[test]
-    fn a_pin_with_nothing_on_the_keyboard_owes_nobody_a_handover() {
+    fn every_reason_is_the_loop_s_own_tick_except_the_watchdog_s() {
+        for (reason, exit) in [
+            (Reason::Closed, PinExit::Loop),
+            (Reason::Asked, PinExit::Loop),
+            (Reason::SwitchedOff, PinExit::Loop),
+            (Reason::MediaGone, PinExit::Loop),
+            (Reason::Hung, PinExit::Watchdog),
+        ] {
+            assert_eq!(reason.exit(), exit, "{reason:?} is {exit:?}'s road");
+        }
+    }
+
+    /// Two roads racing on one pin end it once.
+    ///
+    /// The watchdog and the loop's own tick both watch for a hung loop, and either may be
+    /// first. The second one must find nothing to take down rather than refusing, and must not
+    /// be the one that leaves the keyboard claimed.
+    #[test]
+    fn two_roads_racing_on_one_pin_end_it_once() {
         let _one = ONE_AT_A_TIME.lock();
 
-        install(a_pin());
-        let window = settle_pin(0x2000);
+        a_pin_holding_the_keyboard(0x2000);
+        end_pin(Reason::Hung, &RecordedPinWindow::new(0x1000));
 
-        assert!(
-            window.calls().is_empty(),
-            "nothing is asked of a window this pin never took anything from"
+        let second = RecordedPinWindow::new(0x1000);
+        end_pin(Reason::Hung, &second);
+
+        assert_eq!(keyboard(), None, "the pin is over either way");
+        assert_eq!(
+            second.calls(),
+            vec![PinWindowCall::Post(WM_PIN_RELEASE_POINTER)],
+            "and the second road is told nothing about a window that is already gone, because \
+             the pointer release it asks for is a request and there is nothing to release"
         );
     }
 
-    /// The pin's own state is readable while it is up and gone once it is over.
+    /// Every reason reaches the same teardown, and nothing is left standing after it.
+    ///
+    /// One list, called from every exit: the state, the keyboard claim, the command queue and
+    /// the bubble, whatever asked for it. This is the locality the review asked for — one
+    /// teardown, several callers — and it is the property that fails first if a road is written
+    /// without it, which is not a hypothetical: the watchdog's hand-written copy of this list
+    /// cleared the pin and its flags and left the keyboard it had claimed and the walk a caption
+    /// button had queued, so a pin killed for being hung ended still holding a caret and a walk
+    /// to be answered into whatever pin came next.
+    ///
+    /// Every reason and not one of them, and the whole of what a pin was holding and not a
+    /// sample of it, because each of those four items was one the copy had wrong.
+    #[test]
+    fn every_reason_reaches_the_same_teardown() {
+        let _one = ONE_AT_A_TIME.lock();
+
+        for reason in EVERY_REASON {
+            a_pin_holding_the_keyboard(0x2000);
+            end_pin(reason, &RecordedPinWindow::new(0x1000));
+
+            assert!(!pin_is_up(), "{reason:?}: the pin is over");
+            assert_eq!(
+                keyboard(),
+                None,
+                "{reason:?}: the keyboard went with it, so there is nothing for a later pin to \
+                 inherit and nothing for a reader to find"
+            );
+            assert_eq!(
+                take_pin_command(),
+                None,
+                "{reason:?}: so did the queue — a command left behind is a command about a window \
+                 that is gone, fired against whatever pin comes next"
+            );
+            assert_eq!(
+                why(),
+                Some(reason),
+                "{reason:?}: and the end says which end it was, which is the whole of what a \
+                 reason handed to a teardown is for"
+            );
+        }
+    }
+
+    /// A collapsed pin is still a pin, and still goes down the same way.
+    ///
+    /// A pin that has been put away is not up but is not gone: the loop's own tick still has
+    /// to be able to end it, and the end has to settle everything an un-collapsed one holds.
+    /// The bubble is a window of this app's own and does not hold the keyboard, so a pin
+    /// collapsed with the caret on it still has to hand it back.
+    #[test]
+    fn a_collapsed_pin_is_still_a_pin_and_still_goes_down_the_same_way() {
+        let _one = ONE_AT_A_TIME.lock();
+
+        install(a_pin());
+        take_keyboard(0x2000);
+        ask_pin(PinCommand::Close);
+        if let Some(mut state) = pin_state() {
+            if let Some(pin) = state.pin_mut() {
+                pin.collapsed = true;
+            }
+        }
+
+        let window = RecordedPinWindow::new(0x1000);
+        end_pin(Reason::Closed, &window);
+
+        assert!(!pin_is_up());
+        assert_eq!(keyboard(), None);
+        assert_eq!(take_pin_command(), None);
+        assert!(
+            window.calls().contains(&PinWindowCall::SetForeground),
+            "a bubble does not hold the keyboard, so a pin collapsed with the caret on it still \
+             has to hand it back"
+        );
+    }
+
+    /// A pin whose window is a bubble takes the bubble with it, on the road that owns the
+    /// thread.
+    ///
+    /// A collapsed pin whose state has been cleared but whose bubble is still on screen is a
+    /// window nothing will ever take away again, so the loop's own road takes it down itself
+    /// rather than leaving it for the ordinary take-down, which does not know about it. The
+    /// watchdog's road cannot, and its own thread's hide covers it (see `hide_pin_windows`).
+    #[test]
+    fn a_pin_whose_window_is_a_bubble_takes_the_bubble_with_it() {
+        let _one = ONE_AT_A_TIME.lock();
+
+        install(a_pin());
+        let window = RecordedPinWindow::new(0x1000);
+        end_pin(Reason::Closed, &window);
+
+        assert!(
+            window.calls().contains(&PinWindowCall::HidePinBubble),
+            "the bubble goes with the pin, on the road that owns the thread"
+        );
+    }
+
+    /// The pin's own value is readable while it is up and gone once it is over.
     #[test]
     fn the_pin_s_own_state_is_readable_while_it_is_up_and_gone_once_it_is_over() {
         let _one = ONE_AT_A_TIME.lock();
-        stand_pin(None);
 
         assert!(
             pin_state().is_none_or(|state| state.pin().is_none()),
@@ -917,64 +1351,10 @@ mod tests {
             "a pin that is up has a window and a state of its own to read"
         );
 
-        let window = RecordedPinWindow::new(0x1000);
-        let mut settle = |_: &dyn PinWindow| {
-            settle_pin(0);
-        };
-        take_pin_down(PinExit::Loop, &window, &mut settle);
+        end_pin(Reason::Closed, &RecordedPinWindow::new(0x1000));
         assert!(
             pin_state().is_some_and(|state| state.pin().is_none()),
-            "and a pin that is over has neither"
-        );
-    }
-
-    /// A collapsed pin is still a pin, and a collapse still gives the keyboard back.
-    ///
-    /// The bubble is a window of this app's own and does not hold the keyboard, so a pin
-    /// collapsed with the caret on it still has to hand it back.
-    #[test]
-    fn a_collapsed_pin_gives_the_keyboard_back_without_going_down() {
-        let _one = ONE_AT_A_TIME.lock();
-
-        install(a_pin());
-        take_keyboard(0x2000);
-        if let Some(mut state) = pin_state() {
-            if let Some(pin) = state.pin_mut() {
-                pin.collapsed = true;
-            }
-        }
-
-        let window = RecordedPinWindow::new(0x1000);
-        give_the_keyboard_back(&window);
-
-        assert!(pin_is_up(), "a collapsed pin is still a pin");
-        assert_eq!(keyboard(), None, "and it holds no keyboard");
-        assert!(
-            window.calls().contains(&PinWindowCall::SetForeground),
-            "the window behind is put back in front, so a keyboard handed back lands where it \
-             came from"
-        );
-    }
-
-    /// A pin that took the keyboard from nothing hands it back to nothing.
-    ///
-    /// There is sometimes no window behind: a `WS_POPUP` with no parent has no `GW_OWNER` at
-    /// all, so the handover is the focus going to nothing.
-    #[test]
-    fn a_pin_that_took_the_keyboard_from_nothing_hands_it_back_to_nothing() {
-        let _one = ONE_AT_A_TIME.lock();
-
-        install(a_pin());
-        take_keyboard(0);
-        let window = RecordedPinWindow::new(0x1000);
-        give_the_keyboard_back(&window);
-
-        assert!(
-            window
-                .calls()
-                .iter()
-                .all(|call| !matches!(call, PinWindowCall::SetForeground)),
-            "there is no window behind a pin that took the keyboard from nothing"
+            "and a pin that is over has neither, which is the whole of what Ending means"
         );
     }
 
@@ -982,22 +1362,28 @@ mod tests {
     ///
     /// A pin that is over is a pointer that is on something new: the file the pin was of is
     /// not a hover the hook has already answered, and one is due the moment the pin is gone
-    /// rather than after the delay a re-hover of the same file is given.
+    /// rather than after the delay a re-hover of the same file is given. That is a fact about
+    /// the pin's end and nothing else, so it is published here rather than left to the caller
+    /// that happened to remember to do it.
     #[test]
     fn a_pin_s_end_is_published_to_the_hook_once() {
         let _one = ONE_AT_A_TIME.lock();
 
+        // Whatever a test elsewhere on the machine left published is drained first, since the
+        // flag is process-wide and this one is about what an end does rather than about the
+        // flag having been clear to begin with.
         take_pin_resumed();
-        install(a_pin());
-        note_pin_ended();
 
+        install(a_pin());
+        end_pin(Reason::Closed, &RecordedPinWindow::new(0x1000));
         assert!(
             take_pin_resumed(),
             "a pin that is over is a hover the hook has not answered yet"
         );
         assert!(
             !take_pin_resumed(),
-            "and it is said once, because a second true would be a file the pointer never left"
+            "and it is said once, because the hook reads it once per tick and a second true \
+             would be a file the pointer never left"
         );
     }
 }

@@ -11,7 +11,7 @@ use crate::ui::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
     note_engine_page_drag, pinned, pinned_path, pointer_item_box, pointer_item_holds,
     preview_pointer_hold, preview_screen_rect, preview_stall_ms, publish_pin_media_press,
-    publish_pointer_item_box, end_pin, show_preview, show_preview_keyboard,
+    publish_pointer_item_box, request_pin_end, show_preview, show_preview_keyboard,
     take_pin_resumed, update_pinned_preview, PreviewCursorHover,
 };
 use crate::{CONFIG, RUNNING};
@@ -5854,9 +5854,9 @@ pub fn run_explorer_hook() {
             // A pinned preview is a window the user put there, and the two settings above are
             // what says whether previews may be raised at all — which is the question their
             // leaving it standing would answer wrongly. So it comes down with them, by the path
-            // its own close button takes (see `end_pin`).
+            // its own close button takes (see `request_pin_end`).
             if pinned() {
-                end_pin();
+                request_pin_end();
             }
             keyboard_file = None;
             last_file = None;
