@@ -154,7 +154,7 @@ impl Probe {
     /// Everything the question below needs from the disk, read once.
     pub fn read(path: &Path) -> Self {
         #[cfg(test)]
-        ENTRY_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        ENTRY_READS.with(|reads| reads.set(reads.get() + 1));
 
         // A file whose content is not on this machine is not opened at all, and that question
         // is answered out of the directory entry rather than by trying (see `cloud_files`).
@@ -224,25 +224,29 @@ impl Probe {
     }
 }
 
-/// How many times a probe has read a file's directory entry, which is how many `fs::metadata`
-/// calls a run of hovers paid for reading "what is this file" against the disk.
-///
-/// It is the count the whole of this module's split is for, and it is counted rather than
-/// argued about: six questions about one file used to make six of them, one per question,
-/// because nothing was handed down between them.
+// How many times a probe has read a file's directory entry, which is how many `fs::metadata`
+// calls a run of hovers paid for reading "what is this file" against the disk.
+//
+// It is the count the whole of this module's split is for, and it is counted rather than
+// argued about: six questions about one file used to make six of them, one per question,
+// because nothing was handed down between them. It is per-thread because the tests that read
+// it run beside each other, and a count of one thread's probes taken while another's are added
+// to it says nothing about either. It is a comment rather than a doc because a `thread_local!`
+// block carries no doc of its own.
 #[cfg(test)]
-pub(crate) static ENTRY_READS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    static ENTRY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
-/// The entry reads so far, and a way to start counting again from nothing.
+/// The entry reads this thread has made, and a way to start counting again from nothing.
 #[cfg(test)]
 pub(crate) fn entry_reads() -> usize {
-    ENTRY_READS.load(std::sync::atomic::Ordering::Relaxed)
+    ENTRY_READS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
 pub(crate) fn count_entry_reads_from_now() {
-    ENTRY_READS.store(0, std::sync::atomic::Ordering::Relaxed);
+    ENTRY_READS.with(|reads| reads.set(0));
 }
 
 /// Whether the tables below cannot answer from the front alone, and so the whole window is

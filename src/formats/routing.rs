@@ -14,19 +14,29 @@
 //! answered with — the form `content_type` asks, where the file is a signature's own name and
 //! has never been opened — and there is nothing left to read (see [`Asked`]).
 //!
+//! What is *not* here is a second answer to the same question. "Who draws this file?" was
+//! asked twelve ways across five modules — the router's claim table, the reader chain, the
+//! in-app job, six backdrop functions, and a predicate per kind in the window that composes the
+//! preview — and a kind left out of one of them was a preview drawn at the wrong scale, which is
+//! the failure this module's existence is for. [`resolve`] answers the whole of it in one place
+//! as a [`Route`], and every caller that wanted more than the kind reads fields off that
+//! instead of reaching for a predicate of its own. Which readers could answer is deliberately
+//! still a separate question: it is about the machine and the run rather than about the file,
+//! and it costs a registry lookup per engine.
+//!
 //! The lists themselves are not here: they are `config.ini`'s, and which names each one holds
 //! is the user's to edit. What this module owns is the *order* they are asked in, and what
 //! each kind is drawn by — see [`chain`]. A name that sits in two lists is settled by that
 //! order rather than by the name, which is why the order has one author.
 
-use crate::config::config::{AppConfig, PreviewType};
+use crate::config::config::{AppConfig, PreviewType, TransparentBackground};
 use crate::engines::{
     calibre_render, imagemagick_render, libreoffice_render, peazip_render, webview_preview,
 };
 use crate::formats::{
     archive_formats, audio_formats, calibre_formats, codecs, design_formats, ebook_formats,
-    font_formats, image_formats, libre_formats, magick_formats, office_formats, peazip_formats,
-    text_formats, vector_formats, video_formats,
+    font_formats, image_formats, libre_formats, magick_formats, native_formats::NativeJob,
+    office_formats, peazip_formats, text_formats, vector_formats, video_formats,
 };
 use crate::readers::pdf_preview;
 use crate::readers::svg_preview;
@@ -141,6 +151,279 @@ const CLAIMS: &[Claim] = &[
     claim_images,
 ];
 
+/// Everything one file's route is, answered once.
+///
+/// A file's route is one question asked twelve ways. Which kind claims it is the router's answer
+/// ([`kind_of`]); what its own bytes say it is, which outranks that answer where they disagree,
+/// is `content_type`'s; which reader draws it is [`chain`] narrowed to this machine; what of this
+/// app's own reads it is `native_formats`'s job; and which of the three the browser draws is
+/// [`DrawnBy`]'s. Each of those was reached from a different module, and a kind left out of one
+/// of them was a preview drawn at the wrong scale — which is the defect this struct is for.
+///
+/// It is a record rather than a thirteenth function: every field is an answer something already
+/// had, and what it buys is that a caller asks once and reads fields. Adding a kind is one arm of
+/// the match that builds it, in the one file that owns the order, rather than an edit in six
+/// predicates that each worked it out for themselves.
+///
+/// It is [`resolve`] that builds one, and it is deliberately the whole of what this module offers:
+/// a caller that wants the kind alone is served by [`kind_of`], which is a lookup in the table
+/// rather than the construction of everything above it, because most callers want one field and
+/// the fields that cost something — an engine's availability, a reader's job — are not free to
+/// ask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Route {
+    /// What the file's own bytes say it is, or nothing where they had no opinion.
+    pub content: crate::formats::content_type::Content,
+    /// The kind the file's name's lists claim, or nothing where no list does.
+    pub named: Option<PreviewType>,
+    /// Which half of the `Ebook` kind the file is, of the book list's names.
+    pub page: Page,
+    /// Which half of the `Vector` kind the file is, of its name.
+    pub drawing: Drawing,
+    /// Who draws it — the three the browser draws, a media engine, or the kind's own reader.
+    pub drawn_by: DrawnBy,
+}
+
+/// Who draws a file, in the one exhaustive answer.
+///
+/// The question was eleven predicates, six of them about the backdrop a preview is composited
+/// over and one of them a hit-test on a rectangle (see [`Backdrop`]). What is left is the one
+/// thing they were all reaching for: which of this app's own hands the file to.
+///
+/// The engine kinds are not in it, and that is deliberate rather than a gap: a document, a book an
+/// engine converts, an archive an engine lists and a picture an engine develops are drawn by
+/// whatever the engine's window is, and which engine is a question about the machine and the
+/// run rather than about the file (`readers_for`). What is here is what this file is *handed*,
+/// which is what the preview window composes, lays out and shows a wait for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawnBy {
+    /// A reader of this app's own draws it into this app's window.
+    Native(NativeJob),
+    /// The media engine Windows has plays a video in a window of its own.
+    MediaEngine,
+    /// A card is painted rather than drawn: a sound's facts, a listing, a page of text.
+    Card,
+    /// The browser engine's window is the preview — an SVG document, a font specimen, a page
+    /// of HTML (see [`WebPage`]).
+    WebView(WebPage),
+    /// Nothing draws it: no kind claims it, or the kind's gate is off.
+    Nothing,
+}
+
+/// The three things the browser engine draws, which is all `DrawnBy::WebView` can be.
+///
+/// They are one field rather than three booleans because a file is at most one of them, and the
+/// loader asks the question by matching on a kind rather than by consulting three predicates in
+/// an order it had to remember.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WebPage {
+    /// An SVG document, drawn by the engine at whatever box the layout came out with.
+    Svg,
+    /// A font specimen: the two tables are read by this app and the glyphs are the engine's.
+    FontSpecimen,
+    /// A page of HTML, which the engine lays out rather than this side painting.
+    Html,
+}
+
+/// The backdrop a preview of a file is composited over, and the six tray settings that decide it.
+///
+/// The six `current_*_background` functions each took the configuration's lock to read one scalar
+/// and were asked from two places, so the same picture's backdrop was read twice and a kind's
+/// was asked of a predicate that had to remember which three names the engine draws. It is one
+/// exhaustive match over the kind here instead, and the paint asks it of the answer it already
+/// has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backdrop {
+    /// A picture's, which is also the one every kind that is none of the others below keeps.
+    Image,
+    /// A specimen's, which is a page of its own.
+    Font,
+    /// A texture's: a `.dds`'s alpha is as often a mask or an unfilled channel as transparency.
+    Dds,
+    /// A design document's, which is the document's own rather than a photograph's.
+    Design,
+    /// A drawing's: what stands behind the marks is this app's, except where the engine brings
+    /// its own page.
+    Vector,
+    /// A page of HTML's, which is a page the engine brings rather than a transparency.
+    Html,
+}
+
+/// The backdrop a preview of `kind` is composited over, out of the six the tray keeps apart.
+///
+/// It is exhaustive rather than answered with a default, and the reason it is worth a type is
+/// that it was six functions before it: a kind added to this app had to be added to six places
+/// to be drawn over the right thing, and nothing said so. The kinds that share a backdrop do so
+/// because a user turns off one thing — a picture and a picture a converter developed, a drawing
+/// and a drawing the engine drew (see [`nav_category`] for the fold the pin's own buttons walk by).
+pub fn backdrop_of(kind: PreviewType, web: Option<WebPage>) -> Backdrop {
+    // The browser's three first, because they are the three that are asked about by name rather
+    // than by kind: a font file and a page of HTML are both text-or-drawing by kind, and what
+    // stands behind either is the engine's page rather than this app's transparency.
+    match web {
+        Some(WebPage::FontSpecimen) => return Backdrop::Font,
+        Some(WebPage::Html) => return Backdrop::Html,
+        Some(WebPage::Svg) => return Backdrop::Vector,
+        None => {}
+    }
+
+    match kind {
+        PreviewType::Images | PreviewType::Magick => Backdrop::Image,
+        PreviewType::Fonts => Backdrop::Font,
+        PreviewType::Design => Backdrop::Design,
+        PreviewType::Vector => Backdrop::Vector,
+        // The rest are pages and cards rather than bitmaps: what is on screen for a document is
+        // the engine's own window over its own backdrop, and for a text page or a listing or a
+        // sound's card it is painted with a background this side never composites through.
+        PreviewType::Videos
+        | PreviewType::Audio
+        | PreviewType::Ebook
+        | PreviewType::Archives
+        | PreviewType::Peazip
+        | PreviewType::Calibre
+        | PreviewType::Document
+        | PreviewType::Libre
+        | PreviewType::Text => Backdrop::Image,
+    }
+}
+
+/// The backdrop of one of the kinds above, as the configuration has it.
+pub fn backdrop_value(backdrop: Backdrop, config: &AppConfig) -> TransparentBackground {
+    match backdrop {
+        Backdrop::Image => config.image_background,
+        Backdrop::Font => config.font_background,
+        Backdrop::Dds => config.dds_background,
+        Backdrop::Design => config.design_background,
+        Backdrop::Vector => config.vector_background,
+        Backdrop::Html => config.html_background,
+    }
+}
+
+/// Everything one file's route is, asked once and answered once.
+///
+/// It is [`kind_of`] and the four questions beside it, read together so that a caller who wants
+/// the whole of a route pays for the parts it has not been asked for once rather than each of
+/// them finding the file for itself — and so that the twelve answers cannot drift apart, because
+/// there is one place they are written down.
+///
+/// The entry is a parameter rather than something read here, for the same reason `content_type`
+/// takes one: a hover reads a file's directory entry once for a dozen questions and hands it
+/// down, and every one of those questions used to read it for itself.
+pub fn resolve(
+    path: &Path,
+    config: &AppConfig,
+    probe: &crate::formats::content_type::Probe,
+) -> Route {
+    let content = crate::formats::content_type::answer(probe, config);
+    let named = kind_of_with_facts(path, config, probe.facts());
+
+    let page = named
+        .filter(|kind| *kind == PreviewType::Ebook)
+        .map(|_| page_of(path, config, probe.facts()))
+        .unwrap_or(Page::Comic);
+
+    let drawing = drawing_of(path);
+    let drawn_by = drawn_by_of(content, named, page, drawing, path);
+
+    Route {
+        content,
+        named,
+        page,
+        drawing,
+        drawn_by,
+    }
+}
+
+/// Who draws a file, from what it is and what it is called.
+///
+/// It is one match because that is the shape of the question: a file is drawn one way or another,
+/// and a kind this function does not mention has no answer. The five terms are the five ways a
+/// preview reaches a screen — a reader of this app's own, the media engine, a card this side
+/// paints, the browser's own window, or nothing at all — and each is asked of the two answers
+/// above it rather than worked out from the file a second time.
+///
+/// The name is asked for three of them and the bytes for two, which is the same order the loader
+/// asks in: what the file's own bytes say outranks what its name says (a `.docx` whose bytes are
+/// an MP4 is a video), and a file whose bytes said nothing is its name's.
+fn drawn_by_of(
+    content: crate::formats::content_type::Content,
+    named: Option<PreviewType>,
+    page: Page,
+    drawing: Drawing,
+    path: &Path,
+) -> DrawnBy {
+    use crate::formats::content_type::Content;
+
+    // The browser's three are asked of both answers, because a drawing is a document by name and
+    // a specimen is a specimen whatever a file's bytes are: the browser draws an SVG document,
+    // a font file and a page of HTML, and nothing else this app previews is handed to it.
+    let web = |named: Option<PreviewType>, content: Content| match named {
+        Some(PreviewType::Vector) if drawing == Drawing::Svg => Some(WebPage::Svg),
+        Some(PreviewType::Fonts) => Some(WebPage::FontSpecimen),
+        Some(PreviewType::Text) if crate::formats::text_formats::is_html_extension(path) => {
+            Some(WebPage::Html)
+        }
+        // A file the bytes named as one of the three is one of them whatever it is called, and a
+        // file the bytes named as something else is not one of them however it is named.
+        _ => match content {
+            Content::Kind(PreviewType::Vector) if drawing == Drawing::Svg => Some(WebPage::Svg),
+            Content::Kind(PreviewType::Fonts) => Some(WebPage::FontSpecimen),
+            Content::Kind(PreviewType::Text)
+                if crate::formats::text_formats::is_html_extension(path) =>
+            {
+                Some(WebPage::Html)
+            }
+            _ => None,
+        },
+    };
+
+    let web = web(named, content);
+    if let Some(web) = web {
+        return DrawnBy::WebView(web);
+    }
+
+    // And then the kind, where the answer is what this app's own reader is. A video is the one
+    // that is not: it is played by the media engine in a window of its own, which is why a video
+    // preview is a wait rather than a frame (see `video_player`).
+    let kind = match content {
+        Content::Kind(kind) => Some(kind),
+        Content::Foreign => None,
+        Content::Unknown => named,
+    };
+
+    match kind {
+        Some(PreviewType::Videos) => DrawnBy::MediaEngine,
+        // The four that are painted into the box the layout planned rather than scaled within
+        // it: a listing, a page of text, and a sound's card. A font is not one of them — a
+        // specimen is a page of its own size, laid out like a page.
+        Some(PreviewType::Archives)
+        | Some(PreviewType::Peazip)
+        | Some(PreviewType::Text)
+        | Some(PreviewType::Audio) => DrawnBy::Card,
+        Some(PreviewType::Images) => DrawnBy::Native(NativeJob::Picture),
+        Some(PreviewType::Design) => DrawnBy::Native(NativeJob::Project),
+        Some(PreviewType::Vector) => match drawing {
+            Drawing::Svg => DrawnBy::WebView(WebPage::Svg),
+            Drawing::Replayed => DrawnBy::Native(NativeJob::Metafile),
+        },
+        Some(PreviewType::Ebook) => DrawnBy::Native(match page {
+            Page::Pdf => NativeJob::Pdf,
+            Page::Comic => NativeJob::Comic,
+        }),
+        // A specimen is reached here only as itself — a file whose bytes are a font's and whose
+        // name is not, which the browser still draws.
+        Some(PreviewType::Fonts) => DrawnBy::WebView(WebPage::FontSpecimen),
+        // The four kinds an engine draws, and nothing at all: their answer is the engine's own
+        // window, which is not a kind of reader of this app's own, and a file no list claims is
+        // the picture the loader's own chain ends at.
+        Some(PreviewType::Calibre)
+        | Some(PreviewType::Document)
+        | Some(PreviewType::Libre)
+        | Some(PreviewType::Magick)
+        | None => DrawnBy::Nothing,
+    }
+}
+
 /// The kind that claims `path`, or nothing where no list does.
 ///
 /// This is the question a hover asks: the file's own content is not in hand, so the two names
@@ -150,7 +433,8 @@ const CLAIMS: &[Claim] = &[
 ///
 /// A caller that has read the file's own entry already — a hover, which reads it for half a
 /// dozen questions of its own — asks [`kind_of_with_facts`] instead, and pays no second
-/// `fs::metadata` for the same file.
+/// `fs::metadata` for the same file. A caller that wants the whole of a file's route asks
+/// [`resolve`], which is this question and the four beside it read together.
 pub fn kind_of(path: &Path, config: &AppConfig) -> Option<PreviewType> {
     claims(path, config, Asked::File, None)
 }
@@ -1165,5 +1449,85 @@ mod tests {
             "the same answer through the name half of the question, which is the form the \
              content tier asks in"
         );
+    }
+
+    /// One route and the four questions it is made of are the same four answers, for every
+    /// name this app ships.
+    ///
+    /// `resolve` exists so that a caller asks once and reads fields, and what that is worth is
+    /// only true if the record cannot say something the functions it replaced would have
+    /// disagreed with — so this asks both, over the shipped lists rather than over a sample, and
+    /// compares. The kind and the half of each kind are the two that were reached from different
+    /// modules, which is how a book came to be drawn by the reader the comic's or a drawing by
+    /// the browser engine's: the kind was right and the reader was another kind's (see
+    /// [`every_shipped_drawing_name_reaches_one_half_and_the_list_agrees`]).
+    ///
+    /// Who draws it is asserted too, since that is the answer none of the four has on its own:
+    /// a kind this app ships is drawn by something for every name, and the four engine kinds
+    /// are the ones whose answer is `Nothing` — the engine's own window is not a reader of this
+    /// app's, which is what `chain` is for (see [`DrawnBy`]).
+    #[test]
+    fn a_route_says_what_the_four_questions_it_is_made_of_say() {
+        let config = AppConfig::default();
+
+        for (kind, paths) in shipped_lists(&config) {
+            for path in paths {
+                let probe = crate::formats::content_type::Probe::read(&path);
+                let route = resolve(&path, &config, &probe);
+
+                assert_eq!(
+                    route.named,
+                    kind_of(&path, &config),
+                    "`{}` is reached as one kind here and another by the router",
+                    path.display()
+                );
+                assert_eq!(
+                    route.drawing,
+                    drawing_of(&path),
+                    "`{}` is one half of the drawing kind here and another by the name",
+                    path.display()
+                );
+
+                if route.named == Some(PreviewType::Ebook) {
+                    assert_eq!(
+                        route.page,
+                        page_of(&path, &config, probe.facts()),
+                        "`{}` is one half of the book kind here and another by the list",
+                        path.display()
+                    );
+                } else {
+                    assert_eq!(
+                        route.page,
+                        Page::Comic,
+                        "`{}` is not a book, so which half of one it is has no answer to be \
+                         wrong about",
+                        path.display()
+                    );
+                }
+
+                // The four engine kinds and nothing else are drawn by an engine's own window
+                // rather than by a reader of this app's, so they are the four arms that answer
+                // `Nothing` — the only way a claimed kind has no hand to be drawn by.
+                let engine_kind = matches!(
+                    route.named,
+                    Some(PreviewType::Document)
+                        | Some(PreviewType::Libre)
+                        | Some(PreviewType::Calibre)
+                        | Some(PreviewType::Magick)
+                );
+
+                assert_eq!(
+                    route.drawn_by == DrawnBy::Nothing,
+                    engine_kind,
+                    "`{}` is the {kind:?} list's, and its reader is {}",
+                    path.display(),
+                    if engine_kind {
+                        "an engine's own window rather than a reader of this app's"
+                    } else {
+                        "a reader of this app's own"
+                    }
+                );
+            }
+        }
     }
 }
