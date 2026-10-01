@@ -20,10 +20,13 @@
 //! installation of Calibre, looked for where it installs — and beside `config.ini` for a portable
 //! copy — and run as the user runs it. A name is answered only where the engine is there, and a
 //! machine without Calibre shows no preview for one of these names rather than the first page of
-//! text the text preview would make of the bytes, which is what a `.fb2` is under its markup. The
-//! list lives in `config.ini` as `[calibre] extensions`, written from the built-in list on first
-//! run and read back from there, so a user can add a format the engine reads and this app does not
-//! know, or take one out.
+//! text the text preview would make of the bytes, which is what a `.fb2` is under its markup.
+//!
+//! The list of names this answers for is a row of `crate::formats::lists` — the one table every
+//! kind's list is a row of, and the one place a list is written down, the built-in entries and the
+//! older lists this app shipped and then changed included. A user can still add a format the
+//! engine reads and this app does not know, or take one out: the list is theirs, and the file it is
+//! read from is `config.ini`.
 //!
 //! What is listed here is what the engine's own input plugins declare, checked one name at a time,
 //! and what no other list of this app's already claims:
@@ -82,78 +85,15 @@
 //! is the engine's whatever it is called (see `content_type::SIGNATURES`).
 
 use crate::config::config::PreviewType;
-use crate::formats::text_formats;
 use crate::CONFIG;
 use std::path::Path;
 
-/// The extensions written to `config.ini` on first run: the ebook formats the engine reads as
-/// input that no list of this app's own already claims.
+/// The Calibre list itself, which is a row of `crate::formats::lists` like every other.
 ///
-/// The four groups are the module documentation's, in the order they are written there: the Kindle
-/// and Mobipocket family (`azw`, `azw3`, `azw4`, `mobi`, `prc`), the two books whose text is packed
-/// the way no reader here unpacks it (`chm`, `lit`), the open and single-reader formats (`djvu`,
-/// `epub`, `fb2`, `lrf`), and the formats of the dedicated readers and of the engine itself
-/// (`htmlz`, `pml`, `snb`, `tcr`).
-///
-/// Deliberately absent, and each for a reason the module documentation above gives: the names
-/// another list of this app's already reads (`cbz`, `docx`, `odt`, `pdb`, `html`, `rtf`, `txt`,
-/// `pdf`), the comic books, which this app reads itself and needs no engine for (`cbr`, `cbc`), the
-/// name that is a programming language (`rb`), the Sony container's protected spelling (`lrx`), and
-/// the names the engine does not read at all (`tpz`, and the `kfx` a plugin would be needed for).
-pub const DEFAULT_CALIBRE_EXTENSIONS: &str =
-    "azw,azw3,azw4,djvu,epub,fb2,htmlz,lit,lrf,mobi,pml,prc,snb,tcr";
-
-/// The built-in `[calibre]` list as it stood while a compiled help file was this engine's to draw.
-///
-/// `chm` was in this list for one build and is not any more: the page the engine draws for one is
-/// right, and the two to three seconds it takes to draw it is not — a help file is a file a pointer
-/// crosses on its way somewhere else, and the listing the archiver prints for one is there before a
-/// hover has finished settling (see `peazip_formats`, which is where the name is again). A file
-/// holding this list is a file this app wrote, so it is brought up to the list of now rather than
-/// kept as written, and the name goes back where it came from.
-pub const CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE: &str =
-    "azw,azw3,azw4,chm,djvu,epub,fb2,htmlz,lit,lrf,mobi,pml,prc,snb,tcr";
-
-/// The built-in `[calibre]` list as it stood before `chm` and `lit` became the engine's names.
-///
-/// A file holding exactly these entries is this app's own earlier list rather than a user's edit —
-/// nobody has typed it — so it is brought up to the built-in list rather than kept as written, which
-/// is what gives an installation that already exists the name that stayed. Without it that name would
-/// reach a fresh installation only: every `config.ini` already written holds the list as it was, and a
-/// list nobody has touched is indistinguishable from one a user edited unless the older spellings of
-/// it are written down here (see `config::repair_older_lists`).
-///
-/// Both names were the `[peazip]` list's until then, so the same change takes them out of that list.
-/// `chm` has since gone back — see [`CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE`] — so a file can hold
-/// either of the two older spellings of this list, and both are written down for that reason: a list
-/// this app shipped is a list it brings up to now, whichever of them it is.
-pub const CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS: &str =
-    "azw,azw3,azw4,djvu,epub,fb2,htmlz,lrf,mobi,pml,prc,snb,tcr";
-
-/// Whether the configured list claims `path`.
-pub fn matches_calibre_list(path: &Path, extensions: &[String]) -> bool {
-    text_formats::matches_configured_extension(path, extensions)
-}
-
-/// Whether the configured list claims `path`, without asking whether these previews are switched
-/// on. The gate is asked beside it by the hook, the way every other kind's is.
-pub fn is_calibre_file(path: &Path) -> bool {
-    CONFIG
-        .lock()
-        .map(|config| matches_calibre_list(path, &config.calibre_extensions))
-        .unwrap_or(false)
-}
-
-/// Whether a preview may be shown for `path`: the file the configured list claims, and the
-/// `Calibre` gate in the tray's `Preview Types` submenu.
-///
-/// Both halves ask it where a kind can be switched off under a preview that is already on screen:
-/// a hover is not sent for a kind that is off, and the layout places nothing for a file whose kind
-/// is off, which is how a preview of that kind comes down when the switch does. See
-/// `PreviewType::enabled`.
-pub fn is_calibre_preview(path: &Path) -> bool {
-    is_calibre_file(path) && PreviewType::Calibre.enabled()
-}
+/// It is named here as well because the ebook engine's own tests still ask for it by this path,
+/// and until they are moved across the table keeps the name they reach for.
+#[cfg(test)]
+pub use crate::formats::lists::DEFAULT_CALIBRE_EXTENSIONS;
 
 /// Whether the engine is the one that reads this file at all: a name its own list carries, or the
 /// bytes of a book it reads under a name no list holds — a `.mobi` renamed to `.dat`, say.
@@ -174,37 +114,24 @@ pub fn is_engine_ebook(path: &Path) -> bool {
     match content {
         Content::Kind(PreviewType::Calibre) => true,
         Content::Kind(_) | Content::Foreign => false,
-        Content::Unknown => is_calibre_file(path),
+        Content::Unknown => CONFIG
+            .lock()
+            .map(|config| crate::formats::lists::CALIBRE.claims(path, &config))
+            .unwrap_or(false),
     }
 }
 
-/// What a file's content says it is, with the configuration's lock not held across the file.
+/// The file's own bytes, asked in the shape the lock rule wants it: the entry read first with
+/// nothing held, and the lists taken under the guard for the lookup that consults them.
 ///
-/// The one question the four engine tiers all ask, in the shape the rule wants it: the file's
-/// own entry read first without the lock, and the lists taken under it for the lookup that
-/// consults them. Those four are the only places in this layer that may take that lock at all,
-/// because they are the only questions in it with no configuration of their own to be handed
-/// one through — and they were the only places allowed to take it for exactly that long (see
-/// `mod tests::the_configuration_is_locked_only_where_the_engines_ask`, which still holds).
-///
-/// A guard held across a `content_type::of` is a guard every other thread of the app waits on
-/// for as long as the disk takes, and these are asked from the engine's own thread as well as
-/// the preview's.
-pub(crate) fn content_of(path: &Path) -> crate::formats::content_type::Content {
-    use crate::formats::content_type;
-
-    // The file's own entry, read before the lock: it is the one thing this needs from the disk,
-    // and reading it here rather than inside `of` is what keeps the guard off the file.
-    let facts = crate::formats::head::Facts::read(path);
-
-    let Ok(config) = crate::CONFIG.lock() else {
-        return content_type::Content::Unknown;
-    };
-
-    match &facts {
-        Some(facts) => content_type::of_with_facts(path, facts, &config),
-        None => content_type::of(path, &config),
-    }
+/// It is `content_type`'s own function rather than one written out here, because the question is
+/// that module's and it used to live in this file only because this was where a reader of the
+/// ebook list happened to be asked — and four siblings then reached across to it for their own
+/// engine's question, which is the shape a question gets asked in when nothing owns it. What
+/// owns it now is the module whose answer it is, and the four engine tiers ask it as
+/// `content_type::of_reaching_config`.
+fn content_of(path: &Path) -> crate::formats::content_type::Content {
+    crate::formats::content_type::of_reaching_config(path)
 }
 
 #[cfg(test)]
@@ -216,44 +143,22 @@ mod tests {
     /// file are all answered elsewhere, and none of them is here.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         let claimed_elsewhere = |path: &Path| {
-            crate::formats::image_formats::matches_image_list(path, &config.image_extensions)
-                || crate::formats::vector_formats::matches_vector_list(
-                    path,
-                    &config.vector_extensions,
-                )
-                || crate::formats::design_formats::matches_design_list(
-                    path,
-                    &config.design_extensions,
-                )
-                || crate::formats::font_formats::matches_font_list(path, &config.font_extensions)
-                || crate::formats::libre_formats::matches_libre_list(path, &config.libre_extensions)
-                || crate::formats::magick_formats::matches_magick_list(
-                    path,
-                    &config.magick_extensions,
-                )
+            crate::formats::lists::IMAGE.claims(path, &config)
+                || crate::formats::lists::VECTOR.claims(path, &config)
+                || crate::formats::lists::DESIGN.claims(path, &config)
+                || crate::formats::lists::FONT.claims(path, &config)
+                || crate::formats::lists::LIBRE.claims(path, &config)
+                || crate::formats::lists::MAGICK.claims(path, &config)
                 || crate::formats::video_formats::matches_any_video_list(path, &config)
-                || crate::formats::archive_formats::matches_archive_list(
-                    path,
-                    &config.archive_extensions,
-                )
-                || crate::formats::office_formats::matches_office_list(
-                    path,
-                    &config.office_extensions,
-                )
-                || crate::formats::ebook_formats::matches_ebook_list(path, &config.ebook_extensions)
-                || crate::formats::peazip_formats::matches_peazip_list(
-                    path,
-                    &config.peazip_extensions,
-                )
-                || crate::formats::text_formats::matches_text_lists(
-                    path,
-                    &config.text_extensions,
-                    &config.text_names,
-                )
+                || crate::formats::lists::ARCHIVE.claims(path, &config)
+                || crate::formats::lists::OFFICE.claims(path, &config)
+                || crate::formats::lists::EBOOK.claims(path, &config)
+                || crate::formats::lists::PEAZIP.claims(path, &config)
+                || crate::formats::lists::TEXT.claims(path, &config)
+                || crate::formats::lists::NAMES.claims(path, &config)
         };
 
         for name in [
@@ -272,7 +177,7 @@ mod tests {
                 "`{name}` is read by another kind, so this expectation is written the wrong way round"
             );
             assert!(
-                !matches_calibre_list(path, &list),
+                !crate::formats::lists::CALIBRE.claims(path, &config),
                 "`{name}` is read by another kind, so the engine is not asked about it"
             );
         }
@@ -286,7 +191,7 @@ mod tests {
             "a PDF is this app's own to draw"
         );
         assert!(
-            !matches_calibre_list(pdf, &list),
+            !crate::formats::lists::CALIBRE.claims(pdf, &config),
             "so the engine is not asked about one either"
         );
 
@@ -296,21 +201,21 @@ mod tests {
         // the judgement `peazip_formats` carries the other half of.
         let book = Path::new("book.lit");
         assert!(
-            matches_calibre_list(book, &list),
+            crate::formats::lists::CALIBRE.claims(book, &config),
             "a Microsoft Reader book is a page only this engine can draw"
         );
         assert!(
-            !crate::formats::peazip_formats::matches_peazip_list(book, &config.peazip_extensions),
+            !crate::formats::lists::PEAZIP.claims(book, &config),
             "and it is not the listing engine's any more: one name, one answer"
         );
 
         let help = Path::new("help.chm");
         assert!(
-            crate::formats::peazip_formats::matches_peazip_list(help, &config.peazip_extensions),
+            crate::formats::lists::PEAZIP.claims(help, &config),
             "a compiled help file is the listing engine's, which answers immediately"
         );
         assert!(
-            !matches_calibre_list(help, &list),
+            !crate::formats::lists::CALIBRE.claims(help, &config),
             "and it is not this engine's: a help file is not a page to wait two seconds for"
         );
 
@@ -320,11 +225,11 @@ mod tests {
         // one as well.
         let palm = Path::new("book.pdb");
         assert!(
-            crate::formats::libre_formats::matches_libre_list(palm, &config.libre_extensions),
+            crate::formats::lists::LIBRE.claims(palm, &config),
             "a Palm ebook is the render engine's, by the name that lists it"
         );
         assert!(
-            !matches_calibre_list(palm, &list),
+            !crate::formats::lists::CALIBRE.claims(palm, &config),
             "and not this engine's, so the two cannot both be asked about one file"
         );
     }
@@ -334,7 +239,7 @@ mod tests {
     /// of the dedicated readers.
     #[test]
     fn holds_the_ebooks_no_reader_here_opens() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS);
+        let config = crate::config::config::AppConfig::default();
 
         for name in [
             "book.azw",
@@ -352,7 +257,7 @@ mod tests {
             "book.tcr",
         ] {
             assert!(
-                matches_calibre_list(Path::new(name), &list),
+                crate::formats::lists::CALIBRE.claims(Path::new(name), &config),
                 "`{name}` is one of the engine's ebooks"
             );
         }
@@ -362,7 +267,8 @@ mod tests {
     /// other list of this app's answers a hand-edited entry.
     #[test]
     fn reads_a_list_of_bare_extensions() {
-        let extensions = text_formats::sanitize_extension_list(" .MOBI , epub,,book*.azw ,epub,tcr");
+        let extensions =
+            crate::formats::lists::sanitize_extension_list(" .MOBI , epub,,book*.azw ,epub,tcr");
 
         assert_eq!(extensions, vec!["mobi", "epub", "tcr"]);
     }
@@ -374,7 +280,9 @@ mod tests {
     #[test]
     fn asks_the_engine_about_a_file_by_its_bytes_before_its_name() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.calibre_extensions = text_formats::sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS);
+            config.calibre_extensions = crate::formats::lists::sanitize_extension_list(
+                crate::formats::lists::DEFAULT_CALIBRE_EXTENSIONS,
+            );
         }
 
         let folder = std::env::temp_dir().join("rust-hover-preview-calibre-engine-ebook");
