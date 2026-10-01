@@ -375,19 +375,45 @@ impl PinState {
     /// `Ending(_)` has nowhere to put it. The command queue goes the same way — it is a field
     /// of the pin, so a walk queued before a kill cannot be answered after it, because there
     /// is nothing left to answer it into.
-    fn end(&mut self, reason: Reason) -> Option<PinKeyboard> {
+    ///
+    /// Whether there was a pin to take down goes back beside the claim, because the caller owes
+    /// the window different work in the two cases and the claim alone cannot tell them apart (see
+    /// [`PinEnded`]).
+    fn end(&mut self, reason: Reason) -> PinEnded {
         let PinState::Up(mut up) = std::mem::replace(self, PinState::Ending(reason)) else {
             // A pin that is not up is already over, and the end it is being given is recorded
             // rather than refused: two roads racing on the same pin is normal (the watchdog and
             // the loop's own tick both watch for a hung one), and the second one must not be the
             // one that leaves the keyboard claimed.
             *self = PinState::Ending(reason);
-            return None;
+            return PinEnded {
+                was_up: false,
+                keyboard: None,
+            };
         };
 
         up.commands.clear();
-        up.keyboard
+        PinEnded {
+            was_up: true,
+            keyboard: up.keyboard,
+        }
     }
+}
+
+/// What a road out of a pin took away, in the two shapes the window work has to tell apart.
+///
+/// Two fields rather than the one optional this replaced, because *a pin that held no keyboard* and
+/// *no pin was up* are different answers and the road does different work for each. The first owes
+/// the window its `WS_EX_NOACTIVATE` back — the style is only ever taken off in
+/// [`hand_keyboard_back`], which runs for a claim and for nothing else — and the second owes it
+/// nothing at all, because a road that finds the pin already over is a road that was told nothing
+/// to begin with: the road that ended it has already ended it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct PinEnded {
+    /// Whether a pin was up when this was called, and this is the call that took it down.
+    was_up: bool,
+    /// The keyboard that pin was holding, if it was holding one.
+    keyboard: Option<PinKeyboard>,
 }
 
 /// Give the pin the keyboard, if the keyboard arrived in it: the window that was in front, and
@@ -496,17 +522,27 @@ pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
 
     // The state, and everything the pin was holding, in one move under one lock. This is the
     // list the watchdog's hand-written copy of had four items missing from.
-    let keyboard = PIN_STATE
+    let ended = PIN_STATE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .end(reason);
 
-    // The keyboard goes back to the window it came from, outside the lock: `SetFocus` and
-    // `SetForegroundWindow` are messages to this app's own window and to the one behind it,
-    // and both arrive back here.
-    if let Some(keyboard) = keyboard {
-        hand_keyboard_back(&keyboard, hwnd, window);
+    if ended.was_up {
+        match ended.keyboard {
+            // The keyboard goes back to the window it came from, outside the lock: `SetFocus` and
+            // `SetForegroundWindow` are messages to this app's own window and to the one behind
+            // it, and both arrive back here.
+            Some(keyboard) => hand_keyboard_back(&keyboard, hwnd, window),
+            // And a pin that was holding none still owes the window its style back. `SetFocus` is
+            // not asked for first here because there is no focus of ours to give up: the claim is
+            // written on the answer Windows gave rather than on the asking (see `take_keyboard`),
+            // so a pin holding none is not the window the keyboard is in.
+            None => make_the_window_unfocusable_again(hwnd, window),
+        }
     }
+    // A road that finds the pin already over is told nothing about the window: the road that ended
+    // it has already ended it, style and all, and the second road is a race the watchdog and the
+    // loop's own tick are both entitled to lose (see `two_roads_racing_on_one_pin_end_it_once`).
 
     PIN_UP.store(false, Ordering::Release);
     // A pin that is over is a pointer that is on something new: the file the pin was of is not
@@ -567,6 +603,10 @@ pub(super) fn give_the_keyboard_back(window: &dyn PinWindow) {
 /// non-activating while it still holds the focus holds it in a state Windows does not expect.
 /// The window behind is one that may since have gone, and the call is refused by Windows in
 /// that case rather than acted on.
+///
+/// This is the only place the style goes back on, which used to leave the pin nobody pressed
+/// focusable after it came down — see [`make_the_window_unfocusable_again`] for what that costs
+/// and why the road out of a claim-less pin asks for it of itself.
 fn hand_keyboard_back(keyboard: &PinKeyboard, hwnd: isize, window: &dyn PinWindow) {
     if hwnd == 0 {
         return;
@@ -578,6 +618,35 @@ fn hand_keyboard_back(keyboard: &PinKeyboard, hwnd: isize, window: &dyn PinWindo
     if keyboard.behind != 0 {
         window.set_foreground(keyboard.behind);
     }
+}
+
+/// Put `WS_EX_NOACTIVATE` back on a window a pin took it off, for a pin that held no keyboard.
+///
+/// The style is only ever taken off in [`hand_keyboard_back`], which runs for a claim and for
+/// nothing else, so a road out of a pin that was holding none went down leaving a window of this
+/// app's own focusable while it was showing nothing. It is a `WS_EX_TOOLWINDOW` popup with
+/// `WS_EX_TOPMOST` and no owner, so an alt-tab, a `SetForegroundWindow` asked for from somewhere
+/// else, or a click landing on the area of a window that is hidden all move the caret out of
+/// whatever the user is typing in — which is the one thing the style is on that window for (see
+/// `pin_set_focusable`).
+///
+/// Claim-less rather than *pin-gone*, and the collapse is the difference. A pin that is put away
+/// to its bubble still holds its claim until [`give_the_keyboard_back`] takes it, and that road
+/// already goes through [`hand_keyboard_back`] and so already puts the style back: the pinned
+/// window is hidden, and the bubble standing in for it is a window of its own with the style
+/// already on it. So "no claim is held" is the condition that means *this window is not one the
+/// user is in* on both roads, where "no pin is up" is not a condition at all — it is true of a
+/// collapsed pin, which is a pin.
+///
+/// No focus is given up first, and there is none to give up: a claim is written on what Windows
+/// answered rather than on what was asked for, so a pin holding no claim is a pin the keyboard
+/// never arrived in (see `take_keyboard`).
+fn make_the_window_unfocusable_again(hwnd: isize, window: &dyn PinWindow) {
+    if hwnd == 0 {
+        return;
+    }
+
+    window.set_focusable(hwnd, false);
 }
 
 /// What a road out of a pin is allowed to ask of a window.
@@ -907,6 +976,11 @@ mod tests {
     /// took it, so a watchdog asking for one releases nothing — or, if some other window on
     /// that thread is holding one, releases that window's press and hands it to a pin the
     /// hand is not aimed at. That is why the watchdog's road asks by message instead.
+    ///
+    /// The style in each list is the window being made unfocusable again on a pin that was holding
+    /// no keyboard at all (see `make_the_window_unfocusable_again`); it is on the list because it
+    /// is owed on every one of these roads, and on the loop's it comes after the release for the
+    /// same reason the state does — the release is a message back into this thread.
     #[test]
     fn the_pointer_goes_before_the_state_and_only_where_this_thread_holds_it() {
         let _one = ONE_AT_A_TIME.lock();
@@ -919,7 +993,11 @@ mod tests {
         );
         assert_eq!(
             loop_window.calls(),
-            vec![PinWindowCall::ReleaseCapture, PinWindowCall::HidePinBubble],
+            vec![
+                PinWindowCall::ReleaseCapture,
+                PinWindowCall::SetFocusable { focusable: false },
+                PinWindowCall::HidePinBubble,
+            ],
             "the release is taken while this thread can still end the drag it belongs to"
         );
 
@@ -931,7 +1009,10 @@ mod tests {
         );
         assert_eq!(
             watchdog_window.calls(),
-            vec![PinWindowCall::Post(WM_PIN_RELEASE_POINTER)],
+            vec![
+                PinWindowCall::SetFocusable { focusable: false },
+                PinWindowCall::Post(WM_PIN_RELEASE_POINTER),
+            ],
             "a watchdog has no capture of its own to release, and cannot wait on the loop's"
         );
     }
@@ -1307,7 +1388,9 @@ mod tests {
     ///
     /// A pin nobody pressed holds no keyboard to give back, so a teardown of one does not go
     /// near the focus at all — which is the item the old `pin_drop_focus` asked `PIN_FOCUSED`
-    /// about before doing anything.
+    /// about before doing anything. The style is the one thing it still owes, because a window
+    /// left focusable is a window an alt-tab can take the caret with (see
+    /// `make_the_window_unfocusable_again`).
     #[test]
     fn a_pin_with_nothing_on_the_keyboard_owes_nobody_a_handover() {
         let _one = ONE_AT_A_TIME.lock();
@@ -1318,9 +1401,79 @@ mod tests {
 
         assert_eq!(
             window.calls(),
-            vec![PinWindowCall::ReleaseCapture, PinWindowCall::HidePinBubble],
-            "nothing is asked of a window this pin never took anything from"
+            vec![
+                PinWindowCall::ReleaseCapture,
+                PinWindowCall::SetFocusable { focusable: false },
+                PinWindowCall::HidePinBubble,
+            ],
+            "the focus is not touched, because there was never a claim on it to give up — but the \
+             style goes back, because a pin the hand never pressed never took it off and must not \
+             leave it off"
         );
+    }
+
+    /// Every road out of a pin that was holding no keyboard still puts the style back, in the place
+    /// on that road where the handover would have gone.
+    ///
+    /// The bug this pins down is a pin that came down focusable. `hand_keyboard_back` is the only
+    /// place the style goes back and it runs only for a claim, so every pin the hand never pressed
+    /// — and, since the claim is written on what Windows answered rather than on what was asked,
+    /// every pin whose press Windows refused — went down leaving a window of this app's own
+    /// activatable while it was showing nothing. On a `WS_EX_TOOLWINDOW` popup with
+    /// `WS_EX_TOPMOST` and no owner that is an alt-tab, a `SetForegroundWindow` asked for from
+    /// elsewhere, or a click landing on the hidden window's area, each moving the caret out of
+    /// whatever the user is typing in.
+    ///
+    /// Every reason and not one of them, and the whole recorded list rather than a search of it,
+    /// because where on each road the style belongs is the part that differs between them and the
+    /// part a hand-written copy of this list gets wrong first. On the loop's road it goes after the
+    /// pointer release and before the bubble comes down; on the watchdog's there is no pointer to
+    /// release, so it goes first and the request for the loop's comes after — the same place the
+    /// handover itself would have gone on each.
+    #[test]
+    fn a_road_out_of_a_pin_holding_no_keyboard_still_puts_the_style_back() {
+        let _one = ONE_AT_A_TIME.lock();
+
+        for reason in EVERY_REASON {
+            // A pin the hand never pressed, which is the ordinary one: nothing is claimed, so the
+            // handover `hand_keyboard_back` performs never runs at all.
+            install(a_pin());
+            assert!(!pin_holds_a_keyboard(), "{reason:?}: a pin nobody pressed");
+
+            let mut expected = Vec::new();
+            if reason.exit() == PinExit::Loop {
+                expected.push(PinWindowCall::ReleaseCapture);
+            }
+            expected.push(PinWindowCall::SetFocusable { focusable: false });
+            if reason.exit() == PinExit::Loop {
+                expected.push(PinWindowCall::HidePinBubble);
+            } else {
+                expected.push(PinWindowCall::Post(WM_PIN_RELEASE_POINTER));
+            }
+
+            let window = RecordedPinWindow::new(0x1000);
+            end_pin(reason, &window);
+            assert_eq!(
+                window.calls(),
+                expected,
+                "{reason:?}: the style goes back where the handover would have gone, and nothing \
+                 else is asked of a pin that took nothing"
+            );
+
+            // And the other road into the same state: a press Windows refused writes no claim
+            // (see `take_keyboard`), so this pin came down through the branch above too.
+            install(a_pin());
+            take_keyboard(0x2000, false);
+            assert!(!pin_holds_a_keyboard(), "{reason:?}: a refused press");
+
+            let refused = RecordedPinWindow::new(0x1000);
+            end_pin(reason, &refused);
+            assert_eq!(
+                refused.calls(),
+                expected,
+                "{reason:?}: and a press Windows refused is the same road as never pressing at all"
+            );
+        }
     }
 
     /// The note that the keyboard was taken is dropped with the pin, or with the focus.
@@ -1354,6 +1507,11 @@ mod tests {
     /// whatever the user had moved on to. The arrival is the caller's to report and this module's
     /// to insist on: the claim is written where the keyboard demonstrably is and nowhere else, and
     /// a caller that has not asked Windows cannot write one.
+    ///
+    /// It is also the road that made the style worth restoring here: the press took
+    /// `WS_EX_NOACTIVATE` off the window before it asked for the foreground, so a refused press
+    /// left a pin that was focusable and holding nothing, and its take-down had nothing to restore
+    /// it from (see `make_the_window_unfocusable_again`).
     #[test]
     fn a_press_the_windows_refused_leaves_no_claim_to_hand_over() {
         let _one = ONE_AT_A_TIME.lock();
@@ -1370,9 +1528,13 @@ mod tests {
         end_pin(Reason::Closed, &window);
         assert_eq!(
             window.calls(),
-            vec![PinWindowCall::ReleaseCapture, PinWindowCall::HidePinBubble],
-            "and a pin with no claim asks the window the user left for nothing, rather than \
-             bringing it back to the front"
+            vec![
+                PinWindowCall::ReleaseCapture,
+                PinWindowCall::SetFocusable { focusable: false },
+                PinWindowCall::HidePinBubble,
+            ],
+            "and a pin with no claim asks the window the user left for nothing — not the \
+             foreground, and not the focus — while still putting the style it took off back"
         );
     }
 
