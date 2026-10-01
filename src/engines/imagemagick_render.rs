@@ -1068,6 +1068,9 @@ mod tests {
         let _stand_in = crate::app::engine_processes::STAND_IN
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _in_flight = crate::engines::supervisor::IN_FLIGHT_TAKEN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut engine = std::process::Command::new("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
