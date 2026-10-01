@@ -68,32 +68,6 @@ ivr,kux,m1v,m2p,m2t,m2ts,m2v,m4v,mj2,mjpeg,mjpg,mk3d,mkv,moflex,mov,mp4,mpe,mpeg
 mvi,mxf,mxg,nsv,nut,obu,ogm,ogv,pmp,psp,qt,rcv,rm,rmvb,roq,rsd,smk,str,swf,thp,tod,tp,tr,ts,ty,\
 ty+,usm,vc1,vc2,viv,vob,vro,vvc,vw,webm,wmv,wtv,xl,xmv,y4m,yop";
 
-/// Read one entry out of the configured list into the lowercase form the lookups
-/// use.
-///
-/// Every name in this list is a bare extension — unlike the archive list, which has
-/// to carry the dotted `tar.gz` — so anything that is not one is dropped rather than
-/// matched against.
-pub fn sanitize_video_extensions(list: &str) -> Vec<String> {
-    let mut extensions: Vec<String> = Vec::new();
-
-    for entry in list.split(',') {
-        let trimmed = entry.trim().trim_start_matches('.').to_lowercase();
-        let is_extension = !trimmed.is_empty()
-            && !trimmed.starts_with('.')
-            && !trimmed.ends_with('.')
-            && trimmed
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_'));
-
-        if is_extension && !extensions.contains(&trimmed) {
-            extensions.push(trimmed);
-        }
-    }
-
-    extensions
-}
-
 /// Whether one of the two video lists claims `path` as a video.
 ///
 /// `.ts` and `.mts` are claimed by the text lists too, so a file of either name is
@@ -214,9 +188,9 @@ mod tests {
     /// was not already asked about.
     #[test]
     fn the_two_video_lists_partition_the_one_list_they_were() {
-        let before = sanitize_video_extensions(VIDEO_EXTENSIONS_BEFORE_THE_SPLIT);
-        let native = sanitize_video_extensions(DEFAULT_VIDEO_EXTENSIONS);
-        let ffmpeg = sanitize_video_extensions(DEFAULT_FFMPEG_EXTENSIONS);
+        let before = crate::formats::text_formats::sanitize_extension_list(VIDEO_EXTENSIONS_BEFORE_THE_SPLIT);
+        let native = crate::formats::text_formats::sanitize_extension_list(DEFAULT_VIDEO_EXTENSIONS);
+        let ffmpeg = crate::formats::text_formats::sanitize_extension_list(DEFAULT_FFMPEG_EXTENSIONS);
 
         for name in &native {
             assert!(!ffmpeg.contains(name), "{name} is in both video lists");
@@ -246,7 +220,7 @@ mod tests {
             DEFAULT_FFMPEG_EXTENSIONS,
             VIDEO_EXTENSIONS_BEFORE_THE_SPLIT,
         ] {
-            let entries = sanitize_video_extensions(list);
+            let entries = crate::formats::text_formats::sanitize_extension_list(list);
             let mut sorted = entries.clone();
             sorted.sort();
 

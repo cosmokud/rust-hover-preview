@@ -46,32 +46,6 @@ pub fn matches_font_list(path: &Path, extensions: &[String]) -> bool {
     text_formats::matches_configured_extension(path, extensions)
 }
 
-/// Read one entry out of the configured list into the lowercase form the lookups
-/// use.
-///
-/// Every name in the font list is a bare extension — unlike the archive list, which
-/// has to carry the dotted `tar.gz` — so anything that is not one is dropped rather
-/// than matched against.
-pub fn sanitize_font_extensions(list: &str) -> Vec<String> {
-    let mut extensions: Vec<String> = Vec::new();
-
-    for entry in list.split(',') {
-        let trimmed = entry.trim().trim_start_matches('.').to_lowercase();
-        let is_extension = !trimmed.is_empty()
-            && !trimmed.starts_with('.')
-            && !trimmed.ends_with('.')
-            && trimmed
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_'));
-
-        if is_extension && !extensions.contains(&trimmed) {
-            extensions.push(trimmed);
-        }
-    }
-
-    extensions
-}
-
 /// Whether the configured list claims `path`, without asking whether font previews
 /// are switched on.
 pub fn is_font_file(path: &Path) -> bool {
@@ -94,7 +68,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn list() -> Vec<String> {
-        sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS)
+        crate::formats::text_formats::sanitize_extension_list(DEFAULT_FONT_EXTENSIONS)
     }
 
     #[test]
@@ -106,7 +80,7 @@ mod tests {
         assert!(extensions.contains(&"woff".to_string()));
         assert!(extensions.contains(&"woff2".to_string()));
 
-        let typed = sanitize_font_extensions(".TTF, woff2 ,nonsense*,,ttf,.Font-Regular.otf");
+        let typed = crate::formats::text_formats::sanitize_extension_list(".TTF, woff2 ,nonsense*,,ttf,.Font-Regular.otf");
         assert_eq!(typed, vec!["ttf", "woff2"]);
     }
 

@@ -58,33 +58,6 @@ pub fn matches_archive_list(path: &Path, extensions: &[String]) -> bool {
         .any(|extension| extension.contains('.') && name.ends_with(&format!(".{extension}")))
 }
 
-/// Read one entry out of the configured list into the lowercase form the lookups
-/// use.
-///
-/// The text lists drop an entry that is not a bare extension; here a dot is part
-/// of the vocabulary, because the entry that names a tarball has to be `tar.gz` —
-/// `gz` alone is a compressed file, not an archive — and is matched against the
-/// end of the name rather than against the last extension.
-pub fn sanitize_archive_extensions(list: &str) -> Vec<String> {
-    let mut extensions: Vec<String> = Vec::new();
-
-    for entry in list.split(',') {
-        let trimmed = entry.trim().trim_start_matches('.').to_lowercase();
-        let is_extension = !trimmed.is_empty()
-            && !trimmed.starts_with('.')
-            && !trimmed.ends_with('.')
-            && trimmed
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-' | '_' | '#'));
-
-        if is_extension && !extensions.contains(&trimmed) {
-            extensions.push(trimmed);
-        }
-    }
-
-    extensions
-}
-
 /// Whether the configured list claims `path`, without asking whether archive
 /// previews are switched on.
 pub fn is_archive_file(path: &Path) -> bool {
@@ -106,7 +79,7 @@ mod tests {
     use super::*;
 
     fn list() -> Vec<String> {
-        sanitize_archive_extensions(DEFAULT_ARCHIVE_EXTENSIONS)
+        crate::formats::text_formats::sanitize_archive_extension_list(DEFAULT_ARCHIVE_EXTENSIONS)
     }
 
     #[test]
@@ -116,7 +89,7 @@ mod tests {
         assert!(extensions.contains(&"zip".to_string()));
         // A leading dot is what a user types; anything that is not an extension
         // is dropped rather than matched against.
-        let typed = sanitize_archive_extensions(".ZIP, tar.gz ,nonsense*,,docx");
+        let typed = crate::formats::text_formats::sanitize_archive_extension_list(".ZIP, tar.gz ,nonsense*,,docx");
         assert_eq!(typed, vec!["zip", "tar.gz", "docx"]);
     }
 

@@ -96,7 +96,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Threading::{
-    CreateEventW, OpenProcess, QueryFullProcessImageNameW, SetEvent, TerminateProcess,
+    CreateEventW, OpenProcess, QueryFullProcessImageNameW, ResetEvent, SetEvent, TerminateProcess,
     WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
@@ -188,6 +188,14 @@ const STATIC_WAIT_MS: u64 = 150;
 /// pointer's pace rather than at this pace — this stays short so caption
 /// buttons still feel instant while waking 3x less often than the frame loop.
 const STATIC_PIN_WAIT_MS: u64 = 50;
+
+/// How often the page an engine is drawing is looked for on disk.
+///
+/// The look is a content probe, a folder index and two cache keys, and it is worth doing
+/// several times less often than the loop turns while a render takes seconds. Nothing is
+/// gained by asking sooner: a page that has not landed has not landed however often it is
+/// looked for, and the spinner turning a little longer is the whole of the cost.
+const ENGINE_PAGE_POLL: Duration = Duration::from_millis(150);
 /// How often the pointer hold region is republished while a static preview is
 /// up. The region only changes on show/move/resize/swap/hide, so a slow
 /// heartbeat plus an immediate publish on those transitions is the whole of
@@ -247,6 +255,43 @@ const PIN_MIN_MEDIA_PIXELS: f32 = 48.0;
 const PIN_TRANSPORT_REPAINT_MS: u64 = 250;
 
 // Message passing for thread communication
+/// The event the preview channel's sends are announced on, so that a thread waiting for one
+/// sleeps on the channel as well as on the message queue.
+///
+/// The wait the loop does was a wait on the queue alone, polled in eight-millisecond slices
+/// because nothing would otherwise wake it: a thread with nothing on screen spent the whole of
+/// `IDLE_WAIT_MS` waking to ask an empty channel whether it had anything, several times a
+/// second, for the whole life of the process. Signalling this on the send is what lets the
+/// wait block on the channel too — so a hover is answered when it is sent rather than at the
+/// end of a slice, and an idle loop costs one kernel wait per tick instead of one per slice.
+fn preview_channel_event() -> HANDLE {
+    // Kept as the number a handle is rather than as the handle, for the reason
+    // `NOACTIVATE_WAKE` is: a handle is a raw pointer, and this is shared across threads.
+    static EVENT: Lazy<isize> = Lazy::new(|| {
+        // Safety: an event with no name and no security descriptor, manual-reset, which is
+        // what a wait that may be woken several times before it is read wants.
+        unsafe { CreateEventW(None, true, false, None) }
+            .map(|handle| handle.0 as isize)
+            .unwrap_or_default()
+    });
+
+    HANDLE(*EVENT as *mut core::ffi::c_void)
+}
+
+/// Send a message to the preview loop and wake it, so that a wait in progress ends at once.
+fn send_preview(message: PreviewMessage) {
+    if let Ok(sender) = PREVIEW_SENDER.lock() {
+        if let Some(tx) = sender.as_ref() {
+            let _ = tx.send(message);
+            // Signalled after the send rather than before, so an armed wait can only be woken
+            // by a message that is already in the channel to be read.
+            unsafe {
+                let _ = SetEvent(preview_channel_event());
+            }
+        }
+    }
+}
+
 pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
     Lazy::new(|| Mutex::new(None));
 
@@ -344,19 +389,18 @@ fn spawn_pin_watchdog() {
                 continue;
             }
 
-            // The state first, and the same state a close button takes: a hook behind the
-            // pin stops holding back its hovers the moment `PIN_ACTIVE` is false, and a
-            // loop that comes back to a cleared pin is a loop with nothing to clean up.
-            // The windows follow on a thread of their own.
-            if let Ok(mut pinned) = PINNED.lock() {
-                *pinned = None;
-            }
-            PIN_ACTIVE.store(false, Ordering::Release);
-            PIN_COLLAPSED.store(false, Ordering::Release);
-            PIN_RESUMED.store(true, Ordering::Release);
-            if let Ok(mut jobs) = PIN_JOBS.0.lock() {
-                *jobs = None;
-            }
+            // The state goes through the one teardown there is, rather than through a second
+            // hand-written copy of it. The copy this replaces cleared the pin and two of its
+            // flags and nothing else: it kept the keyboard the pin had claimed, kept the
+            // window focusable, and left the walk a caption button had queued to be answered
+            // into a pin that no longer existed. A teardown that is written twice is a teardown
+            // that is half of each, and this is the half that was missing.
+            //
+            // What is *not* done here is the window work, because the loop is the thread that
+            // owns the windows and this one is the thread that has given up on it. The loop
+            // notices the cleared pin on its next turn and takes the windows down itself; a
+            // loop that never comes back cannot, which is what the messages below are for.
+            end_pin_state_guards();
 
             // And the pointer this thread cannot let go of: a press on the pin took it for the
             // preview thread, and only that thread can give it back, so the pin being cleared
@@ -1294,7 +1338,14 @@ struct StreamedFrames {
 
 /// Media data that can be either static or animated
 struct MediaData {
-    frames: Vec<ImageFrame>,
+    /// Frames behind an `Arc` so a frame handed over by the image cache is the same
+    /// allocation rather than a copy of it — a still is decoded once and then shared by
+    /// every hover that shows it again (see `ImageCacheEntry`).
+    ///
+    /// The two places that write into a frame in place ask for it mutably, which copies
+    /// only if something else is still holding it: a loading frame and a native video
+    /// frame, neither of which is a frame the cache has.
+    frames: Vec<Arc<ImageFrame>>,
     /// Shared frame queue for streaming decode (animated formats append here)
     shared_frames: Option<Arc<Mutex<StreamedFrames>>>,
     /// Signal from the background thread that all frames have been decoded
@@ -1387,7 +1438,7 @@ struct VideoGeometry {
 impl MediaData {
     /// The frame on screen, which a document the engine draws does not have.
     fn current_frame(&self) -> Option<&ImageFrame> {
-        self.frames.get(self.current_frame)
+        self.frames.get(self.current_frame).map(AsRef::as_ref)
     }
 
     fn current_pixels(&self) -> &[u8] {
@@ -1426,7 +1477,7 @@ impl MediaData {
             return false;
         };
 
-        self.frames[0] = ImageFrame::new(pixels, width, height, 0);
+        self.frames[0] = Arc::new(ImageFrame::new(pixels, width, height, 0));
         true
     }
 
@@ -1455,7 +1506,7 @@ impl MediaData {
             return false;
         };
 
-        self.frames[0] = ImageFrame::new(pixels, width, height, 0);
+        self.frames[0] = Arc::new(ImageFrame::new(pixels, width, height, 0));
         true
     }
 
@@ -1500,7 +1551,10 @@ impl MediaData {
             let result = shared.lock();
             if let Ok(mut streamed) = result {
                 if !streamed.queue.is_empty() {
-                    self.frames.extend(streamed.queue.drain(..));
+                    // A streamed frame is made by the decoder thread and handed over once,
+                    // so wrapping it here is the only allocation it ever needs.
+                    self.frames
+                        .extend(streamed.queue.drain(..).map(Arc::new));
                 }
             }
         }
@@ -1669,7 +1723,8 @@ impl MediaData {
                 if let Some(start) = self.loading_start {
                     let elapsed_secs = start.elapsed().as_secs_f32();
                     let angle = elapsed_secs * 2.0 * std::f32::consts::PI * 1.2;
-                    self.frames[0].set_pixels(render_loading_frame(width, height, angle));
+                    Arc::make_mut(&mut self.frames[0])
+                        .set_pixels(render_loading_frame(width, height, angle));
                 }
             }
             self.last_frame_time = Instant::now();
@@ -1693,7 +1748,10 @@ impl MediaData {
     /// from allocating: the buffer is written into rather than replaced, and the frames
     /// that arrive between repaints are simply the ones that are never seen.
     fn take_native_video_frame(&mut self) -> bool {
-        let Some(frame) = self.frames.first_mut() else {
+        // Asked for mutably rather than reached into through the `Arc`: a native video frame
+        // is written over and over, so this is the one place the frame is genuinely owned
+        // alone and the borrow is not a copy.
+        let Some(frame) = self.frames.first_mut().map(Arc::make_mut) else {
             return false;
         };
 
@@ -1764,11 +1822,7 @@ pub fn update_pinned_preview(path: &Path) {
         return;
     }
 
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::PinUpdate(path.to_path_buf()));
-        }
-    }
+    send_preview(PreviewMessage::PinUpdate(path.to_path_buf()));
 }
 
 /// Show a preview of the file the pointer hovers, opened from the cursor it was hovered
@@ -1797,11 +1851,7 @@ pub fn show_preview(path: &Path, x: i32, y: i32, avoid: Option<((i32, i32, i32, 
         }
     });
 
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::Show(path.to_path_buf(), x, y, avoid));
-        }
-    }
+    send_preview(PreviewMessage::Show(path.to_path_buf(), x, y, avoid));
 }
 
 pub fn show_preview_keyboard(
@@ -1824,19 +1874,15 @@ pub fn show_preview_keyboard(
     // keyboard asked for (see `HOVER_POINTER_BOX`).
     clear_pointer_item_box();
 
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::ShowKeyboard(
-                path.to_path_buf(),
-                item_left,
-                item_top,
-                item_right,
-                item_bottom,
-                avoid,
-                draws_columns,
-            ));
-        }
-    }
+    send_preview(PreviewMessage::ShowKeyboard(
+        path.to_path_buf(),
+        item_left,
+        item_top,
+        item_right,
+        item_bottom,
+        avoid,
+        draws_columns,
+    ));
 }
 
 pub fn hide_preview() {
@@ -1894,19 +1940,11 @@ pub fn hide_preview() {
         kill_stray_video_process();
     }
 
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::Hide);
-        }
-    }
+    send_preview(PreviewMessage::Hide);
 }
 
 pub fn refresh_preview() {
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::Refresh);
-        }
-    }
+    send_preview(PreviewMessage::Refresh);
 }
 
 /// The tray's `Render HTML` row has been switched off: a page the engine is drawing for a
@@ -1927,50 +1965,34 @@ pub fn refresh_render_html() {
 /// only the preview thread can answer — the window and the media under it are its own
 /// — so the answer is left to it.
 pub fn refresh_pin() {
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::PinChanged);
-        }
-    }
+    send_preview(PreviewMessage::PinChanged);
 }
 
 /// A preview type was switched on or off in the tray, which is a question only
 /// the preview thread can answer: whether what is on screen is of that kind.
 pub fn refresh_preview_types() {
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::RefreshTypes);
-        }
-    }
+    send_preview(PreviewMessage::RefreshTypes);
 }
 
 /// The render tier is done with a document. Sent from the engine thread through
 /// the same channel every other message arrives on, so the preview loop learns
 /// about a page the moment it exists.
 pub fn notify_office_render(path: &Path, generation: u64, ok: bool) {
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::OfficeRenderReady {
-                path: path.to_path_buf(),
-                generation,
-                ok,
-            });
-        }
-    }
+    send_preview(PreviewMessage::OfficeRenderReady {
+        path: path.to_path_buf(),
+        generation,
+        ok,
+    });
 }
 
 /// A video's probe is done. Sent from the thread the probe ran on, through the same
 /// channel every other message arrives on, so the hover that was waiting for it is
 /// replayed the moment there is an answer to place it with.
 fn notify_video_probed(path: &Path, generation: u64) {
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::VideoProbed {
-                path: path.to_path_buf(),
-                generation,
-            });
-        }
-    }
+    send_preview(PreviewMessage::VideoProbed {
+        path: path.to_path_buf(),
+        generation,
+    });
 }
 
 /// The ImageMagick engine is done with a file. Sent from the engine's own thread, through the
@@ -1978,15 +2000,11 @@ fn notify_video_probed(path: &Path, generation: u64) {
 /// moment there is a picture to place it with — or taken down, where the answer is that the
 /// file is not one the engine can read.
 pub fn notify_magick_ready(path: &Path, generation: u64, ok: bool) {
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::MagickReady {
-                path: path.to_path_buf(),
-                generation,
-                ok,
-            });
-        }
-    }
+    send_preview(PreviewMessage::MagickReady {
+        path: path.to_path_buf(),
+        generation,
+        ok,
+    });
 }
 
 /// And the PeaZip engine, on the same terms: the archive has been listed, or it is one the engine
@@ -1994,15 +2012,11 @@ pub fn notify_magick_ready(path: &Path, generation: u64, ok: bool) {
 /// spinner — the page an archive is drawn as cannot be measured before its listing exists — and
 /// what the answer does is replay that hover, with the listing in hand or with nothing at all.
 pub fn notify_peazip_ready(path: &Path, generation: u64, ok: bool) {
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::PeazipReady {
-                path: path.to_path_buf(),
-                generation,
-                ok,
-            });
-        }
-    }
+    send_preview(PreviewMessage::PeazipReady {
+        path: path.to_path_buf(),
+        generation,
+        ok,
+    });
 }
 
 /// Probe a video's geometry on a thread of its own, and tell the preview loop.
@@ -2225,14 +2239,10 @@ fn spawn_measure_probe(
 /// — or, where the reader has no box for the file at all, told that the wait is over (see
 /// `MeasureProbed`).
 fn notify_measured(path: &Path, size: Option<(u32, u32)>) {
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(ref tx) = *sender {
-            let _ = tx.send(PreviewMessage::MeasureProbed {
-                path: path.to_path_buf(),
-                size,
-            });
-        }
-    }
+    send_preview(PreviewMessage::MeasureProbed {
+        path: path.to_path_buf(),
+        size,
+    });
 }
 
 /// The box a measure that reads a file answers with: the box this side already holds, or the
@@ -2653,11 +2663,10 @@ fn engine_kind_of(path: &Path) -> Option<PreviewType> {
     // kind whose two halves have to be told apart by the name as well — the browser draws a
     // document, and the drawing layer replays a metafile or a PostScript program, which is
     // no engine window at all — so the name answers which half of that kind a file is.
-    let content = CONFIG
-        .lock()
-        .ok()
-        .map(|config| crate::formats::content_type::of(path, &config))
-        .unwrap_or(crate::formats::content_type::Content::Unknown);
+    //
+    // The entry is read before the lock and the lists are taken under it, so the guard is not
+    // held across the file read the content question may make (see `drawn_as_audio`).
+    let content = content_of(path);
 
     if let crate::formats::content_type::Content::Kind(kind) = content {
         return match kind {
@@ -2911,16 +2920,36 @@ fn office_render_is_due(path: &Path, width: u32) -> bool {
 /// opinion at all, and only a disagreement — a picture under a document's name — is a file
 /// whose engine must not be started.
 fn content_names_another_kind(path: &Path, kind: PreviewType) -> bool {
-    let content = CONFIG
-        .lock()
-        .ok()
-        .map(|config| crate::formats::content_type::of(path, &config))
-        .unwrap_or(crate::formats::content_type::Content::Unknown);
-
     matches!(
-        content,
+        content_of(path),
         crate::formats::content_type::Content::Kind(named) if named != kind
     )
+}
+
+/// What a file's content says it is, with the configuration's lock not held across the file.
+///
+/// One question asked from the hook, the layout, the loader and the engines' own request sides,
+/// every one of them for the same file in the same hover, and every one of them taking the
+/// process-wide configuration lock across a `content_type::of` — which reads the file's first
+/// four kilobytes on a miss. A slow volume therefore froze every thread of the app, including
+/// the one pumping the preview window's own messages, which is the thread a pin's caption is
+/// dispatched on.
+///
+/// The fix is the order rather than a copy of the configuration: the file's own entry is read
+/// first, without the lock, and the lists are taken under it for the lookup that consults
+/// them. A file that cannot be read has no entry and takes the other form, which is the same
+/// answer for a file nothing can say anything about.
+fn content_of(path: &Path) -> crate::formats::content_type::Content {
+    let facts = crate::formats::head::Facts::read(path);
+
+    let Ok(config) = CONFIG.lock() else {
+        return crate::formats::content_type::Content::Unknown;
+    };
+
+    match &facts {
+        Some(facts) => crate::formats::content_type::of_entry_read(path, &config, facts),
+        None => crate::formats::content_type::of(path, &config),
+    }
 }
 
 /// Ask the render tier for the page a hover needs, at the moment that hover is
@@ -3180,7 +3209,31 @@ fn warm_engines_for(path: &Path) {
 /// message when it is done: what says a page is there is the page, read out of the cache it was
 /// kept in (see `libre_render_is_due` and `calibre_render_is_due`). One question for both, so that
 /// the wait and the replay that takes the answer up are one code path whichever engine produced it.
+///
+/// The question is floored rather than asked every tick. What it costs is not a comparison but a
+/// content probe, a folder index and two cache keys — two of which are `fs::metadata` of the
+/// document — and it was being paid sixty times a second for as long as a render took, which is a
+/// couple of seconds for a LibreOffice document. There is nothing to gain by asking sooner: a
+/// page that has not been written yet is not written yet however often it is looked for, and the
+/// only cost of waiting longer is that the spinner turns for another tenth of a second.
 fn engine_page_answer(path: &Path) -> Option<bool> {
+    // Read through one clock for both callers, so a hover waiting and a pin waiting for the same
+    // document in the same tick are one read of the disk rather than two.
+    static LAST_ASKED: Lazy<Mutex<Instant>> = Lazy::new(|| Mutex::new(Instant::now() - ENGINE_PAGE_POLL));
+
+    let mut last = match LAST_ASKED.lock() {
+        Ok(last) => last,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if last.elapsed() < ENGINE_PAGE_POLL {
+        return None;
+    }
+    // The guard is given up before the question is asked, for the same reason every other
+    // question on this thread gives it up: what follows reads the disk, and a lock held across
+    // a read is a lock every other thread of the app waits on for as long as the disk takes.
+    *last = Instant::now();
+    drop(last);
+
     // Which engine owes the page is asked of the file, and it is the same question the request side
     // asked before there was anything to ask for: an engine that was never asked has no page for the
     // file, and waiting on it would be waiting for nothing.
@@ -3316,11 +3369,12 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
     // at the picture's share, and one under a document's name at the picture's share too.
     // Where the bytes have nothing to say the name decides below, which is every file that
     // is called what it is.
-    let content = CONFIG
-        .lock()
-        .ok()
-        .map(|config| crate::formats::content_type::of(path, &config))
-        .unwrap_or(crate::formats::content_type::Content::Unknown);
+    //
+    // Both questions below consult the lists, and both may read the file — so both are asked
+    // with the entry read first and the lock taken for the lists alone. This is the question a
+    // hover asks, so it is the one that was paid for on the thread that pumps this window's
+    // messages (see `content_of`).
+    let content = content_of(path);
 
     if let crate::formats::content_type::Content::Kind(kind) = content {
         return scale_of_kind(kind, path, scales);
@@ -3536,11 +3590,38 @@ fn fit_reduced(preview_scale: PreviewScale) -> PreviewScale {
 /// whatever it is called, and one whose content is text is drawn as text even where the name
 /// is a kind the lists would have claimed first.
 fn is_text_preview(path: &Path) -> bool {
-    let Ok(config) = CONFIG.lock() else {
-        return false;
+    // The file's own entry, read before the lock. Both questions below consult the lists, and
+    // both of them may open the file — the content one reads four kilobytes on a miss, and the
+    // router's video claim reads a `.ts` to tell a film from a TypeScript file — so the guard
+    // used to be held across two `File::open`s on the thread that pumps this window's messages.
+    // Every other thread of the app waits on that guard, including the one that would end an
+    // engine or answer the tray.
+    let facts = crate::formats::head::Facts::read(path);
+
+    let (content, named_text) = {
+        let Ok(config) = CONFIG.lock() else {
+            return false;
+        };
+
+        let content = match &facts {
+            Some(facts) => crate::formats::content_type::of_entry_read(path, &config, facts),
+            None => crate::formats::content_type::of(path, &config),
+        };
+
+        // Only the fallback asks the router, and only when the content had no opinion: a file
+        // whose bytes named a kind is already settled, and the router would ask the same lists
+        // about a name that has been answered for.
+        let named_text = if content == crate::formats::content_type::Content::Unknown {
+            PreviewType::Text.enabled_in(&config)
+                && crate::formats::routing::kind_of(path, &config) == Some(PreviewType::Text)
+        } else {
+            false
+        };
+
+        (content, named_text)
     };
 
-    match crate::formats::content_type::of(path, &config) {
+    match content {
         crate::formats::content_type::Content::Kind(PreviewType::Text) => return true,
         // Another kind, or a format no kind here previews at all: neither is drawn as text,
         // and the second is drawn as nothing.
@@ -3554,8 +3635,7 @@ fn is_text_preview(path: &Path) -> bool {
     // as text would be placed as one and drawn as the other. The switch is part of the
     // question, as it is wherever the text lists are asked — a kind turned off in the tray is
     // not drawn at all.
-    PreviewType::Text.enabled_in(&config)
-        && crate::formats::routing::kind_of(path, &config) == Some(PreviewType::Text)
+    named_text
 }
 
 /// Whether a preview of this file is painted into the box it is given rather than scaled within
@@ -4004,7 +4084,7 @@ fn load_animated_gif(
         if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
         }
-        initial_frames.push(img);
+        initial_frames.push(Arc::new(img));
     }
 
     if initial_frames.is_empty() || (reached_end && initial_frames.len() <= 1) {
@@ -4229,7 +4309,7 @@ fn load_animated_apng(
         if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
         }
-        initial_frames.push(img);
+        initial_frames.push(Arc::new(img));
     }
 
     if initial_frames.is_empty() || (reached_end && initial_frames.len() <= 1) {
@@ -4459,7 +4539,7 @@ fn load_animated_webp(
         if initial_bytes > ANIMATION_RETAINED_BYTES {
             return None;
         }
-        initial_frames.push(img);
+        initial_frames.push(Arc::new(img));
     }
 
     if initial_frames.is_empty() || (reached_end && initial_frames.len() <= 1) {
@@ -4618,12 +4698,12 @@ fn load_animated_heif(
 
     let mut frames = Vec::with_capacity(sequence.frames.len());
     for (pixels, delay_ms) in sequence.frames {
-        frames.push(ImageFrame::new(
+        frames.push(Arc::new(ImageFrame::new(
             pixels,
             sequence.width,
             sequence.height,
             delay_ms,
-        ));
+        )));
     }
 
     Some(MediaData {
@@ -4713,12 +4793,12 @@ fn load_animated_jxl(
         // still timebase, which is zero too — is a frame the playhead would advance
         // through as fast as the message pump allows, spinning the render loop on a
         // picture that never appears to change.
-        frames.push(ImageFrame::new(
+        frames.push(Arc::new(ImageFrame::new(
             pixels,
             orig_width,
             orig_height,
             delay_ms.max(MIN_ANIMATION_FRAME_DELAY_MS),
-        ));
+        )));
     }
 
     Some(MediaData {
@@ -4739,7 +4819,11 @@ fn load_animated_jxl(
 /// counter rather than a clock, so the order frames are dropped in cannot be
 /// changed by the system clock moving.
 struct ImageCacheEntry {
-    frame: ImageFrame,
+    /// Held behind an `Arc` because a frame is the size of the box it is decoded into —
+    /// 33 MB at 4K — and both the store and every hit used to copy all of it: a cache that
+    /// exists to avoid decoding a file was paying a memcpy per answer instead. One allocation
+    /// is made where the pixels are, and the cache and the player share it.
+    frame: Arc<ImageFrame>,
     bytes: usize,
     last_used: u64,
 }
@@ -4834,7 +4918,7 @@ pub(crate) fn trim_image_cache() {
 }
 
 /// The frame held for `key`, if the cache still has it.
-fn image_cache_get(key: &ImageCacheKey) -> Option<ImageFrame> {
+fn image_cache_get(key: &ImageCacheKey) -> Option<Arc<ImageFrame>> {
     let limit = image_cache_limit_bytes();
     let mut cache = IMAGE_CACHE.lock().ok()?;
 
@@ -4850,7 +4934,7 @@ fn image_cache_get(key: &ImageCacheKey) -> Option<ImageFrame> {
 }
 
 /// Hold `frame` for `key`, dropping whatever no longer fits beside it.
-fn image_cache_put(key: ImageCacheKey, frame: ImageFrame) {
+fn image_cache_put(key: ImageCacheKey, frame: Arc<ImageFrame>) {
     let limit = image_cache_limit_bytes();
     let Ok(mut cache) = IMAGE_CACHE.lock() else {
         return;
@@ -4944,7 +5028,7 @@ fn pinned_engine_media(path: &Path) -> Option<MediaData> {
 /// The kind arrives with the frame rather than being decided here: a texture is a still
 /// picture like any other, and the one thing that makes it a kind of its own is what it is
 /// drawn over — which is the loader's to know, since the loader is what held the file.
-fn static_image_media(frame: ImageFrame, kind: MediaType) -> MediaData {
+fn static_image_media(frame: Arc<ImageFrame>, kind: MediaType) -> MediaData {
     MediaData {
         frames: vec![frame],
         shared_frames: None,
@@ -5069,10 +5153,10 @@ fn load_static_image(
         (rgba_to_bgra(rgba.as_raw()), width, height)
     };
 
-    let frame = ImageFrame::new(pixels, target_width, target_height, 0);
+    let frame = Arc::new(ImageFrame::new(pixels, target_width, target_height, 0));
 
     if let Some(key) = cache_key {
-        image_cache_put(key, frame.clone());
+        image_cache_put(key, Arc::clone(&frame));
     }
 
     Some(static_image_media(frame, kind))
@@ -5142,9 +5226,9 @@ fn load_design_preview(
         (pixels, target_width, target_height)
     };
 
-    let frame = ImageFrame::new(pixels, width, height, 0);
+    let frame = Arc::new(ImageFrame::new(pixels, width, height, 0));
 
-    image_cache_put(key, frame.clone());
+    image_cache_put(key, Arc::clone(&frame));
 
     Some(static_image_media(frame, MediaType::Design))
 }
@@ -5203,7 +5287,7 @@ fn load_engine_page(
         pdf_preview::render_first_page(page, target_width, target_height)?;
 
     Some(static_image_media(
-        ImageFrame::new(pixels, width, height, 0),
+        Arc::new(ImageFrame::new(pixels, width, height, 0)),
         kind,
     ))
 }
@@ -5254,7 +5338,7 @@ fn load_comic_page(
     let pixels = comic_preview::decode(path, target_width, target_height)?;
 
     Some(static_image_media(
-        ImageFrame::new(pixels, target_width, target_height, 0),
+        Arc::new(ImageFrame::new(pixels, target_width, target_height, 0)),
         MediaType::Comic,
     ))
 }
@@ -5284,7 +5368,7 @@ fn load_book_page(
     let (pixels, width, height) = pdf_preview::render_book_page(page, target_width, target_height)?;
 
     Some(static_image_media(
-        ImageFrame::new(pixels, width, height, 0),
+        Arc::new(ImageFrame::new(pixels, width, height, 0)),
         MediaType::Calibre,
     ))
 }
@@ -5415,10 +5499,15 @@ fn load_magick_picture(
     };
 
     let rgba = resized.to_rgba8();
-    let frame = ImageFrame::new(rgba_to_bgra(rgba.as_raw()), target_width, target_height, 0);
+    let frame = Arc::new(ImageFrame::new(
+        rgba_to_bgra(rgba.as_raw()),
+        target_width,
+        target_height,
+        0,
+    ));
 
     if let Some(key) = cache_key {
-        image_cache_put(key, frame.clone());
+        image_cache_put(key, Arc::clone(&frame));
     }
 
     Some(static_image_media(frame, MediaType::Magick))
@@ -5483,9 +5572,9 @@ fn load_vector_preview(
             .or_else(|| metafile_image::decode(path, target_width, target_height))
     }?;
 
-    let frame = ImageFrame::new(pixels, target_width, target_height, 0);
+    let frame = Arc::new(ImageFrame::new(pixels, target_width, target_height, 0));
 
-    image_cache_put(key, frame.clone());
+    image_cache_put(key, Arc::clone(&frame));
 
     Some(static_image_media(frame, MediaType::Vector))
 }
@@ -5525,7 +5614,7 @@ fn load_pdf_first_page(
     let frame = ImageFrame::new(pixels, width, height, 0);
 
     Some(MediaData {
-        frames: vec![frame],
+        frames: vec![Arc::new(frame)],
         shared_frames: None,
         all_frames_loaded: None,
         current_frame: 0,
@@ -5571,7 +5660,7 @@ fn load_office_preview(
     let frame = ImageFrame::new(pixels, width, height, 0);
 
     Some(MediaData {
-        frames: vec![frame],
+        frames: vec![Arc::new(frame)],
         shared_frames: None,
         all_frames_loaded: None,
         current_frame: 0,
@@ -5622,7 +5711,7 @@ fn load_text_preview(
     let frame = ImageFrame::new(frame.pixels, frame.width, frame.height, 0);
 
     Some(MediaData {
-        frames: vec![frame],
+        frames: vec![Arc::new(frame)],
         shared_frames: None,
         all_frames_loaded: None,
         current_frame: 0,
@@ -5657,7 +5746,7 @@ fn load_archive_preview(
     }
 
     Some(MediaData {
-        frames: vec![ImageFrame::new(pixels, width, height, 0)],
+        frames: vec![Arc::new(ImageFrame::new(pixels, width, height, 0))],
         shared_frames: None,
         all_frames_loaded: None,
         current_frame: 0,
@@ -5715,7 +5804,7 @@ fn load_video_thumbnail(
     let frame = ImageFrame::new(placeholder_pixels, target_width, target_height, 0);
 
     Some(MediaData {
-        frames: vec![frame],
+        frames: vec![Arc::new(frame)],
         shared_frames: None,
         all_frames_loaded: None,
         current_frame: 0,
@@ -6844,11 +6933,11 @@ fn load_media(
     // disagree: a `.docx` whose bytes are an MP4 is loaded as the video it is, and a format
     // no kind of this app previews is loaded as nothing at all — see `content_type` for
     // what settles that, and `load_media_of_kind` for where the kind is handed on.
-    let content = CONFIG
-        .lock()
-        .ok()
-        .map(|config| crate::formats::content_type::of(path, &config))
-        .unwrap_or(crate::formats::content_type::Content::Unknown);
+    //
+    // Asked with the lock given up before the file is read, on the loader thread: what follows
+    // is a decode, and a thread that decodes is a thread that is not answering the window (see
+    // `content_of`).
+    let content = content_of(path);
 
     match content {
         crate::formats::content_type::Content::Kind(kind) => {
@@ -7205,14 +7294,12 @@ fn video_probe_due(path: &Path) -> bool {
 /// name, and a hover whose picture is played but whose frames are awaited would sit on a
 /// first frame that nothing ever replaces.
 fn drawn_as_video(path: &Path) -> bool {
-    let content = CONFIG
-        .lock()
-        .ok()
-        .map(|config| crate::formats::content_type::of(path, &config))
-        .unwrap_or(crate::formats::content_type::Content::Unknown);
-
+    // Asked from four places in one hover — the probe's due question, both dimension questions
+    // and the `Show` arm — and each of those used to read the file and take the configuration
+    // lock for it. The content is a cache hit after the first, so the entry read is all that
+    // is repeated; the lock is no longer held across the read at all (see `content_of`).
     if matches!(
-        content,
+        content_of(path),
         crate::formats::content_type::Content::Kind(PreviewType::Videos)
     ) {
         return PreviewType::Videos.enabled();
@@ -7250,10 +7337,19 @@ fn media_engine_plays(path: &Path) -> bool {
         return true;
     }
 
-    let named = CONFIG
-        .lock()
-        .map(|config| video_formats::matches_video_list(path, &config.video_extensions))
-        .unwrap_or(false);
+    // The list is copied out and the lock given up before the list is consulted, because the
+    // consultation is not free: the two extensions the video list shares with the text lists
+    // are settled by reading the file, and that read was happening under the process-wide
+    // configuration lock on the thread that pumps this window's messages.
+    let named = {
+        let Ok(config) = CONFIG.lock() else {
+            return false;
+        };
+        let extensions = config.video_extensions.clone();
+        drop(config);
+
+        video_formats::matches_video_list(path, &extensions)
+    };
 
     named && video_player::plays(path)
 }
@@ -7436,28 +7532,55 @@ fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> 
 /// which for a renamed file, or for a container whose streams hold only a song, is a question
 /// about the content rather than about the name.
 ///
-/// The configuration is taken by copy and the lock let go before the content is asked of: that
-/// question is a `content_type::of`, which reads the file's first four kilobytes on a miss, and
-/// a lock held across a file read is a lock every other thread of the app waits on for as long
-/// as the disk takes — the preview thread included, which is the thread that pumps this
-/// window's own messages.
+/// The configuration is read for the two things this question needs and the lock let go before
+/// the content is asked of: that question is a `content_type::of`, which reads the file's first
+/// four kilobytes on a miss, and a lock held across a file read is a lock every other thread
+/// of the app waits on for as long as the disk takes — the preview thread included, which is
+/// the thread that pumps this window's own messages.
+///
+/// Only the audio list is copied out, rather than the whole configuration: this was a deep copy
+/// of sixteen `Vec<String>` — two hundred allocations and a `PathBuf` each — to read one list
+/// and one flag, paid on every hover of a sound. The list itself is one allocation.
 fn drawn_as_audio(path: &Path) -> bool {
-    if !PreviewType::Audio.enabled() {
+    let (enabled, extensions) = {
+        let Ok(config) = CONFIG.lock() else {
+            return false;
+        };
+        (
+            config.audio_preview_enabled,
+            config.audio_extensions.clone(),
+        )
+    };
+
+    if !enabled {
         return false;
     }
 
-    let Some(config) = CONFIG.lock().ok().map(|config| config.clone()) else {
-        return false;
+    // The entry is read before the lock is taken, so the question below is a lookup rather
+    // than a read: what the content is asked needs the lists, and the lists are in hand
+    // without a guard that is then held across a `File::open`.
+    let facts = crate::formats::head::Facts::read(path);
+
+    let drawn_as_audio = {
+        let Ok(config) = CONFIG.lock() else {
+            return false;
+        };
+        match &facts {
+            Some(facts) => {
+                crate::formats::content_type::of_entry_read(path, &config, facts)
+            }
+            None => crate::formats::content_type::of(path, &config),
+        }
     };
 
     if matches!(
-        crate::formats::content_type::of(path, &config),
+        drawn_as_audio,
         crate::formats::content_type::Content::Kind(PreviewType::Audio)
     ) {
         return true;
     }
 
-    audio_formats::matches_audio_list(path, &config.audio_extensions)
+    audio_formats::matches_audio_list(path, &extensions)
 }
 
 /// What a sound's card says, with the clock as it stands — or nothing for a file with no track
@@ -7492,7 +7615,7 @@ fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) -> Option<Med
         audio_preview::render(&card, width, height, dpi, current_audio_options())?;
 
     Some(MediaData {
-        frames: vec![ImageFrame::new(pixels, width, height, 0)],
+        frames: vec![Arc::new(ImageFrame::new(pixels, width, height, 0))],
         shared_frames: None,
         all_frames_loaded: None,
         current_frame: 0,
@@ -8157,11 +8280,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // What the file's content says it is comes ahead of what its name does, where the two
     // disagree: the box a file is placed at is the box of the kind its content belongs to,
     // and a format no kind previews is placed nowhere at all — see `content_type`.
-    let content = CONFIG
-        .lock()
-        .ok()
-        .map(|config| crate::formats::content_type::of(path, &config))
-        .unwrap_or(crate::formats::content_type::Content::Unknown);
+    let content = content_of(path);
 
     match content {
         crate::formats::content_type::Content::Kind(kind) => {
@@ -8481,11 +8600,12 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
     // as the picture it is rather than read as a page of text it is not — which for a file
     // whose bytes are not text is no measurement at all, and a preview that never appears
     // for a file that would otherwise be drawn.
-    let content = CONFIG
-        .lock()
-        .ok()
-        .map(|config| crate::formats::content_type::of(path, &config))
-        .unwrap_or(crate::formats::content_type::Content::Unknown);
+    //
+    // Asked with the lock not held across the file (see `content_of`), which matters more here
+    // than anywhere else: this runs on the preview thread at the moment the `Show` arm is
+    // installing the hover, so a slow volume held the lock here held the thread that pumps
+    // this window's messages for the length of the read.
+    let content = content_of(path);
 
     if let crate::formats::content_type::Content::Kind(kind) = content {
         return match kind {
@@ -8816,7 +8936,7 @@ fn create_loading_media(width: u32, height: u32) -> MediaData {
     let pixels = render_loading_frame(width, height, 0.0);
     let frame = ImageFrame::new(pixels, width, height, 33);
     MediaData {
-        frames: vec![frame],
+        frames: vec![Arc::new(frame)],
         shared_frames: None,
         all_frames_loaded: None,
         current_frame: 0,
@@ -9757,7 +9877,12 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         ULW_ALPHA,
     );
 
-    publish_pointer_hold(hwnd);
+    // The hold is deliberately not published from here. Both render paths used to publish it on
+    // every frame, which is four lock round-trips and a `GetWindowRect` per painted frame, and it
+    // defeated the throttle entirely: the tick's own publish (see `POINTER_HOLD_HEARTBEAT_MS`)
+    // asks the same question 500 ms later and was always arriving second. What a paint changes
+    // is the window's position, and the tick's key already carries the generation a move or
+    // resize bumps, so the region is one heartbeat behind the paint at worst.
 }
 
 /// Paint a pinned window: the caption, the media in the band below it, and — for a kind that
@@ -9966,7 +10091,8 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         );
     }
 
-    publish_pointer_hold(hwnd);
+    // As in `render_layered_preview_at`: the hold is the tick's to publish, because a publish
+    // per painted frame is what made the 500 ms throttle suppress nothing.
 }
 
 /// Everything a repaint of a pinned window needs, taken in one look: what the caption says and
@@ -10768,13 +10894,21 @@ pub fn preview_pointer_hold(x: i32, y: i32) -> bool {
             .unwrap_or(false);
     }
 
-    if engine_page_holds(
-        x,
-        y,
-        preview_screen_rect().unwrap_or((0, 0, 0, 0)),
-        webview_preview::showing_path().is_some_and(|path| html_is_engine_drawn(&path)),
-        ENGINE_PAGE_DRAG.load(Ordering::Acquire),
-    ) {
+    // Gated on whether the engine has a window up at all, and it is gated first because this is
+    // asked at the pointer's own rate: 66 times a second, from the hook's tick, for a window that
+    // is usually a picture. Behind the gate are a `PathBuf` clone out of what the engine is
+    // holding, a name test and two `GetWindowRect`s — all evaluated as arguments to the call
+    // below, and all thrown away by it whenever no page is running. The gate is the engine's own
+    // answer, which is one atomic load (see `webview_preview::is_showing`).
+    if webview_preview::is_showing()
+        && engine_page_holds(
+            x,
+            y,
+            preview_screen_rect().unwrap_or((0, 0, 0, 0)),
+            webview_preview::showing_path().is_some_and(|path| html_is_engine_drawn(&path)),
+            ENGINE_PAGE_DRAG.load(Ordering::Acquire),
+        )
+    {
         return true;
     }
 
@@ -10898,7 +11032,7 @@ unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
             return;
         }
 
-        media.frames[0] = ImageFrame::new(frame.pixels, frame.width, frame.height, 0);
+        media.frames[0] = Arc::new(ImageFrame::new(frame.pixels, frame.width, frame.height, 0));
 
         if let Some(state) = media.text_state.as_mut() {
             state.first_line = frame.first_line;
@@ -10953,7 +11087,7 @@ unsafe fn repaint_text_preview(hwnd: HWND) {
             return;
         }
 
-        media.frames[0] = ImageFrame::new(frame.pixels, frame.width, frame.height, 0);
+        media.frames[0] = Arc::new(ImageFrame::new(frame.pixels, frame.width, frame.height, 0));
 
         if let Some(state) = media.text_state.as_mut() {
             state.lines = frame.lines;
@@ -14185,38 +14319,44 @@ pub(crate) enum PinCommand {
     TogglePlayback,
 }
 
-/// The command the window procedure left for the preview loop, if any: one at a time, which is
-/// all a pointer can ask for at once.
-static PIN_COMMAND: AtomicU32 = AtomicU32::new(0);
+/// The commands the window procedure has left for the preview loop, oldest first.
+///
+/// A queue rather than a slot, and the reason is a double-click. A slot holds one command and
+/// the next write over it, so a double-click on `Next` — two presses, the second within the
+/// system double-click time, both delivered as separate `WM_LBUTTONUP`s — left one command
+/// where the user asked for two, and the second file was not walked to. Two `Next` clicks are
+/// the ordinary way to move two files along, so the loss was on the commonest button.
+///
+/// Bounded because the loop that drains it is the one that would have to be stopped for it to
+/// grow: a caption clicked faster than the loop turns, which is a hand drumming on a button.
+/// At that rate the loop is behind anyway, and what is dropped is the oldest, so what
+/// survives is the user's latest intent rather than the first thing they asked for.
+static PIN_COMMANDS: Lazy<Mutex<VecDeque<PinCommand>>> =
+    Lazy::new(|| Mutex::new(VecDeque::new()));
 
-const PIN_COMMAND_NONE: u32 = 0;
+/// How many commands may be waiting before the oldest is dropped. A loop turns on the order of
+/// sixty times a second and a caption button is a press, so a queue this deep is already a
+/// loop that is not keeping up rather than a hand that is ahead of it.
+const PIN_COMMANDS_MAX: usize = 16;
 
 /// Leave a command for the preview loop to act on.
 pub(crate) fn ask_pin(command: PinCommand) {
-    let code = match command {
-        PinCommand::Previous => 5,
-        PinCommand::Next => 6,
-        PinCommand::Minimize => 1,
-        PinCommand::Maximize => 2,
-        PinCommand::Close => 3,
-        PinCommand::Restore => 4,
-        PinCommand::TogglePlayback => 7,
+    let Ok(mut commands) = PIN_COMMANDS.lock() else {
+        return;
     };
-    PIN_COMMAND.store(code, Ordering::Release);
+    if commands.len() >= PIN_COMMANDS_MAX {
+        commands.pop_front();
+    }
+    commands.push_back(command);
 }
 
 /// Take the command the chrome left, if one was left.
+///
+/// `false` says the queue was already empty, which is the whole of what the loop asks for
+/// beyond the command itself: the read is destructive, so a command nobody wanted any more is
+/// gone rather than acted on by a later tick.
 fn take_pin_command() -> Option<PinCommand> {
-    match PIN_COMMAND.swap(PIN_COMMAND_NONE, Ordering::AcqRel) {
-        1 => Some(PinCommand::Minimize),
-        2 => Some(PinCommand::Maximize),
-        3 => Some(PinCommand::Close),
-        4 => Some(PinCommand::Restore),
-        5 => Some(PinCommand::Previous),
-        6 => Some(PinCommand::Next),
-        7 => Some(PinCommand::TogglePlayback),
-        _ => None,
-    }
+    PIN_COMMANDS.lock().ok()?.pop_front()
 }
 
 /// A pinned window's box, kept on a display: a window dragged past an edge leaves a caption's
@@ -14358,13 +14498,36 @@ fn end_pin_state() -> PreviewMessage {
         unsafe { release_pin_capture(hwnd) };
     }
 
+    end_pin_state_guards();
+
+    hide_pin_bubble();
+
+    PreviewMessage::Hide
+}
+
+/// Everything about a pin that has to be true of every road out of it, in one place.
+///
+/// The pin is a window, a caption, a claim on the keyboard, a pointer that may have been taken,
+/// a walk that may be queued and a command that may be waiting to be acted on — and each of
+/// those is a separate piece of state with a separate owner. This is the one exit through all
+/// of them, so that "a pin is over" has exactly one meaning rather than one meaning per caller.
+///
+/// It used to be the body of `end_pin_state` with the window work left out, and the watchdog
+/// had its own hand-written copy of the same list. The copy is what made a pin killed by the
+/// watchdog keep the keyboard it had taken and the foreground it had stolen: everything this
+/// now settles was in the other list, which had drifted by four items.
+///
+/// Nothing here takes `PINNED` while holding it across anything else, and nothing here is a
+/// window message except the release, which is taken outside the lock for the reason
+/// `end_pin_state` gives.
+fn end_pin_state_guards() {
     if let Ok(mut pinned) = PINNED.lock() {
         *pinned = None;
     }
 
-    // The window goes back to being a window nobody types into before it is hidden, because a
-    // hover preview uses this same window and must never be able to take the focus (see
-    // `pin_set_focusable`).
+    // The window goes back to being a window nobody types into, and the keyboard goes back to
+    // where it came from, because a hover preview uses this same window and must never be able
+    // to take the focus (see `pin_set_focusable`).
     pin_drop_focus();
 
     PIN_ACTIVE.store(false, Ordering::Release);
@@ -14373,9 +14536,33 @@ fn end_pin_state() -> PreviewMessage {
     // a hover the hook has already answered, and one is due the moment the pin is gone rather
     // than after the delay a re-hover of the same file is given (see `PIN_RESUMED`).
     PIN_RESUMED.store(true, Ordering::Release);
-    hide_pin_bubble();
 
-    PreviewMessage::Hide
+    // A command left in the slot when a pin ends is a command about a window that is no longer
+    // there, fired against whatever pin comes next: the chrome is drawn for the file now on
+    // screen, so a Close that belonged to the last one closes this one. A walk is the same
+    // answer to the same question — a caption button asking for the next file, worked out for a
+    // pin that has gone.
+    if let Ok(mut commands) = PIN_COMMANDS.lock() {
+        commands.clear();
+    }
+    if let Ok(mut jobs) = PIN_JOBS.0.lock() {
+        *jobs = None;
+    }
+
+    // A drag on the bubble is a drag on a window that is going away, and the latch that says
+    // one is in progress is what tells a click on it from a drag; left standing, the next
+    // bubble treats a press as the end of a drag that began before it existed.
+    PIN_BUBBLE_MOVED.store(false, Ordering::Release);
+    if let Ok(mut drag) = PIN_BUBBLE_DRAG.lock() {
+        *drag = None;
+    }
+
+    // A box a drag has left a pinned window at is a layout for a window that is going away, and
+    // a take-down that kept it laid the next pin out into a box the user dragged a window they
+    // can no longer see into.
+    if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+        *request = None;
+    }
 }
 
 /// Whether the thing a pin is a window onto is still there.
@@ -14836,22 +15023,18 @@ fn pin_update_box(room: ScreenRegion, shape: (u32, u32), scale: PreviewScale) ->
 /// own measure came out at rather than the box the pin has (see `pin_update_content`), and what the
 /// answer is for here is that a box the file was *drawn* to is no ceiling for the files after it.
 fn pin_keeps_its_box(path: &Path) -> bool {
-    // The configuration is taken by copy and the lock let go before the content is asked of,
-    // for the reason `drawn_as_audio` gives: the question is a `content_type::of`, which
-    // reads the file on a miss, and the take-up that asks this one is a take-up that must
-    // not be holding a lock a window message may be waiting on.
-    if let Some(config) = CONFIG.lock().ok().map(|config| config.clone()) {
-        if let crate::formats::content_type::Content::Kind(kind) =
-            crate::formats::content_type::of(path, &config)
-        {
-            return matches!(
-                kind,
-                PreviewType::Text
-                    | PreviewType::Archives
-                    | PreviewType::Peazip
-                    | PreviewType::Audio
-            );
-        }
+    // Asked of the content, with the entry read before the lock rather than the whole
+    // configuration copied out of it: the take-up that asks this one is a take-up that must
+    // not be holding a lock a window message may be waiting on, and a copy of the
+    // configuration is sixteen lists to clone to read one answer (see `content_of`).
+    if let crate::formats::content_type::Content::Kind(kind) = content_of(path) {
+        return matches!(
+            kind,
+            PreviewType::Text
+                | PreviewType::Archives
+                | PreviewType::Peazip
+                | PreviewType::Audio
+        );
     }
 
     is_text_preview(path)
@@ -16145,11 +16328,7 @@ fn spawn_pin_planner() {
                     .unwrap_or_default();
 
             if let Some(answer) = answer {
-                if let Ok(sender) = PREVIEW_SENDER.lock() {
-                    if let Some(ref tx) = *sender {
-                        let _ = tx.send(PreviewMessage::PinAnswered(answer));
-                    }
-                }
+                send_preview(PreviewMessage::PinAnswered(answer));
             }
         }
     });
@@ -16274,6 +16453,15 @@ static PIN_BUBBLE_DRAG: Lazy<Mutex<Option<BubbleDrag>>> = Lazy::new(|| Mutex::ne
 /// the one message that is not a move is the release — so this is only the ceiling on a drag that
 /// has lost its capture without one being sent, which is what keeps the wait from being a hang.
 const PIN_BUBBLE_DRAG_WAIT_MS: u32 = 100;
+
+/// How long a bubble drag may hold its loop before the drag is given back.
+///
+/// The same shape as `PIN_DRAG_WAIT_MS` and for the same reason: the wait above is a ceiling on a
+/// drag whose capture has gone, not a bound on how long a hand may be moving. A drag that has
+/// lost its capture without a message saying so ended at the first wait that returned; a drag
+/// with the button genuinely held down is bounded by this instead, and past it the drag is
+/// looked at again by whatever asked for it rather than by a loop that never gives it back.
+const PIN_BUBBLE_DRAG_CARRY_MS: u64 = 2_000;
 
 /// Whether the drag in progress has moved at all: what tells a click on the bubble — which puts
 /// the window back up — from a hand that was carrying it somewhere.
@@ -17081,16 +17269,22 @@ fn drop_bubble_drag() {
 /// message that takes it away. The wait is bounded for the one case neither leaves a message for:
 /// a drag whose state has been emptied for another reason still leaves it within the bound.
 unsafe fn carry_bubble_drag(hwnd: HWND) {
-    let mut msg = MSG::default();
+    // The same bound the other carry takes, and the same refusal to re-enter a drain: this loop
+    // and `carry_pin_drag_with_the_hand` were two hand-written loops with two different bounds,
+    // and a bubble drag answered from inside a pump would dispatch the same message twice — a
+    // click that lands in the wrong place (see `Carry`).
+    let mut carry = Carry::begin(PIN_BUBBLE_DRAG_CARRY_MS);
 
     loop {
+        if carry.is_exhausted() {
+            return;
+        }
         note_preview_alive();
 
         // Everything the queue holds, answered where it is: a move carries the bubble, and the
         // release ends the drag in the handler it always has.
-        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        if !carry.pump_window_messages() {
+            return;
         }
 
         if !RUNNING.load(Ordering::SeqCst) || !bubble_is_being_dragged() || GetCapture() != hwnd {
@@ -18057,8 +18251,20 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
     };
     let window = (left, top, left + width, top + height);
 
-    if let Ok(mut pinned) = PINNED.lock() {
-        if let Some(pin) = pinned.as_mut() {
+    // Whether the drag was installed at all, which is what the capture is conditioned on below.
+    //
+    // The pointer is taken only once there is a drag for it, and the two were not connected:
+    // a lock this thread could not take, or a pin that had been taken down since the press was
+    // read, left the window holding the pointer for the whole desktop with nothing that would
+    // ever release it. Every mouse message then went to this window rather than to whatever the
+    // pointer was aimed at, and the cursor kept whichever shape the last edge gave it — a
+    // desktop that looked broken until some other window took the pointer for itself, which is
+    // why clicking elsewhere appeared to bring it back.
+    let installed = PINNED
+        .lock()
+        .ok()
+        .and_then(|mut pinned| {
+            let pin = pinned.as_mut()?;
             pin.dragging = Some(PinDrag {
                 from,
                 window,
@@ -18068,10 +18274,15 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
                 // not been: the window has not moved by a single pixel until the pointer does.
                 carried: (i32::MIN, i32::MIN),
             });
-        }
-    }
+            Some(pin.dragging)
+        })
+        .is_some();
 
-    let _ = SetCapture(hwnd);
+    if installed {
+        let _ = SetCapture(hwnd);
+    } else {
+        release_pin_capture(hwnd);
+    }
 }
 
 /// Carry on, and let go of, a drag whose press this window was never given.
@@ -18151,10 +18362,14 @@ fn carried_drag() -> Option<PinDrag> {
 /// Two things bound it, both about not being a thread that never gives the tick back: a hand that
 /// stops moving is handed back to the loop's own wait, but only once it has sat still for a while,
 /// and every pass notes the loop alive (see `note_pin_alive`).
-unsafe fn carry_pin_drag_with_the_hand(hwnd: HWND) {
+unsafe fn carry_pin_drag_with_the_hand(hwnd: HWND, rx: &Receiver<PreviewMessage>) -> CarryOut {
+    let mut carry = Carry::begin(PIN_DRAG_WAIT_MS);
     let mut moved_at = Instant::now();
 
     while pin_drag_is_carried() {
+        if carry.is_exhausted() {
+            break;
+        }
         note_pin_alive();
 
         let carried_to = pin_drag_carried_to();
@@ -18162,10 +18377,109 @@ unsafe fn carry_pin_drag_with_the_hand(hwnd: HWND) {
         if pin_drag_carried_to() != carried_to {
             moved_at = Instant::now();
         } else if moved_at.elapsed() >= PIN_DRAG_HAND_RESTED {
-            return;
+            break;
         }
 
+        // The window's own queue is drained here so that a window being carried goes on
+        // answering everything a window answers — and the drain is refused if this thread is
+        // already inside one, because a window procedure that pumps the same queue re-enters
+        // it over those messages, and a nested drain is how a caption button ends up answered
+        // twice for one click.
+        if !carry.pump_window_messages() {
+            break;
+        }
+
+        carry.drain(rx);
+    }
+
+    carry.finish()
+}
+
+/// What a carry found on the loop's channel, for the tick to take up before anything else.
+type CarryOut = Vec<PreviewMessage>;
+
+/// One window's drag being carried by the loop instead of by its own messages.
+///
+/// The two loops that carry a pointer — this one and the bubble's — were two hand-written
+/// loops with two different bounds and neither of them bounded in the way that matters. This
+/// one followed a hand that never stopped moving, for as long as the hand did, giving the tick
+/// back only when the pointer had been still for `PIN_DRAG_HAND_RESTED`; and while it was
+/// inside, the loop's own channel was never polled at all, so a `Close` on the caption, a
+/// media kind switched off in the tray, or an engine that had died all went unacted-on for the
+/// length of the drag. A caption that stops answering during a drag is the livelock this
+/// bounds, and the bound is what makes the loop a guest in its own tick rather than a
+/// replacement for it.
+///
+/// Three things are held to, and each is a way this used to be a thread that never gave the
+/// tick back:
+///
+/// - A deadline, so a hand that moves for minutes is a window that follows for minutes rather
+///   than a loop that is gone. Past it the drag is still carried — by the tick, at the tick's
+///   pace — so nothing is lost but the smoothness.
+/// - A refusal to pump the window queue from inside a pump, so a re-entrant dispatch cannot
+///   drain the same queue twice.
+/// - A drain of the preview channel on the way through, so a message sent while the hand is
+///   moving is held rather than lost, and is taken up by the tick that resumes.
+struct Carry {
+    /// When this carry is over, whatever the hand is doing. Past it the drag is carried by the
+    /// tick instead, which is slower and answers everything.
+    deadline: Instant,
+    /// Whether a pump is already in progress on this thread. Set by `pump_window_messages` for
+    /// the duration of the drain, so a window procedure that pumps re-enters without a second
+    /// drain over the same queue.
+    pumping: bool,
+    /// Messages the drain found, in the order they arrived, for the tick to take up.
+    carried: Vec<PreviewMessage>,
+}
+
+impl Carry {
+    /// Begin carrying, bounded by `wait_ms`.
+    fn begin(wait_ms: u64) -> Self {
+        Self {
+            deadline: Instant::now() + Duration::from_millis(wait_ms),
+            pumping: false,
+            carried: Vec::new(),
+        }
+    }
+
+    /// Whether this carry is over and the tick should be given the drag back.
+    fn is_exhausted(&self) -> bool {
+        Instant::now() >= self.deadline
+    }
+
+    /// Drain the window queue, answering what is on it where it is.
+    ///
+    /// `false` means the queue is already being drained on this thread, and the carry is over:
+    /// a nested drain would dispatch the same message twice, and a caption button answered
+    /// twice for one click is a click that lands in the wrong place.
+    fn pump_window_messages(&mut self) -> bool {
+        if self.pumping {
+            return false;
+        }
+        self.pumping = true;
         pump_window_messages();
+        self.pumping = false;
+        true
+    }
+
+    /// Take off whatever the loop has been sent, holding it for the tick.
+    ///
+    /// Non-blocking, and every pass: this is a look on the way past rather than a wait, since
+    /// the wait is what the carry exists to avoid. The messages go to `carried` rather than to
+    /// the loop's own drain, because the tick is the thing that acts on them.
+    fn drain(&mut self, rx: &Receiver<PreviewMessage>) {
+        while let Ok(message) = rx.try_recv() {
+            self.carried.push(message);
+        }
+    }
+
+    /// Hand back what was taken off the channel, in the order it arrived.
+    ///
+    /// A tick that resumes with these in hand acts on them before it does anything else, so a
+    /// pin asked to close while it was being dragged closes when the drag ends rather than
+    /// after the next hover.
+    fn finish(self) -> CarryOut {
+        self.carried
     }
 }
 
@@ -18194,6 +18508,15 @@ fn pump_window_messages() {
         }
     }
 }
+
+/// How long a carry of a pinned drag may hold the loop before the tick is given it back.
+///
+/// Long enough that a hand dragging a window across a 4K display is carried the whole way at
+/// the pointer's own rate, and short enough that a window left held down over something nobody
+/// is touching is a pause rather than a loop that has stopped answering. It is the outer bound
+/// the stillness test never provided: that one ends a carry when the hand stops, and says
+/// nothing about a hand that never does.
+const PIN_DRAG_WAIT_MS: u64 = 2_000;
 
 /// Let go of the pointer, if this window is the one holding it.
 ///
@@ -18913,40 +19236,51 @@ unsafe fn finish_pin_drag(hwnd: HWND) -> bool {
 /// pace rather than at the pace of the repaint: waiting on the message queue instead of on the
 /// channel wakes the moment the pointer moves, and costs nothing extra when idle.
 ///
-/// The channel is polled in short slices rather than blocked on, so a message sent while the wait
-/// runs lands within a slice rather than on the next tick. A slice is one kernel wait plus one
-/// non-blocking channel poll — no spinning — and input still wakes the current slice at once.
+/// The wait is on two things at once: the message queue, and the channel's own event. The event
+/// is what the slicing this used to do was standing in for. A wait that could not see the channel
+/// had to wake on a timer to ask it, so `wait_ms` was cut into eight-millisecond slices and each
+/// one was a kernel wait followed by a poll of an empty channel — which for a loop with nothing
+/// on screen, waiting `IDLE_WAIT_MS`, was a hundred kernel transitions a second for the whole
+/// life of the process, doing nothing. A send now signals the event, so the wait ends where the
+/// message lands, and an idle loop costs one wait per tick.
+///
+/// The event is manual-reset and is reset after the wait rather than at the send, which is what
+/// makes the arm-then-send race safe: a message that arrived between the poll above and the wait
+/// below has already signalled it, so the wait returns at once instead of sleeping through a
+/// message that is in the queue.
 fn wait_preview_channel(rx: &Receiver<PreviewMessage>, wait_ms: u64) -> Option<PreviewMessage> {
     // A message sent just before the wait is answered without waiting at all.
     if let Ok(message) = rx.try_recv() {
         return Some(message);
     }
-    // Long enough that an idle thread still sleeps instead of spinning, short
-    // enough that a channel message never waits out a full tick to be noticed.
-    const SLICE_MS: u64 = 8;
-    let mut remaining = wait_ms;
-    while remaining > 0 {
-        let slice = remaining.min(SLICE_MS);
-        unsafe {
-            let _ =
-                MsgWaitForMultipleObjectsEx(None, slice as u32, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-        }
-        // Woken by input, by the timeout, or — within a slice — by nothing at
-        // all: either way the channel is only ever polled, never blocked on,
-        // so the queue is never left unpumped while a drag is going.
-        if let Ok(message) = rx.try_recv() {
-            return Some(message);
-        }
-        // Input alone is a reason to go round the loop now rather than to sit
-        // out the rest of the tick: the queue holds the move the wait woke for.
-        let mut msg = MSG::default();
-        unsafe {
-            if PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE).as_bool() {
-                return None;
-            }
-        }
-        remaining = remaining.saturating_sub(slice);
+
+    let event = preview_channel_event();
+    let handles = [event];
+    unsafe {
+        let _ = MsgWaitForMultipleObjectsEx(
+            Some(&handles),
+            wait_ms as u32,
+            QS_ALLINPUT,
+            MWMO_INPUTAVAILABLE,
+        );
+        let _ = ResetEvent(event);
     }
+
+    // Woken by input, by a message, or by the timeout. Either way the channel is only ever
+    // polled, never blocked on, so the queue is never left unpumped while a drag is going.
+    if let Ok(message) = rx.try_recv() {
+        return Some(message);
+    }
+
+    // Input alone is a reason to go round the loop now rather than to sit out the rest of
+    // the tick: the queue holds the move the wait woke for.
+    let mut msg = MSG::default();
+    unsafe {
+        if PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE).as_bool() {
+            return None;
+        }
+    }
+
     None
 }
 
@@ -19161,10 +19495,18 @@ pub fn run_preview_window() {
         // A message the idle wait took off the channel, held for the drain below
         // rather than acted on where it was received.
         let mut carried_preview_msg: Option<PreviewMessage> = None;
+        // What a carry of a pinned drag took off the channel while it was inside the tick, in
+        // the order it arrived. A carry cannot act on a message itself — the tick owns the media
+        // and the windows — so it holds them and the tick takes them up as its own (see `Carry`).
+        let mut carried_preview_messages: Vec<PreviewMessage> = Vec::new();
         // How many left-button presses the pin's own press handling has already been given, as a
         // count rather than a latch on the button being down: a press and a release between two
         // ticks of this loop leaves nothing to latch, so a drag begun from one would never begin at
         // all (see `settle_pinned_engine_press`).
+        //
+        // Reset on every take-up, which is what a local of the loop cannot do for itself: the
+        // count is published by the hook for the life of the process, so a snapshot of it
+        // outlives the pin it was taken in and swallows the first press of the next one.
         let mut engine_press_seen: u64 = 0;
         // Static-tick throttle state (see `STATIC_WAIT_MS`): whether the media on
         // screen was dynamic the last time it was fully looked at, when that look
@@ -19337,7 +19679,15 @@ pub fn run_preview_window() {
                 // than at the tick's, since nothing this window is sent will ever carry it (see
                 // `carry_pin_drag_with_the_hand`).
                 settle_pinned_engine_drag(hwnd);
-                carry_pin_drag_with_the_hand(hwnd);
+
+                // Followed at the hand's own rate rather than at the tick's, since nothing this
+                // window is sent will ever carry it. What the carry found on the channel goes to
+                // the front of this tick's own messages: a `Close` on the caption, a media kind
+                // switched off in the tray, or an engine that has died are all asked for past the
+                // line this loop is inside, so without this a hand that kept moving left every
+                // one of them standing — which is the caption going deaf for the length of the
+                // drag (see `Carry`).
+                carried_preview_messages.extend(carry_pin_drag_with_the_hand(hwnd, &rx));
 
                 // A step the caption's own walk buttons took is a pick like any other, and is
                 // held in the walk rather than in the pick slot: the file it stands on is the
@@ -20404,7 +20754,17 @@ pub fn run_preview_window() {
             // waiting on it is a hover, and the box is what that hover is replayed with (see
             // `MeasureProbed`).
             let mut measure_probed: Option<(PathBuf, Option<(u32, u32)>)> = None;
+            // What a carry held comes next, oldest first: a pin asked to close while it was
+            // being dragged is closed by this tick rather than sitting in the channel until the
+            // next one happens to read it.
             let mut next_preview_msg = carried_preview_msg.take();
+            if next_preview_msg.is_none() {
+                next_preview_msg = if carried_preview_messages.is_empty() {
+                    None
+                } else {
+                    Some(carried_preview_messages.remove(0))
+                };
+            }
             while let Some(preview_msg) = next_preview_msg.or_else(|| rx.try_recv().ok()) {
                 next_preview_msg = None;
 
@@ -21484,6 +21844,22 @@ pub fn run_preview_window() {
                         // earlier pin was still waiting for a box of is that pin's wait, and this
                         // window is not it (see `pin_awaiting_box`).
                         pin_awaiting_box = None;
+
+                        // The press tracking starts with this pin rather than with the loop.
+                        //
+                        // It is a local of the loop, so without this it survived every pin
+                        // boundary in the life of the process: a press the hook counted while
+                        // one pin was up was still "already seen" on the tick after the next
+                        // one was taken up, so the first press on a new pin was swallowed and
+                        // a drag begun from it never began. Set to what the hook has published
+                        // rather than to zero, because zero is a count no press has reached —
+                        // asking for a pin that has just come up to handle a press from the
+                        // window it replaced is the same bug from the other end.
+                        //
+                        // The Shell side fixed this exact shape on its own side, where the
+                        // equivalent is a destructive drain rather than a snapshot, so that
+                        // there is no state to go stale between two things.
+                        engine_press_seen = pin_media_press_count();
 
                         // And it is owed no hover's wait either, which is the one it inherits.
                         // A pin is taken up out of a hover, and a hover that was still loading
@@ -22857,7 +23233,7 @@ mod tests {
             // What the app's own `config.ini` holds is not what this test is about: it asks
             // the machine, and the setting is pinned to the one that asks the machine.
             config.office_engine = OfficeEngine::MicrosoftOffice;
-            config.office_extensions = office_formats::sanitize_office_extensions(
+            config.office_extensions = crate::formats::text_formats::sanitize_extension_list(
                 office_formats::DEFAULT_OFFICE_EXTENSIONS,
             );
         }
@@ -26905,12 +27281,121 @@ mod tests {
             );
         }
 
-        // And the second ask overwrites the first rather than queueing behind it, which is
-        // what a single-slot command means: one at a time is all a pointer can ask for.
+        // Two asks are two commands, in the order they were made. A single slot dropped the
+        // first: a double-click on `Next` is two `WM_LBUTTONUP`s, and moving two files along is
+        // what double-clicking a `Next` is for.
         ask_pin(PinCommand::Previous);
         ask_pin(PinCommand::Next);
+        assert_eq!(take_pin_command(), Some(PinCommand::Previous));
         assert_eq!(take_pin_command(), Some(PinCommand::Next));
         assert_eq!(take_pin_command(), None, "a command is taken once");
+    }
+
+    #[test]
+    fn a_command_queue_drops_the_oldest_rather_than_growing_without_end() {
+        // A loop that cannot keep up with a hand drumming on a button must not be the reason a
+        // session ends. What goes is the oldest, so what survives is what was last asked for.
+        for _ in 0..(PIN_COMMANDS_MAX + 4) {
+            ask_pin(PinCommand::Next);
+        }
+
+        let mut drained = Vec::new();
+        while let Some(command) = take_pin_command() {
+            drained.push(command);
+        }
+
+        assert_eq!(
+            drained.len(),
+            PIN_COMMANDS_MAX,
+            "the queue is bounded, however many asks are made of it"
+        );
+    }
+
+    #[test]
+    fn every_road_out_of_a_pin_leaves_no_command_behind_it() {
+        // A command left in the slot when a pin ends is a command about a window that is gone,
+        // fired against whatever pin comes next — the caption is drawn for the file now on
+        // screen, so a `Close` that belonged to the last one closes this one.
+        ask_pin(PinCommand::Close);
+        end_pin_state_guards();
+
+        assert_eq!(
+            take_pin_command(),
+            None,
+            "a pin that is over leaves nothing waiting to be acted on"
+        );
+    }
+
+    /// The one teardown settles every part of a pin, so the parts cannot drift apart.
+    ///
+    /// Every item here is a thing a pin is holding that belongs to no window and no other
+    /// object: the state, the keyboard claim, the pointer, a queued walk, a queued command, the
+    /// bubble's drag, and the box a drag left the window at. The watchdog had its own
+    /// hand-written list of four of them and left the rest standing, which is how a pin killed
+    /// because its loop was stuck ended still holding the keyboard and a focusable window.
+    ///
+    /// A test that asserts the whole list is what stops the list from being two lists again.
+    #[test]
+    fn the_one_teardown_settles_every_part_of_a_pin() {
+        // A pin holding all of it: state up and collapsed, the keyboard claimed with a window
+        // in front of it, a walk queued and a command left, a bubble mid-drag, and a box a drag
+        // has left the window at.
+        if let Ok(mut pinned) = PINNED.lock() {
+            *pinned = Some(overlay_pin((0, 0, 100, 100), PinChrome::always()));
+        }
+        PIN_ACTIVE.store(true, Ordering::Release);
+        PIN_COLLAPSED.store(true, Ordering::Release);
+        PIN_FOCUSED.store(true, Ordering::Release);
+        PIN_PREVIOUS_FOREGROUND.store(0x1234, Ordering::Release);
+        PIN_BUBBLE_MOVED.store(true, Ordering::Release);
+        if let Ok(mut drag) = PIN_BUBBLE_DRAG.lock() {
+            *drag = Some(((0, 0), (10, 10)));
+        }
+        if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+            *request = Some((0, 0, 10, 10));
+        }
+        ask_pin(PinCommand::Close);
+        assert!(queue_pin_job(PinJob::OpenWith {
+            path: PathBuf::from("x")
+        }));
+
+        end_pin_state_guards();
+
+        assert!(
+            PINNED.lock().ok().is_some_and(|pinned| pinned.is_none()),
+            "the state is gone"
+        );
+        assert!(!PIN_ACTIVE.load(Ordering::Acquire), "no pin is up");
+        assert!(!PIN_COLLAPSED.load(Ordering::Acquire), "no pin is collapsed");
+        assert!(
+            !PIN_FOCUSED.load(Ordering::Acquire),
+            "the keyboard is given back, by every road out"
+        );
+        assert_eq!(
+            PIN_PREVIOUS_FOREGROUND.load(Ordering::Acquire),
+            0,
+            "and no window is remembered to give it back to"
+        );
+        assert_eq!(take_pin_command(), None, "no command is left over");
+        assert!(
+            PIN_JOBS.0.lock().ok().is_some_and(|jobs| jobs.is_none()),
+            "the queued walk is dropped with the pin it was worked out for"
+        );
+        assert!(
+            !PIN_BUBBLE_MOVED.load(Ordering::Acquire),
+            "the bubble's drag latch does not outlive the pin"
+        );
+        assert!(
+            PIN_BUBBLE_DRAG
+                .lock()
+                .ok()
+                .is_some_and(|drag| drag.is_none()),
+            "nor the drag it was latched for"
+        );
+        assert!(
+            PIN_BOX_REQUEST.lock().ok().is_some_and(|box_| box_.is_none()),
+            "nor the box a drag had left a window that is going away at"
+        );
     }
 
     #[test]

@@ -1173,7 +1173,6 @@ fn measure_text(
         }
     }
 }
-
 /// The buttons a caption carries, in the order they sit in: the two or three that are a
 /// window's own — minimize, maximize or restore, close — and the three that are a pin's,
 /// packed to their left.
@@ -1863,37 +1862,57 @@ fn fit_title(
         }
 
         let previous = SelectObject(surface.dc, font);
-        let measured = |text: &str| -> i32 {
-            let wide: Vec<u16> = text.encode_utf16().collect();
+
+        // One buffer for every measurement below, filled in place. A caption is repainted on
+        // every pointer move across it, and the alternative was an allocation per measurement.
+        let mut wide: Vec<u16> = Vec::new();
+        let measured = |text: &str, wide: &mut Vec<u16>| -> i32 {
+            wide.clear();
+            wide.extend(text.encode_utf16());
             if wide.is_empty() {
                 return 0;
             }
             let mut extent = SIZE::default();
-            if GetTextExtentPoint32W(surface.dc, &wide, &mut extent).as_bool() {
+            if GetTextExtentPoint32W(surface.dc, wide, &mut extent).as_bool() {
                 extent.cx
             } else {
                 0
             }
         };
 
-        let full = measured(title);
+        let full = measured(title, &mut wide);
         let fitted = if full <= available {
             title.to_string()
         } else {
-            let ellipsis = measured("…");
+            let ellipsis = measured("…", &mut wide);
             let budget = (available - ellipsis).max(0);
-            let mut best = 0usize;
-            for (index, _) in title.char_indices().skip(1) {
-                if measured(&title[..index]) > budget {
-                    break;
+
+            // Searched rather than walked. A prefix only ever gets wider, so the longest
+            // beginning that fits is found in about seven measurements whatever the length
+            // of the name — where walking it was one `GetTextExtentPoint32W` per character,
+            // over a deep folder path, on every repaint that only moved a playhead.
+            let boundaries: Vec<usize> = title.char_indices().skip(1).map(|(index, _)| index).collect();
+            let fits =
+                |index: usize, wide: &mut Vec<u16>| measured(&title[..index], wide) <= budget;
+
+            // How many of the boundaries fit, which is the one the walk used to arrive at by
+            // stopping at the first that did not.
+            let mut low = 0usize;
+            let mut high = boundaries.len();
+            while low < high {
+                let middle = low + (high - low) / 2;
+                if fits(boundaries[middle], &mut wide) {
+                    low = middle + 1;
+                } else {
+                    high = middle;
                 }
-                best = index;
             }
 
-            if best == 0 {
-                String::new()
-            } else {
-                format!("{}…", &title[..best])
+            // A name whose first character is already too wide for the ellipsis is not a name
+            // with room cut off it, so nothing is drawn rather than an ellipsis alone.
+            match low.checked_sub(1).map(|index| boundaries[index]) {
+                Some(best) => format!("{}…", &title[..best]),
+                None => String::new(),
             }
         };
 
@@ -2406,6 +2425,122 @@ fn draw_open_with_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The prefix search, over a width function rather than a font — the same shape as the
+    /// search in `fit_title`, which is the part that has to be right and the part that cannot
+    /// be reached without a GDI surface.
+    fn longest_prefix_that_fits(title: &str, budget: i32, width: fn(&str) -> i32) -> String {
+        let boundaries: Vec<usize> = title.char_indices().skip(1).map(|(index, _)| index).collect();
+
+        let mut low = 0usize;
+        let mut high = boundaries.len();
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if width(&title[..boundaries[middle]]) <= budget {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+
+        match low.checked_sub(1).map(|index| boundaries[index]) {
+            Some(best) => format!("{}…", &title[..best]),
+            None => String::new(),
+        }
+    }
+
+    #[test]
+    fn a_cut_name_is_the_whole_name_where_it_fits_and_the_longest_beginning_where_it_does_not() {
+        // Six pixels a character, so a budget of 24 is four characters and no more.
+        let width = |text: &str| text.chars().count() as i32 * 6;
+
+        assert_eq!(longest_prefix_that_fits("abcdef", 24, width), "abcd…");
+        // The last boundary is the one before the final character: a name cut at the very last
+        // character is a name with a character missing, and it is cut where the width ran out
+        // rather than as late as it could be.
+        assert_eq!(longest_prefix_that_fits("abcdef", 30, width), "abcde…");
+        // Nothing fits beside the ellipsis, so nothing is drawn — a lone ellipsis is not a name.
+        assert_eq!(longest_prefix_that_fits("abcdef", 0, width), "");
+        assert_eq!(longest_prefix_that_fits("abcdef", 5, width), "");
+        // One boundary that fits, and the name is kept to its first character.
+        assert_eq!(longest_prefix_that_fits("abcdef", 6, width), "a…");
+        // A single character has no boundary to cut at, so it is not cut either.
+        assert_eq!(longest_prefix_that_fits("a", 0, width), "");
+    }
+
+    #[test]
+    fn a_cut_name_is_cut_on_a_character_rather_than_inside_one() {
+        // A name of multi-byte characters: every boundary the search tries is the start of a
+        // character, so a cut cannot land in the middle of one and leave half a glyph.
+        let title = "äöüäöüäöü";
+        let width = |text: &str| text.chars().count() as i32 * 10;
+
+        let cut = longest_prefix_that_fits(title, 25, width);
+
+        assert_eq!(cut, "äö…");
+        assert!(title.starts_with(cut.trim_end_matches('…')));
+        assert!(cut.is_char_boundary(cut.len()));
+    }
+
+    #[test]
+    fn the_search_agrees_with_walking_it() {
+        // The search replaced a walk that stopped at the first prefix too wide, so the two must
+        // answer the same thing for every budget — which is the whole claim of the change.
+        let title = "D:\\some\\folder\\a rather long file name.txt";
+        let width = |text: &str| text.chars().count() as i32 * 7;
+
+        for budget in 0..(title.chars().count() as i32 * 7) {
+            let boundaries: Vec<usize> =
+                title.char_indices().skip(1).map(|(index, _)| index).collect();
+
+            let mut walked = 0usize;
+            for &index in &boundaries {
+                if width(&title[..index]) > budget {
+                    break;
+                }
+                walked = index;
+            }
+
+            let expected = if walked == 0 {
+                String::new()
+            } else {
+                format!("{}…", &title[..walked])
+            };
+
+            assert_eq!(
+                longest_prefix_that_fits(title, budget, width),
+                expected,
+                "the search and the walk differ at a budget of {budget}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sanitized_list_drops_a_leading_dot_a_duplicate_and_anything_that_is_not_an_extension() {
+        // The one rule every list in the app is read through, and it used to be written out
+        // fourteen times: a leading dot is what a user types, an entry that is not a bare
+        // extension is dropped rather than matched against, and a repeat is not a second entry.
+        let typed = crate::formats::text_formats::sanitize_extension_list(
+            " .ZIP , zip,,book*.azw,epub,..,tar.gz",
+        );
+
+        // `book*.azw` is a path fragment and `tar.gz` a compound name: neither is a bare
+        // extension, so neither is in a list that is matched against one.
+        assert_eq!(typed, vec!["zip", "epub"]);
+    }
+
+    #[test]
+    fn the_archive_list_is_the_one_that_keeps_a_dotted_compound_name() {
+        // `tar.gz` is a name rather than an extension, and the archive list matches it against
+        // the end of a whole file name — so a sanitiser that dropped the dot would silently
+        // stop the list claiming the format it exists to claim. This is the only difference
+        // between the two lists, and it is the reason they are two functions.
+        let typed = crate::formats::text_formats::sanitize_archive_extension_list(
+            " .ZIP , zip,,nonsense*,docx,tar.gz",
+        );
+
+        assert_eq!(typed, vec!["zip", "docx", "tar.gz"]);
+    }
 
     #[test]
     fn a_clock_is_written_the_way_a_player_writes_one() {

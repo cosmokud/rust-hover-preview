@@ -11,46 +11,45 @@ use std::time::Duration;
 
 use crate::config::theme_files;
 use crate::formats::archive_formats::{
-    sanitize_archive_extensions, ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS, DEFAULT_ARCHIVE_EXTENSIONS,
+    ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS, DEFAULT_ARCHIVE_EXTENSIONS,
 };
 use crate::formats::calibre_formats::{
-    sanitize_calibre_extensions, CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS,
-    CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE, DEFAULT_CALIBRE_EXTENSIONS,
+    CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS, CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE,
+    DEFAULT_CALIBRE_EXTENSIONS,
 };
 use crate::formats::design_formats::{
-    sanitize_design_extensions, DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
+    DEFAULT_DESIGN_EXTENSIONS, DESIGN_EXTENSIONS_BEFORE_AI,
     DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE, DESIGN_EXTENSIONS_WITH_CDR,
 };
-use crate::formats::ebook_formats::{sanitize_ebook_extensions, DEFAULT_EBOOK_EXTENSIONS};
-use crate::formats::font_formats::{sanitize_font_extensions, DEFAULT_FONT_EXTENSIONS};
+use crate::formats::ebook_formats::DEFAULT_EBOOK_EXTENSIONS;
+use crate::formats::font_formats::DEFAULT_FONT_EXTENSIONS;
 use crate::formats::image_formats::{
-    sanitize_image_extensions, DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_AVCI,
+    DEFAULT_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS_BEFORE_AVCI,
     IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS, IMAGE_EXTENSIONS_BEFORE_DDS,
     IMAGE_EXTENSIONS_BEFORE_SVG, IMAGE_EXTENSIONS_WITH_SVG,
 };
 use crate::formats::libre_formats::{
-    sanitize_libre_extensions, DEFAULT_LIBRE_EXTENSIONS,
-    LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ,
+    DEFAULT_LIBRE_EXTENSIONS, LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ,
 };
 use crate::formats::magick_formats::{
-    sanitize_magick_extensions, DEFAULT_MAGICK_EXTENSIONS, MAGICK_EXTENSIONS_BEFORE_THE_REST,
+    DEFAULT_MAGICK_EXTENSIONS, MAGICK_EXTENSIONS_BEFORE_THE_REST,
 };
-use crate::formats::office_formats::{sanitize_office_extensions, DEFAULT_OFFICE_EXTENSIONS};
+use crate::formats::office_formats::DEFAULT_OFFICE_EXTENSIONS;
 use crate::formats::peazip_formats::{
-    sanitize_peazip_extensions, DEFAULT_PEAZIP_EXTENSIONS, PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS,
+    DEFAULT_PEAZIP_EXTENSIONS, PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS,
     PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS, PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE,
 };
 use crate::formats::text_formats::{
-    sanitize_extensions, sanitize_names, DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
+    sanitize_archive_extension_list, sanitize_extension_list, sanitize_extensions, sanitize_names,
+    DEFAULT_TEXT_EXTENSIONS, DEFAULT_TEXT_NAMES,
 };
 use crate::formats::vector_formats::{
-    sanitize_vector_extensions, DEFAULT_VECTOR_EXTENSIONS, VECTOR_EXTENSIONS_BEFORE_SVG,
+    DEFAULT_VECTOR_EXTENSIONS, VECTOR_EXTENSIONS_BEFORE_SVG,
     VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS,
 };
-use crate::formats::audio_formats::{sanitize_audio_extensions, DEFAULT_AUDIO_EXTENSIONS};
+use crate::formats::audio_formats::DEFAULT_AUDIO_EXTENSIONS;
 use crate::formats::video_formats::{
-    sanitize_video_extensions, DEFAULT_FFMPEG_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS,
-    VIDEO_EXTENSIONS_BEFORE_THE_SPLIT,
+    DEFAULT_FFMPEG_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS, VIDEO_EXTENSIONS_BEFORE_THE_SPLIT,
 };
 use crate::readers::tone_map::Curve;
 
@@ -1946,22 +1945,22 @@ impl Default for AppConfig {
             hdr_exposure: DEFAULT_HDR_EXPOSURE,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
-            image_extensions: sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
-            video_extensions: sanitize_video_extensions(DEFAULT_VIDEO_EXTENSIONS),
-            ffmpeg_extensions: sanitize_video_extensions(DEFAULT_FFMPEG_EXTENSIONS),
-            audio_extensions: sanitize_audio_extensions(DEFAULT_AUDIO_EXTENSIONS),
+            image_extensions: sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS),
+            video_extensions: sanitize_extension_list(DEFAULT_VIDEO_EXTENSIONS),
+            ffmpeg_extensions: sanitize_extension_list(DEFAULT_FFMPEG_EXTENSIONS),
+            audio_extensions: crate::formats::text_formats::sanitize_extension_list(DEFAULT_AUDIO_EXTENSIONS),
             text_extensions: sanitize_extensions(DEFAULT_TEXT_EXTENSIONS),
             text_names: sanitize_names(DEFAULT_TEXT_NAMES),
-            archive_extensions: sanitize_archive_extensions(DEFAULT_ARCHIVE_EXTENSIONS),
-            office_extensions: sanitize_office_extensions(DEFAULT_OFFICE_EXTENSIONS),
-            font_extensions: sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS),
-            design_extensions: sanitize_design_extensions(DEFAULT_DESIGN_EXTENSIONS),
-            libre_extensions: sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS),
-            magick_extensions: sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS),
-            peazip_extensions: sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS),
-            calibre_extensions: sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS),
-            ebook_extensions: sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS),
-            vector_extensions: sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS),
+            archive_extensions: crate::formats::text_formats::sanitize_archive_extension_list(DEFAULT_ARCHIVE_EXTENSIONS),
+            office_extensions: crate::formats::text_formats::sanitize_extension_list(DEFAULT_OFFICE_EXTENSIONS),
+            font_extensions: crate::formats::text_formats::sanitize_extension_list(DEFAULT_FONT_EXTENSIONS),
+            design_extensions: sanitize_extension_list(DEFAULT_DESIGN_EXTENSIONS),
+            libre_extensions: sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS),
+            magick_extensions: sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS),
+            peazip_extensions: sanitize_extension_list(DEFAULT_PEAZIP_EXTENSIONS),
+            calibre_extensions: sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS),
+            ebook_extensions: crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS),
+            vector_extensions: sanitize_extension_list(DEFAULT_VECTOR_EXTENSIONS),
         }
     }
 }
@@ -2251,12 +2250,21 @@ fn configured_list(
 fn repair_older_lists(ini: &mut Ini) -> bool {
     let mut repaired = false;
 
+    // Bound to the same type once each, rather than coerced at all ten rows. An array's
+    // elements have to be one type, and ten sanitizers of the same signature are ten distinct
+    // fn items, so the coercions were only ever there to make the array typecheck. There are
+    // two of them now rather than ten: the archive list holds a dotted compound name and
+    // everything else is a bare extension (see `text_formats::sanitize_extension_list`).
+    let plain: fn(&str) -> Vec<String> = sanitize_extension_list;
+    let compound: fn(&str) -> Vec<String> =
+        crate::formats::text_formats::sanitize_archive_extension_list;
+
     for (section, defaults, previous, sanitize) in [
         (
             ARCHIVE_SECTION,
             DEFAULT_ARCHIVE_EXTENSIONS,
             &[ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS][..],
-            sanitize_archive_extensions as fn(&str) -> Vec<String>,
+            compound,
         ),
         (
             IMAGE_SECTION,
@@ -2268,7 +2276,7 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
                 IMAGE_EXTENSIONS_BEFORE_SVG,
                 IMAGE_EXTENSIONS_WITH_SVG,
             ][..],
-            sanitize_image_extensions as fn(&str) -> Vec<String>,
+            plain,
         ),
         (
             DESIGN_SECTION,
@@ -2278,19 +2286,19 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
                 DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
                 DESIGN_EXTENSIONS_WITH_CDR,
             ][..],
-            sanitize_design_extensions as fn(&str) -> Vec<String>,
+            plain,
         ),
         (
             LIBRE_SECTION,
             DEFAULT_LIBRE_EXTENSIONS,
             &[LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ][..],
-            sanitize_libre_extensions as fn(&str) -> Vec<String>,
+            plain,
         ),
         (
             MAGICK_SECTION,
             DEFAULT_MAGICK_EXTENSIONS,
             &[MAGICK_EXTENSIONS_BEFORE_THE_REST][..],
-            sanitize_magick_extensions as fn(&str) -> Vec<String>,
+            plain,
         ),
         (
             CALIBRE_SECTION,
@@ -2299,7 +2307,7 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
                 CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS,
                 CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE,
             ][..],
-            sanitize_calibre_extensions as fn(&str) -> Vec<String>,
+            plain,
         ),
         (
             PEAZIP_SECTION,
@@ -2309,13 +2317,13 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
                 PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS,
                 PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE,
             ][..],
-            sanitize_peazip_extensions as fn(&str) -> Vec<String>,
+            plain,
         ),
         (
             VIDEO_SECTION,
             DEFAULT_VIDEO_EXTENSIONS,
             &[VIDEO_EXTENSIONS_BEFORE_THE_SPLIT][..],
-            sanitize_video_extensions as fn(&str) -> Vec<String>,
+            plain,
         ),
         (
             FFMPEG_SECTION,
@@ -2324,7 +2332,7 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
             // a file that has it has an edit somebody made by hand, and a file that has not is
             // given the built-in list as it is read.
             &[][..],
-            sanitize_video_extensions as fn(&str) -> Vec<String>,
+            plain,
         ),
         (
             VECTOR_SECTION,
@@ -2333,7 +2341,7 @@ fn repair_older_lists(ini: &mut Ini) -> bool {
                 VECTOR_EXTENSIONS_BEFORE_SVG,
                 VECTOR_EXTENSIONS_BEFORE_THE_EPS_SPELLINGS,
             ][..],
-            sanitize_vector_extensions as fn(&str) -> Vec<String>,
+            plain,
         ),
     ] {
         let Some(value) = ini.get(section, "extensions") else {
@@ -3068,22 +3076,22 @@ impl AppConfig {
         ini.set(
             IMAGE_SECTION,
             "extensions",
-            Some(sanitize_image_extensions(&self.image_extensions.join(",")).join(",")),
+            Some(sanitize_extension_list(&self.image_extensions.join(",")).join(",")),
         );
         ini.set(
             VIDEO_SECTION,
             "extensions",
-            Some(sanitize_video_extensions(&self.video_extensions.join(",")).join(",")),
+            Some(sanitize_extension_list(&self.video_extensions.join(",")).join(",")),
         );
         ini.set(
             FFMPEG_SECTION,
             "extensions",
-            Some(sanitize_video_extensions(&self.ffmpeg_extensions.join(",")).join(",")),
+            Some(sanitize_extension_list(&self.ffmpeg_extensions.join(",")).join(",")),
         );
         ini.set(
             AUDIO_SECTION,
             "extensions",
-            Some(sanitize_audio_extensions(&self.audio_extensions.join(",")).join(",")),
+            Some(crate::formats::text_formats::sanitize_extension_list(&self.audio_extensions.join(",")).join(",")),
         );
         ini.set(
             TEXT_SECTION,
@@ -3098,52 +3106,52 @@ impl AppConfig {
         ini.set(
             ARCHIVE_SECTION,
             "extensions",
-            Some(sanitize_archive_extensions(&self.archive_extensions.join(",")).join(",")),
+            Some(crate::formats::text_formats::sanitize_archive_extension_list(&self.archive_extensions.join(",")).join(",")),
         );
         ini.set(
             OFFICE_SECTION,
             "extensions",
-            Some(sanitize_office_extensions(&self.office_extensions.join(",")).join(",")),
+            Some(crate::formats::text_formats::sanitize_extension_list(&self.office_extensions.join(",")).join(",")),
         );
         ini.set(
             FONT_SECTION,
             "extensions",
-            Some(sanitize_font_extensions(&self.font_extensions.join(",")).join(",")),
+            Some(crate::formats::text_formats::sanitize_extension_list(&self.font_extensions.join(",")).join(",")),
         );
         ini.set(
             DESIGN_SECTION,
             "extensions",
-            Some(sanitize_design_extensions(&self.design_extensions.join(",")).join(",")),
+            Some(sanitize_extension_list(&self.design_extensions.join(",")).join(",")),
         );
         ini.set(
             LIBRE_SECTION,
             "extensions",
-            Some(sanitize_libre_extensions(&self.libre_extensions.join(",")).join(",")),
+            Some(sanitize_extension_list(&self.libre_extensions.join(",")).join(",")),
         );
         ini.set(
             MAGICK_SECTION,
             "extensions",
-            Some(sanitize_magick_extensions(&self.magick_extensions.join(",")).join(",")),
+            Some(sanitize_extension_list(&self.magick_extensions.join(",")).join(",")),
         );
         ini.set(
             PEAZIP_SECTION,
             "extensions",
-            Some(sanitize_peazip_extensions(&self.peazip_extensions.join(",")).join(",")),
+            Some(sanitize_extension_list(&self.peazip_extensions.join(",")).join(",")),
         );
         ini.set(
             CALIBRE_SECTION,
             "extensions",
-            Some(sanitize_calibre_extensions(&self.calibre_extensions.join(",")).join(",")),
+            Some(sanitize_extension_list(&self.calibre_extensions.join(",")).join(",")),
         );
         ini.set(
             EBOOK_SECTION,
             "extensions",
-            Some(sanitize_ebook_extensions(&self.ebook_extensions.join(",")).join(",")),
+            Some(crate::formats::text_formats::sanitize_extension_list(&self.ebook_extensions.join(",")).join(",")),
         );
         ini.set(
             VECTOR_SECTION,
             "extensions",
-            Some(sanitize_vector_extensions(&self.vector_extensions.join(",")).join(",")),
+            Some(sanitize_extension_list(&self.vector_extensions.join(",")).join(",")),
         );
         ini
     }
@@ -3597,7 +3605,7 @@ impl AppConfig {
             IMAGE_SECTION,
             "extensions",
             DEFAULT_IMAGE_EXTENSIONS,
-            sanitize_image_extensions,
+            sanitize_extension_list,
         );
         self.image_extensions = list;
         let list = configured_list(
@@ -3605,7 +3613,7 @@ impl AppConfig {
             VIDEO_SECTION,
             "extensions",
             DEFAULT_VIDEO_EXTENSIONS,
-            sanitize_video_extensions,
+            sanitize_extension_list,
         );
         self.video_extensions = list;
         let list = configured_list(
@@ -3613,7 +3621,7 @@ impl AppConfig {
             FFMPEG_SECTION,
             "extensions",
             DEFAULT_FFMPEG_EXTENSIONS,
-            sanitize_video_extensions,
+            sanitize_extension_list,
         );
         self.ffmpeg_extensions = list;
         let list = configured_list(
@@ -3637,7 +3645,7 @@ impl AppConfig {
             ARCHIVE_SECTION,
             "extensions",
             DEFAULT_ARCHIVE_EXTENSIONS,
-            sanitize_archive_extensions,
+            sanitize_archive_extension_list,
         );
         self.archive_extensions = list;
         let list = configured_list(
@@ -3645,7 +3653,7 @@ impl AppConfig {
             OFFICE_SECTION,
             "extensions",
             DEFAULT_OFFICE_EXTENSIONS,
-            sanitize_office_extensions,
+            sanitize_extension_list,
         );
         self.office_extensions = list;
         // The sound list, new with its kind: an older file has no section at all, so the key is
@@ -3656,7 +3664,7 @@ impl AppConfig {
             AUDIO_SECTION,
             "extensions",
             DEFAULT_AUDIO_EXTENSIONS,
-            sanitize_audio_extensions,
+            sanitize_extension_list,
         );
         self.audio_extensions = list;
         // The font list is one whose built-in entries are new with the kind itself, so an
@@ -3667,7 +3675,7 @@ impl AppConfig {
             FONT_SECTION,
             "extensions",
             DEFAULT_FONT_EXTENSIONS,
-            sanitize_font_extensions,
+            sanitize_extension_list,
         );
         self.font_extensions = list;
         // The design list is new with the kind itself, the way the font list above is: an
@@ -3680,7 +3688,7 @@ impl AppConfig {
             DESIGN_SECTION,
             "extensions",
             DEFAULT_DESIGN_EXTENSIONS,
-            sanitize_design_extensions,
+            sanitize_extension_list,
         );
         self.design_extensions = list;
         // The render engine's list, new with its kind: an older file has no section at all, so
@@ -3693,7 +3701,7 @@ impl AppConfig {
             LIBRE_SECTION,
             "extensions",
             DEFAULT_LIBRE_EXTENSIONS,
-            sanitize_libre_extensions,
+            sanitize_extension_list,
         );
         self.libre_extensions = list;
         // And the ImageMagick engine's, the same shape once more: the camera raw formats above
@@ -3704,7 +3712,7 @@ impl AppConfig {
             MAGICK_SECTION,
             "extensions",
             DEFAULT_MAGICK_EXTENSIONS,
-            sanitize_magick_extensions,
+            sanitize_extension_list,
         );
         self.magick_extensions = list;
         // And the PeaZip engine's, the same shape once more: the archives its console archiver
@@ -3717,7 +3725,7 @@ impl AppConfig {
             PEAZIP_SECTION,
             "extensions",
             DEFAULT_PEAZIP_EXTENSIONS,
-            sanitize_peazip_extensions,
+            sanitize_extension_list,
         );
         self.peazip_extensions = list;
         // And the Calibre engine's, the same shape once more: the ebook formats its converter
@@ -3729,7 +3737,7 @@ impl AppConfig {
             CALIBRE_SECTION,
             "extensions",
             DEFAULT_CALIBRE_EXTENSIONS,
-            sanitize_calibre_extensions,
+            sanitize_extension_list,
         );
         self.calibre_extensions = list;
         // And the ebook list, which is the one list that is two readers' worth of names: the PDF's
@@ -3742,7 +3750,7 @@ impl AppConfig {
             EBOOK_SECTION,
             "extensions",
             DEFAULT_EBOOK_EXTENSIONS,
-            sanitize_ebook_extensions,
+            sanitize_extension_list,
         );
         self.ebook_extensions = list;
         // And the vector list, new with its kind: an older file has no section at all, so
@@ -3755,7 +3763,7 @@ impl AppConfig {
             VECTOR_SECTION,
             "extensions",
             DEFAULT_VECTOR_EXTENSIONS,
-            sanitize_vector_extensions,
+            sanitize_extension_list,
         );
         self.vector_extensions = list;
     }
@@ -4318,7 +4326,7 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(
             config.font_extensions,
-            sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS)
+            crate::formats::text_formats::sanitize_extension_list(DEFAULT_FONT_EXTENSIONS)
         );
 
         let mut ini = Ini::new();
@@ -4335,7 +4343,7 @@ mod tests {
         let config = read_file(&mut ini);
         assert_eq!(
             config.font_extensions,
-            sanitize_font_extensions(DEFAULT_FONT_EXTENSIONS)
+            crate::formats::text_formats::sanitize_extension_list(DEFAULT_FONT_EXTENSIONS)
         );
         assert!(
             config.differs(&ini),
@@ -4373,7 +4381,7 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(
             config.magick_extensions,
-            sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS)
+            sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS)
         );
 
         let mut ini = Ini::new();
@@ -4390,7 +4398,7 @@ mod tests {
         let config = read_file(&mut ini);
         assert_eq!(
             config.magick_extensions,
-            sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS)
+            sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS)
         );
         assert!(
             config.differs(&ini),
@@ -4410,7 +4418,7 @@ mod tests {
         let config = read_file(&mut ini);
         assert_eq!(
             config.magick_extensions,
-            sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS)
+            sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS)
         );
         for name in ["sun", "pict", "rgb", "ase", "fax"] {
             assert!(
@@ -4431,7 +4439,7 @@ mod tests {
         assert!(PreviewType::Libre.enabled_in(&config));
         assert_eq!(
             config.magick_extensions,
-            sanitize_magick_extensions(DEFAULT_MAGICK_EXTENSIONS)
+            sanitize_extension_list(DEFAULT_MAGICK_EXTENSIONS)
         );
 
         PreviewType::Images.set_enabled_in(&mut config, true);
@@ -4451,7 +4459,7 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(
             config.calibre_extensions,
-            sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS)
+            sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS)
         );
 
         let mut ini = Ini::new();
@@ -4472,7 +4480,7 @@ mod tests {
         let config = read_file(&mut ini);
         assert_eq!(
             config.calibre_extensions,
-            sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS)
+            sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS)
         );
         assert!(
             config.differs(&ini),
@@ -4487,7 +4495,7 @@ mod tests {
         assert!(!PreviewType::Ebook.enabled_in(&config));
         assert_eq!(
             config.calibre_extensions,
-            sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS)
+            sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS)
         );
 
         PreviewType::Ebook.set_enabled_in(&mut config, true);
@@ -4591,7 +4599,7 @@ mod tests {
 
         assert_eq!(
             config.image_extensions,
-            sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
     }
@@ -4614,12 +4622,12 @@ mod tests {
 
         assert_eq!(
             config.video_extensions,
-            sanitize_video_extensions(DEFAULT_VIDEO_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_VIDEO_EXTENSIONS),
             "the engine is asked about the names it can read"
         );
         assert_eq!(
             config.ffmpeg_extensions,
-            sanitize_video_extensions(DEFAULT_FFMPEG_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_FFMPEG_EXTENSIONS),
             "and the rest of the old list is the player's"
         );
         assert!(
@@ -4642,12 +4650,12 @@ mod tests {
 
         assert_eq!(
             config.video_extensions,
-            sanitize_video_extensions(&edited),
+            sanitize_extension_list(&edited),
             "an edit is read as the edit it is"
         );
         assert_eq!(
             config.ffmpeg_extensions,
-            sanitize_video_extensions(DEFAULT_FFMPEG_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_FFMPEG_EXTENSIONS),
             "and the player's list is the one this build writes"
         );
     }
@@ -4671,7 +4679,7 @@ mod tests {
 
         assert_eq!(
             config.peazip_extensions,
-            sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_PEAZIP_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
         for name in ["arc", "zpaq", "br", "bcm", "lpaq8"] {
@@ -4714,17 +4722,17 @@ mod tests {
 
         assert_eq!(
             config.archive_extensions,
-            sanitize_archive_extensions(DEFAULT_ARCHIVE_EXTENSIONS),
+            crate::formats::text_formats::sanitize_archive_extension_list(DEFAULT_ARCHIVE_EXTENSIONS),
             "a comic is not an archive any more"
         );
         assert_eq!(
             config.peazip_extensions,
-            sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_PEAZIP_EXTENSIONS),
             "and the help file the engine had taken is the archiver's again"
         );
         assert_eq!(
             config.calibre_extensions,
-            sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS),
             "and the engine's list is without it, with the Microsoft Reader book it kept"
         );
 
@@ -4753,7 +4761,7 @@ mod tests {
         // entries come back with the key rather than the names being lost on the way over.
         assert_eq!(
             config.ebook_extensions,
-            sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS),
+            crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS),
             "a file with no `[ebook]` section is given the built-in list"
         );
         assert!(
@@ -4779,7 +4787,7 @@ mod tests {
 
         assert_eq!(
             config.libre_extensions,
-            sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
         for name in ["swf", "epub", "qxp", "pm3", "vssm", "uof"] {
@@ -5124,7 +5132,7 @@ mod tests {
         ini.set(
             IMAGE_SECTION,
             "extensions",
-            Some(sanitize_image_extensions(IMAGE_EXTENSIONS_BEFORE_DDS).join(",")),
+            Some(sanitize_extension_list(IMAGE_EXTENSIONS_BEFORE_DDS).join(",")),
         );
 
         let config = read_file(&mut ini);
@@ -5152,7 +5160,7 @@ mod tests {
 
             assert_eq!(
                 config.design_extensions,
-                sanitize_design_extensions(DEFAULT_DESIGN_EXTENSIONS),
+                sanitize_extension_list(DEFAULT_DESIGN_EXTENSIONS),
                 "the list the app shipped before (`{shipped}`) is read as the list it ships now"
             );
         }
@@ -5165,7 +5173,7 @@ mod tests {
 
         assert_eq!(
             config.design_extensions,
-            sanitize_design_extensions(&edited),
+            sanitize_extension_list(&edited),
             "a list with an entry of its own is the user's and is kept as written"
         );
     }
@@ -5187,7 +5195,7 @@ mod tests {
 
         assert_eq!(
             config.image_extensions,
-            sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
         for extension in ["avif", "heic", "heif", "jxl"] {
@@ -5215,7 +5223,7 @@ mod tests {
 
         assert_eq!(
             config.image_extensions,
-            sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
         assert!(!config.image_extensions.contains(&"svg".to_string()));
@@ -5238,7 +5246,7 @@ mod tests {
 
         assert_eq!(
             config.vector_extensions,
-            sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS),
+            sanitize_extension_list(DEFAULT_VECTOR_EXTENSIONS),
             "the list the app shipped before is read as the list it ships now"
         );
         for extension in ["svg", "svgz"] {
@@ -5265,7 +5273,7 @@ mod tests {
 
         assert_eq!(
             config.vector_extensions,
-            sanitize_vector_extensions(DEFAULT_VECTOR_EXTENSIONS)
+            sanitize_extension_list(DEFAULT_VECTOR_EXTENSIONS)
         );
         for extension in ["epsf", "epi", "ept", "ept2", "ept3"] {
             assert!(
@@ -5291,7 +5299,7 @@ mod tests {
 
         assert_eq!(
             config.image_extensions,
-            sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS)
+            sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS)
         );
         assert!(config.image_extensions.contains(&"avci".to_string()));
     }
@@ -5309,7 +5317,7 @@ mod tests {
 
         assert_eq!(
             config.image_extensions,
-            sanitize_image_extensions(&written),
+            sanitize_extension_list(&written),
             "what the file says is what the list is"
         );
         assert!(!config.image_extensions.contains(&"svg".to_string()));
@@ -5735,7 +5743,7 @@ something_new=1
             image_cache_mb: 16,
             document_cache_mb: 2048,
             preview_enabled: false,
-            image_extensions: sanitize_image_extensions("png,dng"),
+            image_extensions: sanitize_extension_list("png,dng"),
             ..Default::default()
         };
 
@@ -5765,7 +5773,7 @@ something_new=1
     fn the_lists_reset_restores_the_built_in_lists_alone() {
         let mut config = AppConfig {
             image_cache_mb: 16,
-            image_extensions: sanitize_image_extensions("png,dng"),
+            image_extensions: sanitize_extension_list("png,dng"),
             ebook_extensions: Vec::new(),
             ..Default::default()
         };
@@ -5774,11 +5782,11 @@ something_new=1
 
         assert_eq!(
             config.image_extensions,
-            sanitize_image_extensions(DEFAULT_IMAGE_EXTENSIONS)
+            sanitize_extension_list(DEFAULT_IMAGE_EXTENSIONS)
         );
         assert_eq!(
             config.ebook_extensions,
-            sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS),
+            crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS),
             "a list emptied by hand is a list this puts back"
         );
         assert_eq!(config.image_cache_mb, 16, "and nothing else was touched");
@@ -5799,7 +5807,7 @@ something_new=1
     fn the_differences_are_named_by_the_keys_the_file_writes() {
         let config = AppConfig {
             image_cache_mb: 16,
-            image_extensions: sanitize_image_extensions("png,dng"),
+            image_extensions: sanitize_extension_list("png,dng"),
             ..Default::default()
         };
 

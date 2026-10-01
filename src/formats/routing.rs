@@ -102,7 +102,14 @@ pub fn nav_category(kind: PreviewType) -> NavCategory {
 /// its own: a drawing is not a picture, and the image list is asked last of all — so a name
 /// that list still holds and does not own is answered with the kind it belongs to. See
 /// [`claim_images`].
-type Claim = fn(&Path, &AppConfig, Asked) -> Option<PreviewType>;
+/// A question about one file, with the version of that file already read where reading it is
+/// what the question needs.
+///
+/// The key is `None` for a question about a name alone, which never touches the disk: the
+/// caller has already read the file, and the read that would settle the name is the one that
+/// was made. It is a parameter rather than something each claim works out for itself so that
+/// one entry read serves all fourteen (see `claims`).
+type Claim = fn(&Path, &AppConfig, Asked, Option<&crate::formats::head::Key>) -> Option<PreviewType>;
 
 /// The kinds, in the one order they are asked in.
 ///
@@ -153,7 +160,23 @@ pub fn kind_of_name(path: &Path, config: &AppConfig) -> Option<PreviewType> {
 }
 
 fn claims(path: &Path, config: &AppConfig, asked: Asked) -> Option<PreviewType> {
-    CLAIMS.iter().find_map(|claim| claim(path, config, asked))
+    // One reading of the directory entry for the whole walk, because the video claim below
+    // needs the version of the file to look the probe's answer up. Every claim that reads
+    // anything else reads it from `config`, and the one claim that opens the file is settled
+    // by `asked` rather than here.
+    //
+    // `Asked::Name` is a question about a name and never touches the disk at all: the caller
+    // has already read the file, and the read that would settle the name is the one that was
+    // made. Asking for the entry anyway cost a `fs::metadata` on a synthetic path, which is a
+    // metadata call for a file that is not there.
+    let key = match asked {
+        Asked::File => Some(crate::formats::head::key(path)),
+        Asked::Name => None,
+    };
+
+    CLAIMS
+        .iter()
+        .find_map(|claim| claim(path, config, asked, key.as_ref()))
 }
 
 /// A video: the configured list's names, and the two of them it shares with the text lists
@@ -163,8 +186,20 @@ fn claims(path: &Path, config: &AppConfig, asked: Asked) -> Option<PreviewType> 
 /// this list carries — an `.mp4`, an `.mka`, an `.ogg` — whose own streams turned out to hold
 /// a sound and no picture is not a video at all, and the sound claim below is where it is
 /// answered instead (see `audio_formats::probed_audio_only`).
-fn claim_video(path: &Path, config: &AppConfig, asked: Asked) -> Option<PreviewType> {
-    if audio_formats::probed_audio_only(path) {
+fn claim_video(
+    path: &Path,
+    config: &AppConfig,
+    asked: Asked,
+    key: Option<&crate::formats::head::Key>,
+) -> Option<PreviewType> {
+    // Asked of the key the walk already has, and of the path only where there is none. The
+    // probe's answer is a set in memory, so the entry that keys it is the only thing the
+    // question needs from the disk, and the walk has read it once for all fourteen claims.
+    let probed = match key {
+        Some(key) => audio_formats::probed_audio_only_in(key),
+        None => audio_formats::probed_audio_only(path),
+    };
+    if probed {
         return None;
     }
 
@@ -183,9 +218,19 @@ fn claim_video(path: &Path, config: &AppConfig, asked: Asked) -> Option<PreviewT
 /// It is asked beside the video claim rather than after the kinds below it, because the two
 /// are the pair that share containers: what a `.mka` is, is whichever of the two its streams
 /// say it is, and nothing else in the table has an opinion about one.
-fn claim_audio(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_audio(
+    path: &Path,
+    config: &AppConfig,
+    _asked: Asked,
+    key: Option<&crate::formats::head::Key>,
+) -> Option<PreviewType> {
     let named = audio_formats::matches_audio_list(path, &config.audio_extensions);
-    let probed = audio_formats::probed_audio_only(path);
+    // Of the key the walk already has where there is one: this is the second of the two claims
+    // that asks the probe's answer, and the entry it was keyed by was read once for both.
+    let probed = match key {
+        Some(key) => audio_formats::probed_audio_only_in(key),
+        None => audio_formats::probed_audio_only(path),
+    };
 
     (named || probed).then_some(PreviewType::Audio)
 }
@@ -198,7 +243,7 @@ fn claim_audio(path: &Path, config: &AppConfig, _asked: Asked) -> Option<Preview
 /// difference (see `preview_window::load_media_of_kind`). The PDF's names are asked of the list
 /// in hand rather than of the gate that reads it, since the caller holds the configuration
 /// already (see `pdf_preview::is_pdf_file_in`).
-fn claim_ebook(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_ebook(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     let page = pdf_preview::is_pdf_file_in(path, &config.ebook_extensions);
     let book = ebook_formats::matches_ebook_list(path, &config.ebook_extensions);
 
@@ -206,7 +251,7 @@ fn claim_ebook(path: &Path, config: &AppConfig, _asked: Asked) -> Option<Preview
 }
 
 /// An archive this app reads itself, which is a listing rather than an engine's work.
-fn claim_archives(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_archives(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     archive_formats::matches_archive_list(path, &config.archive_extensions)
         .then_some(PreviewType::Archives)
 }
@@ -214,13 +259,13 @@ fn claim_archives(path: &Path, config: &AppConfig, _asked: Asked) -> Option<Prev
 /// An archive a listing engine reads, asked beside the archive list above it: a name in that
 /// list is read by this app itself, and one in this list is read by an engine. A name in both
 /// is the archive list's, since that list is asked first.
-fn claim_peazip(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_peazip(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     peazip_formats::matches_peazip_list(path, &config.peazip_extensions)
         .then_some(PreviewType::Peazip)
 }
 
 /// A book a conversion engine reads: a name no reader here opens, and no list above claims.
-fn claim_calibre(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_calibre(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     calibre_formats::matches_calibre_list(path, &config.calibre_extensions)
         .then_some(PreviewType::Calibre)
 }
@@ -228,47 +273,47 @@ fn claim_calibre(path: &Path, config: &AppConfig, _asked: Asked) -> Option<Previ
 /// A document shown as a page: the names the application that owns the format draws, and the
 /// names a render engine draws because no application of that family is installed. Which of
 /// the two draws a file is the machine's answer rather than the list's (see [`chain`]).
-fn claim_document(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_document(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     office_formats::matches_office_list(path, &config.office_extensions)
         .then_some(PreviewType::Document)
 }
 
 /// A document only a render engine draws, asked after the Office list because a name can sit
 /// in both: what such a file keeps of itself is a thumbnail, and a thumbnail is not a preview.
-fn claim_libre(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_libre(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     libre_formats::matches_libre_list(path, &config.libre_extensions).then_some(PreviewType::Libre)
 }
 
 /// A picture an image converter develops — a camera raw above all — asked before the design
 /// list, which it is a neighbour of rather than a member of.
-fn claim_magick(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_magick(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     magick_formats::matches_magick_list(path, &config.magick_extensions)
         .then_some(PreviewType::Magick)
 }
 
 /// A design document: a kind of its own, whose preview is made of the picture the file keeps
 /// of itself rather than of a decoder its name names.
-fn claim_design(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_design(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     design_formats::matches_design_list(path, &config.design_extensions)
         .then_some(PreviewType::Design)
 }
 
 /// A drawing: a metafile, an encapsulated PostScript file, or an SVG document.
-fn claim_vector(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_vector(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     vector_formats::matches_vector_list(path, &config.vector_extensions)
         .then_some(PreviewType::Vector)
 }
 
 /// Text: the extension lists and the names list, which is what makes a `makefile` a text file
 /// and what the dot-file rule is for (see `text_formats::lookup_extension`).
-fn claim_text(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_text(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     text_formats::matches_text_lists(path, &config.text_extensions, &config.text_names)
         .then_some(PreviewType::Text)
 }
 
 /// A font, asked ahead of the image list that would have turned a `.ttf` down: what draws one
 /// is the browser engine rather than a decoder.
-fn claim_fonts(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_fonts(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     font_formats::matches_font_list(path, &config.font_extensions).then_some(PreviewType::Fonts)
 }
 
@@ -279,7 +324,7 @@ fn claim_fonts(path: &Path, config: &AppConfig, _asked: Asked) -> Option<Preview
 /// answered as the drawing it is rather than as the picture its name says (see
 /// `svg_preview::is_svg_file`). It is asked inside this entry rather than as an entry of its
 /// own so that the order the other kinds are asked in is not disturbed by it.
-fn claim_images(path: &Path, config: &AppConfig, _asked: Asked) -> Option<PreviewType> {
+fn claim_images(path: &Path, config: &AppConfig, _asked: Asked, _key: Option<&crate::formats::head::Key>) -> Option<PreviewType> {
     if !image_formats::matches_image_list(path, &config.image_extensions) {
         return None;
     }

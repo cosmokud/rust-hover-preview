@@ -115,31 +115,6 @@ pub fn matches_libre_list(path: &Path, extensions: &[String]) -> bool {
     text_formats::matches_configured_extension(path, extensions)
 }
 
-/// Read one entry out of the configured list into the lowercase form the lookups use.
-///
-/// Every name in this list is a bare extension — unlike the archive list, which has to
-/// carry the dotted `tar.gz` — so anything that is not one is dropped rather than matched
-/// against.
-pub fn sanitize_libre_extensions(list: &str) -> Vec<String> {
-    let mut extensions: Vec<String> = Vec::new();
-
-    for entry in list.split(',') {
-        let trimmed = entry.trim().trim_start_matches('.').to_lowercase();
-        let is_extension = !trimmed.is_empty()
-            && !trimmed.starts_with('.')
-            && !trimmed.ends_with('.')
-            && trimmed
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_'));
-
-        if is_extension && !extensions.contains(&trimmed) {
-            extensions.push(trimmed);
-        }
-    }
-
-    extensions
-}
-
 /// Whether the configured list claims `path`, without asking whether these previews are
 /// switched on. The gate is asked beside it by the hook, the way every other kind's is.
 pub fn is_libre_file(path: &Path) -> bool {
@@ -182,24 +157,13 @@ pub fn is_libre_preview(path: &Path) -> bool {
 /// (`PreviewType::enabled`), because the same question is asked of a preview that is already
 /// on screen when a switch is thrown.
 pub fn engine_page_kind(path: &Path) -> Option<PreviewType> {
-    use crate::formats::content_type::{self, Content};
+    use crate::formats::content_type::Content;
 
-    // The file's own entry first and the configuration after it: the question is asked with the
-    // lists in hand, and the head it reads is read outside the lock (see `content_type::of`).
     // What follows the question asks the machine rather than a list — the name's own list, and
-    // which of the two kinds the page belongs to — and takes its own answers.
-    let facts = crate::formats::head::Facts::read(path);
-
-    let content = {
-        let Ok(config) = crate::CONFIG.lock() else {
-            return None;
-        };
-
-        match &facts {
-            Some(facts) => content_type::of_with_facts(path, facts, &config),
-            None => content_type::of(path, &config),
-        }
-    };
+    // which of the two kinds the page belongs to — and takes its own answers. The question
+    // itself reads the file's entry before taking the lock, so the guard is not held across
+    // the read (see `calibre_formats::content_of`).
+    let content = crate::formats::calibre_formats::content_of(path);
 
     match content {
         Content::Kind(PreviewType::Libre) => return Some(PreviewType::Libre),
@@ -233,7 +197,7 @@ mod tests {
     /// rule is worth stating rather than assuming.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS);
+        let list = text_formats::sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         for name in [
@@ -295,7 +259,7 @@ mod tests {
     /// of the nineties to the open formats of today.
     #[test]
     fn holds_the_documents_no_reader_of_this_app_takes() {
-        let list = sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS);
+        let list = text_formats::sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS);
 
         for name in [
             "letter.wpd",
@@ -337,7 +301,7 @@ mod tests {
     /// that made it worth checking is beside them.
     #[test]
     fn hands_over_no_name_the_engine_has_no_filter_for() {
-        let list = sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS);
+        let list = text_formats::sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS);
 
         for name in [
             "book.swf",
@@ -381,7 +345,7 @@ mod tests {
     #[test]
     fn a_page_the_engine_draws_answers_with_the_kind_it_is_shown_under() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.libre_extensions = sanitize_libre_extensions(DEFAULT_LIBRE_EXTENSIONS);
+            config.libre_extensions = text_formats::sanitize_extension_list(DEFAULT_LIBRE_EXTENSIONS);
         }
 
         let folder = std::env::temp_dir().join("rust-hover-preview-engine-page-kind");

@@ -27,6 +27,22 @@ twig,txt,v,vbs,vert,vhd,vhdl,vtt,vue,wat,wgsl,xhtml,xml,xsd,xsl,xslt,yaml,yml,zi
 /// a user might type, and an entry that is not a bare extension is dropped so a
 /// stray path or sentence in the list cannot turn into a match.
 fn sanitized_extension(value: &str) -> Option<String> {
+    sanitized_by(value, &['+', '-', '_', '#'])
+}
+
+/// The characters an extension may hold besides its alphanumerics, for the lists that
+/// differ on which.
+///
+/// Every list in this app is a comma-separated list of extensions read out of `config.ini`,
+/// and twelve of the fourteen sanitizers that read them were byte-identical. The two that were
+/// not are this one and the archive list's: the archive list has to carry a dotted compound
+/// such as `tar.gz`, which is the whole of what [`sanitize_archive_extensions`] is for, and a
+/// name list has to hold a dot for `cmakelists.txt`.
+///
+/// So the character set is a parameter and the body is one function. The twelve identical
+/// copies were 200 lines that any edit to one of them could have left disagreeing with the
+/// other eleven — which is the failure mode of a rule copied rather than shared.
+fn sanitized_by(value: &str, extra: &[char]) -> Option<String> {
     let trimmed = value.trim().trim_start_matches('.').to_lowercase();
     if trimmed.is_empty() {
         return None;
@@ -34,8 +50,45 @@ fn sanitized_extension(value: &str) -> Option<String> {
 
     let is_extension = trimmed
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_' | '#'));
+        .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c));
     is_extension.then_some(trimmed)
+}
+
+/// The characters every ordinary extension list admits besides its alphanumerics.
+///
+/// Deliberately without `#` and without `.`, which are what the two lists that need them
+/// add: `#` for a name like `C#`, `.` for a compound like `tar.gz`. Twelve of the fourteen
+/// lists admit exactly this set, and the two that admitted more are the two this is not.
+const PLAIN_EXTENSION_CHARS: &[char] = &['+', '-', '_'];
+
+/// The one sanitiser for the twelve lists that differ on nothing but their names.
+///
+/// A caller's list is sanitized by this, which is a `fn(&str) -> Vec<String>` it can be handed
+/// as a value rather than named fourteen times in an array of coercions.
+pub fn sanitize_extension_list(list: &str) -> Vec<String> {
+    sanitized_list(list, PLAIN_EXTENSION_CHARS)
+}
+
+/// The archive list's own sanitiser, which is the one list that holds a dotted compound name.
+///
+/// `tar.gz` is a name rather than an extension, and `matches_archive_list` matches it against
+/// the end of a whole file name — so a sanitiser that dropped the dot would silently stop the
+/// list claiming the format it exists to claim.
+pub fn sanitize_archive_extension_list(list: &str) -> Vec<String> {
+    sanitized_list(list, &['.', '+', '-', '_', '#'])
+}
+
+/// A list split into its entries, each read by the rule `extra` names.
+fn sanitized_list(list: &str, extra: &[char]) -> Vec<String> {
+    let mut extensions: Vec<String> = Vec::new();
+    for entry in list.split(',') {
+        if let Some(extension) = sanitized_by(entry, extra) {
+            if !extensions.contains(&extension) {
+                extensions.push(extension);
+            }
+        }
+    }
+    extensions
 }
 
 /// File names previewed as text before the list is edited in `config.ini`.
@@ -64,15 +117,7 @@ notice,.npmignore,.prettierignore,.prettierrc,procfile,rakefile,readme,.rustfmt.
 /// that is not a plausible file name is dropped so a stray path or sentence in the
 /// list cannot turn into a match.
 fn sanitized_name(value: &str) -> Option<String> {
-    let trimmed = value.trim().trim_start_matches('.').to_lowercase();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let is_name = trimmed
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
-    is_name.then_some(trimmed)
+    sanitized_by(value, &['.', '-', '_'])
 }
 
 /// The configured name list split into the entries lookups compare against.
@@ -99,6 +144,9 @@ fn lookup_name(path: &Path) -> Option<String> {
 }
 
 /// The configured list split into the entries lookups compare against.
+///
+/// The text list is the one list that admits `#` as well as the plain characters, so it is not
+/// the shared sanitiser above — see [`sanitized_by`].
 pub fn sanitize_extensions(list: &str) -> Vec<String> {
     let mut extensions: Vec<String> = Vec::new();
     for entry in list.split(',') {

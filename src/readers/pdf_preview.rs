@@ -613,7 +613,7 @@ mod tests {
     /// module's (see `is_pdf_file_in`).
     #[test]
     fn reads_a_page_name_out_of_the_list_it_is_given() {
-        let list = crate::formats::ebook_formats::sanitize_ebook_extensions(
+        let list = crate::formats::text_formats::sanitize_extension_list(
             crate::formats::ebook_formats::DEFAULT_EBOOK_EXTENSIONS,
         );
 
@@ -630,7 +630,7 @@ mod tests {
         );
 
         let without_the_page_names =
-            crate::formats::ebook_formats::sanitize_ebook_extensions("cbc,cbr,cbz");
+            crate::formats::text_formats::sanitize_extension_list("cbc,cbr,cbz");
         assert!(
             !is_pdf_file_in(Path::new("report.pdf"), &without_the_page_names),
             "and a name taken out of the list is answered by what it is rather than by a list"
@@ -646,7 +646,7 @@ mod tests {
             .join("illustrator");
         std::fs::create_dir_all(&folder).expect("a test folder");
 
-        let list = crate::formats::ebook_formats::sanitize_ebook_extensions(
+        let list = crate::formats::text_formats::sanitize_extension_list(
             crate::formats::ebook_formats::DEFAULT_EBOOK_EXTENSIONS,
         );
 

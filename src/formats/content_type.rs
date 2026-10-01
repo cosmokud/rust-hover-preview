@@ -138,7 +138,33 @@ pub enum Content {
 /// lock taken twice hangs the thread that asked, and this question is asked from the hook, the
 /// loader, the layout and the engines' own request sides.
 pub fn of(path: &Path, config: &AppConfig) -> Content {
-    answered(crate::formats::head::key(path), path, None, config)
+    // The one reading of the directory entry this question makes, and everything below is
+    // keyed by it. It used to be made twice: once here for the answer, and once inside
+    // `probed_audio_only` to look up a table that is already in memory. A hover asks this
+    // question from several places for one file, so the second read was paid several times
+    // over for an answer that was in memory both times.
+    let facts = crate::formats::head::Facts::read(path);
+    of_read(path, config, facts.as_ref())
+}
+
+/// The same question, for a caller that has already read the file's own entry.
+///
+/// The entry is the one thing this needs from the disk before the lists are consulted, and
+/// reading it is what lets the caller hand the same reading to every other question about the
+/// file — a hover asks this one and five others, and each was reading the same directory entry
+/// for itself (see `crate::formats::head::Facts`).
+pub fn of_entry_read(path: &Path, config: &AppConfig, facts: &crate::formats::head::Facts) -> Content {
+    of_read(path, config, Some(facts))
+}
+
+/// Both forms above, once the entry has been settled.
+fn of_read(path: &Path, config: &AppConfig, facts: Option<&crate::formats::head::Facts>) -> Content {
+    let key = facts.map_or_else(
+        || crate::formats::head::key(path),
+        |facts| facts.key().clone(),
+    );
+
+    answered(key, path, facts, config)
 }
 
 /// The same for a caller that has already read the file's own entry: the answer is held under
@@ -166,7 +192,10 @@ fn answered(
     // an `.mp4` that is really a song would be cached as the video its brand says it is and
     // stay one for the version of the file the probe had already corrected (see
     // `audio_formats::probed_audio_only`).
-    if crate::formats::audio_formats::probed_audio_only(path) {
+    //
+    // Asked of the key rather than of the path, so that a caller who has already read the
+    // directory entry does not have it read again to look this up in a table in memory.
+    if crate::formats::audio_formats::probed_audio_only_in(&key) {
         return Content::Kind(PreviewType::Audio);
     }
 
