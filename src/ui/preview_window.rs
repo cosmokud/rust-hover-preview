@@ -83,10 +83,9 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EndPaint, GdiFlush, GetMonitorInfoW, MonitorFromPoint, SelectObject, SetBrushOrgEx,
-    SetStretchBltMode, StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    BLENDFUNCTION, DIB_RGB_COLORS, HALFTONE, HBITMAP, HDC, HGDIOBJ, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
+    EndPaint, GdiFlush, SelectObject, SetBrushOrgEx, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA,
+    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HALFTONE,
+    HBITMAP, HDC, HGDIOBJ, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -98,7 +97,6 @@ use windows::Win32::System::Threading::{
     CreateEventW, OpenProcess, QueryFullProcessImageNameW, ResetEvent, SetEvent, TerminateProcess,
     WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, GetFocus, ReleaseCapture, SetCapture, SetFocus, VK_A, VK_C,
     VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_SPACE, VK_UP,
@@ -108,25 +106,28 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    EnumWindows, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
+    EnumWindows, GetCursorPos, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
     MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
-    SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
-    CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL,
-    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE,
-    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE,
-    PM_REMOVE, QS_ALLINPUT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
-    ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
+    GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+    IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
+    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
+    TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
+mod displays;
 mod pin_window;
+
+#[cfg(test)]
+use displays::RecordedDisplays;
+use displays::{dpi_at, work_area_at, Displays, DESKTOPS};
 
 use pin_window::{
     ask_pin, end_pin, give_the_keyboard_back, install, pin_state, release_keyboard, take_keyboard,
@@ -8895,58 +8896,15 @@ fn text_preview_layout(
 
 /// The effective DPI of the display nearest `(x, y)`, which is what a text preview's
 /// font size is scaled by — and what every margin a layout is written around is
-/// scaled by (see `logical_px`). Falls back to the 96 DPI baseline when no display
-/// can be named, the same way the placement falls back to the primary display.
+/// scaled by (see `logical_px`).
 ///
-/// The display is what is asked, not the window the point happens to be over: a
-/// window carries the scale its own process was told about — a UWP one can answer a
-/// scale that is not the display's at all — while the display under the point is one
-/// question with one answer, whatever is drawn on it.
-///
-/// The answer is kept per display, because the scale of a display does not change while
-/// it is the display: the pointer's own probe asks this every tick and every layout asks
-/// it again, and a pointer that has not crossed to another display is answered from here
-/// rather than by asking the DPI interface for a number that cannot have moved. A display
-/// whose scale does change — a monitor switched to another scaling — is a display whose
-/// handle is the same and whose answer is not, so the cache holds one display: the next
-/// one named is asked about, and the one after that is asked again.
+/// The display is asked and not the window the point happens to be over, and the display's
+/// answer is kept for one display and asked about again for the next: both of those are the
+/// adapter's, and the question of what to do where the machine cannot name a display is the
+/// same one a placement asks and so is asked in the same place (see `displays::display_at`).
 pub(crate) fn monitor_dpi_from_point(x: i32, y: i32) -> u32 {
-    const BASELINE_DPI: u32 = 96;
-
-    unsafe {
-        let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
-        if monitor.is_invalid() {
-            return BASELINE_DPI;
-        }
-
-        let handle = monitor.0 as isize;
-        if let Ok(cached) = MONITOR_DPI.lock() {
-            if let Some((cached_monitor, dpi)) = *cached {
-                if cached_monitor == handle {
-                    return dpi;
-                }
-            }
-        }
-
-        let mut dpi = BASELINE_DPI;
-        let mut dpi_x = 0u32;
-        let mut dpi_y = 0u32;
-        if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok() && dpi_x > 0
-        {
-            dpi = dpi_x;
-        }
-
-        if let Ok(mut cached) = MONITOR_DPI.lock() {
-            *cached = Some((handle, dpi));
-        }
-
-        dpi
-    }
+    dpi_at(x, y)
 }
-
-/// The last display asked about and the scale it answered with — one display's worth, for
-/// the reason `monitor_dpi_from_point` gives.
-static MONITOR_DPI: Lazy<Mutex<Option<(isize, u32)>>> = Lazy::new(|| Mutex::new(None));
 
 /// Render a single frame of the loading spinner animation (BGRA pixels).
 ///
@@ -9633,7 +9591,7 @@ impl PendingLoad {
             return followed;
         };
 
-        let bounds = monitor_bounds_from_point(cursor.x, cursor.y);
+        let bounds = work_area_at(cursor.x, cursor.y);
 
         // The room an engine is asked for follows the hand the preview does, because the
         // display the hand is on is the one the hover is now waiting on: a pointer that has
@@ -12023,7 +11981,10 @@ struct PreviewLayout {
     preview_h: u32,
 }
 
-#[derive(Clone, Copy)]
+/// Compared and printed rather than only copied, because the placements this is asked for are
+/// read back as rectangles: a test that asserts on one wants to say what the rectangle was, and
+/// an inequality between two displays is how "one display rather than the union" is stated.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ScreenBounds {
     left: i32,
     top: i32,
@@ -12053,89 +12014,11 @@ impl ScreenBounds {
     }
 }
 
-/// The work area of the primary display, for a layout that could not be anchored to
-/// the display it belongs to.
-///
-/// What this stands in for is one display's room, so one display is what it answers
-/// with: the whole virtual screen — `SM_XVIRTUALSCREEN` and its width — is the union
-/// of every display, and a preview sized to that is a preview that straddles the seam
-/// between two of them, which is the thing anchoring a layout to a display is for. A
-/// preview asked for on a display that cannot be named is therefore placed on the
-/// primary one: somewhere it is wholly visible, rather than somewhere it is not.
-fn primary_display_bounds() -> ScreenBounds {
-    unsafe {
-        let mut work = RECT::default();
-        if SystemParametersInfoW(
-            SPI_GETWORKAREA,
-            0,
-            Some(&mut work as *mut RECT as *mut core::ffi::c_void),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        )
-        .is_ok()
-        {
-            return ScreenBounds {
-                left: work.left,
-                top: work.top,
-                right: work.right,
-                bottom: work.bottom,
-            };
-        }
-    }
-
-    virtual_screen_bounds()
-}
-
-/// Every display in one rectangle, for the fallback that cannot do better than the
-/// primary display and find it missing.
-fn virtual_screen_bounds() -> ScreenBounds {
-    unsafe {
-        let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-        let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-        let width = GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1);
-        let height = GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1);
-
-        ScreenBounds {
-            left,
-            top,
-            right: left + width,
-            bottom: top + height,
-        }
-    }
-}
-
 /// Where the pointer is, in screen coordinates.
 fn cursor_position() -> Option<POINT> {
     let mut point = POINT::default();
     unsafe { GetCursorPos(&mut point) }.ok()?;
     Some(point)
-}
-
-/// Usable bounds of the display nearest to `(x, y)`. Anchoring layout to a
-/// single monitor keeps the preview from spilling onto a neighboring display
-/// when more than one is attached. Falls back to the primary display if the
-/// monitor query fails — a display, rather than the union of them, since a
-/// preview sized to the union is one that spills onto a neighbor.
-fn monitor_bounds_from_point(x: i32, y: i32) -> ScreenBounds {
-    unsafe {
-        let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
-        if !monitor.is_invalid() {
-            let mut info = MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
-            if GetMonitorInfoW(monitor, &mut info).as_bool() {
-                let work = info.rcWork;
-                return ScreenBounds {
-                    left: work.left,
-                    top: work.top,
-                    right: work.right,
-                    bottom: work.bottom,
-                };
-            }
-        }
-    }
-
-    primary_display_bounds()
 }
 
 /// The top edge that centers a `height`-tall preview on `center`, kept inside the
@@ -14423,12 +14306,23 @@ pub(crate) enum PinCommand {
 /// A pinned window's box, kept on a display: a window dragged past an edge leaves a caption's
 /// worth of itself behind, and a window dragged wholly off one is put back on it. The display
 /// it is kept on is the one the caption is nearest — which is the one the hand is on.
-fn clamp_pinned_box(box_: ScreenRegion, dpi: u32) -> ScreenRegion {
+///
+/// The display arrives as an argument rather than being worked out here, and that is the whole
+/// of why this function has tests at all. It is arithmetic on a rectangle, and it was untestable
+/// because it reached into the display driver for one of its two arguments: the one clamp in
+/// this file that decides where a window the user is looking at is allowed to be stranded, and
+/// the only way to ask it anything was to attach a monitor to it (see `displays`).
+///
+/// Which display it is asked about is the decision the seam makes testable rather than this one:
+/// the anchor is the box's own middle, so a window wide enough to have a middle on a display it
+/// is mostly not on is kept on the display the hand is on rather than the one its left edge is
+/// against, and a recorder reads that anchor back as a point (see `RecordedDisplays`).
+fn clamp_pinned_box(box_: ScreenRegion, dpi: u32, displays: &dyn Displays) -> ScreenRegion {
     let keep = logical_px(dpi, PIN_KEEP_ON_SCREEN_PIXELS).max(8);
     let width = (box_.2 - box_.0).max(1);
     let height = (box_.3 - box_.1).max(1);
 
-    let anchor = monitor_bounds_from_point(box_.0 + width / 2, box_.1 + height / 2);
+    let anchor = displays::display_at(displays, box_.0 + width / 2, box_.1 + height / 2).work_area;
     let horizontal_keep = keep.min(width);
     let vertical_keep = keep.min(height);
 
@@ -14806,7 +14700,7 @@ struct PinSwapSpace {
 /// It is read rather than asked for piece by piece so that the lock is let go of before
 /// anything is measured or asked for an engine — the same rule `PinUpdate` keeps.
 fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
-    let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
+    let bounds = work_area_at(pin.content.0, pin.content.1);
     PinSwapSpace {
         current: pin.content,
         bound: pin.bound,
@@ -14852,8 +14746,8 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
     // it, rather than read off the pin: what the take-up computes is the scale it draws the new
     // kind's chrome at, and a media loaded at another one would be a picture and a caption that
     // disagree about how large a pixel is.
-    let dpi = monitor_dpi_from_point(space.current.0, space.current.1);
-    let bounds = monitor_bounds_from_point(space.current.0, space.current.1);
+    let dpi = dpi_at(space.current.0, space.current.1);
+    let bounds = work_area_at(space.current.0, space.current.1);
 
     Some(match pin_update_content(space, path, bounds, dpi)? {
         PinBox::Measured(content) => PinPlan::Show(PinUpdate {
@@ -14885,7 +14779,7 @@ fn pin_engine_room() -> Option<(u32, u32)> {
         return None;
     }
 
-    Some(monitor_bounds_from_point(pin.content.0, pin.content.1).room())
+    Some(work_area_at(pin.content.0, pin.content.1).room())
 }
 
 /// Ask whichever engine owes a pinned window's new file its page, a picture or a listing — and
@@ -15835,8 +15729,8 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
     let mut pinned = pin_state()?;
     let pin = pinned.pin_mut()?;
 
-    pin.dpi = monitor_dpi_from_point(pin.content.0, pin.content.1);
-    let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
+    pin.dpi = dpi_at(pin.content.0, pin.content.1);
+    let bounds = work_area_at(pin.content.0, pin.content.1);
     let room = pinned_room(bounds, pin.dpi, pin.transport_bar, pin.overlay);
     let shape = (
         (pin.content.2 - pin.content.0).max(1) as u32,
@@ -15851,6 +15745,7 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
             pin.content.1 + height,
         ),
         pin.dpi,
+        &DESKTOPS,
     );
 
     pin.content = content;
@@ -15893,7 +15788,7 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
         return;
     };
 
-    let bounds = monitor_bounds_from_point(content.0, content.1);
+    let bounds = work_area_at(content.0, content.1);
     let room = pinned_room(bounds, dpi, transport_bar, overlay);
     let shape = media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape));
 
@@ -15909,7 +15804,7 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
         room,
     });
 
-    let content = clamp_pinned_box(content, dpi);
+    let content = clamp_pinned_box(content, dpi, &DESKTOPS);
 
     // The check and the write are one lock and one step, because a walk taken between the read
     // above and this write has changed what the pin is showing, and a box decided from the file
@@ -16910,8 +16805,8 @@ fn placed_pin_box(pin: &PinnedPreview) -> Option<ScreenRegion> {
     let height = (window.3 - window.1).max(1);
 
     let (anchor_x, anchor_y) = pin_bubble_centre().or_else(cursor_screen_point)?;
-    let bounds = monitor_bounds_from_point(anchor_x, anchor_y);
-    let dpi = monitor_dpi_from_point(anchor_x, anchor_y);
+    let bounds = work_area_at(anchor_x, anchor_y);
+    let dpi = dpi_at(anchor_x, anchor_y);
 
     let layout = compute_mouse_layout(
         anchor_x,
@@ -16991,13 +16886,13 @@ fn hide_pin_bubble() {
 /// to go. It is painted before it is shown, for the reason every other layered window of this app's
 /// is: what one shows between two paints is the surface it already has.
 unsafe fn show_pin_bubble(anchor: ScreenRegion) {
-    let dpi = monitor_dpi_from_point(anchor.0, anchor.1);
+    let dpi = dpi_at(anchor.0, anchor.1);
     let side = logical_px(dpi, PIN_BUBBLE_PIXELS).max(16);
 
     let centre_x = (anchor.0 + anchor.2) / 2;
     let centre_y = (anchor.1 + anchor.3) / 2;
     let (x, y) = (centre_x - side / 2, centre_y - side / 2);
-    let clamped = clamp_pinned_box((x, y, x + side, y + side), dpi);
+    let clamped = clamp_pinned_box((x, y, x + side, y + side), dpi, &DESKTOPS);
     let (x, y) = (clamped.0, clamped.1);
 
     let Some(hwnd) = pin_bubble_window() else {
@@ -17307,7 +17202,7 @@ unsafe fn drag_pin_bubble(hwnd: HWND) {
     let Some((_, _, width, height)) = window_origin(hwnd) else {
         return;
     };
-    let dpi = monitor_dpi_from_point(x, y);
+    let dpi = dpi_at(x, y);
     let target = clamp_pinned_box(
         (
             x - grab.0,
@@ -17316,6 +17211,7 @@ unsafe fn drag_pin_bubble(hwnd: HWND) {
             y - grab.1 + height,
         ),
         dpi,
+        &DESKTOPS,
     );
 
     let _ = SetWindowPos(
@@ -18663,7 +18559,7 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             resize_pinned_window(drag.window, edge, dx, dy, dpi, transport, overlay, frame)
         }
     };
-    let window = clamp_pinned_box(window, dpi);
+    let window = clamp_pinned_box(window, dpi, &DESKTOPS);
     let content = content_box_of(window, dpi, transport, overlay);
 
     {
@@ -18761,7 +18657,7 @@ fn resize_pinned_window(
     frame: PinFrame,
 ) -> ScreenRegion {
     let content = content_box_of(window, dpi, transport, overlay);
-    let bounds = monitor_bounds_from_point(
+    let bounds = work_area_at(
         content.0 + (content.2 - content.0) / 2,
         content.1 + (content.3 - content.1) / 2,
     );
@@ -20523,10 +20419,7 @@ pub fn run_preview_window() {
                             // and is left where the item put it.
                             if let Some(pl) = pending.as_mut() {
                                 if let Some(cursor) = cursor_position() {
-                                    pl.follow_pointer(
-                                        cursor,
-                                        monitor_dpi_from_point(cursor.x, cursor.y),
-                                    );
+                                    pl.follow_pointer(cursor, dpi_at(cursor.x, cursor.y));
                                 }
                             }
 
@@ -20741,7 +20634,7 @@ pub fn run_preview_window() {
             if let Some(ref mut pl) = pending_load {
                 if let Some(cursor) = cursor_position() {
                     let side_before = pl.spinner_side;
-                    let dpi = monitor_dpi_from_point(cursor.x, cursor.y);
+                    let dpi = dpi_at(cursor.x, cursor.y);
                     let followed = pl.follow_pointer(cursor, dpi);
                     if followed.spinner && pl.spinner_shown {
                         if pl.spinner_side == side_before {
@@ -21710,8 +21603,8 @@ pub fn run_preview_window() {
                         // the two without losing it.
                         set_text_scroll_anchor(x, y);
 
-                        let bounds = monitor_bounds_from_point(x, y);
-                        let dpi = monitor_dpi_from_point(x, y);
+                        let bounds = work_area_at(x, y);
+                        let dpi = dpi_at(x, y);
                         // One reading of the file and one of the configuration for the whole
                         // of this arm: the six questions below are asked of what comes back
                         // rather than of the path, which is what took about twenty
@@ -21812,8 +21705,8 @@ pub fn run_preview_window() {
                         let center = ((il + ir) / 2, (it + ib) / 2);
                         set_text_scroll_anchor(center.0, center.1);
 
-                        let bounds = monitor_bounds_from_point(center.0, center.1);
-                        let dpi = monitor_dpi_from_point(center.0, center.1);
+                        let bounds = work_area_at(center.0, center.1);
+                        let dpi = dpi_at(center.0, center.1);
                         // One reading of the file and one of the configuration for the whole of
                         // this arm, as the pointer's arm above does (see `HoverFacts`).
                         let hover = HoverFacts::read(&path);
@@ -21999,7 +21892,7 @@ pub fn run_preview_window() {
                             .lock()
                             .ok()
                             .and_then(|media| media.as_ref().map(|media| media.media_type));
-                        let dpi = monitor_dpi_from_point(rect.0, rect.1);
+                        let dpi = dpi_at(rect.0, rect.1);
                         let transport_bar = pin_transport_kind(kind);
                         let overlay = pin_overlay_chrome(kind);
 
@@ -22013,6 +21906,7 @@ pub fn run_preview_window() {
                         let window = clamp_pinned_box(
                             pinned_window_box_of(rect, dpi, transport_bar, overlay),
                             dpi,
+                            &DESKTOPS,
                         );
                         let content = content_box_of(window, dpi, transport_bar, overlay);
 
@@ -22817,6 +22711,176 @@ mod tests {
             right: 1000,
             bottom: 800,
         }
+    }
+
+    /// A display to the right of `bounds()`, so the two can be told apart by the answer
+    /// rather than by their position.
+    fn the_second_display() -> ScreenBounds {
+        ScreenBounds {
+            left: 1000,
+            top: 0,
+            right: 2000,
+            bottom: 800,
+        }
+    }
+
+    /// How much of a pinned window is left on the display it is kept on, in the pixels of a
+    /// 100% display: a caption's worth, which is the band the buttons that close the pin are
+    /// drawn in (see `PIN_KEEP_ON_SCREEN_PIXELS`).
+    fn a_captions_worth() -> i32 {
+        logical_px(TEST_DPI, PIN_KEEP_ON_SCREEN_PIXELS).max(8)
+    }
+
+    /// A locked window, a caption's worth of it left on the display.
+    ///
+    /// The two failures this states are the ones the clamp exists for: a window dragged past
+    /// an edge keeps a caption on screen, so its buttons can still be pressed, and one
+    /// dragged wholly off is put back. Both were unreachable to a test, because the clamp
+    /// worked the display out for itself — the reader is `displays`, which is what this
+    /// passes in (see `clamp_pinned_box`).
+    #[test]
+    fn a_locked_window_keeps_a_caption_on_the_display_it_is_kept_on() {
+        let desk = RecordedDisplays::one_display(bounds(), TEST_DPI);
+        let keep = a_captions_worth();
+
+        // Past the right edge: the caption's worth comes back, and the window keeps the size
+        // the hand pulled it to rather than being squeezed into the room that is left.
+        let dragged_right = clamp_pinned_box((1000, 300, 1400, 700), TEST_DPI, &desk);
+        assert_eq!(
+            dragged_right.0,
+            bounds().right - keep,
+            "a window dragged past the right edge is pulled back to leave its caption on screen"
+        );
+        assert_eq!(
+            (
+                dragged_right.2 - dragged_right.0,
+                dragged_right.3 - dragged_right.1
+            ),
+            (400, 400),
+            "and it is moved, not resized: the size a hand pulled it to is the size it keeps"
+        );
+
+        // Wholly off the right, and it is put back rather than kept as a caption on nothing.
+        let dragged_away = clamp_pinned_box((1600, 300, 2000, 700), TEST_DPI, &desk);
+        assert_eq!(
+            dragged_away.0,
+            bounds().right - keep,
+            "a window dragged wholly off one display is put back on it"
+        );
+        assert_eq!(
+            (
+                dragged_away.2 - dragged_away.0,
+                dragged_away.3 - dragged_away.1
+            ),
+            (400, 400),
+            "at the size it was dragged to, which is what the pin's own bound is later read from"
+        );
+
+        // And the same at each of the other three edges, because a caption is on whichever side
+        // the window was carried to and the four are four arms of the same decision.
+        let past_bottom = clamp_pinned_box((300, 780, 700, 1180), TEST_DPI, &desk);
+        assert_eq!(
+            past_bottom.1,
+            bounds().bottom - keep,
+            "and at the bottom, from the other direction"
+        );
+
+        // The top edge is the odd one out and deliberately so: a caption is drawn *above* the
+        // media, so a window pulled off the top has its buttons still on screen with no help
+        // from a sliver, and the whole of the top edge is pulled back rather than a caption's
+        // worth.
+        let past_top = clamp_pinned_box((300, -400, 700, 0), TEST_DPI, &desk);
+        assert_eq!(
+            past_top.1,
+            bounds().top,
+            "a window off the top is put back on it wholly"
+        );
+
+        let past_left = clamp_pinned_box((-400, 300, 0, 700), TEST_DPI, &desk);
+        assert_eq!(
+            past_left.2,
+            bounds().left + keep,
+            "and at the left, from the other direction"
+        );
+    }
+
+    /// A window wholly off a display is kept on the one its middle is on, which is the one
+    /// the caption is nearest — and for a box wider than the gap between two displays that is
+    /// the only thing there is to go on.
+    ///
+    /// The anchor is the box's own middle and not its left edge, and the two disagree exactly
+    /// where this defect lives: a window carried from one display to the next has its left edge
+    /// over the display it came from, so a clamp that asked about the left edge would put the
+    /// user's window back on the monitor they dragged it off.
+    #[test]
+    fn a_locked_window_is_kept_on_the_display_its_middle_is_on() {
+        let desk = RecordedDisplays::one_display(the_second_display(), TEST_DPI);
+
+        // The left edge is over the first display and the middle is over the second, which is
+        // the only case where the two disagree.
+        let straddling = clamp_pinned_box((900, 300, 1300, 700), TEST_DPI, &desk);
+        assert_eq!(
+            straddling,
+            (900, 300, 1300, 700),
+            "a window the middle of which is on the second display is not moved at all, whatever \
+             its left edge is over"
+        );
+
+        // And the point the clamp asked about is the middle, which a test can read back rather
+        // than infer from the box that came out.
+        let fresh = RecordedDisplays::one_display(bounds(), TEST_DPI);
+        clamp_pinned_box((300, 300, 700, 700), TEST_DPI, &fresh);
+        assert_eq!(
+            fresh.points_asked_about(),
+            vec![(500, 500)],
+            "the display is asked about the middle of the box rather than its corner"
+        );
+    }
+
+    /// The caption's worth is a distance under a hand, so it grows with the display it is
+    /// measured on — and a window on a 200% display is kept back further than the same window
+    /// on a 100% one.
+    ///
+    /// The alternative is a caption left half the width a hand can hit, on the one display
+    /// where the pixels are twice as big and the window is being read from further away.
+    #[test]
+    fn the_room_a_caption_is_given_grows_with_the_display_it_is_measured_on() {
+        let desk = RecordedDisplays::one_display(bounds(), 192);
+        let clamped = clamp_pinned_box((1000, 300, 1400, 700), 192, &desk);
+
+        assert_eq!(
+            clamped.0,
+            bounds().right - logical_px(192, PIN_KEEP_ON_SCREEN_PIXELS).max(8),
+            "a 200% display keeps a 200% caption, which is the same size under a hand"
+        );
+    }
+
+    /// A window kept on a display whose scale could not be read is kept on the primary one
+    /// rather than on the union of them.
+    ///
+    /// The machine this stands in for is the one a display-change arrives on, and it is the
+    /// only caller of this clamp that could not previously be reached at all: the fallback was
+    /// inside the function that did the Win32 call, so a test could not give it a machine that
+    /// refuses (see `displays::display_at`).
+    #[test]
+    fn a_window_on_a_display_that_cannot_be_named_is_kept_on_the_primary_one() {
+        // The same drag, against a machine that can name a display and against one that cannot. The
+        // second answers the primary's right edge, which is a rectangle covering one display and
+        // not the union of them — a union would leave the window where the hand left it.
+        let dragged = (1000, 300, 1400, 700);
+        let named = RecordedDisplays::one_display(the_second_display(), TEST_DPI);
+        let unnamed = RecordedDisplays::no_display_to_name(bounds());
+        assert_eq!(
+            clamp_pinned_box(dragged, TEST_DPI, &named),
+            dragged,
+            "a machine that names the second display leaves the window where the hand put it"
+        );
+        assert_eq!(
+            clamp_pinned_box(dragged, TEST_DPI, &unnamed).0,
+            bounds().right - a_captions_worth(),
+            "and one that cannot names the primary, whose own right edge is what it is kept \
+             against — a rectangle covering one display, not the union of them"
+        );
     }
 
     /// A lock the tests that publish the pointer's own state take, so that one of them
@@ -24547,14 +24611,8 @@ mod tests {
             "the spinner's own corner is a gap off the cursor, not under it"
         );
         assert_eq!(waiting.spinner_side, office_preview::WAITING_BOX);
-        let preview = compute_mouse_layout(
-            300,
-            300,
-            placement,
-            monitor_bounds_from_point(300, 300),
-            TEST_DPI,
-        )
-        .expect("a placed preview");
+        let preview = compute_mouse_layout(300, 300, placement, work_area_at(300, 300), TEST_DPI)
+            .expect("a placed preview");
         assert_eq!(
             (waiting.pos_x, waiting.pos_y),
             (preview.pos_x, preview.pos_y),
