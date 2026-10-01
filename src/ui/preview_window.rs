@@ -5069,6 +5069,14 @@ fn image_cache_limit_bytes() -> usize {
 ///
 /// A limit of zero empties it, which is what makes `image_cache_mb = 0` mean
 /// "hold nothing" rather than "hold everything until something else is stored".
+///
+/// The one thing it is for is memory: the budget is read from the configuration on every call,
+/// so a figure typed into the tray applies at the next decode rather than at a restart, and a
+/// figure typed down frees what is already held at the moment it is set (`trim_image_cache`)
+/// rather than at the next decode that happens to pass through. Which frames go is a policy —
+/// *least recently used*, not *largest*, and not *first decoded* — because a cache of decoded
+/// frames that evicts by size keeps re-decoding a file the user has moved on from and evicts
+/// nothing at all when every frame is the same size.
 fn image_cache_trim(cache: &mut ImageCache, limit: usize) {
     while cache.bytes > limit {
         // Bound to its own statement so the borrow of `entries` has ended before
@@ -16594,7 +16602,7 @@ fn restore_pin() {
         // bubble was clicked with, rather than where it stood when it was collapsed: the bubble is
         // the bit of the pin the hand is on, and what the hand gets back is a window placed beside
         // it the way this app places everything else (see `placed_pin_box`).
-        if let Some(window) = placed_pin_box(pin) {
+        if let Some(window) = placed_pin_box(pin, &DESKTOPS) {
             pin.content = content_box_of(window, pin.dpi, pin.transport_bar, pin.overlay);
         }
     }
@@ -16824,7 +16832,14 @@ fn put_back_bubble_playback(
 ///
 /// A hover's placement steps around the name the file is listed under (see `avoiding_text`); a
 /// bubble is on no name, so the pointer's own standoff is the whole of the clearance.
-fn placed_pin_box(pin: &PinnedPreview) -> Option<ScreenRegion> {
+///
+/// The display arrives as an argument, and that is the second of the two functions in this file
+/// that could not be tested because it worked the display out for itself. Where a box goes back
+/// up is a decision about the machine it is going up on, and the one that matters is which
+/// display that is: a bubble left at the right-hand edge of a display the second monitor begins
+/// beside must come back up on the second, or it comes back up under the edge of the first and
+/// off the bottom of the desktop.
+fn placed_pin_box(pin: &PinnedPreview, displays: &dyn Displays) -> Option<ScreenRegion> {
     if pin.restore.is_some() {
         return None;
     }
@@ -16834,8 +16849,9 @@ fn placed_pin_box(pin: &PinnedPreview) -> Option<ScreenRegion> {
     let height = (window.3 - window.1).max(1);
 
     let (anchor_x, anchor_y) = pin_bubble_centre().or_else(cursor_screen_point)?;
-    let bounds = work_area_at(anchor_x, anchor_y);
-    let dpi = dpi_at(anchor_x, anchor_y);
+    let display = displays::display_at(displays, anchor_x, anchor_y);
+    let bounds = display.work_area;
+    let dpi = display.dpi;
 
     let layout = compute_mouse_layout(
         anchor_x,
@@ -23080,7 +23096,321 @@ mod tests {
         );
     }
 
-    /// A lock the tests that share the pin's own state take, so that one of them runs at a
+    /// A frame of `bytes` pixels, for a cache to hold.
+    fn a_frame_of(bytes: usize) -> Arc<ImageFrame> {
+        Arc::new(ImageFrame::new(vec![0u8; bytes], 1, 1, 0))
+    }
+
+    /// A cache key for a file that is not there, named so a test can say which frame it is
+    /// looking at.
+    fn a_cache_key_for(name: &str) -> ImageCacheKey {
+        ImageCacheKey {
+            path: PathBuf::from(format!(r"C:\pictures\{name}")),
+            version: FileVersion {
+                modified: None,
+                len: 0,
+            },
+            width: 1,
+            height: 1,
+        }
+    }
+
+    /// A cache holding one frame per name, each `bytes` long, stored in that order so that
+    /// `first` is the least recently used and `last` the most.
+    ///
+    /// A cache of its own rather than the process-wide one, because the trim takes one as an
+    /// argument for exactly this reason: it is a decision about a set of frames and a number,
+    /// and the number comes from the configuration at every call so that an edit in the tray
+    /// applies without a restart (see `image_cache_limit_bytes`).
+    fn a_cache_of(names: &[(&str, usize)]) -> ImageCache {
+        let mut cache = ImageCache::default();
+        for (name, bytes) in names {
+            cache.tick += 1;
+            cache.entries.insert(
+                a_cache_key_for(name),
+                ImageCacheEntry {
+                    frame: a_frame_of(*bytes),
+                    bytes: *bytes,
+                    last_used: cache.tick,
+                },
+            );
+            cache.bytes += bytes;
+        }
+        cache
+    }
+
+    /// The names a cache still holds, least recently used first.
+    ///
+    /// Read in the order the trim decides in rather than in whatever order a hash map iterates,
+    /// because the order *is* the policy: a test that could not see it would pass against a
+    /// cache that dropped frames by some other rule entirely.
+    fn held_by_a_cache(cache: &ImageCache) -> Vec<String> {
+        let mut held: Vec<(&ImageCacheKey, u64)> = cache
+            .entries
+            .iter()
+            .map(|(key, entry)| (key, entry.last_used))
+            .collect();
+        held.sort_by_key(|(_, last_used)| *last_used);
+        held.into_iter()
+            .map(|(key, _)| {
+                key.path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    /// The frame least recently used is the one dropped, and the rest are kept whatever their
+    /// sizes are.
+    ///
+    /// This is the whole policy, and it is the opposite of the two rules it is not: a cache of
+    /// decoded frames that dropped the largest keeps re-decoding the file the user has just
+    /// moved on from — a 4K photograph is evicted by a 32-pixel icon, so the preview the user
+    /// is looking at is decoded again on every re-hover — and a cache that dropped by insertion
+    /// order evicts a frame that is being looked at right now in favour of one nobody has asked
+    /// for since the file was first hovered.
+    ///
+    /// The budget is bytes rather than entries for the same reason: what this app runs out of is
+    /// memory, and a frame at the size of a display is 33 MB while the icon is a few kilobytes.
+    #[test]
+    fn the_frame_least_recently_used_is_the_one_dropped() {
+        let mut cache = a_cache_of(&[
+            ("oldest.png", 4_000),
+            ("middle.png", 100),
+            ("newest.png", 4_000),
+        ]);
+
+        // A budget that only two of the three fit inside, and the big ones are the ones that do
+        // not fit — so a size-based rule would drop them and this rule does not.
+        image_cache_trim(&mut cache, 5_000);
+
+        assert_eq!(
+            held_by_a_cache(&cache),
+            vec!["middle.png", "newest.png"],
+            "the frame nobody has asked for since it was first decoded is the one that goes, \
+             whatever its size"
+        );
+        assert_eq!(
+            cache.bytes, 4_100,
+            "and the accounting is what is left, not what was held"
+        );
+    }
+
+    /// A budget of zero means "hold nothing", and every other budget means what it says.
+    ///
+    /// Zero is the one value a loop could spin on: `image_cache_trim` drops until the cache fits
+    /// inside the limit, and a cache that cannot be emptied would leave it dropping nothing with
+    /// the budget still unmet. That is why the loop breaks on an empty cache rather than asking
+    /// again, and it is the half of the trim that is a decision rather than arithmetic.
+    #[test]
+    fn a_budget_of_zero_empties_the_cache_rather_than_looping() {
+        let mut cache = a_cache_of(&[("a.png", 4_000), ("b.png", 4_000), ("c.png", 4_000)]);
+
+        image_cache_trim(&mut cache, 0);
+
+        assert!(
+            cache.entries.is_empty(),
+            "`image_cache_mb = 0` means hold nothing, rather than hold everything until \
+             something else is stored"
+        );
+        assert_eq!(
+            cache.bytes, 0,
+            "and nothing is still counted against the budget"
+        );
+
+        // And a budget the cache already fits inside drops nothing, which is the other direction
+        // the loop has to get right.
+        let mut cache = a_cache_of(&[("a.png", 100)]);
+        image_cache_trim(&mut cache, 1_000_000);
+        assert_eq!(held_by_a_cache(&cache), vec!["a.png"]);
+        assert_eq!(cache.bytes, 100);
+    }
+
+    /// A budget that lands between two frames drops exactly as many as it takes, and stops.
+    ///
+    /// The eviction is by a whole frame rather than a whole byte, so a budget that cannot be hit
+    /// exactly is overshot downwards rather than approximated: the alternative is dropping the
+    /// frame *after* the one that crossed the line, which frees memory in units of tens of
+    /// megabytes and frees far more than the budget was short by.
+    #[test]
+    fn the_budget_is_hit_by_whole_frames_and_no_further() {
+        let mut cache = a_cache_of(&[("a.png", 1_000), ("b.png", 1_000), ("c.png", 1_000)]);
+
+        // Room for two of three, and the third is dropped: exactly as many as it takes.
+        image_cache_trim(&mut cache, 2_500);
+        assert_eq!(held_by_a_cache(&cache), vec!["b.png", "c.png"]);
+
+        // Room for one and a half, which no whole frame fits into twice over: one is dropped,
+        // and dropping a second would free 1000 bytes the budget did not ask for.
+        image_cache_trim(&mut cache, 1_500);
+        assert_eq!(held_by_a_cache(&cache), vec!["c.png"]);
+        assert_eq!(cache.bytes, 1_000);
+    }
+
+    /// One share for every kind, so a test can say what a single kind's arm does by changing one
+    /// setting and leaving the other twelve where they are.
+    ///
+    /// Every scale is distinct on purpose: a test that set them all alike could not tell an
+    /// arm that read the wrong field from one that read the right one, and the whole of what
+    /// this table decides is *which* setting each kind follows.
+    fn one_scale_per_kind() -> HoverScales {
+        HoverScales {
+            picture: PreviewScale::Percent(11),
+            animated: PreviewScale::Percent(12),
+            video: PreviewScale::Percent(13),
+            ebook: PreviewScale::Percent(14),
+            document: PreviewScale::Percent(15),
+            vector: PreviewScale::Percent(16),
+            design: PreviewScale::Percent(17),
+            font: PreviewScale::Percent(18),
+        }
+    }
+
+    /// Every kind follows the one setting it names, and the share that comes back says which.
+    ///
+    /// The table is the reason this function exists at all. It was one share written into each
+    /// arm of a chain, and the chain's output disagreed with the loader's: a picture laid out
+    /// at the vector share is a preview placed against a box nothing will ever draw it into.
+    /// Writing the setting into the arm and reading it back through the placement the caller
+    /// uses is what makes "every kind follows its own" a claim rather than a hope — and the
+    /// shares are all distinct precisely so that an arm reading a neighbour's field fails.
+    ///
+    /// Every share here is below `100%`, so each kind is answered with a *reduced fit* — a
+    /// share of the display's room rather than of its own size — and the two are told apart by
+    /// the number rather than by the variant, which is the distinction a kind's arm exists to
+    /// draw.
+    #[test]
+    fn every_kind_follows_the_one_setting_it_names() {
+        let scales = one_scale_per_kind();
+
+        for (kind, setting, expected) in [
+            (PreviewType::Ebook, "ebook_scale", scales.ebook),
+            (PreviewType::Libre, "document_scale", scales.document),
+            (PreviewType::Calibre, "ebook_scale", scales.ebook),
+            (PreviewType::Design, "design_scale", scales.design),
+            (PreviewType::Vector, "vector_scale", scales.vector),
+            (PreviewType::Fonts, "font_scale", scales.font),
+        ] {
+            let path = std::env::temp_dir().join(format!("scale-of-kind-{setting}"));
+            // The path does not have to exist: these arms ask the file nothing, and the share is
+            // the display's room either way.
+            let hover = HoverFacts::read(&path);
+            assert_eq!(
+                scale_of_kind(kind, &hover, scales),
+                fit_reduced(expected),
+                "{kind:?} follows {setting} and nothing else"
+            );
+        }
+    }
+
+    /// A page takes the display's room and a bitmap takes a share of its own size, and a fit is
+    /// the only place the two rules come apart.
+    ///
+    /// They are not a preference. A page has no pixels of its own — it is laid out at whatever
+    /// box it is given, so the display's room is free quality — while a bitmap is only ever as
+    /// good as the pixels it holds, and stretching a worksheet's corner over a display produces
+    /// a preview that is larger and no more readable. So `Fit to Screen` means the whole of the
+    /// room for a page and the picture at the size it is for a bitmap, and the difference is the
+    /// whole of what `bitmap_at_display_scale` is for.
+    ///
+    /// Asserted against the two rules rather than against the table of kinds above, because they
+    /// live in different functions and the bug this rules out is one being reached where the
+    /// other belongs: a document handed a bitmap's share is placed against a box nothing is
+    /// going to draw it into.
+    #[test]
+    fn a_page_takes_the_display_and_a_bitmap_takes_its_own_size() {
+        for configured in [
+            PreviewScale::Percent(100),
+            PreviewScale::Percent(250),
+            PreviewScale::FitToScreen,
+            PreviewScale::FitToScreenReduced(40),
+        ] {
+            assert_eq!(
+                fit_reduced(configured),
+                match configured {
+                    PreviewScale::Percent(percent) if percent < 100 => {
+                        PreviewScale::FitToScreenReduced(percent)
+                    }
+                    _ => PreviewScale::FitToScreen,
+                },
+                "a page at {configured:?} is a share of the display's room"
+            );
+            assert_eq!(
+                bitmap_at_display_scale(configured),
+                match configured {
+                    PreviewScale::Percent(percent) => PreviewScale::Percent(percent),
+                    // Which is the half of the rule a fit is: the whole of the display as the
+                    // picture's own size, and never more of the picture than it has.
+                    PreviewScale::FitToScreen | PreviewScale::FitToScreenReduced(_) => {
+                        PreviewScale::Percent(100)
+                    }
+                },
+                "and a bitmap at {configured:?} is a share of its own, so a fit never enlarges \
+                 one to fill a display"
+            );
+        }
+
+        // And the one place the two rules are genuinely different, named on both sides so a
+        // reader can see that these are not the same rule written twice.
+        assert_ne!(
+            fit_reduced(PreviewScale::FitToScreen),
+            bitmap_at_display_scale(PreviewScale::FitToScreen),
+            "a fit is the room for a page and the picture's own size for a bitmap"
+        );
+    }
+
+    /// A picture keeps the picture's share, and an animation is the one thing that asks the file
+    /// — and it asks it last, because the answer cannot matter for any other kind.
+    ///
+    /// The ordering is a cost decision with a bug in it if it is wrong: `image_is_animated` is
+    /// the only arm of the table that reads the file, so a kind answered by one of its own arms
+    /// and then asked again would pay two file reads for one hover, on the thread that pumps
+    /// this window's messages. The cheap exit is that a user who has given animations the same
+    /// size as pictures never pays the probe at all — which is the state a fresh install is in,
+    /// because both settings start at `100%`.
+    #[test]
+    fn a_picture_asks_the_file_about_moving_only_when_the_two_sizes_differ() {
+        let animated = std::env::temp_dir().join("scale-of-kind-animated.gif");
+        write_test_gif(&animated, 2);
+        let still = std::env::temp_dir().join("scale-of-kind-still.gif");
+        write_test_gif(&still, 1);
+
+        let differing = HoverScales {
+            picture: PreviewScale::Percent(100),
+            animated: PreviewScale::Percent(25),
+            ..one_scale_per_kind()
+        };
+        assert_eq!(
+            scale_of_kind(PreviewType::Images, &HoverFacts::read(&animated), differing),
+            PreviewScale::Percent(25),
+            "a file whose own head says it moves is drawn at the animation's share"
+        );
+        assert_eq!(
+            scale_of_kind(PreviewType::Images, &HoverFacts::read(&still), differing),
+            PreviewScale::Percent(100),
+            "and one holding a single frame is a picture like any other"
+        );
+
+        // The same two files where the probe cannot change the answer, which is what makes the
+        // question affordable to ask on every hover.
+        let alike = HoverScales {
+            picture: PreviewScale::Percent(100),
+            animated: PreviewScale::Percent(100),
+            ..one_scale_per_kind()
+        };
+        for path in [&animated, &still] {
+            assert_eq!(
+                scale_of_kind(PreviewType::Images, &HoverFacts::read(path), alike),
+                PreviewScale::Percent(100),
+                "{} follows the picture's share, and the file is not read to find that out",
+                path.display()
+            );
+        }
+    }
+
+    /// The lock the tests that share the pin's own state take, so that one of them runs at a
     /// time: the pin is a process-wide value, so two of these at once is one test's press
     /// answered by another's window (see `pin_window::tests::ONE_AT_A_TIME`).
     static PIN_TESTS_ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
