@@ -57,14 +57,14 @@
 
 use crate::config::config::decode_budget_bytes;
 use crate::engines::document_cache::{self, PageKind};
+use crate::engines::supervisor::{self, Adapter, Worker};
 use once_cell::sync::Lazy;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Condvar, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::process::{Command, Stdio};
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, SystemTime};
 
 /// How long a conversion is given, and the point past which the engine is a stopped one
 /// rather than a busy one: the conversion is ended where it stands, and the picture it was
@@ -89,12 +89,6 @@ const CONVERSION_POLL: Duration = Duration::from_millis(50);
 /// rather than endless for the one way it cannot be: a coder that leaves something else
 /// holding that end.
 const OUTPUT_WAIT: Duration = Duration::from_secs(5);
-/// How long the engine thread waits on its slot before looking again.
-///
-/// The wait is on the slot itself, so a request is taken up the moment it is made and this
-/// is only a ceiling on how long anything else — a file the engine thread is asked to give up
-/// on, a run that is ending — goes unnoticed.
-const IDLE_TICK: Duration = Duration::from_secs(1);
 
 /// The engine's own program, by the name it installs under, and the name the older one is
 /// installed as.
@@ -555,140 +549,49 @@ pub fn request(path: &Path, room: (u32, u32), generation: u64) {
     // A conversion that has been inside one file for longer than any of them takes has
     // stopped answering, so it is ended here rather than queued behind: what that frees is
     // the thread it was holding and the file that is waiting for it.
-    end_hung_conversion();
+    supervisor::end_hung(Adapter::ImageMagick, CONVERSION_GIVE_UP);
 
     // A request for the file already being converted is that request. One that arrives
     // while another waits replaces it, the way the loader's slot does: the newest hover is
     // the one the pointer is on, and a file whose hover has gone is one nobody is waiting
     // for.
-    if running_source().as_deref() == Some(path) {
+    if supervisor::running_source(Adapter::ImageMagick).as_deref() == Some(path) {
         return;
     }
 
-    let (slot, ready) = &*REQUESTED;
-    if let Ok(mut requested) = slot.lock() {
-        *requested = Some(Requested {
-            path: path.to_path_buf(),
-            room,
-            generation,
-        });
-    }
-    ready.notify_all();
+    let file = path.to_path_buf();
+    WORKER.request(move || {
+        // Whatever the engine answers — a picture, or a conversion that wrote none — the
+        // hover waiting on this file is told either way. A panic is contained here for
+        // the reason the loader contains one: one file's failure is that file's, and the
+        // thread goes on to the next hover — a thread that died on one picture would take
+        // every picture after it with it, in silence.
+        let picture =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| develop(&file, room)))
+                .unwrap_or(None);
 
-    start_engine();
-}
-
-/// The file the engine is converting now, if it is converting one.
-fn running_source() -> Option<PathBuf> {
-    RUNNING
-        .lock()
-        .ok()?
-        .as_ref()
-        .map(|running| running.source.clone())
-}
-
-/// End a conversion that has outrun the engine's give-up.
-///
-/// Ending the process a conversion is waiting on is what ends the wait: the engine thread
-/// reads it as a conversion that wrote no picture, remembers the file as one the engine will
-/// not draw, and takes up the file behind it. What the caller here is left with is an engine
-/// that costs nothing and the answer it would have reached anyway.
-fn end_hung_conversion() {
-    let hung = RUNNING.lock().ok().and_then(|running| {
-        running
-            .as_ref()
-            .filter(|running| is_hung(running))
-            .map(|running| running.pid)
-    });
-
-    if let Some(pid) = hung {
-        // Verified by name and start time before anything is ended, like every other
-        // process this app holds a record of.
-        crate::app::engine_processes::terminate_owned(pid);
-    }
-}
-
-/// Whether a conversion in flight has had its chance: a file the engine has been reading
-/// for longer than any of them takes is one it is not going to finish.
-fn is_hung(running: &Running) -> bool {
-    running.started.elapsed() >= CONVERSION_GIVE_UP
-}
-
-/// Start the thread conversions run on, once.
-///
-/// It is one of the app's threads rather than one per file: what it does between conversions
-/// is wait on its own slot, which costs nothing, and what it is asked for is one file at a
-/// time because what it is holding is one process.
-fn start_engine() {
-    if ENGINE_STARTED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    std::thread::spawn(|| {
-        while let Some(requested) = next_request() {
-            // Whatever the engine answers — a picture, or a conversion that wrote none — the
-            // hover waiting on this file is told either way. A panic is contained here for
-            // the reason the loader contains one: one file's failure is that file's, and the
-            // thread goes on to the next hover — a thread that died on one picture would take
-            // every picture after it with it, in silence.
-            let picture = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                develop(&requested.path, requested.room)
-            }))
-            .unwrap_or(None);
-
-            let ok = picture.is_some();
-            if let Some(picture) = picture {
-                remember(&picture.key, (picture.width, picture.height));
-                // The bytes are in hand, so the page costs a write and nothing else: it is what
-                // the hovers after this one read, and the next run, which has no memory of the
-                // conversion at all. The hover that asked is drawn from the frame held below,
-                // so nothing here waits on the write — and at a budget of nothing the page is
-                // not written at all (see `document_cache::store_image`).
-                document_cache::store_image(
-                    &requested.path,
-                    ENGINE_NAME,
-                    PageKind::Png,
-                    &picture.png,
-                );
-                hold(picture);
-            } else {
-                refuse(&key_of(&requested.path));
-            }
-
-            crate::ui::preview_window::notify_magick_ready(
-                &requested.path,
-                requested.generation,
-                ok,
-            );
+        let ok = picture.is_some();
+        if let Some(picture) = picture {
+            remember(&picture.key, (picture.width, picture.height));
+            // The bytes are in hand, so the page costs a write and nothing else: it is what
+            // the hovers after this one read, and the next run, which has no memory of the
+            // conversion at all. The hover that asked is drawn from the frame held below,
+            // so nothing here waits on the write — and at a budget of nothing the page is
+            // not written at all (see `document_cache::store_image`).
+            document_cache::store_image(&file, ENGINE_NAME, PageKind::Png, &picture.png);
+            hold(picture);
+        } else {
+            refuse(&key_of(&file));
         }
+
+        crate::ui::preview_window::notify_magick_ready(&file, generation, ok);
     });
 }
 
-/// The next file to convert, waiting for one.
-///
-/// The wait is on the slot itself, so a request is taken up the moment it is made; a lock
-/// poisoned by a panic on another thread is still the same slot, and a queue of one is not
-/// worth standing down over.
-fn next_request() -> Option<Requested> {
-    let (slot, ready) = &*REQUESTED;
-    let mut requested = match slot.lock() {
-        Ok(requested) => requested,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-
-    loop {
-        if let Some(requested) = requested.take() {
-            return Some(requested);
-        }
-
-        // The wait is bounded rather than endless, and what a bound that runs out is for is
-        // a request that may have been made in the meantime.
-        requested = match ready.wait_timeout(requested, IDLE_TICK) {
-            Ok((requested, _)) => requested,
-            Err(poisoned) => poisoned.into_inner().0,
-        };
-    }
-}
+/// The thread conversions run on, and the one file waiting behind whatever is being converted
+/// now. Nothing is done between conversions but the wait, so the thread is asked for nothing
+/// there.
+static WORKER: Lazy<Worker> = Lazy::new(|| Worker::new(None));
 
 /// Develop a file, by running the engine the way a user would.
 ///
@@ -820,16 +723,12 @@ fn convert(program: &Path, source: &Path, room: (u32, u32)) -> Option<Vec<u8>> {
     });
 
     // What the engine is reading, published for the threads that may decide it has stopped
-    // answering while this one waits (see `end_hung_conversion`).
-    publish_running(Some(Running {
-        source: source.to_path_buf(),
-        pid: child.id(),
-        started: Instant::now(),
-    }));
+    // answering while this one waits.
+    supervisor::begin(Adapter::ImageMagick, source, child.id());
 
-    let finished = wait(&mut child, CONVERSION_GIVE_UP);
+    let finished = supervisor::wait(&mut child, CONVERSION_GIVE_UP, CONVERSION_POLL).is_some();
 
-    publish_running(None);
+    supervisor::stop(Adapter::ImageMagick);
 
     let png = written_rx.recv_timeout(OUTPUT_WAIT).ok().flatten();
 
@@ -864,22 +763,6 @@ fn png_dimensions(png: &[u8]) -> Option<(u32, u32)> {
     let height = u32::from_be_bytes(png.get(IHDR_AT + 4..IHDR_AT + 8)?.try_into().ok()?);
 
     (width > 0 && height > 0).then_some((width, height))
-}
-
-/// Wait for a process, ending it rather than waiting past `limit`.
-fn wait(child: &mut Child, limit: Duration) -> bool {
-    let deadline = Instant::now() + limit;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return true,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(CONVERSION_POLL),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-        }
-    }
 }
 
 /// Remember what a file's picture turned out to be, so that the layout can measure a preview
@@ -919,43 +802,10 @@ fn refuse(key: &Key) {
     }
 }
 
-/// Say what the engine is converting now, or that it has stopped.
-fn publish_running(running: Option<Running>) {
-    if let Ok(mut published) = RUNNING.lock() {
-        *published = running;
-    }
-}
-
-/// The conversion in flight: the file being converted, the process converting it, and since
-/// when. It is what tells a busy engine from one that has stopped answering, and it is the id
-/// a conversion that has to be ended is ended by.
-struct Running {
-    source: PathBuf,
-    pid: u32,
-    started: Instant,
-}
-
-static RUNNING: Lazy<Mutex<Option<Running>>> = Lazy::new(|| Mutex::new(None));
-
-/// A file to convert, the box to convert it into, and the hover that asked for it.
-struct Requested {
-    path: PathBuf,
-    room: (u32, u32),
-    generation: u64,
-}
-
-/// The file waiting to be converted, and the signal that one is there: a queue of one, for
-/// the reason there is one engine at a time.
-static REQUESTED: Lazy<(Mutex<Option<Requested>>, Condvar)> =
-    Lazy::new(|| (Mutex::new(None), Condvar::new()));
-
-/// Whether the engine thread has been started. It is one of the app's threads rather than
-/// one per file, so it is started once and waits on its slot for the rest of the run.
-static ENGINE_STARTED: AtomicBool = AtomicBool::new(false);
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     /// The engine is never started for a name its own list does not hold: a picture this
     /// app decodes itself, a document an engine of its own draws and a video are all
@@ -991,17 +841,15 @@ mod tests {
     /// the engine that its list has not claimed.
     #[test]
     fn queues_nothing_for_a_name_it_does_not_read() {
-        let (slot, _) = &*REQUESTED;
-        if let Ok(mut requested) = slot.lock() {
-            *requested = None;
-        }
+        assert!(
+            !WORKER.take_queued(),
+            "the slot is empty before anything is asked of the engine"
+        );
 
         request(Path::new("photo.png"), (1920, 1080), 7);
 
         assert!(
-            slot.lock()
-                .map(|requested| requested.is_none())
-                .unwrap_or(false),
+            !WORKER.take_queued(),
             "the engine is not asked about a name no list of its own holds"
         );
     }
@@ -1218,6 +1066,11 @@ mod tests {
     /// its chance. A process that stays up stands in for the engine — a test is not going
     /// to make ImageMagick spin on a file — recorded the way the engine is, by image name,
     /// which is the check that keeps an id from being acted on by itself.
+    ///
+    /// The bound is the one this engine gives itself rather than the one the give-up is
+    /// decided by (`supervisor`): what is being asked here is that the two ends of the
+    /// decision reach the process, and the number that decides is that module's business and
+    /// tested there.
     #[test]
     fn ends_a_conversion_only_once_it_has_outrun_the_give_up() {
         let _stand_in = crate::app::engine_processes::STAND_IN
@@ -1229,11 +1082,6 @@ mod tests {
             .spawn()
             .expect("a process to stand in for the engine");
         let pid = engine.id();
-        let running = |started: Instant| Running {
-            source: PathBuf::from("shot.nef"),
-            pid,
-            started,
-        };
 
         assert!(
             crate::app::engine_processes::processes_named("ping.exe").contains(&pid),
@@ -1242,84 +1090,24 @@ mod tests {
         crate::app::engine_processes::record("ping.exe", pid);
 
         // A conversion that has just started is a file being read, and is left to it.
-        publish_running(Some(running(Instant::now())));
-        end_hung_conversion();
+        supervisor::begin(Adapter::ImageMagick, Path::new("shot.nef"), pid);
+        supervisor::end_hung(Adapter::ImageMagick, CONVERSION_GIVE_UP);
         assert!(
             crate::app::engine_processes::is_running(pid),
             "a conversion that has just started is not an engine to end"
         );
 
-        // One that has outrun the give-up is an engine that has stopped answering.
-        publish_running(Some(running(Instant::now() - CONVERSION_GIVE_UP)));
-        end_hung_conversion();
+        // One that has outrun the give-up is an engine that has stopped answering. A bound of
+        // nothing is the shortest a run can be outrun by, which says the same thing about
+        // the decision without waiting half a minute to say it.
+        supervisor::end_hung(Adapter::ImageMagick, Duration::ZERO);
         assert!(
             !crate::app::engine_processes::is_running(pid),
             "the engine a conversion has outrun is ended"
         );
 
-        publish_running(None);
+        supervisor::stop(Adapter::ImageMagick);
         let _ = engine.wait();
-    }
-
-    /// And the bound the engine thread holds over its own conversion: a process that ends
-    /// inside it is answered as it always was, and one that outlasts it is ended there
-    /// rather than waited on.
-    #[test]
-    fn ends_a_conversion_rather_than_waiting_past_its_bound() {
-        let _stand_in = crate::app::engine_processes::STAND_IN
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut quick = std::process::Command::new("ping")
-            .args(["-n", "1", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .expect("a process that ends on its own");
-        assert!(
-            wait(&mut quick, CONVERSION_GIVE_UP),
-            "a conversion that finishes inside its bound is answered as it always was"
-        );
-
-        let mut engine = std::process::Command::new("ping")
-            .args(["-n", "30", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .expect("a process to stand in for the engine");
-        let pid = engine.id();
-        let started = Instant::now();
-
-        assert!(
-            !wait(&mut engine, Duration::from_millis(300)),
-            "a conversion that has outrun its bound is ended, not waited on"
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "and the wait ends at the bound it was given rather than when the process would have"
-        );
-        assert!(
-            !crate::app::engine_processes::is_running(pid),
-            "the engine is gone with it"
-        );
-    }
-
-    /// What the give-up is decided from: a conversion that has just started is not hung —
-    /// a picture the engine can read is under a second — and one that has run past the
-    /// give-up is.
-    #[test]
-    fn a_conversion_is_hung_only_once_it_has_outrun_the_give_up() {
-        let running = |elapsed: Duration| Running {
-            source: PathBuf::from("shot.nef"),
-            pid: std::process::id(),
-            started: Instant::now() - elapsed,
-        };
-
-        assert!(!is_hung(&running(Duration::from_secs(0))));
-        assert!(!is_hung(&running(
-            CONVERSION_GIVE_UP - Duration::from_secs(1)
-        )));
-        assert!(is_hung(&running(CONVERSION_GIVE_UP)));
-        assert!(is_hung(&running(
-            CONVERSION_GIVE_UP + Duration::from_secs(30)
-        )));
     }
 
     /// The engine's own program is found by name, and the older name only ever where
