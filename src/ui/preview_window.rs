@@ -18,19 +18,14 @@ use crate::engines::libreoffice_render;
 use crate::engines::office_render;
 use crate::engines::peazip_render;
 use crate::engines::webview_preview;
-use crate::formats::archive_formats;
 use crate::formats::audio_formats;
 use crate::formats::calibre_formats;
 use crate::formats::codecs;
-use crate::formats::design_formats;
-use crate::formats::ebook_formats;
-use crate::formats::font_formats;
 use crate::formats::libre_formats;
 use crate::formats::magick_formats;
 use crate::formats::native_formats;
 use crate::formats::office_formats;
 use crate::formats::peazip_formats;
-use crate::formats::vector_formats;
 use crate::formats::video_formats;
 use crate::paths::plain_path;
 use crate::readers::audio_seek;
@@ -51,7 +46,6 @@ use crate::readers::tone_map;
 use crate::readers::video_player;
 use crate::readers::webp_image;
 use crate::readers::wic_image;
-use crate::shell::cloud_files;
 use crate::shell::pin_navigation;
 use crate::shell::wheel_input;
 use crate::text::archive_preview::{self, ArchivePreviewOptions};
@@ -84,10 +78,9 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EndPaint, GdiFlush, GetMonitorInfoW, MonitorFromPoint, SelectObject, SetBrushOrgEx,
-    SetStretchBltMode, StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    BLENDFUNCTION, DIB_RGB_COLORS, HALFTONE, HBITMAP, HDC, HGDIOBJ, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
+    EndPaint, GdiFlush, SelectObject, SetBrushOrgEx, SetStretchBltMode, StretchBlt, AC_SRC_ALPHA,
+    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HALFTONE,
+    HBITMAP, HDC, HGDIOBJ, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -99,7 +92,6 @@ use windows::Win32::System::Threading::{
     CreateEventW, OpenProcess, QueryFullProcessImageNameW, ResetEvent, SetEvent, TerminateProcess,
     WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, GetFocus, ReleaseCapture, SetCapture, SetFocus, VK_A, VK_C,
     VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_SPACE, VK_UP,
@@ -109,29 +101,37 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    EnumWindows, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
+    EnumWindows, GetCursorPos, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
     MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
-    SystemParametersInfoW, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
-    CS_VREDRAW, GWL_EXSTYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL,
-    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE,
-    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE,
-    PM_REMOVE, QS_ALLINPUT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
-    ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
+    GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+    IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
+    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
+    TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
+mod displays;
 mod pin_window;
 
-use pin_window::{take_pin_down, PinExit, PinHide, PinWindow, WM_PIN_RELEASE_POINTER};
 #[cfg(test)]
-use pin_window::{PinWindowCall, RecordedPinWindow};
+use displays::RecordedDisplays;
+use displays::{dpi_at, work_area_at, Displays, DESKTOPS};
+
+use pin_window::{
+    ask_pin, end_pin, give_the_keyboard_back, install, pin_state, release_keyboard, take_keyboard,
+    take_pin_command, PinHide, PinWindow, Reason, WM_PIN_RELEASE_POINTER,
+};
+#[cfg(test)]
+use pin_window::{
+    pin_holds_a_keyboard, stand_pin, take_pin_for_a_test, PinWindowCall, RecordedPinWindow,
+};
 
 const PREVIEW_CLASS: PCWSTR = w!("RustHoverPreviewWindow");
 
@@ -183,6 +183,99 @@ const STATIC_WAIT_MS: u64 = 150;
 /// pointer's pace rather than at this pace — this stays short so caption
 /// buttons still feel instant while waking 3x less often than the frame loop.
 const STATIC_PIN_WAIT_MS: u64 = 50;
+/// How long the preview thread waits between the frames of something that is moving. The wait
+/// wakes on window input as well as on this interval, so this is a ceiling and not a rate: a
+/// drag follows the hand because the wait ends when the pointer does, not because a tick came
+/// round.
+const FRAME_WAIT_MS: u64 = 16;
+
+/// How long the preview thread waits before it comes round again, which is the loop's whole
+/// cadence in one place.
+///
+/// Four bands, and which one a tick is in is a decision rather than an arithmetic result: it is
+/// the difference between a loop that wakes sixty times a second for the life of the process
+/// doing nothing, and one that wakes twice a second and still answers every button.
+///
+/// *Nothing on screen* does not answer to its cadence at all. There is nothing to animate,
+/// nothing to repaint and nothing left to keep in step, so the wait becomes the preview channel
+/// itself and a hover is answered as it arrives rather than on the next tick. `dynamic` and
+/// `pinned` are ignored in that band and are named that way rather than left to the caller to
+/// work out, because a caller that has to decide which arguments matter has to re-decide the
+/// question this answers.
+///
+/// *Something moving* is the frame rate, and it is held for anything that has a picture to
+/// advance: a video, an animation, a sound's card, a transport bar, a spinner.
+///
+/// *Something still* is the band the two settings above divide, and the split is the whole of
+/// the argument for having two: a pinned static document wakes at `STATIC_PIN_WAIT_MS` and a
+/// hover's at `STATIC_WAIT_MS`, because a pin's caption carries the buttons that close it and a
+/// static preview's carries nothing at all. Three times as often is not three times the CPU —
+/// both bands sleep on the channel and wake on input — but it is the difference between a
+/// caption that feels instant and one that does not.
+///
+/// Two commits tuned these numbers and disagreed with each other, which is what a decision
+/// with nowhere to be tested goes: there was no place to ask whether the number was still right,
+/// so each change was argued from what it seemed to cost.
+fn wait_before_the_next_tick(nothing_on_screen: bool, dynamic: bool, pinned: bool) -> u64 {
+    if nothing_on_screen {
+        IDLE_WAIT_MS
+    } else if dynamic {
+        FRAME_WAIT_MS
+    } else if pinned {
+        STATIC_PIN_WAIT_MS
+    } else {
+        STATIC_WAIT_MS
+    }
+}
+
+/// Whether this tick takes a full look at the media behind the preview, or trusts the hint.
+///
+/// A full look is the expensive one — it takes the media lock and reads what is on screen — and
+/// a static tick skips it entirely, which is what made the loop cheap enough to run on a
+/// battery. Four things force one anyway, and each of them is a way the hint can be wrong:
+///
+/// * `dynamic` — the hint says something moved, and a hint that is wrong here costs a stale
+///   frame rather than a late one.
+/// * `a_wait` — a load, a walk, a video's start or a first frame is outstanding, and what is on
+///   screen is a stand-in for something that has not arrived.
+/// * `generation_moved` — a swap bumps the generation, and a new hover's media is a different
+///   answer from the last one's.
+/// * `since_the_last_one` — the backstop, and the only one of the four that catches a kind that
+///   changes without a swap: streaming frames that land after the fact, which is a file whose
+///   type this app only discovers by looking. Without it those frames are noticed on the next
+///   swap rather than within half a second, which is a preview that stays a spinner under a
+///   stream that is already playing.
+///
+/// The backstop is the one arm here that exists because of a symptom rather than a principle,
+/// and it is also the one most likely to be argued away as a cost — so it is named rather than
+/// left as a bare `elapsed()` in a four-hundred-line loop.
+fn needs_a_full_media_look(
+    dynamic_hint: bool,
+    a_wait: bool,
+    generation_moved: bool,
+    since_the_last_one: Duration,
+) -> bool {
+    dynamic_hint
+        || a_wait
+        || generation_moved
+        || since_the_last_one >= Duration::from_millis(STATIC_MEDIA_REFRESH_MS)
+}
+
+/// How often the player's window is put back in front, which is split by what is competing with
+/// it for the top of the z-order.
+///
+/// A pinned video competes with the pin's own window and so keeps the tight band; a hover's
+/// video competes with nothing, and re-asserting topmost for a tooltip is five DWM reorders a
+/// second spent on a window that was in front when nobody clicked anything. This is the one
+/// number in the loop that was moved for that reason alone, and it is two arms of an `if` where
+/// the arms are the decision.
+fn topmost_cadence_ms(pinned: bool) -> u64 {
+    if pinned {
+        PIN_TOPMOST_REASSERT_MS
+    } else {
+        HOVER_TOPMOST_REASSERT_MS
+    }
+}
 
 /// How often the page an engine is drawing is looked for on disk.
 ///
@@ -367,11 +460,12 @@ fn note_pin_alive() {
 /// The state and the window are one call now, because they were one thing and this thread
 /// had drifted a copy of its own: it cleared the pin and two flags and left the keyboard
 /// the pin had claimed, the focusable window, and the queued walk all standing. So the
-/// road is named — `PinExit::Watchdog` — and the only thing it changes is what this thread
-/// may do of the window directly, which is the pointer (a capture belongs to the thread
-/// that took it) and the hide (a window procedure that is the thing being waited on would
-/// only make this wait too). Losing this thread costs nothing; losing the only one that can
-/// take a window down costs the window.
+/// caller says why the pin is going rather than choosing a road — `Reason::Hung`, which is
+/// the only reason that is not the loop's own tick — and the road is derived from it. What
+/// the road changes is what this thread may do of the window directly, which is the pointer
+/// (a capture belongs to the thread that took it) and the hide (a window procedure that is
+/// the thing being waited on would only make this wait too). Losing this thread costs
+/// nothing; losing the only one that can take a window down costs the window.
 fn spawn_pin_watchdog() {
     std::thread::spawn(|| {
         while RUNNING.load(Ordering::Acquire) {
@@ -394,13 +488,11 @@ fn spawn_pin_watchdog() {
             // was the one that drifted — it kept the keyboard the pin had claimed, kept the
             // window focusable, and left the walk a caption button had queued to be answered
             // into a pin that no longer existed, so a pin killed for being hung left a desktop
-            // nothing could be clicked on. Both halves are now one call with the road as its
-            // only argument, and the road is the whole of what differs between them (see
-            // `pin_window::take_pin_down`).
+            // nothing could be clicked on. Both halves are now one call with the reason as its
+            // only argument, and the reason is what says which end is taking it (see
+            // `pin_window::end_pin`).
             let window = Win32PinWindow;
-            let owed = take_pin_down(PinExit::Watchdog, &window, &mut |window| {
-                end_pin_state_guards(window)
-            });
+            let owed = end_pin(Reason::Hung, &window);
 
             // What is not done on this thread is the window work, because the loop is the
             // thread that owns the windows and this one is the thread that has given up on
@@ -788,22 +880,6 @@ static RESUME_FROM_SLEEP: AtomicBool = AtomicBool::new(false);
 // is put back by the loop, which is the side that holds the hover it came from.
 static DISPLAY_RESET: AtomicBool = AtomicBool::new(false);
 
-/// Whether a preview is pinned: the preview that stopped being a hover and became a
-/// window of its own, with a caption of its own, that stays until it is closed.
-///
-/// Every hover-side path asks this. Nothing is spawned while it is up — a pointer
-/// crossing a folder is answered with nothing at all — and nothing is despawned
-/// either: the dismissals the Explorer hook sends twenty times a second would
-/// otherwise take the pinned window down the moment the pointer moved. What the pin
-/// is *for* is being read, and a preview that came and went under the pointer while
-/// it was being read would be no better than the hover it came from (see
-/// `PinnedPreview`).
-static PIN_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-/// Whether the pinned preview is collapsed into the round bubble that stands in for it.
-/// A collapsed pin is still a pin: previews stay quiet until it is restored and closed.
-static PIN_COLLAPSED: AtomicBool = AtomicBool::new(false);
-
 /// Whether the left mouse button is down, as the Explorer hook's last read of the buttons
 /// found it.
 ///
@@ -821,28 +897,12 @@ static PIN_MEDIA_LEFT_DOWN: AtomicBool = AtomicBool::new(false);
 /// way: what this side asks is whether the count has moved, which is the question a press is.
 static PIN_MEDIA_LEFT_PRESSES: AtomicU64 = AtomicU64::new(0);
 
-/// Whether this app took the keyboard and has not given it back yet.
-///
-/// This is not what decides whether a key belongs to the pin — that is asked of Windows
-/// (see `pin_is_focused`) — but a note that the keyboard was taken, so that the pin can put it
-/// back when it ends. A window that is hidden while it still holds the focus leaves Windows to
-/// pick what to activate next, and a `WS_EX_TOOLWINDOW` popup is not reliably followed by the
-/// Explorer window that was in front a moment ago; so the handover has to be a thing this app
-/// does rather than one it hopes for (see `pin_drop_focus`).
-static PIN_FOCUSED: AtomicBool = AtomicBool::new(false);
-
-/// A pin was asked to come down, by the Explorer hook (previews were turned off, or the
+/// A pin was asked to come down, by the Explorer hook (previews were turned off, or the</path>
 /// trigger key is holding them back), by the tray, or by the resumption of the machine
 /// from sleep. What a pin *is* — a window and the media under it — belongs to the
 /// preview loop, so this is a request rather than a take-down: the loop ends it on its
 /// next tick, through the same path its own close button takes.
 static PIN_END_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-/// A pin has been closed since this was last asked. The Explorer hook reads it once to
-/// know that what is under the pointer is a *new* hover: the file it was on when the pin
-/// went up is not a hover it has already answered, and the delay a re-hover of the same
-/// file is given is a delay that belongs to a file the pointer left and came back to.
-static PIN_RESUMED: AtomicBool = AtomicBool::new(false);
 
 /// The wait a pinned window is in, in the form a repaint can draw: the millisecond its arc
 /// began turning at, counted from [`PIN_ARC_BASE`], and `0` for a window that is waiting for
@@ -1556,8 +1616,7 @@ impl MediaData {
                 if !streamed.queue.is_empty() {
                     // A streamed frame is made by the decoder thread and handed over once,
                     // so wrapping it here is the only allocation it ever needs.
-                    self.frames
-                        .extend(streamed.queue.drain(..).map(Arc::new));
+                    self.frames.extend(streamed.queue.drain(..).map(Arc::new));
                 }
             }
         }
@@ -1777,15 +1836,19 @@ impl MediaData {
 /// Whether a preview is pinned — a window of its own with a caption, which stays until it
 /// is closed. The Explorer hook asks this every tick: while it is true nothing is spawned
 /// and nothing is taken down, which is the whole of what "the preview mode is paused"
-/// means (see `PIN_ACTIVE`).
+/// means (see `pin_window::pin_is_up`).
 pub fn pinned() -> bool {
-    PIN_ACTIVE.load(Ordering::Acquire)
+    pin_window::pin_is_up()
 }
 
 /// Ask for the pinned preview to come down, from any thread. What a pin is belongs to the
 /// preview loop, so the loop is what ends it — on its next tick, by the same path its own
 /// close button takes. Asking twice is asking once.
-pub fn end_pin() {
+///
+/// Named for what it is rather than `end_pin`, because it is not an end: it is a request, and
+/// the end is the loop's own `end_pin_state(Reason::Asked)`, which is the same call the
+/// caption's cross makes and the only place a pin actually ends on this road.
+pub fn request_pin_end() {
     PIN_END_REQUESTED.store(true, Ordering::Release);
 }
 
@@ -1793,19 +1856,16 @@ pub fn end_pin() {
 /// per tick to know that what is under the pointer is a hover it has not answered yet: the
 /// file it was on when the pin went up is not a file the pointer has left and come back to,
 /// and treating it as one would hold the next preview back for the re-hover delay (see
-/// `PIN_RESUMED`).
+/// `pin_window::take_pin_resumed`).
 pub fn take_pin_resumed() -> bool {
-    PIN_RESUMED.swap(false, Ordering::AcqRel)
+    pin_window::take_pin_resumed()
 }
 
 /// The file the pinned window is showing, if there is one. It is what the Explorer hook reads
 /// to know whether the file the pointer picks is a file the pin is already showing, and it is
-/// the file a *new* pin is told apart from an old one by (see `PINNED`).
+/// the file a *new* pin is told apart from an old one by (see `PinState`).
 pub fn pinned_path() -> Option<PathBuf> {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.path.clone()))
+    pin_state().and_then(|state| state.pin().map(|pin| pin.path.clone()))
 }
 
 /// Ask for the pinned window to be shown another file, from any thread: the Explorer hook's
@@ -2535,67 +2595,61 @@ pub(crate) fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
     bgra
 }
 
-/// The backdrop a picture is drawn over — and every other preview that is not a
-/// document: a PDF page, a painted frame, a page Office rendered.
-fn current_image_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.image_background)
-        .unwrap_or(DEFAULT_IMAGE_BACKGROUND)
-}
-
-/// The backdrop a font specimen is drawn over, which is a page of its own: a document's
-/// backdrop is the one its shapes are drawn on, and a specimen's is the one its glyphs are.
-fn current_font_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.font_background)
-        .unwrap_or(DEFAULT_FONT_BACKGROUND)
-}
-
-/// The backdrop a `.dds` texture is drawn over, which the tray keeps apart from a
-/// picture's: a texture's alpha channel is as often a mask or a channel nobody filled in as
-/// it is transparency, so what is behind one is a question of its own (see `dds_image`).
-fn current_dds_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.dds_background)
-        .unwrap_or(DEFAULT_DDS_BACKGROUND)
-}
-
-/// The backdrop a design document is drawn over, which the tray keeps apart from a
-/// picture's: what is previewed is the picture the file keeps of the whole document, and
-/// a designer's transparency is the document's own rather than a photograph's.
-fn current_design_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.design_background)
-        .unwrap_or(DEFAULT_DESIGN_BACKGROUND)
-}
-
-/// The backdrop a vector drawing is drawn over, which the tray keeps apart from a
-/// picture's.
+/// The backdrop a preview of one of the six is drawn over, out of the one configuration.
 ///
-/// The kind holds two halves that answer this the same way for different reasons: a
-/// metafile says what was drawn and nothing about the sheet under it, so what stands
-/// behind the marks is this app's (see `metafile_image`), and an SVG document is drawn on
-/// a page of the engine's own, so what it is given is a colour (see `webview_preview`).
-fn current_vector_background() -> TransparentBackground {
+/// It was six functions, each of which took the lock for one scalar, and each of which was asked
+/// from one place that had to remember which of the six a file fell in. `routing::Backdrop` is
+/// the one exhaustive answer and this is the one read that turns it into a colour — see
+/// `routing::backdrop_of` for the judgement behind each of the six, and for why a texture and a
+/// design document keep a backdrop a picture does not.
+fn current_background(backdrop: crate::formats::routing::Backdrop) -> TransparentBackground {
     CONFIG
         .lock()
-        .map(|cfg| cfg.vector_background)
-        .unwrap_or(DEFAULT_VECTOR_BACKGROUND)
+        .map(|cfg| crate::formats::routing::backdrop_value(backdrop, &cfg))
+        .unwrap_or(match backdrop {
+            crate::formats::routing::Backdrop::Image => DEFAULT_IMAGE_BACKGROUND,
+            crate::formats::routing::Backdrop::Font => DEFAULT_FONT_BACKGROUND,
+            crate::formats::routing::Backdrop::Dds => DEFAULT_DDS_BACKGROUND,
+            crate::formats::routing::Backdrop::Design => DEFAULT_DESIGN_BACKGROUND,
+            crate::formats::routing::Backdrop::Vector => DEFAULT_VECTOR_BACKGROUND,
+            crate::formats::routing::Backdrop::Html => DEFAULT_HTML_BACKGROUND,
+        })
 }
 
-/// The backdrop a page of HTML is drawn over, which the tray keeps apart from a vector
-/// drawing's: a document the browser is handed is a page already — it brings its own markup
-/// and its own stylesheet — so what is behind it is the page to read it against rather than
-/// a transparency to look through, which is why it does not borrow the drawing's answer.
-fn current_html_background() -> TransparentBackground {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.html_background)
-        .unwrap_or(DEFAULT_HTML_BACKGROUND)
+/// Which of the three the browser draws, for a file whose own bytes have not already said.
+///
+/// It is asked of the name because that is what these three are told apart by, and it is one
+/// function rather than three predicates because the loader asks the same question when it hands
+/// the hover over, the layout asks it when it decides the size, and the paint asks it when it
+/// picks the backdrop — three places that had each been picking out of the same three names.
+fn web_page_of(path: &Path) -> Option<crate::formats::routing::WebPage> {
+    use crate::formats::routing::WebPage;
+
+    if svg_preview::is_svg_file(path) {
+        Some(WebPage::Svg)
+    } else if named_as(path, PreviewType::Fonts) {
+        Some(WebPage::FontSpecimen)
+    } else if crate::formats::text_formats::is_html_extension(path) {
+        Some(WebPage::Html)
+    } else {
+        None
+    }
+}
+
+/// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the same
+/// way it decides everything else about a document. The one engine draws all the kinds this app
+/// hands it, and each of the three answers for itself — a font file's specimen is a page of its
+/// own, an SVG document is a vector drawing, and a page of HTML is a page, so the backdrop the
+/// tray keeps for the kind is the one it is given.
+///
+/// It asks the router's one answer for which of the three a file is rather than repeating the
+/// three-name test, so the backdrop, the layout's size and the loader's hand-over cannot be
+/// three readings of the same question (see `routing::WebPage`).
+fn engine_background(path: &Path) -> TransparentBackground {
+    current_background(crate::formats::routing::backdrop_of(
+        PreviewType::Vector,
+        web_page_of(path),
+    ))
 }
 
 /// How loud a video is played, which is read when one is started rather than when the
@@ -2637,21 +2691,6 @@ fn current_audio_options() -> AudioPreviewOptions {
         })
 }
 
-/// The backdrop an engine-drawn preview of `path` is drawn over: the kind decides it, the
-/// same way it decides everything else about a document. The one engine draws all the kinds
-/// this app hands it, and each of the three answers for itself — a font file's specimen is a
-/// page of its own, an SVG document is a vector drawing, and a page of HTML is a page, so
-/// the backdrop the tray keeps for the kind is the one it is given.
-fn engine_background(path: &Path) -> TransparentBackground {
-    if font_formats::is_font_file(path) {
-        current_font_background()
-    } else if crate::formats::text_formats::is_html_extension(path) {
-        current_html_background()
-    } else {
-        current_vector_background()
-    }
-}
-
 /// The kind of engine-drawn preview `path` would get, when it is one of the three the browser
 /// draws: a document, a font file's specimen, or a page of HTML.
 ///
@@ -2667,42 +2706,93 @@ fn engine_kind_of(path: &Path) -> Option<PreviewType> {
     // document, and the drawing layer replays a metafile or a PostScript program, which is
     // no engine window at all — so the name answers which half of that kind a file is.
     //
-    // The entry is read before the lock and the lists are taken under it, so the guard is not
-    // held across the file read the content question may make (see `drawn_as_audio`).
-    let content = content_of(path);
+    // All of that is now one read of the router's answer rather than four questions asked of
+    // the file in this order, which is what it used to be: the content, then the router, then
+    // three names. A kind this app grows is an arm of `routing::drawn_by_of` rather than a fourth
+    // question here (see `HoverFacts`).
+    let hover = HoverFacts::read(path);
 
-    if let crate::formats::content_type::Content::Kind(kind) = content {
-        return match kind {
-            PreviewType::Vector if svg_preview::is_svg_file(path) => Some(PreviewType::Vector),
-            PreviewType::Fonts => Some(PreviewType::Fonts),
-            PreviewType::Text if html_is_engine_drawn(path) => Some(PreviewType::Text),
+    match hover.route.content {
+        // A file the bytes named as another kind is that kind, whatever the name says, and a
+        // kind that is not one of the browser's three is none of this app's business: a picture
+        // under a font's name is the picture it is, and nothing is handed to the engine for it.
+        crate::formats::content_type::Content::Kind(_) => match hover.routed_kind() {
+            Some(PreviewType::Vector) => Some(PreviewType::Vector),
+            Some(PreviewType::Fonts) => Some(PreviewType::Fonts),
+            // A page of HTML is a text file, so the kind it answers with is the text kind's: the
+            // gate over it is the one a text preview is switched by, and the loader reaches the
+            // engine through that same arm (see `load_media_of_kind`).
+            Some(PreviewType::Text) if hover.html_drawn_by_the_engine() => Some(PreviewType::Text),
             _ => None,
-        };
-    }
+        },
 
-    if svg_preview::is_svg_file(path) {
-        return Some(PreviewType::Vector);
-    }
+        // Where the bytes named nothing, the name's answer is what the browser draws, and it is
+        // the router's — so a file whose name is a specimen's and whose bytes are nothing in
+        // particular is a specimen, and a file no list claims is nothing at all.
+        crate::formats::content_type::Content::Unknown => match hover.route.drawn_by {
+            crate::formats::routing::DrawnBy::WebView(web) => match web {
+                crate::formats::routing::WebPage::Svg => Some(PreviewType::Vector),
+                crate::formats::routing::WebPage::FontSpecimen => Some(PreviewType::Fonts),
+                crate::formats::routing::WebPage::Html => Some(PreviewType::Text),
+            },
+            _ => None,
+        },
 
-    if font_formats::is_font_file(path) {
-        return Some(PreviewType::Fonts);
+        // A format no kind of this app previews: there is no kind to draw it as, so there is
+        // no engine to hand it to either.
+        crate::formats::content_type::Content::Foreign => None,
     }
-
-    // A page of HTML is a text file, so the kind it answers with is the text kind's: the
-    // gate over it is the one a text preview is switched by, and the loader reaches the
-    // engine through that same arm (see `load_media_of_kind`).
-    if html_is_engine_drawn(path) {
-        return Some(PreviewType::Text);
-    }
-
-    None
 }
 
 /// Whether `path` is a page of HTML the browser engine draws: the name is one of the two a
 /// page goes by, and the engine is the thing that draws it (see `webview_preview::draws`,
 /// which answers for a machine with no runtime by not drawing at all).
+///
+/// It is the one of the four questions `engine_kind_of` asks that needs nothing but the name
+/// and the machine, so it stays a function of the path: the engine's availability is asked of
+/// the run rather than of the file, and a caller that has a hover's answer in hand asks that
+/// one instead (`HoverFacts::html_drawn_by_the_engine`).
 fn html_is_engine_drawn(path: &Path) -> bool {
     crate::formats::text_formats::is_html_extension(path) && webview_preview::draws(path)
+}
+
+/// Whether a preview of `path` may be shown as `kind`: that kind's own list claims it, and the
+/// tray has that kind switched on.
+///
+/// It is one function for the eleven `is_<kind>_preview` predicates it replaces — one per module,
+/// each of which reached for the configuration's lock for itself, which is the split-lock form the
+/// deleted grep test could not see because the lock and the read were never in one place to be
+/// matched. The lock is taken here, once, around two comparisons in memory: the row that names the
+/// kind, and the switch that hides it. Nothing on this side of it opens a file, which is the rule
+/// the whole of C4 is about (see `HoverFacts`).
+///
+/// The video kind is deliberately not asked of this. Its two lists share `ts` and `mts` with the
+/// text lists, so answering it reads the file — and a guard held across a read is the defect this
+/// form exists to be free of. A caller that wants to know about a video asks the hover's own
+/// answer, which has already read what that question needs (`HoverFacts::is_video`).
+fn previewed_as(path: &Path, kind: PreviewType) -> bool {
+    debug_assert_ne!(
+        kind,
+        PreviewType::Videos,
+        "asked under a lock, and this kind reads the file"
+    );
+
+    CONFIG
+        .lock()
+        .map(|config| crate::formats::routing::previewed_as(path, &config, kind))
+        .unwrap_or(false)
+}
+
+/// Whether `kind`'s own list claims `path`, without asking whether that kind is switched on.
+///
+/// It is the same question as [`previewed_as`] with the switch left off, for the two callers that
+/// ask what a file *is* rather than whether a preview of it may be shown: the backdrop's own
+/// question about a specimen, and the manual probes' printed table of what each list says.
+fn named_as(path: &Path, kind: PreviewType) -> bool {
+    CONFIG
+        .lock()
+        .map(|config| crate::formats::routing::named_as(path, &config, kind))
+        .unwrap_or(false)
 }
 
 fn current_webp_playback_fps() -> u32 {
@@ -2718,16 +2808,7 @@ fn current_webp_playback_fps() -> u32 {
 fn current_hover_scales() -> HoverScales {
     CONFIG
         .lock()
-        .map(|cfg| HoverScales {
-            picture: cfg.preview_scale,
-            video: cfg.video_scale,
-            animated: cfg.animated_scale,
-            ebook: cfg.ebook_scale,
-            document: cfg.document_scale,
-            font: cfg.font_scale,
-            design: cfg.design_scale,
-            vector: cfg.vector_scale,
-        })
+        .map(|cfg| HoverScales::of(&cfg))
         .unwrap_or(HoverScales {
             picture: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
@@ -2889,7 +2970,7 @@ fn hover_is_shown(message: &PreviewMessage, pinned: bool) -> bool {
 /// hover's room would be, which is a deck that was first previewed on a smaller
 /// display — with the render tier switched on.
 fn office_render_is_due(path: &Path, width: u32) -> bool {
-    if !office_formats::is_office_preview(path) || !office_render::enabled() {
+    if !previewed_as(path, PreviewType::Document) || !office_render::enabled() {
         return false;
     }
 
@@ -2916,17 +2997,57 @@ fn office_render_is_due(path: &Path, width: u32) -> bool {
     }
 }
 
-/// Whether the file's own bytes name one of this app's kinds *other* than `kind`.
+/// Everything one hover needs to know about the file under the hand, asked once.
 ///
-/// It is the question an engine tier asks before it starts anything, and what it says no to
-/// is a file that is called what it is: a name and a content that agree are answered with no
-/// opinion at all, and only a disagreement — a picture under a document's name — is a file
-/// whose engine must not be started.
-fn content_names_another_kind(path: &Path, kind: PreviewType) -> bool {
-    matches!(
-        content_of(path),
-        crate::formats::content_type::Content::Kind(named) if named != kind
-    )
+/// This is the thing the layout already wants to carry. Installing a hover asks six questions
+/// about one file — what its content is, what kind its name makes it, whether it is drawn as a
+/// video, a sound, a page or an engine window, what size it is measured at, and whether what is
+/// on screen for it is a wait — and every one of them used to open the same file's directory
+/// entry for itself and take the process-wide configuration lock across the read. One hover of
+/// one file therefore paid about twenty `fs::metadata` calls for a question with one answer, on
+/// the thread that pumps this window's own messages, which is the thread a pin's caption is
+/// dispatched on.
+///
+/// It is read once, at the top of the arm that installs the hover, and the questions below are
+/// handed it rather than a path: the entry, the front of the file and what the bytes named come
+/// from [`crate::formats::content_type::Probe`], the kind and the list answers come from the one
+/// configuration read beside them, and every question that does not need one of those is a
+/// comparison against a field. What is left asking the disk is the question that genuinely has
+/// to — whether a `.ts` carries transport packets, what an `.ai` keeps at its front, whether a
+/// font parses — and each of those is answered once per file and held.
+///
+/// A caller with no hover of its own to hand builds one for the file it is asking about, which
+/// is what every site outside the `Show` arm does: it costs one entry read where the question
+/// used to make several, and it costs nothing at all after the first hover of the same version
+/// of the file, because the head and the content answer are both caches keyed by that version.
+struct HoverFacts {
+    probe: crate::formats::content_type::Probe,
+    /// What this file is, in one answer: its own bytes' kind, the kind its name's lists claim,
+    /// which half of a book or a drawing it is, and who draws it. This is
+    /// [`crate::formats::routing::resolve`]'s answer, and the predicates below are its fields —
+    /// which is what turns twelve scattered answers to one question into lookups.
+    route: crate::formats::routing::Route,
+    /// The four list answers the eleven predicates used to each go and take the configuration's
+    /// lock for. They are asked here rather than where they are used because they are cheap — a
+    /// name compared against a list of extensions — and because a question asked twice for one
+    /// hover is two locks where one was.
+    video_named: bool,
+    audio_named: bool,
+    archive_named: bool,
+    peazip_named: bool,
+    /// The three of the tray's switches that gate the three kinds whose gate changes what is
+    /// drawn rather than whether it is, and so are asked inside the predicates that gate.
+    video_enabled: bool,
+    audio_enabled: bool,
+    text_enabled: bool,
+    /// What of this app's own reads this file, asked with the kind already settled — which is
+    /// the contract `native_formats::job_for` is written for and the reason it takes a kind
+    /// rather than working one out. A book is the case that needed it: which half of the kind a
+    /// `.cbz` is costs a read of the file, and the loader used to ask it a second time for
+    /// itself under a lock of its own.
+    native_job: Option<native_formats::NativeJob>,
+    scales: HoverScales,
+    follow_cursor: bool,
 }
 
 /// What a file's content says it is, with the configuration's lock not held across the file.
@@ -2942,16 +3063,183 @@ fn content_names_another_kind(path: &Path, kind: PreviewType) -> bool {
 /// first, without the lock, and the lists are taken under it for the lookup that consults
 /// them. A file that cannot be read has no entry and takes the other form, which is the same
 /// answer for a file nothing can say anything about.
+///
+/// It is now the content field of [`HoverFacts`], which is the whole of what this was for: a
+/// caller that has a hover's answer in hand reads a field.
 fn content_of(path: &Path) -> crate::formats::content_type::Content {
-    let facts = crate::formats::head::Facts::read(path);
+    HoverFacts::read(path).route.content
+}
 
-    let Ok(config) = CONFIG.lock() else {
-        return crate::formats::content_type::Content::Unknown;
-    };
+/// Whether the file's own bytes name one of this app's kinds *other* than `kind`.
+fn content_names_another_kind(path: &Path, kind: PreviewType) -> bool {
+    HoverFacts::read(path).names_another_kind(kind)
+}
 
-    match &facts {
-        Some(facts) => crate::formats::content_type::of_entry_read(path, &config, facts),
-        None => crate::formats::content_type::of(path, &config),
+impl HoverFacts {
+    /// Everything one hover of one file needs to know about that file.
+    ///
+    /// The two halves are read in this order and not the other way round: the file's own bytes
+    /// first, with nothing held, and the configuration's lists after — because the lists are
+    /// what the bytes' answer is turned into a kind by, and a guard held across the reading is a
+    /// guard every thread of the app waits on for as long as the volume takes to answer it (see
+    /// `is_text`, whose own account of the bug is the one this whole struct retires).
+    fn read(path: &Path) -> Self {
+        let probe = crate::formats::content_type::Probe::read(path);
+
+        let Ok(config) = CONFIG.lock() else {
+            // Nothing is claimed, so nothing is drawn, and a file a hover cannot read its
+            // configuration for is the answer every kind's gate gives when the tray is
+            // shut (see `PreviewType::enabled`).
+            let route = crate::formats::routing::resolve(path, &AppConfig::default(), &probe);
+
+            return Self {
+                probe,
+                route,
+                video_named: false,
+                audio_named: false,
+                archive_named: false,
+                peazip_named: false,
+                video_enabled: false,
+                audio_enabled: false,
+                text_enabled: false,
+                native_job: None,
+                scales: current_hover_scales(),
+                follow_cursor: true,
+            };
+        };
+
+        // One answer to every question this hover is going to ask, asked of the file's own bytes
+        // and the configuration's lists together — which is what `routing::resolve` is for, and
+        // the reason it exists rather than a thirteenth predicate here.
+        //
+        // The order inside it is the one this function used to have to state: the file is read
+        // first, with nothing held, and the lists are consulted after.
+        let route = crate::formats::routing::resolve(path, &config, &probe);
+
+        // And the four answers this side has that routing does not: which of the lists' names the
+        // file carries, which gates the tray has thrown, and the scales a hover is laid out by.
+        let audio_named = crate::formats::lists::AUDIO.claims(path, &config);
+        let archive_named = crate::formats::lists::ARCHIVE.claims(path, &config);
+        let peazip_named = crate::formats::lists::PEAZIP.claims(path, &config);
+        let video_enabled = PreviewType::Videos.enabled_in(&config);
+        let audio_enabled = PreviewType::Audio.enabled_in(&config);
+        let text_enabled = PreviewType::Text.enabled_in(&config);
+        let scales = HoverScales::of(&config);
+        let follow_cursor = config.follow_cursor;
+
+        // The video lists are the one exception to "consulted after, and only in memory": the two
+        // names they share with the text lists are settled by whether the file holds MPEG-TS
+        // packets, which is a `File::open` and a read. They were copied out under the guard for
+        // exactly that reason, and this line is the second half of a fix whose first half is
+        // `media_engine_plays` doing the same: a guard held across a read is a guard every thread
+        // of the app waits on for as long as the volume takes, and this one is taken on the thread
+        // that pumps this window's own messages.
+        let video_lists = (
+            config.video_extensions.clone(),
+            config.ffmpeg_extensions.clone(),
+        );
+        drop(config);
+
+        let video_named =
+            video_formats::claims_any_video_name_in(path, &video_lists.0, &video_lists.1);
+
+        // And last, with the guard gone: which of this app's own readers does the work. That is
+        // the one question here that still opens the file — a book's is settled by what an `.ai`
+        // keeps at an offset, a picture's by its own head — so it is the one that must not be
+        // asked with a guard in hand. It takes the entry read above, which makes it a lookup
+        // rather than a second `fs::metadata`, and it takes the lock for the one list it consults.
+        //
+        // A configuration that will not open is answered as the page a book most often is, which
+        // is what this arm has always done (see `native_formats::page_job`).
+        let native_job = route.named.and_then(|kind| {
+            CONFIG
+                .lock()
+                .ok()
+                .and_then(|config| native_formats::job_for(path, kind, &config, probe.facts()))
+        });
+
+        Self {
+            probe,
+            route,
+            video_named,
+            audio_named,
+            archive_named,
+            peazip_named,
+            video_enabled,
+            audio_enabled,
+            text_enabled,
+            native_job,
+            scales,
+            follow_cursor,
+        }
+    }
+
+    /// The kind this file is drawn as: its own bytes' answer where they named one, and the name's
+    /// after them.
+    ///
+    /// It is the loader's kind and the layout's, and it is one answer because it is asked once:
+    /// the content tier's verdict outranks the lists for the loader — a `.docx` whose bytes are
+    /// an MP4 is loaded as the video it is — and the same answer is what a file whose bytes named
+    /// nothing is measured at.
+    fn routed_kind(&self) -> Option<PreviewType> {
+        match self.route.content {
+            crate::formats::content_type::Content::Kind(kind) => Some(kind),
+            crate::formats::content_type::Content::Foreign => None,
+            crate::formats::content_type::Content::Unknown => self.route.named,
+        }
+    }
+
+    /// What of this app's own reads a book: the first plate out of the container, or the page the
+    /// PDF engine draws.
+    ///
+    /// A configuration that will not open is answered as the page a book most often is, which
+    /// is what this arm has always done (see `native_formats::page_job`).
+    fn book_job(&self) -> native_formats::NativeJob {
+        self.native_job.unwrap_or(native_formats::NativeJob::Pdf)
+    }
+
+    /// Whether an engine's listing engine would list this file, which is the file's own bytes
+    /// first and the listing list after them (see `peazip_formats::is_engine_archive`).
+    fn engine_archive(&self) -> bool {
+        match self.route.content {
+            crate::formats::content_type::Content::Kind(PreviewType::Peazip) => true,
+            crate::formats::content_type::Content::Kind(_)
+            | crate::formats::content_type::Content::Foreign => false,
+            crate::formats::content_type::Content::Unknown => self.peazip_named,
+        }
+    }
+
+    /// Whether this file's own bytes name one of this app's kinds *other* than `kind`.
+    ///
+    /// It is the question an engine tier asks before it starts anything, and what it says no to
+    /// is a file that is called what it is: a name and a content that agree are answered with no
+    /// opinion at all, and only a disagreement — a picture under a document's name — is a file
+    /// whose engine must not be started.
+    fn names_another_kind(&self, kind: PreviewType) -> bool {
+        matches!(
+            self.route.content,
+            crate::formats::content_type::Content::Kind(named) if named != kind
+        )
+    }
+
+    /// Whether this file is an SVG document rather than a drawing the drawing layer replays.
+    ///
+    /// The name is the whole of it, and deliberately so: an `svg` that is not a document is a
+    /// drawing the browser refuses rather than a metafile, and the renderer has the last word on
+    /// whether a document is a document at all (see `svg_preview::is_svg_file`).
+    fn svg_document(&self) -> bool {
+        self.route.drawing == crate::formats::routing::Drawing::Svg
+    }
+
+    /// Whether a page of HTML is one the browser engine draws.
+    ///
+    /// It is the one term of the route that is about the machine rather than about the file, so
+    /// it is asked where a caller already has the route rather than picked out of three names
+    /// a fourth time (see `web_page_of` for the form a caller with no route asks).
+    fn html_drawn_by_the_engine(&self) -> bool {
+        self.route.drawn_by
+            == crate::formats::routing::DrawnBy::WebView(crate::formats::routing::WebPage::Html)
+            && webview_preview::draws(self.probe.path())
     }
 }
 
@@ -3222,7 +3510,8 @@ fn warm_engines_for(path: &Path) {
 fn engine_page_answer(path: &Path) -> Option<bool> {
     // Read through one clock for both callers, so a hover waiting and a pin waiting for the same
     // document in the same tick are one read of the disk rather than two.
-    static LAST_ASKED: Lazy<Mutex<Instant>> = Lazy::new(|| Mutex::new(Instant::now() - ENGINE_PAGE_POLL));
+    static LAST_ASKED: Lazy<Mutex<Instant>> =
+        Lazy::new(|| Mutex::new(Instant::now() - ENGINE_PAGE_POLL));
 
     let mut last = match LAST_ASKED.lock() {
         Ok(last) => last,
@@ -3301,6 +3590,24 @@ struct HoverScales {
     vector: PreviewScale,
 }
 
+impl HoverScales {
+    /// Every scale one hover is laid out by, read out of a configuration the caller already
+    /// holds — which is what `HoverFacts` does, so that installing a hover reads the
+    /// configuration once for its scales and for the answers below rather than once each.
+    fn of(config: &crate::config::config::AppConfig) -> Self {
+        Self {
+            picture: config.preview_scale,
+            video: config.video_scale,
+            animated: config.animated_scale,
+            ebook: config.ebook_scale,
+            document: config.document_scale,
+            font: config.font_scale,
+            design: config.design_scale,
+            vector: config.vector_scale,
+        }
+    }
+}
+
 /// The scale a preview is laid out and rendered with.
 ///
 /// A PDF page is a vector, so the engine draws it at whatever size it is asked
@@ -3367,33 +3674,37 @@ struct HoverScales {
 ///
 /// Every other format keeps the picture scale.
 fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
+    effective_preview_scale_of(&HoverFacts::read(path), scales)
+}
+
+/// The share one hover of one file is placed at, asked of the answer that hover already has.
+///
+/// Everything this asks is a field of `hover` or something `hover` holds: the file's kind, the
+/// one probe that runs off the thread and is remembered per file and version, and whether the
+/// file's own head says it moves. That is the whole of what a hover's scale is — which is why
+/// the path is not beside it, and why the scale and the box a preview is laid out at cannot
+/// disagree: they are asked of one answer.
+fn effective_preview_scale_of(hover: &HoverFacts, scales: HoverScales) -> PreviewScale {
     // What the file's own bytes say it is comes first, as it does for the loader that draws
     // it and for the box the layout places it at: a picture under a video's name is laid out
     // at the picture's share, and one under a document's name at the picture's share too.
     // Where the bytes have nothing to say the name decides below, which is every file that
     // is called what it is.
-    //
-    // Both questions below consult the lists, and both may read the file — so both are asked
-    // with the entry read first and the lock taken for the lists alone. This is the question a
-    // hover asks, so it is the one that was paid for on the thread that pumps this window's
-    // messages (see `content_of`).
-    let content = content_of(path);
-
-    if let crate::formats::content_type::Content::Kind(kind) = content {
-        return scale_of_kind(kind, path, scales);
+    if let crate::formats::content_type::Content::Kind(kind) = hover.route.content {
+        return scale_of_kind(kind, hover, scales);
     }
 
     // Two questions that are about the run rather than about the file's kind, and both come
     // before it: a page painted to the frame it is given is not scaled within it, and a video
     // whose probe has not answered yet is the spinner rather than a video. Neither can be asked
     // of the kind, which knows nothing about what the run has done so far.
-    if page_is_painted(path) {
+    if hover.is_painted_page() {
         // A listing is a page of text painted to the box it is given, whether this app read the
         // archive itself or an engine listed it, so both are the text rule.
-        return scale_of_kind(PreviewType::Text, path, scales);
+        return scale_of_kind(PreviewType::Text, hover, scales);
     }
 
-    if video_probe_due(path) {
+    if video_probe_due(hover) {
         // A video that has not been probed yet is a hover that is waiting, and what is on
         // screen for one is the waiting spinner: a wait is placed at the size it is rather
         // than fitted to the display, and what the probe answers is what the replay that
@@ -3405,13 +3716,11 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
     // is measured at is the answer the hook admitted it under and the loader draws it by (see
     // `formats::routing`). A name no list claims is measured as the picture it ends up being
     // decoded as, which is where the loader's own chain sends one.
-    let kind = CONFIG
-        .lock()
-        .ok()
-        .and_then(|config| crate::formats::routing::kind_of(path, &config))
-        .unwrap_or(PreviewType::Images);
-
-    scale_of_kind(kind, path, scales)
+    scale_of_kind(
+        hover.route.named.unwrap_or(PreviewType::Images),
+        hover,
+        scales,
+    )
 }
 
 /// The share a preview of one kind is drawn at.
@@ -3421,7 +3730,8 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
 /// say — and both have to come out at the same share for the same kind: a picture is drawn
 /// at the picture's share whether it is called `tomcat.png` or `tomcat.mp4`, or the same
 /// bytes would be two sizes depending on the name they were left under.
-fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> PreviewScale {
+fn scale_of_kind(kind: PreviewType, hover: &HoverFacts, scales: HoverScales) -> PreviewScale {
+    let path = hover.probe.path();
     match kind {
         // A page is a vector, so the room the display has is free quality: the setting is
         // the whole of that room unless it asks for less (see `fit_reduced`).
@@ -3496,7 +3806,7 @@ fn scale_of_kind(kind: PreviewType, path: &Path, scales: HoverScales) -> Preview
         // size `video_scale` names, which is the picture's rule — what a video's preview is
         // until the player's window is over it is its first frame, a bitmap.
         PreviewType::Videos => {
-            if video_probe_due(path) {
+            if video_probe_due(hover) {
                 PreviewScale::Percent(100)
             } else {
                 scales.video
@@ -3579,93 +3889,120 @@ fn fit_reduced(preview_scale: PreviewScale) -> PreviewScale {
     }
 }
 
-/// Whether the preview of `path` is a text preview.
-///
-/// It is one question rather than a chain of exclusions: what kind a file has is the router's
-/// answer, and a file is drawn as text exactly when that answer is text. It used to be written
-/// out here as "the text lists claim it and no kind asked earlier does", with the kinds listed
-/// one by one — and the list had been left short, so a name written into the text list beside a
-/// listing engine's or a picture converter's was measured as text and drawn as the other thing
-/// (see `formats::routing`).
-///
-/// What the file's own bytes say comes first, as it does for the loader that draws it and for
-/// the box it is painted into: a file whose content is another kind is not drawn as text
-/// whatever it is called, and one whose content is text is drawn as text even where the name
-/// is a kind the lists would have claimed first.
-fn is_text_preview(path: &Path) -> bool {
-    // The file's own entry, read before the lock. Both questions below consult the lists, and
-    // both of them may open the file — the content one reads four kilobytes on a miss, and the
-    // router's video claim reads a `.ts` to tell a film from a TypeScript file — so the guard
-    // used to be held across two `File::open`s on the thread that pumps this window's messages.
-    // Every other thread of the app waits on that guard, including the one that would end an
-    // engine or answer the tray.
-    let facts = crate::formats::head::Facts::read(path);
-
-    let (content, named_text) = {
-        let Ok(config) = CONFIG.lock() else {
-            return false;
-        };
-
-        let content = match &facts {
-            Some(facts) => crate::formats::content_type::of_entry_read(path, &config, facts),
-            None => crate::formats::content_type::of(path, &config),
-        };
-
-        // Only the fallback asks the router, and only when the content had no opinion: a file
-        // whose bytes named a kind is already settled, and the router would ask the same lists
-        // about a name that has been answered for.
-        let named_text = if content == crate::formats::content_type::Content::Unknown {
-            PreviewType::Text.enabled_in(&config)
-                && crate::formats::routing::kind_of(path, &config) == Some(PreviewType::Text)
-        } else {
-            false
-        };
-
-        (content, named_text)
-    };
-
-    match content {
-        crate::formats::content_type::Content::Kind(PreviewType::Text) => return true,
-        // Another kind, or a format no kind here previews at all: neither is drawn as text,
-        // and the second is drawn as nothing.
-        crate::formats::content_type::Content::Kind(_)
-        | crate::formats::content_type::Content::Foreign => return false,
-        crate::formats::content_type::Content::Unknown => {}
+impl HoverFacts {
+    /// Whether the preview of this file is a text preview.
+    ///
+    /// It is one question rather than a chain of exclusions: what kind a file has is the
+    /// router's answer, and a file is drawn as text exactly when that answer is text. It used
+    /// to be written out here as "the text lists claim it and no kind asked earlier does",
+    /// with the kinds listed one by one — and the list had been left short, so a name written
+    /// into the text list beside a listing engine's or a picture converter's was measured as
+    /// text and drawn as the other thing (see `formats::routing`).
+    ///
+    /// What the file's own bytes say comes first, as it does for the loader that draws it and
+    /// for the box it is painted into: a file whose content is another kind is not drawn as
+    /// text whatever it is called, and one whose content is text is drawn as text even where
+    /// the name is a kind the lists would have claimed first.
+    ///
+    /// Both of the questions below consult the lists, and both of them used to open the file —
+    /// the content one reads four kilobytes on a miss, and the router's video claim reads a
+    /// `.ts` to tell a film from a TypeScript file — so the guard used to be held across two
+    /// `File::open`s on the thread that pumps this window's messages, and every other thread of
+    /// the app waited on that guard, including the one that would end an engine or answer the
+    /// tray. Neither is asked again here: this is the answer (see `HoverFacts`).
+    fn is_text(&self) -> bool {
+        match self.route.content {
+            crate::formats::content_type::Content::Kind(PreviewType::Text) => true,
+            // Another kind, or a format no kind here previews at all: neither is drawn as
+            // text, and the second is drawn as nothing.
+            crate::formats::content_type::Content::Kind(_)
+            | crate::formats::content_type::Content::Foreign => false,
+            // The kind the hook called it, asked of the same table the hook asked: a name the
+            // text lists hold and an earlier list also claims is that earlier kind, and a
+            // preview measured as text would be placed as one and drawn as the other. The
+            // switch is part of the question, as it is wherever the text lists are asked — a
+            // kind turned off in the tray is not drawn at all.
+            crate::formats::content_type::Content::Unknown => {
+                self.text_enabled && self.route.named == Some(PreviewType::Text)
+            }
+        }
     }
 
-    // The kind the hook called it, asked of the same table the hook asked: a name the text
-    // lists hold and an earlier list also claims is that earlier kind, and a preview measured
-    // as text would be placed as one and drawn as the other. The switch is part of the
-    // question, as it is wherever the text lists are asked — a kind turned off in the tray is
-    // not drawn at all.
-    named_text
+    /// Whether a preview of this file is painted into the box it is given rather than scaled
+    /// within it: a text file, an archive this app read itself, and an archive an engine
+    /// listed are pages of one kind — painted at a fixed font size, so the box the layout
+    /// planned for one is the box it draws into, and the frame that comes back is that box
+    /// rather than a size to be fitted to a space.
+    ///
+    /// One question, asked in the two places that have to agree about a kind: the share it is
+    /// drawn at (`effective_preview_scale`) and the box the loader is handed, which is what
+    /// the window ends up sized to. Asking it in one place is the point — a kind left out of
+    /// one of them is a preview that is drawn at the planned size and loaded against the free
+    /// room of the display, which is a page stretched to the screen, and that is exactly what
+    /// an archive an engine listed was.
+    ///
+    /// The engine's own question is the third term, asked the way the engine asks it — the
+    /// file's bytes first and the name after them — so an archive it lists under a name no
+    /// list holds (a `.cab` renamed to `.dat`) is a page here too.
+    fn is_painted_page(&self) -> bool {
+        // A page the engine draws is not painted into the box at all, so it is not this rule.
+        if self.html_drawn_by_the_engine() {
+            return false;
+        }
+
+        self.is_text() || self.archive_named || self.engine_archive() || self.is_audio()
+    }
+
+    /// Whether this file is drawn as a video: the name the video list carries, or the bytes
+    /// of a video under a name that list does not have.
+    ///
+    /// Every question about a video goes through this one answer — whether its shape has to
+    /// be probed, whether the wait for it is shown, and whether the player takes over the
+    /// window rather than this app drawing its frames — because the loader plays the file its
+    /// bytes name, and a hover whose picture is played but whose frames are awaited would sit
+    /// on a first frame that nothing ever replaces.
+    fn is_video(&self) -> bool {
+        // It was asked from four places in one hover — the probe's due question, both
+        // dimension questions and the `Show` arm — and each of those used to read the file and
+        // take the configuration lock for it. The content is a cache hit after the first, so
+        // the entry read is all that is repeated; the lock is no longer held across the read
+        // at all (see `HoverFacts`).
+        let named = match self.route.content {
+            crate::formats::content_type::Content::Kind(PreviewType::Videos) => true,
+            _ => self.video_named,
+        };
+
+        named && self.video_enabled
+    }
+
+    /// Whether the preview of this file is a sound: what the file's own bytes say it is — the
+    /// verdict a probe left behind included — and, for a name no table names, the sound list.
+    ///
+    /// It is asked the way the video's is asked and for the same reason: a sound is drawn as a
+    /// card by this app rather than by a player, so the layout has to know one when it sees
+    /// one — which for a renamed file, or for a container whose streams hold only a song, is a
+    /// question about the content rather than about the name.
+    fn is_audio(&self) -> bool {
+        if !self.audio_enabled {
+            return false;
+        }
+
+        match self.route.content {
+            crate::formats::content_type::Content::Kind(PreviewType::Audio) => true,
+            _ => self.audio_named,
+        }
+    }
 }
 
-/// Whether a preview of this file is painted into the box it is given rather than scaled within
-/// it: a text file, an archive this app read itself, and an archive an engine listed are pages of
-/// one kind — painted at a fixed font size, so the box the layout planned for one is the box it
-/// draws into, and the frame that comes back is that box rather than a size to be fitted to a
-/// space.
-///
-/// One question, asked in the two places that have to agree about a kind: the share it is drawn
-/// at (`effective_preview_scale`) and the box the loader is handed, which is what the window ends
-/// up sized to. Asking it in one place is the point — a kind left out of one of them is a preview
-/// that is drawn at the planned size and loaded against the free room of the display, which is a
-/// page stretched to the screen, and that is exactly what an archive an engine listed was.
-///
-/// The engine's own question is the third term, asked the way the engine asks it — the file's
-/// bytes first and the name after them — so an archive it lists under a name no list holds (a
-/// `.cab` renamed to `.dat`) is a page here too.
-fn page_is_painted(path: &Path) -> bool {
-    // A page the engine draws is not painted into the box at all, so it is not this rule.
-    if html_is_engine_drawn(path) {
-        return false;
-    }
+/// Whether the preview of `path` is a text preview — the form a caller with no hover of its own
+/// asks, which is one entry read rather than the three this used to make.
+fn is_text_preview(path: &Path) -> bool {
+    HoverFacts::read(path).is_text()
+}
 
-    is_text_preview(path)
-        || archive_formats::is_archive_file(path)
-        || peazip_formats::is_engine_archive(path)
-        || drawn_as_audio(path)
+/// Whether a preview of `path` is painted into the box it is given rather than scaled within it.
+fn page_is_painted(path: &Path) -> bool {
+    HoverFacts::read(path).is_painted_page()
 }
 
 fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32 {
@@ -4890,6 +5227,14 @@ fn image_cache_limit_bytes() -> usize {
 ///
 /// A limit of zero empties it, which is what makes `image_cache_mb = 0` mean
 /// "hold nothing" rather than "hold everything until something else is stored".
+///
+/// The one thing it is for is memory: the budget is read from the configuration on every call,
+/// so a figure typed into the tray applies at the next decode rather than at a restart, and a
+/// figure typed down frees what is already held at the moment it is set (`trim_image_cache`)
+/// rather than at the next decode that happens to pass through. Which frames go is a policy —
+/// *least recently used*, not *largest*, and not *first decoded* — because a cache of decoded
+/// frames that evicts by size keeps re-decoding a file the user has moved on from and evicts
+/// nothing at all when every frame is the same size.
 fn image_cache_trim(cache: &mut ImageCache, limit: usize) {
     while cache.bytes > limit {
         // Bound to its own statement so the borrow of `entries` has ended before
@@ -6928,7 +7273,13 @@ fn load_media(
     // in the cloud is answered here rather than after a download the user never
     // asked for. The hook refuses these too; this is the boundary that reads, so
     // it decides for itself rather than trusting that nothing reaches it.
-    if cloud_files::needs_download(path) {
+    //
+    // The probe below answers that from the file's own entry, so it is not asked twice: the
+    // loader is the fourth thing to ask this file what it is in one hover, and each of them
+    // was reading the entry for itself (see `HoverFacts`).
+    let hover = HoverFacts::read(path);
+
+    if hover.probe.needs_download() {
         return None;
     }
 
@@ -6936,55 +7287,31 @@ fn load_media(
     // disagree: a `.docx` whose bytes are an MP4 is loaded as the video it is, and a format
     // no kind of this app previews is loaded as nothing at all — see `content_type` for
     // what settles that, and `load_media_of_kind` for where the kind is handed on.
-    //
-    // Asked with the lock given up before the file is read, on the loader thread: what follows
-    // is a decode, and a thread that decodes is a thread that is not answering the window (see
-    // `content_of`).
-    let content = content_of(path);
-
-    match content {
-        crate::formats::content_type::Content::Kind(kind) => {
-            return load_media_of_kind(
-                kind,
-                path,
-                max_width,
-                max_height,
-                preview_scale,
-                dpi,
-                cancel,
-            )
-        }
+    match hover.route.content {
+        crate::formats::content_type::Content::Kind(_) => {}
         crate::formats::content_type::Content::Foreign => return None,
         crate::formats::content_type::Content::Unknown => {}
     }
 
     // What the file is, is the router's answer: one order, asked once, and the same one the hook
-    // that admitted this hover asked (see `formats::routing`). The configuration is taken and
-    // given up around that question alone, so nothing below is holding it.
-    let kind = {
-        let Ok(config) = CONFIG.lock() else {
-            return None;
-        };
-
-        crate::formats::routing::kind_of(path, &config)
-    };
-
-    let Some(kind) = kind else {
+    // that admitted this hover asked (see `formats::routing`) — and asked of the entry already
+    // in hand rather than of a second reading of it.
+    if hover.routed_kind().is_none() {
         // A name no list claims has always been the picture path's, and a drawing among those is
         // still the drawing layer's: what it is, is its own header's answer rather than its
         // name's, and an `svg` a hand-edited list no longer names is a document this app can
         // draw. The hook refuses such a file before a hover reaches this far (see
         // `explorer_hook::is_media_file`), so this is the answer for the hover that came the
         // other way — through the content, which named no kind either.
-        if svg_preview::is_svg_file(path) {
+        if hover.svg_document() {
             return webview_preview::draws(path).then(engine_svg_media);
         }
 
         return load_picture(path, max_width, max_height, preview_scale, &cancel);
-    };
+    }
 
     load_media_of_kind(
-        kind,
+        &hover,
         path,
         max_width,
         max_height,
@@ -7004,7 +7331,7 @@ fn load_media(
 /// The gates are not asked here, exactly as they are not asked by the chain: the hook
 /// asked them before a hover could reach this path at all.
 fn load_media_of_kind(
-    kind: PreviewType,
+    hover: &HoverFacts,
     path: &PathBuf,
     max_width: u32,
     max_height: u32,
@@ -7012,28 +7339,23 @@ fn load_media_of_kind(
     dpi: u32,
     cancel: Arc<AtomicBool>,
 ) -> Option<MediaData> {
-    match kind {
-        PreviewType::Videos => load_video_thumbnail(path, max_width, max_height, preview_scale),
+    match hover.routed_kind() {
+        Some(PreviewType::Videos) => {
+            load_video_thumbnail(path, max_width, max_height, preview_scale)
+        }
         // A book is one kind with two readers, and which of the two a file is, is asked of the
         // table that names them rather than assumed here: a page is the PDF engine's, a comic is
         // the first plate read out of the container it is published in, and a comic reached by
         // its *content* would otherwise be read as a page of a PDF that does not exist (see
         // `native_formats`). What cannot be read for — a configuration that will not open — is
         // answered as the page a book most often is.
-        PreviewType::Ebook => {
-            let job = CONFIG
-                .lock()
-                .ok()
-                .and_then(|config| native_formats::job_for(path, PreviewType::Ebook, &config));
-
-            match job {
-                Some(native_formats::NativeJob::Comic) => {
-                    load_comic_page(path, max_width, max_height, preview_scale)
-                }
-                _ => load_pdf_first_page(path, max_width, max_height, preview_scale),
+        Some(PreviewType::Ebook) => match hover.book_job() {
+            native_formats::NativeJob::Comic => {
+                load_comic_page(path, max_width, max_height, preview_scale)
             }
-        }
-        PreviewType::Archives => load_archive_preview(
+            _ => load_pdf_first_page(path, max_width, max_height, preview_scale),
+        },
+        Some(PreviewType::Archives) => load_archive_preview(
             path,
             max_width,
             max_height,
@@ -7042,11 +7364,11 @@ fn load_media_of_kind(
             MediaType::Archive,
             &cancel,
         ),
-        PreviewType::Document => {
+        Some(PreviewType::Document) => {
             load_office_preview(path, max_width, max_height, preview_scale, &cancel)
                 .or_else(|| load_engine_page_for_office(path, max_width, max_height, preview_scale))
         }
-        PreviewType::Libre => libreoffice_render::rendered_page(path).and_then(|page| {
+        Some(PreviewType::Libre) => libreoffice_render::rendered_page(path).and_then(|page| {
             load_engine_page(
                 &page,
                 MediaType::Libre,
@@ -7055,14 +7377,14 @@ fn load_media_of_kind(
                 preview_scale,
             )
         }),
-        PreviewType::Magick => {
+        Some(PreviewType::Magick) => {
             load_magick_picture(path, max_width, max_height, preview_scale, &cancel)
         }
         // An archive an engine listed is loaded as an archive: the listing it produced is in the
         // same cache under the same key, so the page is measured and painted from it without this
         // arm knowing where it came from — and a file the engine has not answered for yet is a
         // listing the cache does not hold, which is the wait the hover is already in.
-        PreviewType::Peazip => load_archive_preview(
+        Some(PreviewType::Peazip) => load_archive_preview(
             path,
             max_width,
             max_height,
@@ -7071,14 +7393,16 @@ fn load_media_of_kind(
             MediaType::Peazip,
             &cancel,
         ),
-        PreviewType::Calibre => calibre_render::rendered_page(path)
+        Some(PreviewType::Calibre) => calibre_render::rendered_page(path)
             .and_then(|page| load_book_page(&page, max_width, max_height, preview_scale)),
-        PreviewType::Design => load_design_preview(path, max_width, max_height, preview_scale),
+        Some(PreviewType::Design) => {
+            load_design_preview(path, max_width, max_height, preview_scale)
+        }
         // Which half of the drawing kind this is, is the name's to say here rather than the
         // content's: a document is drawn by the browser engine and a metafile by the drawing
         // layer, and the content has already answered that the file is a drawing at all.
-        PreviewType::Vector => {
-            if svg_preview::is_svg_file(path) {
+        Some(PreviewType::Vector) => {
+            if hover.svg_document() {
                 webview_preview::draws(path).then(engine_svg_media)
             } else {
                 load_vector_preview(path, max_width, max_height, preview_scale)
@@ -7086,8 +7410,8 @@ fn load_media_of_kind(
         }
         // A page of HTML the engine draws is handed over the way a document is: the media carries
         // the kind and no frame, and the engine's window is the preview (see `engine_svg_media`).
-        PreviewType::Text => {
-            if html_is_engine_drawn(path) {
+        Some(PreviewType::Text) => {
+            if hover.html_drawn_by_the_engine() {
                 Some(engine_svg_media())
             } else {
                 load_text_preview(path, max_width, max_height, dpi, current_text_options())
@@ -7097,10 +7421,18 @@ fn load_media_of_kind(
         // the probe's and are already in hand — the measure that read them is what laid this
         // hover out (see `audio_box`) — and the player the card is drawn against is started by
         // the loop, where every other preview is put up.
-        PreviewType::Audio => load_audio_card(path, max_width, max_height, dpi),
-        PreviewType::Fonts => (font_preview::probe(path).is_some() && webview_preview::draws(path))
-            .then(engine_font_media),
-        PreviewType::Images => load_picture(path, max_width, max_height, preview_scale, &cancel),
+        Some(PreviewType::Audio) => load_audio_card(path, max_width, max_height, dpi),
+        Some(PreviewType::Fonts) => (font_preview::probe(path).is_some()
+            && webview_preview::draws(path))
+        .then(engine_font_media),
+        Some(PreviewType::Images) => {
+            load_picture(path, max_width, max_height, preview_scale, &cancel)
+        }
+
+        // A file whose content named no kind and whose name no list claims is the picture
+        // path's, and the caller above has already answered that one — a name no list has ever
+        // claimed is the picture it ends up decoded as.
+        None => None,
     }
 }
 
@@ -7284,31 +7616,8 @@ fn video_duration(path: &Path) -> Option<f64> {
 /// `video_probe` in the preview loop). A file the probe has already answered for is not a
 /// wait, whatever the answer was: an unmeasurable video is a video with a fallback box,
 /// not one to be probed again on every hover.
-fn video_probe_due(path: &Path) -> bool {
-    drawn_as_video(path) && cached_video_geometry(path).is_none()
-}
-
-/// Whether the preview of `path` is a video: the name the video list carries, or the bytes
-/// of a video under a name that list does not have.
-///
-/// Every question about a video goes through this one answer — whether its shape has to be
-/// probed, whether the wait for it is shown, and whether the player takes over the window
-/// rather than this app drawing its frames — because the loader plays the file its bytes
-/// name, and a hover whose picture is played but whose frames are awaited would sit on a
-/// first frame that nothing ever replaces.
-fn drawn_as_video(path: &Path) -> bool {
-    // Asked from four places in one hover — the probe's due question, both dimension questions
-    // and the `Show` arm — and each of those used to read the file and take the configuration
-    // lock for it. The content is a cache hit after the first, so the entry read is all that
-    // is repeated; the lock is no longer held across the read at all (see `content_of`).
-    if matches!(
-        content_of(path),
-        crate::formats::content_type::Content::Kind(PreviewType::Videos)
-    ) {
-        return PreviewType::Videos.enabled();
-    }
-
-    video_formats::is_video_preview(path)
+fn video_probe_due(hover: &HoverFacts) -> bool {
+    hover.is_video() && cached_video_geometry(hover.probe.path()).is_none()
 }
 
 /// Which of the two engines plays a video: the media engine the media stack of Windows has, or
@@ -7344,17 +7653,14 @@ fn media_engine_plays(path: &Path) -> bool {
     // consultation is not free: the two extensions the video list shares with the text lists
     // are settled by reading the file, and that read was happening under the process-wide
     // configuration lock on the thread that pumps this window's messages.
-    let named = {
+    let extensions = {
         let Ok(config) = CONFIG.lock() else {
             return false;
         };
-        let extensions = config.video_extensions.clone();
-        drop(config);
-
-        video_formats::matches_video_list(path, &extensions)
+        config.video_extensions.clone()
     };
 
-    named && video_player::plays(path)
+    video_formats::claims_video_name(path, &extensions) && video_player::plays(path)
 }
 
 /// The box a PDF page asks for, measured off the preview thread.
@@ -7527,63 +7833,16 @@ fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> 
     )
 }
 
-/// Whether the preview of `path` is a sound: what the file's own bytes say it is — the verdict a
-/// probe left behind included — and, for a name no table names, the sound list.
+/// Whether the preview of `path` is a sound — the form a caller with no hover of its own asks.
+/// See `HoverFacts::is_audio` for what the answer is.
 ///
-/// It is asked the way `drawn_as_video` is asked and for the same reason: a sound is drawn as a
-/// card by this app rather than by a player, so the layout has to know one when it sees one —
-/// which for a renamed file, or for a container whose streams hold only a song, is a question
-/// about the content rather than about the name.
-///
-/// The configuration is read for the two things this question needs and the lock let go before
-/// the content is asked of: that question is a `content_type::of`, which reads the file's first
-/// four kilobytes on a miss, and a lock held across a file read is a lock every other thread
-/// of the app waits on for as long as the disk takes — the preview thread included, which is
-/// the thread that pumps this window's own messages.
-///
-/// Only the audio list is copied out, rather than the whole configuration: this was a deep copy
-/// of sixteen `Vec<String>` — two hundred allocations and a `PathBuf` each — to read one list
-/// and one flag, paid on every hover of a sound. The list itself is one allocation.
+/// What this used to do and no longer does is worth a line: it copied the audio list out of the
+/// configuration under one lock, read the file's entry, took the lock a second time for the
+/// content answer, and then compared the list itself — a deep copy of sixteen `Vec<String>` and
+/// a `PathBuf` each, two hundred allocations, to read one list and one flag, on every hover of
+/// a sound, and two locks where one was asked for.
 fn drawn_as_audio(path: &Path) -> bool {
-    let (enabled, extensions) = {
-        let Ok(config) = CONFIG.lock() else {
-            return false;
-        };
-        (
-            config.audio_preview_enabled,
-            config.audio_extensions.clone(),
-        )
-    };
-
-    if !enabled {
-        return false;
-    }
-
-    // The entry is read before the lock is taken, so the question below is a lookup rather
-    // than a read: what the content is asked needs the lists, and the lists are in hand
-    // without a guard that is then held across a `File::open`.
-    let facts = crate::formats::head::Facts::read(path);
-
-    let drawn_as_audio = {
-        let Ok(config) = CONFIG.lock() else {
-            return false;
-        };
-        match &facts {
-            Some(facts) => {
-                crate::formats::content_type::of_entry_read(path, &config, facts)
-            }
-            None => crate::formats::content_type::of(path, &config),
-        }
-    };
-
-    if matches!(
-        drawn_as_audio,
-        crate::formats::content_type::Content::Kind(PreviewType::Audio)
-    ) {
-        return true;
-    }
-
-    audio_formats::matches_audio_list(path, &extensions)
+    HoverFacts::read(path).is_audio()
 }
 
 /// What a sound's card says, with the clock as it stands — or nothing for a file with no track
@@ -8278,14 +8537,17 @@ fn audio_clock(
     (position, track.duration)
 }
 
-/// Get original dimensions of media for positioning calculations
-fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+/// Get original dimensions of media for positioning calculations, of a file whose answer the
+/// caller already has.
+///
+/// It is asked of the answer rather than of the path because the caller is `media_dimensions`,
+/// which was handed the same answer a few lines above and used to read the file's directory
+/// entry again to get it (see `HoverFacts`).
+fn get_media_dimensions_of(hover: &HoverFacts, path: &PathBuf) -> Option<(u32, u32)> {
     // What the file's content says it is comes ahead of what its name does, where the two
     // disagree: the box a file is placed at is the box of the kind its content belongs to,
     // and a format no kind previews is placed nowhere at all — see `content_type`.
-    let content = content_of(path);
-
-    match content {
+    match hover.route.content {
         crate::formats::content_type::Content::Kind(kind) => {
             return media_dimensions_of_kind(kind, path)
         }
@@ -8293,7 +8555,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         crate::formats::content_type::Content::Unknown => {}
     }
 
-    if video_formats::is_video_preview(path) {
+    if hover.is_video() {
         return video_box(path);
     }
 
@@ -8307,7 +8569,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // it, beside the PDF, because the two are the same kind of preview — a page of a book — and are
     // told apart by the reader rather than by the user. A box with no plate in it is measured as
     // nothing, which is the hover that shows no preview at all (see `comic_box`).
-    if ebook_formats::is_ebook_preview(path) {
+    if previewed_as(path, PreviewType::Ebook) {
         return comic_box(path);
     }
 
@@ -8315,7 +8577,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // where its own application is installed, and by the render engine beside it where it is
     // not. A document with neither is measured as the page it is about to get — while a page
     // is coming, which is the only case where one is.
-    if office_formats::is_office_preview(path) {
+    if previewed_as(path, PreviewType::Document) {
         return office_preview::measure(path);
     }
 
@@ -8330,7 +8592,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // It is asked where the hook asks it — after the office list, ahead of the design list
     // — because a name can sit in two lists: CorelDRAW is a design document to this app and
     // a drawing to the engine, and it is the engine that draws it (see `libre_formats`).
-    if libre_formats::is_libre_preview(path) {
+    if previewed_as(path, PreviewType::Libre) {
         return libre_box(path);
     }
 
@@ -8338,7 +8600,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // the documents an engine draws, ahead of the design, vector, font and image lists, none
     // of which would have claimed a `.nef` anyway. What is measured is the picture the engine
     // wrote, and one it has not written yet is the wait for it (see `magick_box`).
-    if magick_formats::is_magick_preview(path) {
+    if previewed_as(path, PreviewType::Magick) {
         return magick_box(path);
     }
 
@@ -8346,7 +8608,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // engine and the document engines, none of whose lists would have claimed a `.mobi` anyway.
     // What is measured is the page the engine wrote, and one it has not written yet is the wait
     // for it (see `calibre_box`).
-    if calibre_formats::is_calibre_preview(path) {
+    if previewed_as(path, PreviewType::Calibre) {
         return calibre_box(path);
     }
 
@@ -8359,7 +8621,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // a name written into the design list as well as into the vector or font list is a
     // design document, and the two questions further down would report a size for another
     // kind than the one the tray was asked to switch.
-    if design_formats::is_design_preview(path) {
+    if previewed_as(path, PreviewType::Design) {
         return design_dimensions(path);
     }
 
@@ -8390,7 +8652,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 
     // A vector drawing is measured from the records it holds: what an `.eps` keeps a
     // preview of, or what a metafile's own header declares its drawing to be.
-    if vector_formats::is_vector_preview(path) {
+    if previewed_as(path, PreviewType::Vector) {
         return vector_box(path);
     }
 
@@ -8400,7 +8662,7 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
     // how large that box is shown. `Fonts` is the gate, and a file that will not parse as a
     // font reports no size at all: that is how a `.ttf` that is something else comes to show
     // nothing rather than a page of another font's glyphs.
-    if font_formats::is_font_preview(path) {
+    if previewed_as(path, PreviewType::Fonts) {
         if !webview_preview::can_draw() {
             return None;
         }
@@ -8576,7 +8838,7 @@ fn page_is_on_the_way(path: &Path) -> bool {
     // the same question the render tier is asked before it is asked for one: a picture left
     // under a document's name is drawn here, and placing it at the pointer as the wait for a
     // page would be a preview waiting for nothing (see `content_names_another_kind`).
-    let office = office_formats::is_office_preview(path)
+    let office = previewed_as(path, PreviewType::Document)
         && !content_names_another_kind(path, PreviewType::Document)
         && matches!(
             office_preview::source_kind(path),
@@ -8598,19 +8860,24 @@ fn page_is_on_the_way(path: &Path) -> bool {
 /// can fit it into the space beside the cursor, and the text renderer is handed
 /// the box that comes out of that.
 fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
+    media_dimensions_of(&HoverFacts::read(path), path, bounds, dpi)
+}
+
+/// The same, of a file whose answer the caller already has — which is the form the `Show` arm
+/// asks it in, so that installing a hover reads one file's directory entry rather than the two
+/// this and `get_media_dimensions` used to read between them (see `HoverFacts`).
+fn media_dimensions_of(
+    hover: &HoverFacts,
+    path: &PathBuf,
+    bounds: ScreenBounds,
+    dpi: u32,
+) -> Option<(u32, u32)> {
     // What the file's own bytes say it is comes first, as it does for the loader that draws
     // it and for the share it is laid out at: a `.txt` whose bytes are a picture is measured
     // as the picture it is rather than read as a page of text it is not — which for a file
     // whose bytes are not text is no measurement at all, and a preview that never appears
     // for a file that would otherwise be drawn.
-    //
-    // Asked with the lock not held across the file (see `content_of`), which matters more here
-    // than anywhere else: this runs on the preview thread at the moment the `Show` arm is
-    // installing the hover, so a slow volume held the lock here held the thread that pumps
-    // this window's messages for the length of the read.
-    let content = content_of(path);
-
-    if let crate::formats::content_type::Content::Kind(kind) = content {
+    if let crate::formats::content_type::Content::Kind(kind) = hover.route.content {
         return match kind {
             // The three kinds measured against the room they are drawn in, which is a question
             // this side has the answer to and `media_dimensions_of_kind` does not.
@@ -8637,11 +8904,11 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
         return Some(html_page_box());
     }
 
-    if is_text_preview(path) {
+    if hover.is_text() {
         return text_box(path, bounds, dpi);
     }
 
-    if archive_formats::is_archive_preview(path) {
+    if previewed_as(path, PreviewType::Archives) {
         return archive_box_off_the_tick(path, bounds, dpi);
     }
 
@@ -8650,17 +8917,17 @@ fn media_dimensions(path: &PathBuf, bounds: ScreenBounds, dpi: u32) -> Option<(u
     // itself, and one in this list is read by an engine. What is measured is the page the
     // engine's listing makes, and a listing that has not come back yet is the wait for one (see
     // `peazip_box`).
-    if peazip_formats::is_peazip_preview(path) {
+    if peazip_formats::is_peazip_file(path) && PreviewType::Peazip.enabled() {
         return peazip_box(path, bounds, dpi);
     }
 
     // A sound is the fourth kind measured against its room, and the last: what a hover on one
     // asks is a card whose facts a probe has to bring back first (see `audio_box`).
-    if drawn_as_audio(path) {
+    if hover.is_audio() {
         return audio_box(path, bounds, dpi);
     }
 
-    get_media_dimensions(path)
+    get_media_dimensions_of(hover, path)
 }
 
 /// The room a page of text is measured in: the display's work area cut down to the share
@@ -8764,13 +9031,14 @@ fn peazip_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)>
 /// the whole work area, which is wider and taller than the layout is, so nothing is
 /// clamped at the setting's own start.
 fn text_preview_layout(
+    hover: &HoverFacts,
     path: &Path,
     layout: PreviewLayout,
     bounds: ScreenBounds,
     dpi: u32,
     place: impl FnOnce((u32, u32)) -> Option<PreviewLayout>,
 ) -> (PreviewLayout, Option<(u32, u32)>) {
-    if !is_text_preview(path) {
+    if !hover.is_text() {
         return (layout, None);
     }
 
@@ -8793,58 +9061,15 @@ fn text_preview_layout(
 
 /// The effective DPI of the display nearest `(x, y)`, which is what a text preview's
 /// font size is scaled by — and what every margin a layout is written around is
-/// scaled by (see `logical_px`). Falls back to the 96 DPI baseline when no display
-/// can be named, the same way the placement falls back to the primary display.
+/// scaled by (see `logical_px`).
 ///
-/// The display is what is asked, not the window the point happens to be over: a
-/// window carries the scale its own process was told about — a UWP one can answer a
-/// scale that is not the display's at all — while the display under the point is one
-/// question with one answer, whatever is drawn on it.
-///
-/// The answer is kept per display, because the scale of a display does not change while
-/// it is the display: the pointer's own probe asks this every tick and every layout asks
-/// it again, and a pointer that has not crossed to another display is answered from here
-/// rather than by asking the DPI interface for a number that cannot have moved. A display
-/// whose scale does change — a monitor switched to another scaling — is a display whose
-/// handle is the same and whose answer is not, so the cache holds one display: the next
-/// one named is asked about, and the one after that is asked again.
+/// The display is asked and not the window the point happens to be over, and the display's
+/// answer is kept for one display and asked about again for the next: both of those are the
+/// adapter's, and the question of what to do where the machine cannot name a display is the
+/// same one a placement asks and so is asked in the same place (see `displays::display_at`).
 pub(crate) fn monitor_dpi_from_point(x: i32, y: i32) -> u32 {
-    const BASELINE_DPI: u32 = 96;
-
-    unsafe {
-        let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
-        if monitor.is_invalid() {
-            return BASELINE_DPI;
-        }
-
-        let handle = monitor.0 as isize;
-        if let Ok(cached) = MONITOR_DPI.lock() {
-            if let Some((cached_monitor, dpi)) = *cached {
-                if cached_monitor == handle {
-                    return dpi;
-                }
-            }
-        }
-
-        let mut dpi = BASELINE_DPI;
-        let mut dpi_x = 0u32;
-        let mut dpi_y = 0u32;
-        if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok() && dpi_x > 0
-        {
-            dpi = dpi_x;
-        }
-
-        if let Ok(mut cached) = MONITOR_DPI.lock() {
-            *cached = Some((handle, dpi));
-        }
-
-        dpi
-    }
+    dpi_at(x, y)
 }
-
-/// The last display asked about and the scale it answered with — one display's worth, for
-/// the reason `monitor_dpi_from_point` gives.
-static MONITOR_DPI: Lazy<Mutex<Option<(isize, u32)>>> = Lazy::new(|| Mutex::new(None));
 
 /// Render a single frame of the loading spinner animation (BGRA pixels).
 ///
@@ -9531,7 +9756,7 @@ impl PendingLoad {
             return followed;
         };
 
-        let bounds = monitor_bounds_from_point(cursor.x, cursor.y);
+        let bounds = work_area_at(cursor.x, cursor.y);
 
         // The room an engine is asked for follows the hand the preview does, because the
         // display the hand is on is the one the hover is now waiting on: a pointer that has
@@ -9802,17 +10027,7 @@ unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
         // the one it keeps for the picture a design document is previewed from, each a
         // setting of its own for the reason `dds_image` gives. A document is composited by
         // the engine, over the backdrop of its own, and none of them reaches here.
-        let background = if media.media_type.is_loading() {
-            TransparentBackground::Transparent
-        } else if matches!(media.media_type, MediaType::Dds) {
-            current_dds_background()
-        } else if matches!(media.media_type, MediaType::Design) {
-            current_design_background()
-        } else if matches!(media.media_type, MediaType::Vector) {
-            current_vector_background()
-        } else {
-            current_image_background()
-        };
+        let background = preview_background(media.media_type);
         let bits = ensure_layered_surface(hwnd.0 as isize, width, height)?;
         let out = unsafe { std::slice::from_raw_parts_mut(bits, expected_size) };
 
@@ -10156,8 +10371,8 @@ struct PinTooltipPaint {
 /// `pin_media_is_alive`, which lets go for the same reason).
 fn pinned_paint() -> Option<PinnedPaint> {
     let mut paint = {
-        let pinned = PINNED.lock().ok()?;
-        let pin = pinned.as_ref()?;
+        let pinned = pin_state()?;
+        let pin = pinned.pin()?;
         let (width, height) = pin.window_size();
 
         PinnedPaint {
@@ -11468,8 +11683,14 @@ unsafe fn reset_preview_after_display_change(hwnd: HWND) {
 
 /// Whether the pin that is up is collapsed into the bubble that stands for it: a state in which
 /// nothing of anybody else's belongs on top of the bubble — a player's window included.
+///
+/// Asked of the pin rather than of a flag beside it, because the two had to be written together
+/// and nothing said so: a collapse set `pin.collapsed` under the pin’s lock and `PIN_COLLAPSED`
+/// beside it, and a reader of the flag believed it rather than looking — and the question this
+/// answers is about the window the user is looking at, so a flag that could be set without a
+/// pin was a flag that could be wrong about one.
 fn pin_is_collapsed() -> bool {
-    PIN_COLLAPSED.load(Ordering::Acquire)
+    pin_state().is_some_and(|state| state.pin().is_some_and(|pin| pin.collapsed))
 }
 
 /// Whether the pinned window is the window the user is in, and so whether a key belongs to it.
@@ -11498,14 +11719,30 @@ pub(crate) fn pin_is_focused() -> bool {
 /// It is asked for on the press rather than on the pin coming up, because a pin comes up wherever
 /// the pointer happens to be — a pin that took the focus as it appeared would take it out of
 /// whatever the user was typing, under a preview that has not been touched at all.
+///
+/// The two calls that ask are two *asks*, and what is written below is written on the answer
+/// rather than on the asking. Windows refuses them both under the foreground lock — the
+/// foreground goes to whichever process had the last input, and a process that did not have it is
+/// not given it for asking — and that refusal is ordinary rather than a fault: it is what a press
+/// on the pin looks like while something else owns the input, and the hand simply presses again.
+/// A claim written on the asking is a pin that holds a keyboard it was never given and a note of
+/// a window the user is no longer in, and the handover that note exists for is the foreground
+/// asked back from a window the user left (see `pin_release_focus`).
 unsafe fn pin_take_focus(hwnd: HWND) {
     if !pinned() {
         return;
     }
 
     // Where the keyboard is being taken from, remembered before it is taken: this is the only
-    // moment the window in front is still the one the user was in (see `PIN_PREVIOUS_FOREGROUND`).
-    PIN_PREVIOUS_FOREGROUND.store(GetForegroundWindow().0 as isize, Ordering::Release);
+    // moment the window in front is still the one the user was in. A window that is hidden
+    // while it is still the one holding the focus leaves Windows to pick whatever it likes to
+    // activate next, and for a `WS_EX_TOOLWINDOW` popup that is not reliably the Explorer
+    // window that was in front a moment ago — the arrangement that leaves a desktop on which
+    // nothing answers the keyboard. A popup has no owner to ask either: a window with no parent
+    // has no `GW_OWNER` at all, so the window the caret was in is the one that was in front a
+    // moment before the press, and the only moment it can be read is the moment the pin takes
+    // over from it (see `pin_window::take_keyboard`).
+    let behind = GetForegroundWindow().0 as isize;
 
     // The window is only focusable while a pin is up, so the style is asked to change
     // before the focus is asked for: `SetFocus` on a `WS_EX_NOACTIVATE` window is refused
@@ -11514,7 +11751,18 @@ unsafe fn pin_take_focus(hwnd: HWND) {
 
     let _ = SetForegroundWindow(hwnd);
     let _ = SetFocus(hwnd);
-    PIN_FOCUSED.store(true, Ordering::Release);
+
+    // Whether the keyboard arrived is asked of Windows, by the same question `pin_is_focused`
+    // asks, because that is the one answer here that cannot be wrong: the caret is either in
+    // this window or it is not, and where it is says what the pin holds rather than what the
+    // calls above hoped for. A press that was refused therefore leaves the pin holding no
+    // keyboard at all — the state a pin the hand has never pressed is in — and that is a state
+    // which asks again rather than one that is stuck: the keyboard is not in the pin, so
+    // `pin_is_focused` is false on the next press and the press is answered afresh (see
+    // `WM_LBUTTONDOWN`). What such a press leaves alone is a claim an earlier one earned: the
+    // keyboard in it did arrive then, and Windows drops that claim itself the moment the pin is
+    // activated away from (see the `WM_ACTIVATE` above).
+    take_keyboard(behind, pin_is_focused());
 }
 
 /// Hand the keyboard back, from the pin having lost it: the user has clicked into another window,
@@ -11524,55 +11772,12 @@ unsafe fn pin_take_focus(hwnd: HWND) {
 /// is the kind of thing that brings a window up over the user. What is dropped is the claim: the
 /// pin is not the window the user is in, so the keys the caption walks its folder with are the keys
 /// of whatever is in front of it, which is the ordinary arrangement everywhere else in Windows.
+///
+/// The claim goes with the window it came from, so there is nothing left to hand over to: a pin
+/// holding a note of a window that took the keyboard a moment ago is a pin that will ask for the
+/// foreground back from a window the user is no longer in.
 fn pin_release_focus() {
-    PIN_FOCUSED.store(false, Ordering::Release);
-}
-
-/// The window that was in front when the pin took the focus, so that the pin can hand it back.
-///
-/// This has to be remembered rather than asked for on the way out. A window that is hidden while
-/// it is still the one holding the focus leaves Windows to pick whatever it likes to activate next,
-/// and for a `WS_EX_TOOLWINDOW` popup that is not reliably the Explorer window that was in front a
-/// moment ago — the arrangement that leaves a desktop on which nothing answers the keyboard. A
-/// popup has no owner to ask either: a window with no parent has no `GW_OWNER` at all, so the
-/// window the caret was in is the one that was in front a moment before the press, and the only
-/// moment it can be read is the moment the pin takes over from it.
-static PIN_PREVIOUS_FOREGROUND: AtomicIsize = AtomicIsize::new(0);
-
-/// Give the keyboard up entirely, from the pin that owned it having ended: the claim is dropped and
-/// the window goes back to being a window nobody types into, because the window this one lives in
-/// is put up again as an ordinary hover preview the moment the pin is over.
-///
-/// The keyboard is handed over rather than merely let go of, which is why this is not the same as
-/// `pin_release_focus`: that is what losing the focus means, and it is the window now in front that
-/// already holds the keyboard. This is the pin that is going away, and the keyboard is somewhere it
-/// has to be put back by hand.
-///
-/// It asks the window rather than doing it, because the watchdog used to do this by hand and
-/// did not: a pin it cleared kept the focus it had claimed and the foreground it had stolen,
-/// which is a desktop with no caret in it (see `pin_window`).
-fn pin_drop_focus(window: &dyn PinWindow) {
-    if !PIN_FOCUSED.swap(false, Ordering::AcqRel) {
-        return;
-    }
-
-    let hwnd = window.hwnd();
-    let behind = PIN_PREVIOUS_FOREGROUND.swap(0, Ordering::AcqRel);
-    if hwnd == 0 {
-        return;
-    }
-
-    // The window behind is the one that was in front a moment ago, and a handle to one that
-    // has since gone is refused by the call rather than acted on (see `Win32PinWindow`).
-
-    // The focus is given up before the style is changed, because a window that has been made
-    // non-activating while it still holds the focus holds it in a state Windows does not expect.
-    window.set_focus(0);
-    window.set_focusable(hwnd, false);
-
-    if behind != 0 {
-        window.set_foreground(behind);
-    }
+    release_keyboard();
 }
 
 /// Whether a pinned window can take the focus at all, which is what `WS_EX_NOACTIVATE` takes away
@@ -11700,8 +11905,8 @@ fn media_point(x: i32, y: i32) -> (i32, i32) {
         return (x, y);
     }
 
-    let caption = PINNED.lock().ok().and_then(|pinned| {
-        let pin = pinned.as_ref()?;
+    let caption = pin_state().and_then(|pinned| {
+        let pin = pinned.pin()?;
         (!pin.collapsed && !pin.overlay).then(|| pinned_caption_height(pin.dpi))
     });
 
@@ -11788,9 +11993,9 @@ unsafe extern "system" fn window_proc(
             // media under it and the claim on the keyboard. On a pin, a close is a close. On a
             // hover, of which there is no window to close and no claim to drop, it is nothing at
             // all, exactly as it was before this window could be activated (see
-            // `pin_drop_focus`).
+            // `pin_window::Reason::Closed`).
             if pinned() {
-                end_pin();
+                request_pin_end();
             }
             LRESULT(0)
         }
@@ -11882,8 +12087,8 @@ unsafe extern "system" fn window_proc(
             // Whatever a pinned window was doing with the pointer is over: a capture lost to
             // another window is a drag that is not coming back.
             if pinned() {
-                if let Ok(mut pinned) = PINNED.lock() {
-                    if let Some(pin) = pinned.as_mut() {
+                if let Some(mut pinned) = pin_state() {
+                    if let Some(pin) = pinned.pin_mut() {
                         pin.dragging = None;
                         pin.pressed = None;
                         pin.transport.pressed = None;
@@ -11931,7 +12136,7 @@ unsafe extern "system" fn window_proc(
             // holds is not something a resume can put back. The hook is told, and the loop takes
             // the pin down on its next tick, which is the same path its close button takes.
             if pinned() {
-                end_pin();
+                request_pin_end();
             }
             LRESULT(0)
         }
@@ -11957,7 +12162,10 @@ struct PreviewLayout {
     preview_h: u32,
 }
 
-#[derive(Clone, Copy)]
+/// Compared and printed rather than only copied, because the placements this is asked for are
+/// read back as rectangles: a test that asserts on one wants to say what the rectangle was, and
+/// an inequality between two displays is how "one display rather than the union" is stated.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ScreenBounds {
     left: i32,
     top: i32,
@@ -11993,89 +12201,11 @@ impl ScreenBounds {
     }
 }
 
-/// The work area of the primary display, for a layout that could not be anchored to
-/// the display it belongs to.
-///
-/// What this stands in for is one display's room, so one display is what it answers
-/// with: the whole virtual screen — `SM_XVIRTUALSCREEN` and its width — is the union
-/// of every display, and a preview sized to that is a preview that straddles the seam
-/// between two of them, which is the thing anchoring a layout to a display is for. A
-/// preview asked for on a display that cannot be named is therefore placed on the
-/// primary one: somewhere it is wholly visible, rather than somewhere it is not.
-fn primary_display_bounds() -> ScreenBounds {
-    unsafe {
-        let mut work = RECT::default();
-        if SystemParametersInfoW(
-            SPI_GETWORKAREA,
-            0,
-            Some(&mut work as *mut RECT as *mut core::ffi::c_void),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        )
-        .is_ok()
-        {
-            return ScreenBounds {
-                left: work.left,
-                top: work.top,
-                right: work.right,
-                bottom: work.bottom,
-            };
-        }
-    }
-
-    virtual_screen_bounds()
-}
-
-/// Every display in one rectangle, for the fallback that cannot do better than the
-/// primary display and find it missing.
-fn virtual_screen_bounds() -> ScreenBounds {
-    unsafe {
-        let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-        let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-        let width = GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1);
-        let height = GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1);
-
-        ScreenBounds {
-            left,
-            top,
-            right: left + width,
-            bottom: top + height,
-        }
-    }
-}
-
 /// Where the pointer is, in screen coordinates.
 fn cursor_position() -> Option<POINT> {
     let mut point = POINT::default();
     unsafe { GetCursorPos(&mut point) }.ok()?;
     Some(point)
-}
-
-/// Usable bounds of the display nearest to `(x, y)`. Anchoring layout to a
-/// single monitor keeps the preview from spilling onto a neighboring display
-/// when more than one is attached. Falls back to the primary display if the
-/// monitor query fails — a display, rather than the union of them, since a
-/// preview sized to the union is one that spills onto a neighbor.
-fn monitor_bounds_from_point(x: i32, y: i32) -> ScreenBounds {
-    unsafe {
-        let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
-        if !monitor.is_invalid() {
-            let mut info = MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
-            if GetMonitorInfoW(monitor, &mut info).as_bool() {
-                let work = info.rcWork;
-                return ScreenBounds {
-                    left: work.left,
-                    top: work.top,
-                    right: work.right,
-                    bottom: work.bottom,
-                };
-            }
-        }
-    }
-
-    primary_display_bounds()
 }
 
 /// The top edge that centers a `height`-tall preview on `center`, kept inside the
@@ -13061,17 +13191,21 @@ fn pinned_media_box(orig_dims: (u32, u32), room: ScreenBounds, scale: PreviewSca
 /// What a kind of preview is composited over, which is a question a hover and a pinned window
 /// both ask: a texture has a backdrop of its own, the drawing of a design document another,
 /// and everything else the picture's (see the `Background` submenu).
+///
+/// It is the same exhaustive match the hover's own answer is composed with, so a media type
+/// this app grows and a kind it grows cannot each need remembering here: the three that are not
+/// a picture's are named by the one router table that says which of the tray's six backdrops
+/// stands behind what.
 fn preview_background(kind: MediaType) -> TransparentBackground {
     if kind.is_loading() {
         TransparentBackground::Transparent
-    } else if matches!(kind, MediaType::Dds) {
-        current_dds_background()
-    } else if matches!(kind, MediaType::Design) {
-        current_design_background()
-    } else if matches!(kind, MediaType::Vector) {
-        current_vector_background()
     } else {
-        current_image_background()
+        current_background(match kind {
+            MediaType::Dds => crate::formats::routing::Backdrop::Dds,
+            MediaType::Design => crate::formats::routing::Backdrop::Design,
+            MediaType::Vector => crate::formats::routing::Backdrop::Vector,
+            _ => crate::formats::routing::Backdrop::Image,
+        })
     }
 }
 
@@ -13083,14 +13217,10 @@ fn preview_background(kind: MediaType) -> TransparentBackground {
 /// that says who takes it down and what the pointer is doing on it.
 ///
 /// It is written by the preview loop, which holds the window and the media, and read by the
-/// window procedure and every repaint — which is why it is a global rather than a local of
-/// the loop. `PIN_ACTIVE` is the same answer as an atomic for the threads that ask it without
-/// wanting a lock, and the two are written in one order at both ends: the state under this
-/// lock first, the flag after — set once a pin is in place, cleared once it is gone (see
-/// `end_pin_state`). A reader that finds `pinned()` true therefore finds the pin, or the tail
-/// of one being taken down, which is an answer its own `None` already handles.
-static PINNED: Lazy<Mutex<Option<PinnedPreview>>> = Lazy::new(|| Mutex::new(None));
-
+/// window procedure and every repaint — which is why it is a field of the pin's state rather
+/// than a local of the loop (see `pin_window::PinState`). A pin is up or it is not, and the
+/// value that says so is behind the pin's own lock; `pinned()` is the same answer published
+/// for the threads that ask it without wanting a lock.
 struct PinnedPreview {
     /// The file that is pinned — the hover the pin came from, kept by name so that a box that
     /// changes can be laid out again without asking the Explorer hook anything.
@@ -13166,6 +13296,37 @@ struct PinnedPreview {
     /// The level this pin plays at, which belongs to this window rather than to the setting it was
     /// read from (see `PinVolume`).
     volume: PinVolume,
+}
+
+#[cfg(test)]
+impl PinnedPreview {
+    /// A pin with nothing asked of it and nothing answered about it: the state a test needs to
+    /// stand a pin up in, without a box to place or a media to show.
+    ///
+    /// It is the same pin `overlay_pin` builds, at a box that fits on screen, so a test that
+    /// wants a particular box or a particular chrome says so rather than starting here.
+    pub(crate) fn for_test() -> PinnedPreview {
+        Self {
+            path: PathBuf::from("picture.png"),
+            bound: Some(100),
+            content: (0, 0, 100, 100),
+            restore: None,
+            dpi: 96,
+            transport_bar: false,
+            transport_live: false,
+            frame: PinFrame::Shaped,
+            overlay: true,
+            chrome: PinChrome::always(),
+            collapsed: false,
+            bubble_pause: None,
+            hovered: None,
+            pressed: None,
+            tooltip: PinTooltip::default(),
+            dragging: None,
+            transport: PinTransport::default(),
+            volume: PinVolume::default(),
+        }
+    }
 }
 
 /// What a pin's collapse into its bubble parked, and what it takes to put it back.
@@ -13459,8 +13620,8 @@ struct PinVolume {
 
 /// Answer about the pin that is up with a change to it, where there is one.
 fn with_pin(change: impl FnOnce(&mut PinnedPreview)) {
-    if let Ok(mut pinned) = PINNED.lock() {
-        if let Some(pin) = pinned.as_mut() {
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
             change(pin);
         }
     }
@@ -13469,10 +13630,8 @@ fn with_pin(change: impl FnOnce(&mut PinnedPreview)) {
 /// The level the pin that is up is playing at, and the setting where there is no pin: what a
 /// player this app starts for a pinned file is given (see `restart_pinned_player`).
 fn pinned_volume_level() -> u32 {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.volume.level))
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.level))
         .unwrap_or_else(current_video_volume)
 }
 
@@ -13480,10 +13639,8 @@ fn pinned_volume_level() -> u32 {
 /// the player's window is held off by: the popup is drawn over the media, and the media of a video
 /// FFmpeg plays is that window.
 fn pin_volume_open() -> bool {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.volume.open && !pin.collapsed))
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.open && !pin.collapsed))
         .unwrap_or(false)
 }
 
@@ -13491,8 +13648,8 @@ fn pin_volume_open() -> bool {
 /// owes a repaint for it.
 fn close_pin_volume() -> bool {
     let mut closed = false;
-    if let Ok(mut pinned) = PINNED.lock() {
-        if let Some(pin) = pinned.as_mut() {
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
             closed = pin.volume.open;
             pin.volume.open = false;
             pin.volume.dragging = false;
@@ -13804,8 +13961,8 @@ fn pin_is_playing(transport: &PinTransport) -> bool {
 /// What the transport's own actions need of the pin: the file being played, the box the player's
 /// window fills, where its playback is, and the level it is playing at.
 fn pinned_playback_state() -> Option<(PathBuf, ScreenRegion, PinTransport, PinVolume)> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     Some((pin.path.clone(), pin.content, pin.transport, pin.volume))
 }
 
@@ -14329,55 +14486,30 @@ pub(crate) enum PinCommand {
     TogglePlayback,
 }
 
-/// The commands the window procedure has left for the preview loop, oldest first.
-///
-/// A queue rather than a slot, and the reason is a double-click. A slot holds one command and
-/// the next write over it, so a double-click on `Next` — two presses, the second within the
-/// system double-click time, both delivered as separate `WM_LBUTTONUP`s — left one command
-/// where the user asked for two, and the second file was not walked to. Two `Next` clicks are
-/// the ordinary way to move two files along, so the loss was on the commonest button.
-///
-/// Bounded because the loop that drains it is the one that would have to be stopped for it to
-/// grow: a caption clicked faster than the loop turns, which is a hand drumming on a button.
-/// At that rate the loop is behind anyway, and what is dropped is the oldest, so what
-/// survives is the user's latest intent rather than the first thing they asked for.
-static PIN_COMMANDS: Lazy<Mutex<VecDeque<PinCommand>>> =
-    Lazy::new(|| Mutex::new(VecDeque::new()));
-
-/// How many commands may be waiting before the oldest is dropped. A loop turns on the order of
-/// sixty times a second and a caption button is a press, so a queue this deep is already a
-/// loop that is not keeping up rather than a hand that is ahead of it.
-const PIN_COMMANDS_MAX: usize = 16;
-
-/// Leave a command for the preview loop to act on.
-pub(crate) fn ask_pin(command: PinCommand) {
-    let Ok(mut commands) = PIN_COMMANDS.lock() else {
-        return;
-    };
-    if commands.len() >= PIN_COMMANDS_MAX {
-        commands.pop_front();
-    }
-    commands.push_back(command);
-}
-
-/// Take the command the chrome left, if one was left.
-///
-/// `false` says the queue was already empty, which is the whole of what the loop asks for
-/// beyond the command itself: the read is destructive, so a command nobody wanted any more is
-/// gone rather than acted on by a later tick.
-fn take_pin_command() -> Option<PinCommand> {
-    PIN_COMMANDS.lock().ok()?.pop_front()
-}
+// The commands the window procedure has left for the preview loop are a field of the pin's own
+// state, beside the window they are about (see `pin_window::ask_pin` and
+// `pin_window::take_pin_command`).
 
 /// A pinned window's box, kept on a display: a window dragged past an edge leaves a caption's
 /// worth of itself behind, and a window dragged wholly off one is put back on it. The display
 /// it is kept on is the one the caption is nearest — which is the one the hand is on.
-fn clamp_pinned_box(box_: ScreenRegion, dpi: u32) -> ScreenRegion {
+///
+/// The display arrives as an argument rather than being worked out here, and that is the whole
+/// of why this function has tests at all. It is arithmetic on a rectangle, and it was untestable
+/// because it reached into the display driver for one of its two arguments: the one clamp in
+/// this file that decides where a window the user is looking at is allowed to be stranded, and
+/// the only way to ask it anything was to attach a monitor to it (see `displays`).
+///
+/// Which display it is asked about is the decision the seam makes testable rather than this one:
+/// the anchor is the box's own middle, so a window wide enough to have a middle on a display it
+/// is mostly not on is kept on the display the hand is on rather than the one its left edge is
+/// against, and a recorder reads that anchor back as a point (see `RecordedDisplays`).
+fn clamp_pinned_box(box_: ScreenRegion, dpi: u32, displays: &dyn Displays) -> ScreenRegion {
     let keep = logical_px(dpi, PIN_KEEP_ON_SCREEN_PIXELS).max(8);
     let width = (box_.2 - box_.0).max(1);
     let height = (box_.3 - box_.1).max(1);
 
-    let anchor = monitor_bounds_from_point(box_.0 + width / 2, box_.1 + height / 2);
+    let anchor = displays::display_at(displays, box_.0 + width / 2, box_.1 + height / 2).work_area;
     let horizontal_keep = keep.min(width);
     let vertical_keep = keep.min(height);
 
@@ -14490,31 +14622,27 @@ fn pin_screen_is_settled(media: Option<MediaType>, engine_draws: bool) -> bool {
     media.is_some_and(|kind| !kind.is_loading())
 }
 
-/// Take the pin down, answering with the message that does it.
+/// Take the pin down from the loop's own tick, answering with the message that does it.
 ///
 /// The state goes first, and that is the whole of what this function is: what follows is the
 /// ordinary take-down a hover's dismissal goes through — the window comes down, the player is
 /// ended, the media goes — and it must not be refused by the pin's own guards. The bubble a
-/// collapsed pin left goes with it, and so does the record of a pin being up at all, which is
-/// what lets the next hover through (see `PIN_ACTIVE` and `PIN_RESUMED`).
+/// collapsed pin left goes with it, and so does the record of a pin having been up at all,
+/// which is what lets the next hover through (see `pin_window::end_pin`).
 ///
-/// The road is named rather than written out, because the watchdog used to write this one out
-/// again by hand and the copy drifted: a pin the watchdog cleared kept the keyboard it had
+/// `reason` is said rather than chosen as a road, because the road used to be a free choice and
+/// the watchdog's copy of this list is what that cost: a pin it cleared kept the keyboard it had
 /// claimed, kept a focusable window, and left a queued walk to be answered into a pin that no
-/// longer existed. Both roads now go through `take_pin_down`, and this one adds the bubble
-/// because the loop's own take-down does not.
-fn end_pin_state() -> PreviewMessage {
-    let window = Win32PinWindow;
-    let mut settle = |window: &dyn PinWindow| end_pin_state_guards(window);
-    let owed = take_pin_down(PinExit::Loop, &window, &mut settle);
+/// longer existed. Every reason but `Reason::Hung` is this road, and the bubble is taken down
+/// here because the loop's own take-down does not know about it.
+fn end_pin_state(reason: Reason) -> PreviewMessage {
+    let owed = end_pin(reason, &Win32PinWindow);
 
     debug_assert_eq!(
         owed,
         PinHide::WithTheTakeDown,
         "the loop's own tick brings the window down as part of the message below"
     );
-
-    hide_pin_bubble();
 
     PreviewMessage::Hide
 }
@@ -14530,6 +14658,23 @@ struct Win32PinWindow;
 impl PinWindow for Win32PinWindow {
     fn hwnd(&self) -> isize {
         PREVIEW_HWND.load(Ordering::SeqCst)
+    }
+
+    fn pointer(&self) -> Option<(i32, i32)> {
+        cursor_screen_point()
+    }
+
+    fn window_box(&self, hwnd: isize) -> Option<ScreenRegion> {
+        let (left, top, width, height) = window_origin(HWND(hwnd as *mut _))?;
+        Some((left, top, left + width, top + height))
+    }
+
+    fn capture(&self, hwnd: isize) {
+        // Safety: the handle is this app's own preview window, and a capture is held per thread —
+        // only the thread the press was delivered on can take one, and every caller of this is a
+        // message on this thread's own window procedure. The call is refused rather than acted on
+        // for a window that has since gone.
+        let _ = unsafe { SetCapture(HWND(hwnd as *mut _)) };
     }
 
     fn release_capture(&self, hwnd: isize) {
@@ -14569,6 +14714,22 @@ impl PinWindow for Win32PinWindow {
         }
     }
 
+    fn hide_pin_bubble(&self) {
+        // The bubble is a window of this app's own and hiding it is a plain call on a handle
+        // read from the slot it was created into, with nothing this fn has to be unsafe about.
+        hide_pin_bubble();
+    }
+
+    fn repaint(&self) {
+        // Safety: the handle is read from the slot this app's own preview window was created
+        // into, and the paint is a layered-window blit of a surface this app drew for exactly
+        // this window. A window that has since gone is refused by the call rather than acted on.
+        let hwnd = HWND(self.hwnd() as *mut _);
+        if !hwnd.is_invalid() {
+            unsafe { render_layered_preview(hwnd) };
+        }
+    }
+
     fn post(&self, hwnd: isize, message: u32) {
         // Safety: the handle is read from the slot the window was created into, and the message
         // asks only for something this window does to itself. A window that has since gone is
@@ -14577,48 +14738,22 @@ impl PinWindow for Win32PinWindow {
     }
 }
 
-/// Everything about a pin that has to be true of every road out of it, in one place.
+/// The rest of what a pin's end has to settle, which is not the pin.
 ///
-/// The pin is a window, a caption, a claim on the keyboard, a pointer that may have been taken,
-/// a walk that may be queued and a command that may be waiting to be acted on — and each of
-/// those is a separate piece of state with a separate owner. This is the one exit through all
-/// of them, so that "a pin is over" has exactly one meaning rather than one meaning per caller.
+/// The pin's own window, its keyboard claim and the commands its chrome had queued are fields
+/// of its state, and `pin_window::end_pin` settles those with the window work in one list. The
+/// three things here are each somebody else's: the walk the planner is working on, the bubble's
+/// drag latch and the box a drag had left the window at. They stay where they are because their
+/// owners are elsewhere — the planner holds its lock across a `Condvar::wait_timeout`, and the
+/// bubble and the box are windows of their own — but they are settled from the same one exit, so
+/// a fourth road out of a pin cannot leave them standing.
 ///
-/// It used to be the body of `end_pin_state` with the window work left out, and the watchdog
-/// had its own hand-written copy of the same list. The copy is what made a pin killed by the
-/// watchdog keep the keyboard it had taken and the foreground it had stolen: everything this
-/// now settles was in the other list, which had drifted by four items. It is called by
-/// `take_pin_down` rather than by either road, so the two cannot drift apart again, and it is
-/// handed the window because the keyboard handover in the middle of it is window work.
-///
-/// Nothing here takes `PINNED` while holding it across anything else, and nothing here is a
-/// window message except the handover, which is taken outside the lock because
-/// `SetForegroundWindow` is a message to the window behind.
-fn end_pin_state_guards(window: &dyn PinWindow) {
-    if let Ok(mut pinned) = PINNED.lock() {
-        *pinned = None;
-    }
-
-    // The window goes back to being a window nobody types into, and the keyboard goes back to
-    // where it came from, because a hover preview uses this same window and must never be able
-    // to take the focus (see `pin_set_focusable`).
-    pin_drop_focus(window);
-
-    PIN_ACTIVE.store(false, Ordering::Release);
-    PIN_COLLAPSED.store(false, Ordering::Release);
-    // A pin that is over is a pointer that is on something new: the file the pin was of is not
-    // a hover the hook has already answered, and one is due the moment the pin is gone rather
-    // than after the delay a re-hover of the same file is given (see `PIN_RESUMED`).
-    PIN_RESUMED.store(true, Ordering::Release);
-
-    // A command left in the slot when a pin ends is a command about a window that is no longer
-    // there, fired against whatever pin comes next: the chrome is drawn for the file now on
-    // screen, so a Close that belonged to the last one closes this one. A walk is the same
-    // answer to the same question — a caption button asking for the next file, worked out for a
-    // pin that has gone.
-    if let Ok(mut commands) = PIN_COMMANDS.lock() {
-        commands.clear();
-    }
+/// It is a separate function and not part of the state for the same reason it is separate from
+/// the teardown's own list: it holds three locks in turn, none of them the pin's, and a reader
+/// that wanted one lock for a pin's end would be holding the planner's.
+fn end_pin_beside_the_state() {
+    // A walk is the same answer to the same question a queued command is — a caption button
+    // asking for the next file, worked out for a pin that has gone.
     if let Ok(mut jobs) = PIN_JOBS.0.lock() {
         *jobs = None;
     }
@@ -14862,7 +14997,7 @@ struct PinSwapSpace {
 /// It is read rather than asked for piece by piece so that the lock is let go of before
 /// anything is measured or asked for an engine — the same rule `PinUpdate` keeps.
 fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
-    let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
+    let bounds = work_area_at(pin.content.0, pin.content.1);
     PinSwapSpace {
         current: pin.content,
         bound: pin.bound,
@@ -14890,8 +15025,8 @@ fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
 /// `PinnedPreview::bound` and `pin_swap_room`).
 fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
     let (space, volume, collapsed, showing) = {
-        let pinned = PINNED.lock().ok()?;
-        let pin = pinned.as_ref()?;
+        let pinned = pin_state()?;
+        let pin = pinned.pin()?;
         (
             pin_swap_space(pin),
             pin.volume.level,
@@ -14908,8 +15043,8 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
     // it, rather than read off the pin: what the take-up computes is the scale it draws the new
     // kind's chrome at, and a media loaded at another one would be a picture and a caption that
     // disagree about how large a pixel is.
-    let dpi = monitor_dpi_from_point(space.current.0, space.current.1);
-    let bounds = monitor_bounds_from_point(space.current.0, space.current.1);
+    let dpi = dpi_at(space.current.0, space.current.1);
+    let bounds = work_area_at(space.current.0, space.current.1);
 
     Some(match pin_update_content(space, path, bounds, dpi)? {
         PinBox::Measured(content) => PinPlan::Show(PinUpdate {
@@ -14934,14 +15069,14 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
 /// maximized afterwards asks for. What the engine is asked for is what a hover asks for, so the
 /// two share what comes back.
 fn pin_engine_room() -> Option<(u32, u32)> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
 
     if pin.collapsed {
         return None;
     }
 
-    Some(monitor_bounds_from_point(pin.content.0, pin.content.1).room())
+    Some(work_area_at(pin.content.0, pin.content.1).room())
 }
 
 /// Ask whichever engine owes a pinned window's new file its page, a picture or a listing — and
@@ -15132,7 +15267,7 @@ fn pin_update_content(
 /// than a wait — while a placeholder nothing is reading behind is a size that will never change,
 /// and a pick that waited on it would wait forever.
 fn pin_swap_awaits(path: &Path, shape: (u32, u32)) -> bool {
-    box_is_the_wait(shape) && (measure_waiting(path) || video_probe_due(path))
+    box_is_the_wait(shape) && (measure_waiting(path) || video_probe_due(&HoverFacts::read(path)))
 }
 
 /// Whether a measured shape is the wait for a box rather than one: the placeholder every measurer
@@ -15232,16 +15367,13 @@ fn pin_keeps_its_box(path: &Path) -> bool {
     if let crate::formats::content_type::Content::Kind(kind) = content_of(path) {
         return matches!(
             kind,
-            PreviewType::Text
-                | PreviewType::Archives
-                | PreviewType::Peazip
-                | PreviewType::Audio
+            PreviewType::Text | PreviewType::Archives | PreviewType::Peazip | PreviewType::Audio
         );
     }
 
     is_text_preview(path)
-        || archive_formats::is_archive_preview(path)
-        || peazip_formats::is_peazip_preview(path)
+        || previewed_as(path, PreviewType::Archives)
+        || peazip_formats::is_peazip_file(path) && PreviewType::Peazip.enabled()
         || drawn_as_audio(path)
 }
 
@@ -15852,15 +15984,15 @@ struct AudioCardClock {
 /// The file and the display scale a pin is showing, for the work that has to lay its media out
 /// again — read in one look so that the lock is not held across it.
 fn pinned_media_owner() -> Option<(PathBuf, u32)> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     Some((pin.path.clone(), pin.dpi))
 }
 
 /// The box a pinned window is standing at, if one is up.
 fn pinned_window_box() -> Option<(ScreenRegion, i32, i32)> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     let window = pin.window_box();
     Some((
         window,
@@ -15938,8 +16070,8 @@ fn place_pinned_siblings() {
 /// The media box of the pin that is up, or nothing when there is no pin or it is collapsed: a
 /// collapsed pin has no bands for anybody else's window to stand in.
 fn pinned_content() -> Option<ScreenRegion> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     (!pin.collapsed).then_some(pin.content)
 }
 
@@ -15958,11 +16090,11 @@ fn ensure_pinned_sibling_box(content: ScreenRegion) {
 /// back into the work area where it does not, and the media is laid out again for the display
 /// it ended up on.
 fn replace_pinned_window() -> Option<PreviewMessage> {
-    let mut pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_mut()?;
+    let mut pinned = pin_state()?;
+    let pin = pinned.pin_mut()?;
 
-    pin.dpi = monitor_dpi_from_point(pin.content.0, pin.content.1);
-    let bounds = monitor_bounds_from_point(pin.content.0, pin.content.1);
+    pin.dpi = dpi_at(pin.content.0, pin.content.1);
+    let bounds = work_area_at(pin.content.0, pin.content.1);
     let room = pinned_room(bounds, pin.dpi, pin.transport_bar, pin.overlay);
     let shape = (
         (pin.content.2 - pin.content.0).max(1) as u32,
@@ -15977,6 +16109,7 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
             pin.content.1 + height,
         ),
         pin.dpi,
+        &DESKTOPS,
     );
 
     pin.content = content;
@@ -16019,7 +16152,7 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
         return;
     };
 
-    let bounds = monitor_bounds_from_point(content.0, content.1);
+    let bounds = work_area_at(content.0, content.1);
     let room = pinned_room(bounds, dpi, transport_bar, overlay);
     let shape = media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape));
 
@@ -16035,7 +16168,7 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
         room,
     });
 
-    let content = clamp_pinned_box(content, dpi);
+    let content = clamp_pinned_box(content, dpi, &DESKTOPS);
 
     // The check and the write are one lock and one step, because a walk taken between the read
     // above and this write has changed what the pin is showing, and a box decided from the file
@@ -16043,11 +16176,9 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     // already queued, so the right answer is to leave it to that rather than to lay out over the
     // top of it — which is a decision not to write, so it is made beside the write and not
     // before it.
-    let written = PINNED
-        .lock()
-        .ok()
+    let written = pin_state()
         .and_then(|mut pinned| {
-            let pin = pinned.as_mut()?;
+            let pin = pinned.pin_mut()?;
             if pin.path != path || pin.restore != maximize {
                 return None;
             }
@@ -16150,8 +16281,8 @@ struct PinMaximizeInputs {
 }
 
 fn pin_maximize_inputs() -> Option<PinMaximizeInputs> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
 
     Some(PinMaximizeInputs {
         path: pin.path.clone(),
@@ -16281,7 +16412,7 @@ fn pin_command_request(
 ) -> Option<PinStep> {
     let step = match take_pin_command() {
         Some(PinCommand::Close) => {
-            *request = Some(end_pin_state());
+            *request = Some(end_pin_state(Reason::Closed));
             None
         }
         Some(PinCommand::Minimize) => {
@@ -16305,8 +16436,11 @@ fn pin_command_request(
         None => None,
     };
 
+    // The thing the pin is a window onto came apart: the player's process is gone, or the engine
+    // took a document and never drew it. This is the half of "until it is closed, or it comes
+    // apart" that is not a button (see `pin_media_is_alive`).
     if !pin_media_is_alive(navigating) {
-        *request = Some(end_pin_state());
+        *request = Some(end_pin_state(Reason::MediaGone));
     }
 
     step
@@ -16694,8 +16828,8 @@ fn unplayable_media(size: (u32, u32)) -> MediaData {
 /// is the ordinary rule (see `pin_swap_room` and `pinned_media_box`).
 fn pin_failure_plan() -> Option<PinUpdate> {
     let (space, volume, collapsed) = {
-        let pinned = PINNED.lock().ok()?;
-        let pin = pinned.as_ref()?;
+        let state = pin_state()?;
+        let pin = state.pin()?;
         (pin_swap_space(pin), pin.volume.level, pin.collapsed)
     };
 
@@ -16705,8 +16839,8 @@ fn pin_failure_plan() -> Option<PinUpdate> {
         return None;
     }
 
-    let dpi = monitor_dpi_from_point(space.current.0, space.current.1);
-    let bounds = monitor_bounds_from_point(space.current.0, space.current.1);
+    let dpi = dpi_at(space.current.0, space.current.1);
+    let bounds = work_area_at(space.current.0, space.current.1);
 
     Some(PinUpdate {
         content: pin_update_box(
@@ -16799,10 +16933,10 @@ static PIN_BUBBLE_MOVED: AtomicBool = AtomicBool::new(false);
 /// `settle_bubble_playback`).
 fn collapse_pin() {
     let anchor = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return;
         };
         if pin.collapsed {
@@ -16810,7 +16944,6 @@ fn collapse_pin() {
         }
 
         pin.collapsed = true;
-        PIN_COLLAPSED.store(true, Ordering::Release);
 
         // A bubble has no bar and no level to be read off: the popup goes with the window it was
         // drawn over, and a pin put back up is put back up without it.
@@ -16827,12 +16960,12 @@ fn collapse_pin() {
     // that takes its place cannot be — it is a circle standing in for a window, and it is made the
     // way every preview is. The keyboard goes back now rather than whenever Windows notices the
     // window has gone, so that a pin collapsed with the caret on it does not leave the caret on a
-    // window that is not there (see `pin_drop_focus`).
+    // window that is not there.
     //
     // Asked for outside the lock above because giving a focus up is a message to this app's own
     // window procedure, and a window procedure that arrives back here while the lock is held would
     // be a second thread waiting on it — this one, from its own loop.
-    pin_drop_focus(&Win32PinWindow);
+    give_the_keyboard_back(&Win32PinWindow);
 
     unsafe {
         hide_pinned_windows();
@@ -16881,10 +17014,10 @@ fn pinned_minimize_box(pin: &PinnedPreview) -> ScreenRegion {
 /// the collapse parked is started again by the tick this runs in (see `settle_bubble_playback`).
 fn restore_pin() {
     {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return;
         };
         if !pin.collapsed {
@@ -16892,13 +17025,12 @@ fn restore_pin() {
         }
 
         pin.collapsed = false;
-        PIN_COLLAPSED.store(false, Ordering::Release);
 
         // The window goes back up where a preview of it would have been put at the pointer the
         // bubble was clicked with, rather than where it stood when it was collapsed: the bubble is
         // the bit of the pin the hand is on, and what the hand gets back is a window placed beside
         // it the way this app places everything else (see `placed_pin_box`).
-        if let Some(window) = placed_pin_box(pin) {
+        if let Some(window) = placed_pin_box(pin, &DESKTOPS) {
             pin.content = content_box_of(window, pin.dpi, pin.transport_bar, pin.overlay);
         }
     }
@@ -16944,8 +17076,8 @@ fn restore_pin() {
 
 /// What the bubble a collapsed pin left has parked, if anything (see `BubblePause`).
 fn pin_bubble_pause() -> Option<BubblePause> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     pin.bubble_pause
 }
 
@@ -16972,10 +17104,10 @@ fn update_pin_bubble_pause(park: Option<BubblePause>) {
 /// would be a picture on screen next to the one thing a collapse leaves there.
 fn settle_bubble_playback(audio_started: &mut Option<Instant>, audio_start_offset: &mut f64) {
     let (collapsed, parked) = {
-        let Ok(pinned) = PINNED.lock() else {
+        let Some(pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_ref() else {
+        let Some(pin) = pinned.pin() else {
             return;
         };
 
@@ -17128,7 +17260,14 @@ fn put_back_bubble_playback(
 ///
 /// A hover's placement steps around the name the file is listed under (see `avoiding_text`); a
 /// bubble is on no name, so the pointer's own standoff is the whole of the clearance.
-fn placed_pin_box(pin: &PinnedPreview) -> Option<ScreenRegion> {
+///
+/// The display arrives as an argument, and that is the second of the two functions in this file
+/// that could not be tested because it worked the display out for itself. Where a box goes back
+/// up is a decision about the machine it is going up on, and the one that matters is which
+/// display that is: a bubble left at the right-hand edge of a display the second monitor begins
+/// beside must come back up on the second, or it comes back up under the edge of the first and
+/// off the bottom of the desktop.
+fn placed_pin_box(pin: &PinnedPreview, displays: &dyn Displays) -> Option<ScreenRegion> {
     if pin.restore.is_some() {
         return None;
     }
@@ -17138,8 +17277,9 @@ fn placed_pin_box(pin: &PinnedPreview) -> Option<ScreenRegion> {
     let height = (window.3 - window.1).max(1);
 
     let (anchor_x, anchor_y) = pin_bubble_centre().or_else(cursor_screen_point)?;
-    let bounds = monitor_bounds_from_point(anchor_x, anchor_y);
-    let dpi = monitor_dpi_from_point(anchor_x, anchor_y);
+    let display = displays::display_at(displays, anchor_x, anchor_y);
+    let bounds = display.work_area;
+    let dpi = display.dpi;
 
     let layout = compute_mouse_layout(
         anchor_x,
@@ -17219,13 +17359,13 @@ fn hide_pin_bubble() {
 /// to go. It is painted before it is shown, for the reason every other layered window of this app's
 /// is: what one shows between two paints is the surface it already has.
 unsafe fn show_pin_bubble(anchor: ScreenRegion) {
-    let dpi = monitor_dpi_from_point(anchor.0, anchor.1);
+    let dpi = dpi_at(anchor.0, anchor.1);
     let side = logical_px(dpi, PIN_BUBBLE_PIXELS).max(16);
 
     let centre_x = (anchor.0 + anchor.2) / 2;
     let centre_y = (anchor.1 + anchor.3) / 2;
     let (x, y) = (centre_x - side / 2, centre_y - side / 2);
-    let clamped = clamp_pinned_box((x, y, x + side, y + side), dpi);
+    let clamped = clamp_pinned_box((x, y, x + side, y + side), dpi, &DESKTOPS);
     let (x, y) = (clamped.0, clamped.1);
 
     let Some(hwnd) = pin_bubble_window() else {
@@ -17535,7 +17675,7 @@ unsafe fn drag_pin_bubble(hwnd: HWND) {
     let Some((_, _, width, height)) = window_origin(hwnd) else {
         return;
     };
-    let dpi = monitor_dpi_from_point(x, y);
+    let dpi = dpi_at(x, y);
     let target = clamp_pinned_box(
         (
             x - grab.0,
@@ -17544,6 +17684,7 @@ unsafe fn drag_pin_bubble(hwnd: HWND) {
             y - grab.1 + height,
         ),
         dpi,
+        &DESKTOPS,
     );
 
     let _ = SetWindowPos(
@@ -17685,10 +17826,10 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     };
 
     let dragging = {
-        let Ok(pinned) = PINNED.lock() else {
+        let Some(pinned) = pin_state() else {
             return;
         };
-        pinned.as_ref().and_then(|pin| pin.dragging)
+        pinned.pin().and_then(|pin| pin.dragging)
     };
 
     if dragging.is_some() {
@@ -17721,10 +17862,10 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         })
         .flatten();
     let changed = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return;
         };
 
@@ -17762,11 +17903,9 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
             })
             .flatten()
     });
-    let transport_changed = PINNED
-        .lock()
-        .ok()
+    let transport_changed = pin_state()
         .and_then(|mut pinned| {
-            let pin = pinned.as_mut()?;
+            let pin = pinned.pin_mut()?;
             let changed = pin.transport.hovered != transport_hovered;
             pin.transport.hovered = transport_hovered;
             Some(changed)
@@ -17792,8 +17931,8 @@ struct PinnedCaption {
 }
 
 fn pinned_caption_geometry() -> Option<PinnedCaption> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     (!pin.collapsed).then(|| {
         let (width, _) = pin.window_size();
         PinnedCaption {
@@ -17823,8 +17962,8 @@ struct PinnedTransportBar {
 }
 
 fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     if pin.collapsed || !pin.transport_bar {
         return None;
     }
@@ -17904,10 +18043,8 @@ unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
         return false;
     };
 
-    let dragging = PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.transport.seeking.is_some()));
+    let dragging =
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.transport.seeking.is_some()));
 
     if dragging != Some(true) {
         return false;
@@ -17923,10 +18060,10 @@ unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
 /// that has let go of the bar takes the file to where the hand stopped.
 unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
     let (part, seeking, transport) = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return false;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return false;
         };
 
@@ -17996,10 +18133,8 @@ unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
 fn pinned_volume_geometry() -> Option<pin_chrome::VolumePopup> {
     let bar = pinned_transport_geometry()?;
 
-    PINNED
-        .lock()
-        .ok()?
-        .as_ref()?
+    pin_state()?
+        .pin()?
         .volume
         .open
         .then(|| pin_chrome::volume_popup_layout(bar.width, bar.top.max(0), bar.height, bar.dpi))
@@ -18007,10 +18142,8 @@ fn pinned_volume_geometry() -> Option<pin_chrome::VolumePopup> {
 
 /// Whether the popup's knob is being held.
 fn pin_volume_dragging() -> bool {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().map(|pin| pin.volume.dragging))
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.dragging))
         .unwrap_or(false)
 }
 
@@ -18077,10 +18210,10 @@ unsafe fn pinned_volume_drag(hwnd: HWND, y: i32) -> bool {
 /// being started at one is settled with it (see `settle_pin_volume`).
 unsafe fn pinned_volume_release(hwnd: HWND) -> bool {
     let dragging = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return false;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return false;
         };
 
@@ -18109,10 +18242,10 @@ unsafe fn pinned_volume_release(hwnd: HWND) -> bool {
 /// is not painting and the player is in front of it again on the tick.
 unsafe fn toggle_pin_volume(hwnd: HWND) {
     let opened = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return;
         };
 
@@ -18178,13 +18311,13 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
 
     if framed {
         let edge = {
-            let Ok(pinned) = PINNED.lock() else {
+            let Some(pinned) = pin_state() else {
                 return false;
             };
-            pinned.as_ref().and_then(|pin| pin.resize_edge(x, y))
+            pinned.pin().and_then(|pin| pin.resize_edge(x, y))
         };
         if let Some(edge) = edge {
-            begin_pin_drag(hwnd, PinDragAction::Resize(edge), true);
+            begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Resize(edge), true);
             return true;
         }
     }
@@ -18197,8 +18330,8 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             let button =
                 pin_chrome::button_at(x, y, caption.width, caption.height, caption.dpi, framed);
             if let Some(button) = button {
-                if let Ok(mut pinned) = PINNED.lock() {
-                    if let Some(pin) = pinned.as_mut() {
+                if let Some(mut pinned) = pin_state() {
+                    if let Some(pin) = pinned.pin_mut() {
                         pin.pressed = Some(button);
                     }
                 }
@@ -18208,7 +18341,7 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             }
         }
 
-        begin_pin_drag(hwnd, PinDragAction::Move, true);
+        begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Move, true);
         return true;
     }
 
@@ -18225,7 +18358,7 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     }
 
     if pinned_content_is_the_pins(x, y) {
-        begin_pin_drag(hwnd, PinDragAction::Move, true);
+        begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Move, true);
         return true;
     }
 
@@ -18334,10 +18467,10 @@ unsafe fn pinned_set_cursor(hwnd: HWND) -> bool {
     };
 
     let (frame, hovering, dragging) = {
-        let Ok(pinned) = PINNED.lock() else {
+        let Some(pinned) = pin_state() else {
             return false;
         };
-        let Some(pin) = pinned.as_ref() else {
+        let Some(pin) = pinned.pin() else {
             return false;
         };
         if pin.collapsed {
@@ -18466,6 +18599,7 @@ unsafe fn settle_pinned_engine_press(hwnd: HWND, seen_presses: &mut u64) {
     pin_take_focus(hwnd);
     begin_pin_drag(
         hwnd,
+        &Win32PinWindow,
         pinned_engine_press_action(window, dpi, frame, point),
         false,
     );
@@ -18530,8 +18664,8 @@ fn pin_media_press_count() -> u64 {
 /// The box, display scale and frame of the pin that is up, for a press that landed on the window
 /// standing in its media band — read in one look, so that the lock is not held across the answer.
 fn pinned_window_frame() -> Option<(ScreenRegion, u32, PinFrame)> {
-    let pinned = PINNED.lock().ok()?;
-    let pin = pinned.as_ref()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
     Some((pin.window_box(), pin.dpi, pin.frame))
 }
 
@@ -18562,8 +18696,24 @@ fn pinned_engine_press_action(
     PinDragAction::Move
 }
 
-unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
-    let Some(from) = cursor_screen_point() else {
+/// What a press becomes: a drag of the window, and the pointer taken for it.
+///
+/// *When a press becomes a carried drag* is the whole of this function, and it is the decision
+/// that had no tests: the pointer is taken only once there is a drag for it, and the two were
+/// not connected. A lock this thread could not take, or a pin that had been taken down since
+/// the press was read, left the window holding the pointer for the whole desktop with nothing
+/// that would ever release it. Every mouse message then went to this window rather than to
+/// whatever the pointer was aimed at, and the cursor kept whichever shape the last edge gave
+/// it — a desktop that looked broken until some other window took the pointer for itself,
+/// which is why clicking elsewhere appeared to bring it back.
+///
+/// It is behind `PinWindow` because all three of the things it asks of the machine are: where
+/// the pointer is, where the window stands, and whether the pointer may be taken. Only the
+/// middle step — *whether there is a pin for the drag to live in* — is this file's, and it is
+/// the step that decides which of the other two is asked at all.
+fn begin_pin_drag(hwnd: HWND, window: &dyn PinWindow, action: PinDragAction, delivered: bool) {
+    let hwnd = hwnd.0 as isize;
+    let Some(from) = window.pointer() else {
         return;
     };
     // The box the window is standing at on screen, rather than the one the pin remembers: a
@@ -18571,28 +18721,16 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
     // maximize left it, and a resize begun from the remembered box is begun from the screen's
     // own top border rather than from the place the hand left the window at — which is the
     // window snapping back to the top the moment an edge is pulled (see `apply_pin_drag`).
-    let Some((left, top, width, height)) = window_origin(hwnd) else {
+    let Some(window_box) = window.window_box(hwnd) else {
         return;
     };
-    let window = (left, top, left + width, top + height);
 
-    // Whether the drag was installed at all, which is what the capture is conditioned on below.
-    //
-    // The pointer is taken only once there is a drag for it, and the two were not connected:
-    // a lock this thread could not take, or a pin that had been taken down since the press was
-    // read, left the window holding the pointer for the whole desktop with nothing that would
-    // ever release it. Every mouse message then went to this window rather than to whatever the
-    // pointer was aimed at, and the cursor kept whichever shape the last edge gave it — a
-    // desktop that looked broken until some other window took the pointer for itself, which is
-    // why clicking elsewhere appeared to bring it back.
-    let installed = PINNED
-        .lock()
-        .ok()
+    let installed = pin_state()
         .and_then(|mut pinned| {
-            let pin = pinned.as_mut()?;
+            let pin = pinned.pin_mut()?;
             pin.dragging = Some(PinDrag {
                 from,
-                window,
+                window: window_box,
                 action,
                 delivered,
                 // A drag has not been carried out to anywhere yet, and `from` is a place it has
@@ -18604,9 +18742,9 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
         .is_some();
 
     if installed {
-        let _ = SetCapture(hwnd);
+        window.capture(hwnd);
     } else {
-        release_pin_capture(hwnd);
+        window.release_capture(hwnd);
     }
 }
 
@@ -18624,10 +18762,7 @@ unsafe fn begin_pin_drag(hwnd: HWND, action: PinDragAction, delivered: bool) {
 /// A drag this window *was* given its release for is left alone: it ends in `pinned_release`, and
 /// its capture is this window's own to hold until that message arrives.
 unsafe fn settle_pinned_engine_drag(hwnd: HWND) {
-    let Some(drag) = PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().and_then(|pin| pin.dragging))
+    let Some(drag) = pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging))
     else {
         return;
     };
@@ -18641,7 +18776,7 @@ unsafe fn settle_pinned_engine_drag(hwnd: HWND) {
         return;
     }
 
-    finish_pin_drag(hwnd);
+    finish_pin_drag(hwnd, &Win32PinWindow);
 }
 
 /// Whether a drag is being carried on from what the hook publishes rather than from a message: one
@@ -18662,10 +18797,7 @@ fn pin_drag_carried_to() -> (i32, i32) {
 /// The drag of a pinned drawing the loop is carrying, read in one look: what a pass needs both
 /// the liveness and the last place from, so the two are not read under the lock separately.
 fn carried_drag() -> Option<PinDrag> {
-    PINNED
-        .lock()
-        .ok()
-        .and_then(|pinned| pinned.as_ref().and_then(|pin| pin.dragging))
+    pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging))
 }
 
 /// Follow a drag of a pinned drawing for as long as the hand is going.
@@ -18871,10 +19003,10 @@ unsafe fn release_pin_capture(hwnd: HWND) {
 /// the box the window had when it began.
 unsafe fn apply_pin_drag(hwnd: HWND) {
     let (drag, dpi, transport, overlay, frame) = {
-        let Ok(pinned) = PINNED.lock() else {
+        let Some(pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_ref() else {
+        let Some(pin) = pinned.pin() else {
             return;
         };
         let Some(drag) = pin.dragging else {
@@ -18907,14 +19039,14 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             resize_pinned_window(drag.window, edge, dx, dy, dpi, transport, overlay, frame)
         }
     };
-    let window = clamp_pinned_box(window, dpi);
+    let window = clamp_pinned_box(window, dpi, &DESKTOPS);
     let content = content_box_of(window, dpi, transport, overlay);
 
     {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return;
         };
         // A hand that pulled the box to a size is the box's new bound as well as its size: the
@@ -19005,7 +19137,7 @@ fn resize_pinned_window(
     frame: PinFrame,
 ) -> ScreenRegion {
     let content = content_box_of(window, dpi, transport, overlay);
-    let bounds = monitor_bounds_from_point(
+    let bounds = work_area_at(
         content.0 + (content.2 - content.0) / 2,
         content.1 + (content.3 - content.1) / 2,
     );
@@ -19425,8 +19557,8 @@ unsafe fn settle_open_with_dialog(hwnd: HWND) {
 /// dialog is up is a tick that finds the pointer somewhere the button is not, and the name
 /// would outlive the hover that earned it by however long the dialog is left standing.
 fn put_pin_tooltip_away() {
-    if let Ok(mut pinned) = PINNED.lock() {
-        if let Some(pin) = pinned.as_mut() {
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
             pin.tooltip.shown = None;
         }
     }
@@ -19455,10 +19587,10 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
     // tick instead (see `settle_pinned_engine_drag`). A window's own press does not press a
     // caption button and drag the window at once, so the two are not in competition.
     let (pressed, caption_height, dpi, width, framed) = {
-        let Ok(mut pinned) = PINNED.lock() else {
+        let Some(mut pinned) = pin_state() else {
             return false;
         };
-        let Some(pin) = pinned.as_mut() else {
+        let Some(pin) = pinned.pin_mut() else {
             return false;
         };
 
@@ -19516,7 +19648,7 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
-    finish_pin_drag(hwnd)
+    finish_pin_drag(hwnd, &Win32PinWindow)
 }
 
 /// Let go of a drag, from whichever of the two ends has arrived.
@@ -19532,16 +19664,18 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
 ///
 /// Returns whether there was a drag to let go of, which is what a caller that has other release
 /// work to do needs to know.
-unsafe fn finish_pin_drag(hwnd: HWND) -> bool {
-    let drag = PINNED
-        .lock()
-        .ok()
-        .and_then(|mut pinned| pinned.as_mut().and_then(|pin| pin.dragging.take()));
+///
+/// The window work is the one call `begin_pin_drag` conditions, read back off the seam rather
+/// than off `GetCapture` — the two ends of a capture are one list, and a list that had to be
+/// read out of the machine in two places is a list whose two halves can disagree.
+fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
+    let drag =
+        pin_state().and_then(|mut pinned| pinned.pin_mut().and_then(|pin| pin.dragging.take()));
     let Some(drag) = drag else {
         return false;
     };
 
-    release_pin_capture(hwnd);
+    window.release_capture(hwnd.0 as isize);
 
     if matches!(drag.action, PinDragAction::Resize(_)) {
         if let Some(content) = pinned_content() {
@@ -19551,7 +19685,7 @@ unsafe fn finish_pin_drag(hwnd: HWND) -> bool {
         }
     }
 
-    render_layered_preview(hwnd);
+    window.repaint();
     true
 }
 
@@ -19946,7 +20080,7 @@ pub fn run_preview_window() {
             let tick_generation = current_generation;
             let tick_pinned = pinned();
             if PIN_END_REQUESTED.swap(false, Ordering::AcqRel) {
-                pin_request = Some(end_pin_state());
+                pin_request = Some(end_pin_state(Reason::Asked));
             }
 
             // The key is drained whether or not it is watched, so that a press made while the
@@ -20164,8 +20298,8 @@ pub fn run_preview_window() {
 
                 // Where the player's window belongs while a pin is up: the media band of the
                 // pin, which is what the tick's own re-assertion below is handed.
-                if let Ok(pinned) = PINNED.lock() {
-                    if let Some(pin) = pinned.as_ref() {
+                if let Some(pinned) = pin_state() {
+                    if let Some(pin) = pinned.pin() {
                         video_pos = (
                             pin.content.0,
                             pin.content.1,
@@ -20177,14 +20311,8 @@ pub fn run_preview_window() {
 
                 // A transport bar's playhead moves while its file plays, so the window is painted
                 // again at a clock's own pace rather than only where the picture changes.
-                let transport_showing = PINNED
-                    .lock()
-                    .ok()
-                    .and_then(|pinned| {
-                        pinned
-                            .as_ref()
-                            .map(|pin| pin.transport_bar && !pin.collapsed)
-                    })
+                let transport_showing = pin_state()
+                    .and_then(|pinned| pinned.pin().map(|pin| pin.transport_bar && !pin.collapsed))
                     .unwrap_or(false);
 
                 if transport_showing
@@ -20296,13 +20424,8 @@ pub fn run_preview_window() {
             //
             // Split cadence: a pinned video competes with the pin's own window and keeps
             // the tight band, while a hover video gets the slow one — reordering DWM
-            // 5x/s for a tooltip is what this used to cost (see
-            // `PIN_TOPMOST_REASSERT_MS` / `HOVER_TOPMOST_REASSERT_MS`).
-            let topmost_cadence_ms = if pinned() {
-                PIN_TOPMOST_REASSERT_MS
-            } else {
-                HOVER_TOPMOST_REASSERT_MS
-            };
+            // 5x/s for a tooltip is what this used to cost (see `topmost_cadence_ms`).
+            let topmost_cadence_ms = topmost_cadence_ms(pinned());
             if current_video_path.is_some()
                 && !pin_is_collapsed()
                 && !pin_volume_open()
@@ -20315,19 +20438,22 @@ pub fn run_preview_window() {
 
             // Advance animation frames if needed
             let mut needs_repaint = false;
-            // Whether this tick takes a full look at the media behind the preview
-            // (see `STATIC_MEDIA_REFRESH_MS`): a swap, a load, a wait or a player
-            // forces one, a dynamic hint keeps the fast cadence, and a static hint
-            // still re-checks twice a second so late streaming frames are noticed.
-            let need_media_check = media_dynamic_hint
-                || pending_load.is_some()
-                || pin_load.is_some()
-                || pin_walk_wait.is_some()
-                || video_start.is_some()
-                || first_frame_wait.is_some()
-                || current_generation != last_checked_generation
-                || last_full_media_check.elapsed()
-                    >= Duration::from_millis(STATIC_MEDIA_REFRESH_MS);
+            // Whether this tick takes a full look at the media behind the preview: a
+            // swap, a load, a wait or a player forces one, a dynamic hint keeps the fast
+            // cadence, and a static hint still re-checks twice a second so late streaming
+            // frames are noticed. Named rather than written out inline, because the backstop
+            // is the arm most likely to be argued away and the one that cannot be argued away
+            // on a machine where nothing happens to stream (see `needs_a_full_media_look`).
+            let need_media_check = needs_a_full_media_look(
+                media_dynamic_hint,
+                pending_load.is_some()
+                    || pin_load.is_some()
+                    || pin_walk_wait.is_some()
+                    || video_start.is_some()
+                    || first_frame_wait.is_some(),
+                current_generation != last_checked_generation,
+                last_full_media_check.elapsed(),
+            );
 
             // The engine draws a document in a window of its own, and that window is put
             // up only once the page has arrived: what is underneath it — the spinner the
@@ -20832,10 +20958,7 @@ pub fn run_preview_window() {
                             // and is left where the item put it.
                             if let Some(pl) = pending.as_mut() {
                                 if let Some(cursor) = cursor_position() {
-                                    pl.follow_pointer(
-                                        cursor,
-                                        monitor_dpi_from_point(cursor.x, cursor.y),
-                                    );
+                                    pl.follow_pointer(cursor, dpi_at(cursor.x, cursor.y));
                                 }
                             }
 
@@ -21050,7 +21173,7 @@ pub fn run_preview_window() {
             if let Some(ref mut pl) = pending_load {
                 if let Some(cursor) = cursor_position() {
                     let side_before = pl.spinner_side;
-                    let dpi = monitor_dpi_from_point(cursor.x, cursor.y);
+                    let dpi = dpi_at(cursor.x, cursor.y);
                     let followed = pl.follow_pointer(cursor, dpi);
                     if followed.spinner && pl.spinner_shown {
                         if pl.spinner_side == side_before {
@@ -21206,7 +21329,7 @@ pub fn run_preview_window() {
                                     .is_some_and(|kind| !kind.enabled());
 
                             if switched_off {
-                                pin_request = Some(end_pin_state());
+                                pin_request = Some(end_pin_state(Reason::SwitchedOff));
                             }
                         } else if latest_preview_msg.is_none() {
                             match (current_media_kind(), current_show.clone()) {
@@ -21235,7 +21358,7 @@ pub fn run_preview_window() {
                     // way its own close button takes it.
                     PreviewMessage::PinChanged => {
                         if pinned() && !pin_enabled() {
-                            pin_request = Some(end_pin_state());
+                            pin_request = Some(end_pin_state(Reason::SwitchedOff));
                         }
                     }
                     // The file the user picked while a preview was pinned, which the pin is to be
@@ -21325,8 +21448,8 @@ pub fn run_preview_window() {
                                 // worse than no name.
                                 PinPlanned::OpenWith { path, name } => {
                                     if pinned_path().as_deref() == Some(path.as_path()) {
-                                        if let Ok(mut pinned) = PINNED.lock() {
-                                            if let Some(pin) = pinned.as_mut() {
+                                        if let Some(mut pinned) = pin_state() {
+                                            if let Some(pin) = pinned.pin_mut() {
                                                 pin.tooltip.default_app = name;
                                             }
                                         }
@@ -21404,8 +21527,8 @@ pub fn run_preview_window() {
             // is asked of a pin that is not up, and nothing of one whose chrome is not drawn over
             // its media, which is the answer both of those questions are asked through.
             if pinned() {
-                let changed = PINNED.lock().ok().and_then(|mut pinned| {
-                    let pin = pinned.as_mut()?;
+                let changed = pin_state().and_then(|mut pinned| {
+                    let pin = pinned.pin_mut()?;
                     let now = Instant::now();
                     Some(refresh_pin_chrome(pin, now, cursor_screen_point()))
                 });
@@ -21685,7 +21808,7 @@ pub fn run_preview_window() {
                     && !webview_preview::is_showing();
 
                 if pinned_engine_failed {
-                    pin_request = Some(end_pin_state());
+                    pin_request = Some(end_pin_state(Reason::MediaGone));
                 }
             }
 
@@ -21797,7 +21920,8 @@ pub fn run_preview_window() {
                             // listing are asked for here (see `pin_swap_awaits`, `audio_box` and
                             // `request_pin_engine_render`).
                             Some(PinPlan::Awaiting) => {
-                                if video_probe_due(&path) {
+                                let hover = HoverFacts::read(&path);
+                                if video_probe_due(&hover) {
                                     spawn_video_probe(path.clone(), current_generation);
                                 }
 
@@ -21816,7 +21940,7 @@ pub fn run_preview_window() {
                                 // the hover's own `requested.is_none` arm) — while a file no engine
                                 // can be asked about is left showing what it has.
                                 let outstanding =
-                                    measure_waiting(&path) || video_probe_due(&path) || asked;
+                                    measure_waiting(&path) || video_probe_due(&hover) || asked;
 
                                 if outstanding {
                                     pin_awaiting_box = Some(path.clone());
@@ -22054,10 +22178,15 @@ pub fn run_preview_window() {
                         // the two without losing it.
                         set_text_scroll_anchor(x, y);
 
-                        let bounds = monitor_bounds_from_point(x, y);
-                        let dpi = monitor_dpi_from_point(x, y);
-                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
-                        preview_scale = effective_preview_scale(&path, current_hover_scales());
+                        let bounds = work_area_at(x, y);
+                        let dpi = dpi_at(x, y);
+                        // One reading of the file and one of the configuration for the whole
+                        // of this arm: the six questions below are asked of what comes back
+                        // rather than of the path, which is what took about twenty
+                        // `fs::metadata` calls per hover down to one (see `HoverFacts`).
+                        let hover = HoverFacts::read(&path);
+                        let follow_cursor = hover.follow_cursor;
+                        preview_scale = effective_preview_scale_of(&hover, hover.scales);
 
                         // A document with no page rendered for it yet has nothing to
                         // measure but the wait, so its preview is laid out as the
@@ -22074,15 +22203,15 @@ pub fn run_preview_window() {
                         // lay out as a video until the probe answers, so the hover is the
                         // wait for it — the spinner at the pointer's own corner — and is
                         // replayed when the answer lands (see `video_probe_due`).
-                        let probing = video_probe_due(&path);
+                        let probing = video_probe_due(&hover);
 
-                        if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
+                        if let Some(orig_dims) = media_dimensions_of(&hover, &path, bounds, dpi) {
                             // A box that is being read is placed at the pointer's own corner the
                             // way every other wait is: what is on screen is the spinner for a
                             // measure the layout has just started, and it belongs at the hand
                             // that asked (see `measure_waiting`).
                             let measuring = measure_waiting(&path);
-                            let is_video = drawn_as_video(&path);
+                            let is_video = hover.is_video();
                             let mut placement = HoverPlacement {
                                 orig_dims,
                                 avoid,
@@ -22092,8 +22221,13 @@ pub fn run_preview_window() {
                             };
                             let placed = compute_mouse_layout(x, y, placement, bounds, dpi);
                             if let Some(layout) = placed {
-                                let (layout, text_size) =
-                                    text_preview_layout(&path, layout, bounds, dpi, |size| {
+                                let (layout, text_size) = text_preview_layout(
+                                    &hover,
+                                    &path,
+                                    layout,
+                                    bounds,
+                                    dpi,
+                                    |size| {
                                         compute_mouse_layout(
                                             x,
                                             y,
@@ -22104,7 +22238,8 @@ pub fn run_preview_window() {
                                             bounds,
                                             dpi,
                                         )
-                                    });
+                                    },
+                                );
                                 // A text preview is placed again at the width its box came
                                 // out with, and the frame that lands is taller by the rows a
                                 // long line wraps into there. The wait re-places from the size
@@ -22145,13 +22280,16 @@ pub fn run_preview_window() {
                         let center = ((il + ir) / 2, (it + ib) / 2);
                         set_text_scroll_anchor(center.0, center.1);
 
-                        let bounds = monitor_bounds_from_point(center.0, center.1);
-                        let dpi = monitor_dpi_from_point(center.0, center.1);
-                        let follow_cursor = CONFIG.lock().map(|c| c.follow_cursor).unwrap_or(true);
-                        preview_scale = effective_preview_scale(&path, current_hover_scales());
+                        let bounds = work_area_at(center.0, center.1);
+                        let dpi = dpi_at(center.0, center.1);
+                        // One reading of the file and one of the configuration for the whole of
+                        // this arm, as the pointer's arm above does (see `HoverFacts`).
+                        let hover = HoverFacts::read(&path);
+                        let follow_cursor = hover.follow_cursor;
+                        preview_scale = effective_preview_scale_of(&hover, hover.scales);
 
-                        if let Some(orig_dims) = media_dimensions(&path, bounds, dpi) {
-                            let is_video = drawn_as_video(&path);
+                        if let Some(orig_dims) = media_dimensions_of(&hover, &path, bounds, dpi) {
+                            let is_video = hover.is_video();
                             let placement = KeyboardPlacement {
                                 item_rect: (il, it, ir, ib),
                                 avoid,
@@ -22161,8 +22299,13 @@ pub fn run_preview_window() {
                                 preview_scale,
                             };
                             if let Some(layout) = compute_keyboard_layout(placement, bounds, dpi) {
-                                let (layout, _) =
-                                    text_preview_layout(&path, layout, bounds, dpi, |size| {
+                                let (layout, _) = text_preview_layout(
+                                    &hover,
+                                    &path,
+                                    layout,
+                                    bounds,
+                                    dpi,
+                                    |size| {
                                         compute_keyboard_layout(
                                             KeyboardPlacement {
                                                 orig_dims: size,
@@ -22171,9 +22314,10 @@ pub fn run_preview_window() {
                                             bounds,
                                             dpi,
                                         )
-                                    });
+                                    },
+                                );
                                 show_is_video = is_video;
-                                show_video_probe = video_probe_due(&path);
+                                show_video_probe = video_probe_due(&hover);
                                 show_measure_probe = measure_waiting(&path);
                                 audio_card_dpi = dpi;
                                 show_layout = Some(layout);
@@ -22323,7 +22467,7 @@ pub fn run_preview_window() {
                             .lock()
                             .ok()
                             .and_then(|media| media.as_ref().map(|media| media.media_type));
-                        let dpi = monitor_dpi_from_point(rect.0, rect.1);
+                        let dpi = dpi_at(rect.0, rect.1);
                         let transport_bar = pin_transport_kind(kind);
                         let overlay = pin_overlay_chrome(kind);
 
@@ -22337,6 +22481,7 @@ pub fn run_preview_window() {
                         let window = clamp_pinned_box(
                             pinned_window_box_of(rect, dpi, transport_bar, overlay),
                             dpi,
+                            &DESKTOPS,
                         );
                         let content = content_box_of(window, dpi, transport_bar, overlay);
 
@@ -22364,8 +22509,8 @@ pub fn run_preview_window() {
                         // across either (see `cached_video_geometry`).
                         let duration = video_duration(&path);
 
-                        let carried = PINNED.lock().ok().and_then(|pinned| {
-                            pinned.as_ref().map(|pin| {
+                        let carried = pin_state().and_then(|pinned| {
+                            pinned.pin().map(|pin| {
                                 (pin.restore, pin.chrome, pin.volume, pin.overlay, pin.bound)
                             })
                         });
@@ -22402,15 +22547,15 @@ pub fn run_preview_window() {
                         // longer: the state below replaces it whole, and the pointer a press on
                         // this window took goes with the drag it was taken for. It is let go
                         // here rather than left to the release that is never coming, and it is
-                        // let go before `PINNED` is taken rather than inside it, because
-                        // `ReleaseCapture` delivers `WM_CAPTURECHANGED` and the window procedure
-                        // asks for that same lock (see the note above, and `pinned_release` for
-                        // the release this stands in for).
+                        // let go before the pin's own lock is taken rather than inside it,
+                        // because `ReleaseCapture` delivers `WM_CAPTURECHANGED` and the window
+                        // procedure asks for that same lock (see the note above, and
+                        // `pinned_release` for the release this stands in for).
                         release_pin_capture(hwnd);
 
-                        if let Ok(mut pinned) = PINNED.lock() {
+                        {
                             let now = Instant::now();
-                            *pinned = Some(PinnedPreview {
+                            let pin = PinnedPreview {
                                 path: path.clone(),
                                 content,
                                 // A pin taken up over another one keeps the bound the window has:
@@ -22482,15 +22627,17 @@ pub fn run_preview_window() {
                                         ..Default::default()
                                     },
                                 },
-                            });
+                            };
+
+                            // The pin is published as up inside this, after the state it publishes
+                            // is written (see `pin_window::install`).
+                            install(pin);
                         }
 
-                        PIN_ACTIVE.store(true, Ordering::Release);
-                        PIN_COLLAPSED.store(false, Ordering::Release);
                         // A pin comes up under a pointer that may be anywhere, including inside a
                         // name being renamed, so it may take the focus but is not given it until
-                        // the hand presses it (see `pin_set_focusable`).
-                        PIN_FOCUSED.store(false, Ordering::Release);
+                        // the hand presses it (see `pin_set_focusable`). The pin holds no keyboard
+                        // at all until then, so there is nothing here to clear.
                         pin_set_focusable(hwnd, true);
 
                         // A text preview is the one kind a pin *changes* rather than frames: it
@@ -23067,17 +23214,15 @@ pub fn run_preview_window() {
                 // resume, a display change — waits to be noticed. The wait wakes
                 // on window input at once, so a drag never queues behind it (see
                 // `wait_preview_channel`).
-                carried_preview_msg = wait_preview_channel(&rx, IDLE_WAIT_MS);
+                carried_preview_msg =
+                    wait_preview_channel(&rx, wait_before_the_next_tick(true, false, pinned()));
             } else {
-                // Something is on screen. A tick that has something to animate —
-                // video, animation, audio card, transport, spinner, load or wait —
-                // keeps the frame cadence; a static picture or page of text waits on
-                // the channel instead, so a Hide/Show still answers within a slice
-                // of it. Pinned static ticks keep a shorter ceiling than hover
-                // ones so caption buttons stay snappy (see `STATIC_WAIT_MS` and
-                // `STATIC_PIN_WAIT_MS`), and a drag is dispatched at the pointer's
-                // pace either way since the wait wakes on input (see
-                // `wait_preview_channel`).
+                // Something is on screen, and which band of the cadence it lands in is
+                // `wait_before_the_next_tick`'s question — a tick that has something to
+                // animate keeps the frame cadence, a static picture waits on the channel, and a
+                // pinned static one keeps a shorter ceiling so the caption's buttons stay
+                // snappy. A drag is dispatched at the pointer's pace either way since the wait
+                // wakes on input (see `wait_preview_channel`).
                 //
                 // A wait that ended, a generation that moved or a pin that came up
                 // or down may have installed another kind behind the hint: classify
@@ -23094,14 +23239,8 @@ pub fn run_preview_window() {
                 {
                     media_dynamic_hint = true;
                 }
-                let tick_dynamic = media_dynamic_hint || tick_has_wait;
-                let wait_ms = if tick_dynamic {
-                    16
-                } else if pinned() {
-                    STATIC_PIN_WAIT_MS
-                } else {
-                    STATIC_WAIT_MS
-                };
+                let wait_ms =
+                    wait_before_the_next_tick(false, media_dynamic_hint || tick_has_wait, pinned());
                 carried_preview_msg = wait_preview_channel(&rx, wait_ms);
             }
         }
@@ -23140,6 +23279,762 @@ mod tests {
             bottom: 800,
         }
     }
+
+    /// A display to the right of `bounds()`, so the two can be told apart by the answer
+    /// rather than by their position.
+    fn the_second_display() -> ScreenBounds {
+        ScreenBounds {
+            left: 1000,
+            top: 0,
+            right: 2000,
+            bottom: 800,
+        }
+    }
+
+    /// How much of a pinned window is left on the display it is kept on, in the pixels of a
+    /// 100% display: a caption's worth, which is the band the buttons that close the pin are
+    /// drawn in (see `PIN_KEEP_ON_SCREEN_PIXELS`).
+    fn a_captions_worth() -> i32 {
+        logical_px(TEST_DPI, PIN_KEEP_ON_SCREEN_PIXELS).max(8)
+    }
+
+    /// A locked window, a caption's worth of it left on the display.
+    ///
+    /// The two failures this states are the ones the clamp exists for: a window dragged past
+    /// an edge keeps a caption on screen, so its buttons can still be pressed, and one
+    /// dragged wholly off is put back. Both were unreachable to a test, because the clamp
+    /// worked the display out for itself — the reader is `displays`, which is what this
+    /// passes in (see `clamp_pinned_box`).
+    #[test]
+    fn a_locked_window_keeps_a_caption_on_the_display_it_is_kept_on() {
+        let desk = RecordedDisplays::one_display(bounds(), TEST_DPI);
+        let keep = a_captions_worth();
+
+        // Past the right edge: the caption's worth comes back, and the window keeps the size
+        // the hand pulled it to rather than being squeezed into the room that is left.
+        let dragged_right = clamp_pinned_box((1000, 300, 1400, 700), TEST_DPI, &desk);
+        assert_eq!(
+            dragged_right.0,
+            bounds().right - keep,
+            "a window dragged past the right edge is pulled back to leave its caption on screen"
+        );
+        assert_eq!(
+            (
+                dragged_right.2 - dragged_right.0,
+                dragged_right.3 - dragged_right.1
+            ),
+            (400, 400),
+            "and it is moved, not resized: the size a hand pulled it to is the size it keeps"
+        );
+
+        // Wholly off the right, and it is put back rather than kept as a caption on nothing.
+        let dragged_away = clamp_pinned_box((1600, 300, 2000, 700), TEST_DPI, &desk);
+        assert_eq!(
+            dragged_away.0,
+            bounds().right - keep,
+            "a window dragged wholly off one display is put back on it"
+        );
+        assert_eq!(
+            (
+                dragged_away.2 - dragged_away.0,
+                dragged_away.3 - dragged_away.1
+            ),
+            (400, 400),
+            "at the size it was dragged to, which is what the pin's own bound is later read from"
+        );
+
+        // And the same at each of the other three edges, because a caption is on whichever side
+        // the window was carried to and the four are four arms of the same decision.
+        let past_bottom = clamp_pinned_box((300, 780, 700, 1180), TEST_DPI, &desk);
+        assert_eq!(
+            past_bottom.1,
+            bounds().bottom - keep,
+            "and at the bottom, from the other direction"
+        );
+
+        // The top edge is the odd one out and deliberately so: a caption is drawn *above* the
+        // media, so a window pulled off the top has its buttons still on screen with no help
+        // from a sliver, and the whole of the top edge is pulled back rather than a caption's
+        // worth.
+        let past_top = clamp_pinned_box((300, -400, 700, 0), TEST_DPI, &desk);
+        assert_eq!(
+            past_top.1,
+            bounds().top,
+            "a window off the top is put back on it wholly"
+        );
+
+        let past_left = clamp_pinned_box((-400, 300, 0, 700), TEST_DPI, &desk);
+        assert_eq!(
+            past_left.2,
+            bounds().left + keep,
+            "and at the left, from the other direction"
+        );
+    }
+
+    /// A window wholly off a display is kept on the one its middle is on, which is the one
+    /// the caption is nearest — and for a box wider than the gap between two displays that is
+    /// the only thing there is to go on.
+    ///
+    /// The anchor is the box's own middle and not its left edge, and the two disagree exactly
+    /// where this defect lives: a window carried from one display to the next has its left edge
+    /// over the display it came from, so a clamp that asked about the left edge would put the
+    /// user's window back on the monitor they dragged it off.
+    #[test]
+    fn a_locked_window_is_kept_on_the_display_its_middle_is_on() {
+        let desk = RecordedDisplays::one_display(the_second_display(), TEST_DPI);
+
+        // The left edge is over the first display and the middle is over the second, which is
+        // the only case where the two disagree.
+        let straddling = clamp_pinned_box((900, 300, 1300, 700), TEST_DPI, &desk);
+        assert_eq!(
+            straddling,
+            (900, 300, 1300, 700),
+            "a window the middle of which is on the second display is not moved at all, whatever \
+             its left edge is over"
+        );
+
+        // And the point the clamp asked about is the middle, which a test can read back rather
+        // than infer from the box that came out.
+        let fresh = RecordedDisplays::one_display(bounds(), TEST_DPI);
+        clamp_pinned_box((300, 300, 700, 700), TEST_DPI, &fresh);
+        assert_eq!(
+            fresh.points_asked_about(),
+            vec![(500, 500)],
+            "the display is asked about the middle of the box rather than its corner"
+        );
+    }
+
+    /// The caption's worth is a distance under a hand, so it grows with the display it is
+    /// measured on — and a window on a 200% display is kept back further than the same window
+    /// on a 100% one.
+    ///
+    /// The alternative is a caption left half the width a hand can hit, on the one display
+    /// where the pixels are twice as big and the window is being read from further away.
+    #[test]
+    fn the_room_a_caption_is_given_grows_with_the_display_it_is_measured_on() {
+        let desk = RecordedDisplays::one_display(bounds(), 192);
+        let clamped = clamp_pinned_box((1000, 300, 1400, 700), 192, &desk);
+
+        assert_eq!(
+            clamped.0,
+            bounds().right - logical_px(192, PIN_KEEP_ON_SCREEN_PIXELS).max(8),
+            "a 200% display keeps a 200% caption, which is the same size under a hand"
+        );
+    }
+
+    /// A window kept on a display whose scale could not be read is kept on the primary one
+    /// rather than on the union of them.
+    ///
+    /// The machine this stands in for is the one a display-change arrives on, and it is the
+    /// only caller of this clamp that could not previously be reached at all: the fallback was
+    /// inside the function that did the Win32 call, so a test could not give it a machine that
+    /// refuses (see `displays::display_at`).
+    #[test]
+    fn a_window_on_a_display_that_cannot_be_named_is_kept_on_the_primary_one() {
+        // The same drag, against a machine that can name a display and against one that cannot. The
+        // second answers the primary's right edge, which is a rectangle covering one display and
+        // not the union of them — a union would leave the window where the hand left it.
+        let dragged = (1000, 300, 1400, 700);
+        let named = RecordedDisplays::one_display(the_second_display(), TEST_DPI);
+        let unnamed = RecordedDisplays::no_display_to_name(bounds());
+        assert_eq!(
+            clamp_pinned_box(dragged, TEST_DPI, &named),
+            dragged,
+            "a machine that names the second display leaves the window where the hand put it"
+        );
+        assert_eq!(
+            clamp_pinned_box(dragged, TEST_DPI, &unnamed).0,
+            bounds().right - a_captions_worth(),
+            "and one that cannot names the primary, whose own right edge is what it is kept \
+             against — a rectangle covering one display, not the union of them"
+        );
+    }
+
+    /// A window standing at a box, with the pointer somewhere on the desktop, for the tests
+    /// about what a press becomes.
+    ///
+    /// The box is the screen's own and not the pin's, because that is what `begin_pin_drag` asks
+    /// for: a window the hand has carried since it was maximized is no longer standing where the
+    /// maximize left it, and a drag begun from the pin's remembered box begins from the screen's
+    /// own top border rather than from where the hand left the window.
+    fn a_window_at(box_: ScreenRegion) -> RecordedPinWindow {
+        RecordedPinWindow::with(0x1000, Some((box_.0, box_.1)), Some(box_))
+    }
+
+    /// A pin up, with nothing being dragged and nothing on the keyboard.
+    fn a_pin_awaiting_a_press() {
+        stand_pin(Some(PinnedPreview::for_test()));
+    }
+
+    /// A press that lands on a pin takes the pointer for the drag it begins, and a drag it
+    /// could not begin lets the pointer go instead.
+    ///
+    /// The two halves are one decision and only one of them used to be reachable. Taking the
+    /// pointer is what a press on a pinned window is for — a drag answers nothing until the hand
+    /// lets go, so without the capture the window stops following the hand — but the capture was
+    /// taken unconditionally, and a pin taken down between the press being read and the drag being
+    /// installed left the window holding the pointer for the whole desktop with nothing that
+    /// would ever release it. Every mouse message then went to that window rather than to
+    /// whatever the pointer was aimed at, and clicking elsewhere appeared to bring it back.
+    ///
+    /// The order is load-bearing as well as the two halves: the pointer is asked for *before* the
+    /// window's own box, so a machine that will not say where the pointer is never gets asked
+    /// where its window stands — there is nothing to measure a drag against, and a drag begun
+    /// from a box alone is a drag from the wrong origin.
+    #[test]
+    fn a_press_takes_the_pointer_for_its_drag_and_a_drag_it_cannot_begin_lets_it_go() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock();
+
+        let window = a_window_at((300, 200, 700, 600));
+        let hwnd = HWND(0x1000 as *mut _);
+        a_pin_awaiting_a_press();
+        begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+
+        assert_eq!(
+            window.calls(),
+            vec![
+                PinWindowCall::Pointer(Some((300, 200))),
+                PinWindowCall::WindowBox(Some((300, 200, 700, 600))),
+                PinWindowCall::Capture,
+            ],
+            "a press that begins a drag takes the pointer, and asks for the pointer before the \
+             box because the box alone is a drag from the wrong origin"
+        );
+
+        // No pin to put the drag in, and the pointer is let go rather than left taken. This is
+        // the branch that used to be unreachable: the capture was taken on the way in and only
+        // released by a release that a window with no drag never sees.
+        let window = a_window_at((300, 200, 700, 600));
+        stand_pin(None);
+        begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+
+        assert_eq!(
+            window.calls(),
+            vec![
+                PinWindowCall::Pointer(Some((300, 200))),
+                PinWindowCall::WindowBox(Some((300, 200, 700, 600))),
+                PinWindowCall::ReleaseCapture,
+            ],
+            "a drag that could not be installed lets the pointer go, because a window holding it \
+             with nothing to release it takes every mouse message on the desktop"
+        );
+    }
+
+    /// A press on a window that cannot say where it is takes nothing at all.
+    ///
+    /// Both of the refusals are real answers a real machine gives — `GetCursorPos` and
+    /// `GetWindowRect` can both be refused — and the second one is the dangerous case: the drag
+    /// was already installed by the time the window's own box is asked for, so a refusal here
+    /// leaves a drag in the pin with no origin to measure against and no capture to have been
+    /// taken, which is a drag the loop carries on from a window that is not where it was.
+    ///
+    /// So the order is what answers it: the window's box is asked for *before* the drag is
+    /// installed, and a refusal returns with nothing installed and nothing taken.
+    #[test]
+    fn a_press_that_cannot_be_measured_takes_nothing_at_all() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock();
+
+        for window in [
+            RecordedPinWindow::with(0x1000, None, Some((300, 200, 700, 600))),
+            RecordedPinWindow::with(0x1000, Some((300, 200)), None),
+        ] {
+            a_pin_awaiting_a_press();
+            begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
+
+            assert!(
+                !window
+                    .calls()
+                    .iter()
+                    .any(|call| matches!(call, PinWindowCall::Capture)),
+                "{:?}: a drag that cannot be measured is not begun, and nothing is taken for it",
+                window.calls()
+            );
+            assert!(
+                carried_drag().is_none(),
+                "{:?}: and no drag is left installed with no box to measure against",
+                window.calls()
+            );
+        }
+    }
+
+    /// The two ends of a capture are one list, and they are asked of the same window.
+    ///
+    /// A drag begun by a message is ended by the message that releases it and a drag begun out of
+    /// the hook's published button state is ended by the tick instead, but both are the same
+    /// work: the pointer this window took for the drag is let go of. They were two hand-written
+    /// halves — a `SetCapture` on the way in and a `release_pin_capture` on the way out — and
+    /// nothing said they had to agree about which window.
+    #[test]
+    fn a_drag_lets_go_of_the_pointer_it_took() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock();
+
+        let window = a_window_at((300, 200, 700, 600));
+        let hwnd = HWND(0x1000 as *mut _);
+        a_pin_awaiting_a_press();
+        begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+        assert!(
+            finish_pin_drag(hwnd, &window),
+            "there was a drag to let go of"
+        );
+
+        assert_eq!(
+            window.calls(),
+            vec![
+                PinWindowCall::Pointer(Some((300, 200))),
+                PinWindowCall::WindowBox(Some((300, 200, 700, 600))),
+                PinWindowCall::Capture,
+                PinWindowCall::ReleaseCapture,
+                PinWindowCall::Repaint,
+            ],
+            "the pointer is taken for the drag and given back when the drag is over, and the \
+             window is drawn at where the hand left it — the pointer first, because a window \
+             still holding it after the drag has gone eats every mouse message on the desktop"
+        );
+
+        // And a second end has nothing to release: the drag is taken out of the pin by the first,
+        // so the second road finds nothing rather than releasing a pointer for a drag that has
+        // already been let go of.
+        let after_the_first_end = window.calls().len();
+        assert!(
+            !finish_pin_drag(hwnd, &window),
+            "a drag that is over is not ended twice"
+        );
+        assert_eq!(
+            window.calls().len(),
+            after_the_first_end,
+            "and the second end asks the window for nothing at all — a release and a repaint for a \
+             drag that has already been let go of would repaint a window nobody is carrying"
+        );
+    }
+
+    /// A frame of `bytes` pixels, for a cache to hold.
+    fn a_frame_of(bytes: usize) -> Arc<ImageFrame> {
+        Arc::new(ImageFrame::new(vec![0u8; bytes], 1, 1, 0))
+    }
+
+    /// A cache key for a file that is not there, named so a test can say which frame it is
+    /// looking at.
+    fn a_cache_key_for(name: &str) -> ImageCacheKey {
+        ImageCacheKey {
+            path: PathBuf::from(format!(r"C:\pictures\{name}")),
+            version: FileVersion {
+                modified: None,
+                len: 0,
+            },
+            width: 1,
+            height: 1,
+        }
+    }
+
+    /// A cache holding one frame per name, each `bytes` long, stored in that order so that
+    /// `first` is the least recently used and `last` the most.
+    ///
+    /// A cache of its own rather than the process-wide one, because the trim takes one as an
+    /// argument for exactly this reason: it is a decision about a set of frames and a number,
+    /// and the number comes from the configuration at every call so that an edit in the tray
+    /// applies without a restart (see `image_cache_limit_bytes`).
+    fn a_cache_of(names: &[(&str, usize)]) -> ImageCache {
+        let mut cache = ImageCache::default();
+        for (name, bytes) in names {
+            cache.tick += 1;
+            cache.entries.insert(
+                a_cache_key_for(name),
+                ImageCacheEntry {
+                    frame: a_frame_of(*bytes),
+                    bytes: *bytes,
+                    last_used: cache.tick,
+                },
+            );
+            cache.bytes += bytes;
+        }
+        cache
+    }
+
+    /// The names a cache still holds, least recently used first.
+    ///
+    /// Read in the order the trim decides in rather than in whatever order a hash map iterates,
+    /// because the order *is* the policy: a test that could not see it would pass against a
+    /// cache that dropped frames by some other rule entirely.
+    fn held_by_a_cache(cache: &ImageCache) -> Vec<String> {
+        let mut held: Vec<(&ImageCacheKey, u64)> = cache
+            .entries
+            .iter()
+            .map(|(key, entry)| (key, entry.last_used))
+            .collect();
+        held.sort_by_key(|(_, last_used)| *last_used);
+        held.into_iter()
+            .map(|(key, _)| {
+                key.path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    /// The frame least recently used is the one dropped, and the rest are kept whatever their
+    /// sizes are.
+    ///
+    /// This is the whole policy, and it is the opposite of the two rules it is not: a cache of
+    /// decoded frames that dropped the largest keeps re-decoding the file the user has just
+    /// moved on from — a 4K photograph is evicted by a 32-pixel icon, so the preview the user
+    /// is looking at is decoded again on every re-hover — and a cache that dropped by insertion
+    /// order evicts a frame that is being looked at right now in favour of one nobody has asked
+    /// for since the file was first hovered.
+    ///
+    /// The budget is bytes rather than entries for the same reason: what this app runs out of is
+    /// memory, and a frame at the size of a display is 33 MB while the icon is a few kilobytes.
+    #[test]
+    fn the_frame_least_recently_used_is_the_one_dropped() {
+        let mut cache = a_cache_of(&[
+            ("oldest.png", 4_000),
+            ("middle.png", 100),
+            ("newest.png", 4_000),
+        ]);
+
+        // A budget that only two of the three fit inside, and the big ones are the ones that do
+        // not fit — so a size-based rule would drop them and this rule does not.
+        image_cache_trim(&mut cache, 5_000);
+
+        assert_eq!(
+            held_by_a_cache(&cache),
+            vec!["middle.png", "newest.png"],
+            "the frame nobody has asked for since it was first decoded is the one that goes, \
+             whatever its size"
+        );
+        assert_eq!(
+            cache.bytes, 4_100,
+            "and the accounting is what is left, not what was held"
+        );
+    }
+
+    /// A budget of zero means "hold nothing", and every other budget means what it says.
+    ///
+    /// Zero is the one value a loop could spin on: `image_cache_trim` drops until the cache fits
+    /// inside the limit, and a cache that cannot be emptied would leave it dropping nothing with
+    /// the budget still unmet. That is why the loop breaks on an empty cache rather than asking
+    /// again, and it is the half of the trim that is a decision rather than arithmetic.
+    #[test]
+    fn a_budget_of_zero_empties_the_cache_rather_than_looping() {
+        let mut cache = a_cache_of(&[("a.png", 4_000), ("b.png", 4_000), ("c.png", 4_000)]);
+
+        image_cache_trim(&mut cache, 0);
+
+        assert!(
+            cache.entries.is_empty(),
+            "`image_cache_mb = 0` means hold nothing, rather than hold everything until \
+             something else is stored"
+        );
+        assert_eq!(
+            cache.bytes, 0,
+            "and nothing is still counted against the budget"
+        );
+
+        // And a budget the cache already fits inside drops nothing, which is the other direction
+        // the loop has to get right.
+        let mut cache = a_cache_of(&[("a.png", 100)]);
+        image_cache_trim(&mut cache, 1_000_000);
+        assert_eq!(held_by_a_cache(&cache), vec!["a.png"]);
+        assert_eq!(cache.bytes, 100);
+    }
+
+    /// A budget that lands between two frames drops exactly as many as it takes, and stops.
+    ///
+    /// The eviction is by a whole frame rather than a whole byte, so a budget that cannot be hit
+    /// exactly is overshot downwards rather than approximated: the alternative is dropping the
+    /// frame *after* the one that crossed the line, which frees memory in units of tens of
+    /// megabytes and frees far more than the budget was short by.
+    #[test]
+    fn the_budget_is_hit_by_whole_frames_and_no_further() {
+        let mut cache = a_cache_of(&[("a.png", 1_000), ("b.png", 1_000), ("c.png", 1_000)]);
+
+        // Room for two of three, and the third is dropped: exactly as many as it takes.
+        image_cache_trim(&mut cache, 2_500);
+        assert_eq!(held_by_a_cache(&cache), vec!["b.png", "c.png"]);
+
+        // Room for one and a half, which no whole frame fits into twice over: one is dropped,
+        // and dropping a second would free 1000 bytes the budget did not ask for.
+        image_cache_trim(&mut cache, 1_500);
+        assert_eq!(held_by_a_cache(&cache), vec!["c.png"]);
+        assert_eq!(cache.bytes, 1_000);
+    }
+
+    /// One share for every kind, so a test can say what a single kind's arm does by changing one
+    /// setting and leaving the other twelve where they are.
+    ///
+    /// Every scale is distinct on purpose: a test that set them all alike could not tell an
+    /// arm that read the wrong field from one that read the right one, and the whole of what
+    /// this table decides is *which* setting each kind follows.
+    fn one_scale_per_kind() -> HoverScales {
+        HoverScales {
+            picture: PreviewScale::Percent(11),
+            animated: PreviewScale::Percent(12),
+            video: PreviewScale::Percent(13),
+            ebook: PreviewScale::Percent(14),
+            document: PreviewScale::Percent(15),
+            vector: PreviewScale::Percent(16),
+            design: PreviewScale::Percent(17),
+            font: PreviewScale::Percent(18),
+        }
+    }
+
+    /// A loop with nothing on screen does not wake for a caption that is not there, and one with a
+    /// caption that is does not wait as long.
+    ///
+    /// The four bands and what each is for, in one list, because the numbers were tuned twice by
+    /// two commits that disagreed with each other and there was nowhere to ask whether a change
+    /// had broken the band next to it. The ordering is the claim: each band is strictly longer
+    /// than the one before it except where the caption says it should not be, and a band that
+    /// moved past its neighbour without anybody noticing is exactly what two tunings disagree
+    /// about looks like from the outside.
+    ///
+    /// Nothing on screen is the slowest band and it ignores the other two entirely: there is no
+    /// picture to advance and no button to press, so the only thing the interval bounds is how
+    /// long a window message waits to be noticed.
+    #[test]
+    fn the_loop_s_own_cadence_is_the_slowest_thing_it_does() {
+        assert_eq!(
+            wait_before_the_next_tick(true, false, false),
+            IDLE_WAIT_MS,
+            "nothing on screen waits the longest, and is not a function of whether a pin is up"
+        );
+        assert_eq!(
+            wait_before_the_next_tick(true, true, true),
+            IDLE_WAIT_MS,
+            "a pin and a wait do not make an idle loop turn: there is nothing to draw either"
+        );
+
+        assert_eq!(
+            wait_before_the_next_tick(false, true, false),
+            FRAME_WAIT_MS,
+            "something moving turns at the frame rate, whatever is behind it"
+        );
+        assert_eq!(
+            wait_before_the_next_tick(false, true, true),
+            FRAME_WAIT_MS,
+            "and a pin does not slow that down — a pinned video is still a video"
+        );
+
+        assert!(
+            wait_before_the_next_tick(false, false, true)
+                < wait_before_the_next_tick(false, false, false),
+            "a pin's static tick is shorter than a hover's, because a pin's caption carries the \
+             buttons that close it and a static preview's carries nothing: {} against {}",
+            wait_before_the_next_tick(false, false, true),
+            wait_before_the_next_tick(false, false, false)
+        );
+        assert!(
+            wait_before_the_next_tick(false, false, false) < IDLE_WAIT_MS,
+            "and anything on screen is more work than nothing on screen"
+        );
+    }
+
+    /// A static tick skips the media lock, and the four things that stop it are each a way the
+    /// hint can be wrong.
+    ///
+    /// The backstop is the one that matters and the one that costs. It exists because a file's
+    /// kind can change without a swap — streaming frames land after the fact, and this app
+    /// discovers a stream is a video by looking at it — and without it those frames are noticed
+    /// on the next swap rather than within half a second: a preview that stays a spinner over a
+    /// stream that is already playing. It is also the arm most likely to be argued away as a
+    /// cost on a machine where nothing streams, which is why it is a named argument rather than
+    /// a bare `elapsed()` four hundred lines from where it is decided.
+    #[test]
+    fn a_static_tick_looks_at_the_media_only_when_the_hint_cannot_be_trusted() {
+        let just_looked = Duration::ZERO;
+        let long_untouched = Duration::from_millis(STATIC_MEDIA_REFRESH_MS);
+
+        assert!(
+            !needs_a_full_media_look(false, false, false, just_looked),
+            "a static tick that just looked, with nothing new and nothing waited for, looks again \
+             not at all — this is the arm that made the loop cheap enough to leave running"
+        );
+
+        for (dynamic, a_wait, generation_moved, what) in [
+            (true, false, false, "the hint says something moved"),
+            (
+                false,
+                true,
+                false,
+                "a load, a walk or a player is outstanding",
+            ),
+            (false, false, true, "a swap has installed a different hover"),
+        ] {
+            assert!(
+                needs_a_full_media_look(dynamic, a_wait, generation_moved, just_looked),
+                "{what}, so the hint is not worth trusting this tick"
+            );
+        }
+
+        // And the backstop, which is the only arm that fires with nothing new at all.
+        assert!(
+            needs_a_full_media_look(false, false, false, long_untouched),
+            "and after half a second of nothing the media is looked at anyway, so a kind that \
+             changed without a swap — a stream that turned out to be a video — is noticed within \
+             half a second rather than on the next hover"
+        );
+    }
+
+    /// A pin's video keeps the place at the top and a hover's does not, because a hover's
+    /// competes with nothing and re-asserting topmost for a tooltip is five DWM reorders a
+    /// second spent on a window that was in front when nobody clicked anything.
+    #[test]
+    fn only_a_pinned_players_window_is_put_back_in_front_often() {
+        assert_eq!(topmost_cadence_ms(true), PIN_TOPMOST_REASSERT_MS);
+        assert_eq!(topmost_cadence_ms(false), HOVER_TOPMOST_REASSERT_MS);
+        assert!(
+            topmost_cadence_ms(true) < topmost_cadence_ms(false),
+            "a pin competes with the pin's own window for the top and so keeps the tighter band"
+        );
+    }
+
+    /// Every kind follows the one setting it names, and the share that comes back says which.
+    ///
+    /// The table is the reason this function exists at all. It was one share written into each
+    /// arm of a chain, and the chain's output disagreed with the loader's: a picture laid out
+    /// at the vector share is a preview placed against a box nothing will ever draw it into.
+    /// Writing the setting into the arm and reading it back through the placement the caller
+    /// uses is what makes "every kind follows its own" a claim rather than a hope — and the
+    /// shares are all distinct precisely so that an arm reading a neighbour's field fails.
+    ///
+    /// Every share here is below `100%`, so each kind is answered with a *reduced fit* — a
+    /// share of the display's room rather than of its own size — and the two are told apart by
+    /// the number rather than by the variant, which is the distinction a kind's arm exists to
+    /// draw.
+    #[test]
+    fn every_kind_follows_the_one_setting_it_names() {
+        let scales = one_scale_per_kind();
+
+        for (kind, setting, expected) in [
+            (PreviewType::Ebook, "ebook_scale", scales.ebook),
+            (PreviewType::Libre, "document_scale", scales.document),
+            (PreviewType::Calibre, "ebook_scale", scales.ebook),
+            (PreviewType::Design, "design_scale", scales.design),
+            (PreviewType::Vector, "vector_scale", scales.vector),
+            (PreviewType::Fonts, "font_scale", scales.font),
+        ] {
+            let path = std::env::temp_dir().join(format!("scale-of-kind-{setting}"));
+            // The path does not have to exist: these arms ask the file nothing, and the share is
+            // the display's room either way.
+            let hover = HoverFacts::read(&path);
+            assert_eq!(
+                scale_of_kind(kind, &hover, scales),
+                fit_reduced(expected),
+                "{kind:?} follows {setting} and nothing else"
+            );
+        }
+    }
+
+    /// A page takes the display's room and a bitmap takes a share of its own size, and a fit is
+    /// the only place the two rules come apart.
+    ///
+    /// They are not a preference. A page has no pixels of its own — it is laid out at whatever
+    /// box it is given, so the display's room is free quality — while a bitmap is only ever as
+    /// good as the pixels it holds, and stretching a worksheet's corner over a display produces
+    /// a preview that is larger and no more readable. So `Fit to Screen` means the whole of the
+    /// room for a page and the picture at the size it is for a bitmap, and the difference is the
+    /// whole of what `bitmap_at_display_scale` is for.
+    ///
+    /// Asserted against the two rules rather than against the table of kinds above, because they
+    /// live in different functions and the bug this rules out is one being reached where the
+    /// other belongs: a document handed a bitmap's share is placed against a box nothing is
+    /// going to draw it into.
+    #[test]
+    fn a_page_takes_the_display_and_a_bitmap_takes_its_own_size() {
+        for configured in [
+            PreviewScale::Percent(100),
+            PreviewScale::Percent(250),
+            PreviewScale::FitToScreen,
+            PreviewScale::FitToScreenReduced(40),
+        ] {
+            assert_eq!(
+                fit_reduced(configured),
+                match configured {
+                    PreviewScale::Percent(percent) if percent < 100 => {
+                        PreviewScale::FitToScreenReduced(percent)
+                    }
+                    _ => PreviewScale::FitToScreen,
+                },
+                "a page at {configured:?} is a share of the display's room"
+            );
+            assert_eq!(
+                bitmap_at_display_scale(configured),
+                match configured {
+                    PreviewScale::Percent(percent) => PreviewScale::Percent(percent),
+                    // Which is the half of the rule a fit is: the whole of the display as the
+                    // picture's own size, and never more of the picture than it has.
+                    PreviewScale::FitToScreen | PreviewScale::FitToScreenReduced(_) => {
+                        PreviewScale::Percent(100)
+                    }
+                },
+                "and a bitmap at {configured:?} is a share of its own, so a fit never enlarges \
+                 one to fill a display"
+            );
+        }
+
+        // And the one place the two rules are genuinely different, named on both sides so a
+        // reader can see that these are not the same rule written twice.
+        assert_ne!(
+            fit_reduced(PreviewScale::FitToScreen),
+            bitmap_at_display_scale(PreviewScale::FitToScreen),
+            "a fit is the room for a page and the picture's own size for a bitmap"
+        );
+    }
+
+    /// A picture keeps the picture's share, and an animation is the one thing that asks the file
+    /// — and it asks it last, because the answer cannot matter for any other kind.
+    ///
+    /// The ordering is a cost decision with a bug in it if it is wrong: `image_is_animated` is
+    /// the only arm of the table that reads the file, so a kind answered by one of its own arms
+    /// and then asked again would pay two file reads for one hover, on the thread that pumps
+    /// this window's messages. The cheap exit is that a user who has given animations the same
+    /// size as pictures never pays the probe at all — which is the state a fresh install is in,
+    /// because both settings start at `100%`.
+    #[test]
+    fn a_picture_asks_the_file_about_moving_only_when_the_two_sizes_differ() {
+        let animated = std::env::temp_dir().join("scale-of-kind-animated.gif");
+        write_test_gif(&animated, 2);
+        let still = std::env::temp_dir().join("scale-of-kind-still.gif");
+        write_test_gif(&still, 1);
+
+        let differing = HoverScales {
+            picture: PreviewScale::Percent(100),
+            animated: PreviewScale::Percent(25),
+            ..one_scale_per_kind()
+        };
+        assert_eq!(
+            scale_of_kind(PreviewType::Images, &HoverFacts::read(&animated), differing),
+            PreviewScale::Percent(25),
+            "a file whose own head says it moves is drawn at the animation's share"
+        );
+        assert_eq!(
+            scale_of_kind(PreviewType::Images, &HoverFacts::read(&still), differing),
+            PreviewScale::Percent(100),
+            "and one holding a single frame is a picture like any other"
+        );
+
+        // The same two files where the probe cannot change the answer, which is what makes the
+        // question affordable to ask on every hover.
+        let alike = HoverScales {
+            picture: PreviewScale::Percent(100),
+            animated: PreviewScale::Percent(100),
+            ..one_scale_per_kind()
+        };
+        for path in [&animated, &still] {
+            assert_eq!(
+                scale_of_kind(PreviewType::Images, &HoverFacts::read(path), alike),
+                PreviewScale::Percent(100),
+                "{} follows the picture's share, and the file is not read to find that out",
+                path.display()
+            );
+        }
+    }
+
+    /// The lock the tests that share the pin's own state take, so that one of them runs at a
+    /// time: the pin is a process-wide value, so two of these at once is one test's press
+    /// answered by another's window (see `pin_window::tests::ONE_AT_A_TIME`).
+    static PIN_TESTS_ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     /// A lock the tests that publish the pointer's own state take, so that one of them
     /// runs at a time: the item box and the hold regions are one set for the whole
@@ -23371,6 +24266,95 @@ mod tests {
         }
     }
 
+    /// One hover of one file, asked exactly the six questions the `Show` arm asks and in the
+    /// order it asks them — which is the shape whose entry reads the test below is about.
+    fn ask_as_the_show_arm_does(path: &PathBuf, bounds: ScreenBounds, dpi: u32) {
+        let hover = HoverFacts::read(path);
+
+        let _ = effective_preview_scale_of(&hover, hover.scales);
+        let _ = page_is_on_the_way(path);
+        let _ = video_probe_due(&hover);
+        let _ = media_dimensions_of(&hover, path, bounds, dpi);
+        let _ = measure_waiting(path);
+        let _ = hover.is_video();
+    }
+
+    /// Six questions about one file cost one reading of that file's directory entry, which is
+    /// what the entry is read for.
+    ///
+    /// It was one per question. The layout asked what the content was, the scale asked it
+    /// again, both dimension arms asked it again, the video question asked it again and the
+    /// text layout asked it a sixth time — and each of those six went to the volume for the
+    /// same answer, on the thread that pumps this window's own messages, which is the thread a
+    /// pin's caption is dispatched on. A hover of a file on a slow volume paid the read six
+    /// times over for a question with one answer.
+    ///
+    /// The figures are counted rather than argued about: `content_type::Probe::read` is the
+    /// one place a hover's questions reach the disk for, so its count is the count of
+    /// `fs::metadata` calls those questions made, whatever the caches above it did.
+    #[test]
+    fn a_hover_reads_the_files_entry_once() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-one-probe");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let picture = folder.join("tomcat.png");
+        write_test_png(&picture, false);
+
+        // A file the caches have never seen, so nothing below is answered from what a
+        // previous hover of the same version left behind.
+        let _ = std::fs::remove_file(&picture);
+        write_test_png(&picture, false);
+
+        crate::formats::content_type::count_entry_reads_from_now();
+        ask_as_the_show_arm_does(&picture, bounds(), TEST_DPI);
+        let reads = crate::formats::content_type::entry_reads();
+
+        assert_eq!(
+            reads, 1,
+            "six questions about one file, and the file's directory entry read {reads} times"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// The same file read once for the whole hover rather than once for each question, and the
+    /// answer is the same either way: threading the reading down changed where the answer came
+    /// from, not what it is.
+    ///
+    /// It is asked for a file each of the six questions has an opinion about — a picture under
+    /// a document's name, where the content is a picture and the name a document, so the two
+    /// answers cannot be the same question read twice.
+    #[test]
+    fn one_reading_answers_the_same_questions_six_readings_did() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-one-probe-answers");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let renamed = folder.join("report.docx");
+        write_test_png(&renamed, false);
+
+        let hover = HoverFacts::read(&renamed);
+
+        // The bytes are a picture's, so the layout measures it as the picture it is whatever
+        // it is called, and the loader is handed the picture's kind for the same reason.
+        assert_eq!(hover.routed_kind(), Some(PreviewType::Images));
+        assert!(!hover.is_video());
+        assert!(!hover.is_audio());
+        assert!(!hover.is_text());
+        assert!(!hover.is_painted_page());
+
+        // The name is still a document's, so the engine tier is still the one that asks
+        // whether this is a document a page is owed for — and says no, which is the whole of
+        // what `content_type` exists to prevent.
+        assert!(previewed_as(&renamed, PreviewType::Document));
+        assert!(hover.names_another_kind(PreviewType::Document));
+        assert!(
+            !office_render_is_due(&renamed, 800),
+            "and no engine is started for a file whose bytes are a picture's"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
     /// A keyboard placement of one item, at the size and mode the figures are easy to
     /// read in: the media's own size at 100%, and `Best Position`, so the place comes
     /// out of the room beside the item alone. `columns` is whether the item is read as
@@ -23578,7 +24562,7 @@ mod tests {
         write_test_png(&renamed, false);
 
         assert!(
-            office_formats::is_office_preview(&renamed),
+            previewed_as(&renamed, PreviewType::Document),
             "the name is the document list's, which is what answered before this"
         );
         assert!(
@@ -23596,15 +24580,15 @@ mod tests {
         std::fs::write(&renamed, b"\x00\x00\x00\x20ftypisom").expect("a written video");
 
         assert!(
-            !crate::formats::video_formats::is_video_file(&renamed),
+            !named_as(&renamed, PreviewType::Videos),
             "the name is the picture list's, which is what answered before this"
         );
         assert!(
-            drawn_as_video(&renamed),
+            HoverFacts::read(&renamed).is_video(),
             "and the bytes are a video's, so a video is what is drawn"
         );
         assert!(
-            video_probe_due(&renamed),
+            video_probe_due(&HoverFacts::read(&renamed)),
             "whose shape is probed like any other video's"
         );
 
@@ -23615,11 +24599,7 @@ mod tests {
 
         let listed_as_text = {
             let config = CONFIG.lock().expect("the configuration");
-            crate::formats::text_formats::matches_text_lists(
-                &renamed,
-                &config.text_extensions,
-                &config.text_names,
-            )
+            crate::formats::routing::named_as(&renamed, &config, PreviewType::Text)
         };
 
         assert!(!listed_as_text, "the name is not one the text lists carry");
@@ -23652,7 +24632,7 @@ mod tests {
             // the machine, and the setting is pinned to the one that asks the machine.
             config.office_engine = OfficeEngine::MicrosoftOffice;
             config.office_extensions = crate::formats::text_formats::sanitize_extension_list(
-                office_formats::DEFAULT_OFFICE_EXTENSIONS,
+                crate::formats::lists::DEFAULT_OFFICE_EXTENSIONS,
             );
         }
 
@@ -23667,7 +24647,7 @@ mod tests {
         let installed = office_formats::app_installed(&named);
 
         assert!(
-            office_formats::is_office_preview(&named),
+            previewed_as(&named, PreviewType::Document),
             "the name is the document list's, which is what a document is known by: every \
              format of Office's is a container, and a container says nothing about itself"
         );
@@ -24780,14 +25760,8 @@ mod tests {
             "the spinner's own corner is a gap off the cursor, not under it"
         );
         assert_eq!(waiting.spinner_side, office_preview::WAITING_BOX);
-        let preview = compute_mouse_layout(
-            300,
-            300,
-            placement,
-            monitor_bounds_from_point(300, 300),
-            TEST_DPI,
-        )
-        .expect("a placed preview");
+        let preview = compute_mouse_layout(300, 300, placement, work_area_at(300, 300), TEST_DPI)
+            .expect("a placed preview");
         assert_eq!(
             (waiting.pos_x, waiting.pos_y),
             (preview.pos_x, preview.pos_y),
@@ -25791,12 +26765,8 @@ mod tests {
         println!("drawing at {content:?}");
 
         let before = pinned_window_box().map(|(window, ..)| window);
-        let latched = |()| {
-            PINNED
-                .lock()
-                .ok()
-                .and_then(|pin| pin.as_ref().map(|pin| pin.dragging.is_some()))
-        };
+        let latched =
+            |()| pin_state().and_then(|state| state.pin().map(|pin| pin.dragging.is_some()));
 
         // The drag: a press on the drawing, carried across it a step at a time, and let go of.
         let (cx, cy) = ((content.0 + content.2) / 2, (content.1 + content.3) / 2);
@@ -26070,13 +27040,7 @@ mod tests {
             println!("\n--- {} ---", path.display());
             println!(
                 "the lists call it a sound: {}, and the preview is shown: {}",
-                crate::formats::audio_formats::matches_audio_list(
-                    &path,
-                    &CONFIG
-                        .lock()
-                        .map(|config| config.audio_extensions.clone())
-                        .unwrap_or_default(),
-                ),
+                named_as(&path, PreviewType::Audio),
                 drawn_as_audio(&path)
             );
 
@@ -26086,10 +27050,7 @@ mod tests {
 
             // A container of a video's name is the case the whole verdict exists for: what the
             // video probe finds in it, and what the router says once that probe has answered.
-            let named_video = CONFIG
-                .lock()
-                .map(|config| video_formats::matches_any_video_list(&path, &config))
-                .unwrap_or(false);
+            let named_video = named_as(&path, PreviewType::Videos);
             if named_video {
                 println!(
                     "the video probe answered {}",
@@ -26203,7 +27164,10 @@ mod tests {
             .map(PathBuf::from)
         {
             println!("\n--- {} ---", path.display());
-            println!("the preview is shown: {}", drawn_as_video(&path));
+            println!(
+                "the preview is shown: {}",
+                HoverFacts::read(&path).is_video()
+            );
 
             let started = Instant::now();
             let can_play = video_player::can_play(&path);
@@ -26229,13 +27193,7 @@ mod tests {
             );
             println!(
                 "and the name is one the `[video]` list asks the engine for: {}",
-                CONFIG
-                    .lock()
-                    .map(|config| video_formats::matches_video_list(
-                        &path,
-                        &config.video_extensions
-                    ))
-                    .unwrap_or(false)
+                named_as(&path, PreviewType::Videos)
             );
             println!(
                 "so a preview of it is played by {}",
@@ -26706,20 +27664,16 @@ mod tests {
             println!("engine available: {}", libreoffice_render::available());
             let text_lists = {
                 let config = crate::CONFIG.lock().expect("the configuration");
-                crate::formats::text_formats::matches_text_lists(
-                    &path,
-                    &config.text_extensions,
-                    &config.text_names,
-                )
+                crate::formats::routing::named_as(&path, &config, PreviewType::Text)
             };
             println!(
                 "kinds: video = {}, pdf = {}, office = {}, libre = {}, design = {}, vector = {}, text = {}",
-                crate::formats::video_formats::is_video_file(&path),
+                named_as(&path, PreviewType::Videos),
                 pdf_preview::is_pdf_file(&path),
-                office_formats::is_office_file(&path),
-                libre_formats::is_libre_file(&path),
-                design_formats::is_design_file(&path),
-                vector_formats::is_vector_file(&path),
+                named_as(&path, PreviewType::Document),
+                named_as(&path, PreviewType::Libre),
+                named_as(&path, PreviewType::Design),
+                named_as(&path, PreviewType::Vector),
                 text_lists,
             );
 
@@ -26854,7 +27808,7 @@ mod tests {
 
             let claimed = crate::CONFIG
                 .lock()
-                .map(|config| peazip_formats::matches_peazip_list(&path, &config.peazip_extensions))
+                .map(|config| crate::formats::lists::PEAZIP.claims(&path, &config))
                 .unwrap_or(false);
 
             println!(
@@ -27017,8 +27971,8 @@ mod tests {
                 .lock()
                 .map(|config| {
                     (
-                        ebook_formats::matches_ebook_list(&path, &config.ebook_extensions),
-                        ebook_formats::matches_page_name(&path, &config.ebook_extensions),
+                        crate::formats::lists::EBOOK.claims(&path, &config),
+                        crate::formats::lists::EBOOK.claims(&path, &config),
                     )
                 })
                 .unwrap_or((false, false));
@@ -27026,7 +27980,7 @@ mod tests {
             println!(
                 "kinds: ebook list = {claimed}, page name = {page_name}, comic name = {}, preview = {}",
                 claimed && !page_name,
-                ebook_formats::is_ebook_preview(&path)
+                previewed_as(&path, PreviewType::Ebook)
             );
 
             let started = Instant::now();
@@ -27152,9 +28106,7 @@ mod tests {
 
             let claimed = crate::CONFIG
                 .lock()
-                .map(|config| {
-                    calibre_formats::matches_calibre_list(&path, &config.calibre_extensions)
-                })
+                .map(|config| crate::formats::lists::CALIBRE.claims(&path, &config))
                 .unwrap_or(false);
 
             println!(
@@ -27577,40 +28529,36 @@ mod tests {
     ///
     /// The note is what makes a handover happen at all. A window hidden while it still holds the
     /// focus leaves Windows to pick what to activate next, and a `WS_EX_TOOLWINDOW` popup is not
-    /// reliably followed by the Explorer window that was in front a moment ago — so the flag is
-    /// what `pin_drop_focus` asks before it goes to the trouble of putting the keyboard back, and
+    /// reliably followed by the Explorer window that was in front a moment ago — so the claim is
+    /// what a teardown asks before it goes to the trouble of putting the keyboard back, and
     /// leaving it standing on a road out is what strands a caret on a window that is not there.
     ///
-    /// Which window the user is in is not asked here, because it is not this flag's job: that is
+    /// Which window the user is in is not asked here, because it is not this claim's job: that is
     /// `GetFocus` (see `pin_is_focused`), which is the one answer that cannot be wrong.
     #[test]
-    fn the_keyboard_is_given_back_on_every_road_out_of_a_pin() {
-        // A pin that has just come up has taken nothing, and so owes nobody a handover.
+    fn the_keyboard_is_dropped_on_every_road_out_of_a_pin() {
+        install(PinnedPreview::for_test());
         assert!(
-            !PIN_FOCUSED.swap(true, Ordering::AcqRel),
-            "a pin nobody pressed holds no keyboard to give back"
+            !pin_holds_a_keyboard(),
+            "a pin that has just come up has taken no keyboard, so owes nobody a handover"
         );
 
         // Windows taking the focus away is the user clicking into something else: the window now
-        // in front holds the keyboard, so there is nothing to hand over and the note is dropped.
+        // in front holds the keyboard, so there is nothing to hand over and the claim is dropped.
+        take_keyboard(0x2000, true);
         pin_release_focus();
         assert!(
-            !PIN_FOCUSED.swap(true, Ordering::AcqRel),
-            "losing the focus drops the note as well"
+            !pin_holds_a_keyboard(),
+            "losing the focus drops the claim with it"
         );
 
-        // A pin ending is the road that has to do the work: it drops the note and remembers where
-        // the keyboard came from, and the handover is what that note is asked for.
-        PIN_FOCUSED.store(true, Ordering::Release);
-        pin_drop_focus(&Win32PinWindow);
+        // A pin ending is the road that has to do the work: it drops the claim and hands the
+        // keyboard back, and the handover is what that claim is asked for.
+        take_keyboard(0x2000, true);
+        end_pin(Reason::Closed, &Win32PinWindow);
         assert!(
-            !PIN_FOCUSED.swap(true, Ordering::AcqRel),
-            "a pin that is over holds no keyboard"
-        );
-        assert_eq!(
-            PIN_PREVIOUS_FOREGROUND.swap(0, Ordering::AcqRel),
-            0,
-            "a pin that is over remembers no window to hand the keyboard back to"
+            !pin_holds_a_keyboard(),
+            "a pin that is over holds no keyboard, and remembers no window to hand it back to"
         );
     }
 
@@ -27673,106 +28621,23 @@ mod tests {
         );
     }
 
-    /// Every command a caption's button asks for survives the trip out of the window procedure
-    /// and back, and a tick drains one of them and leaves the rest alone. The codes are the
-    /// whole of the crossing — the loop and the window procedure share nothing else — so a
-    /// button whose code nothing reads back is a button that does nothing at all.
+    /// The three things a pin's end settles that are not the pin, from every road out of it.
     ///
-    /// The last of them is not a button's: it is what a Space in a window the keyboard is in
-    /// leaves, which is the same crossing for the same reason (see `pinned_key_command`).
+    /// The walk the planner is working on, the bubble's drag latch and the box a drag had left
+    /// the window at are each somebody else's state, so each has its own owner and its own lock —
+    /// but they are settled from the one exit rather than by each road remembering to, which is
+    /// the same drift the pin's own state had: a road that forgot one left it standing for a pin
+    /// that was gone.
     #[test]
-    fn every_command_a_caption_asks_for_comes_back_to_the_loop() {
-        for command in [
-            PinCommand::Previous,
-            PinCommand::Next,
-            PinCommand::Minimize,
-            PinCommand::Maximize,
-            PinCommand::Close,
-            PinCommand::Restore,
-            PinCommand::TogglePlayback,
+    fn no_road_out_of_a_pin_leaves_what_it_left_behind_standing() {
+        for reason in [
+            Reason::Closed,
+            Reason::Asked,
+            Reason::SwitchedOff,
+            Reason::MediaGone,
+            Reason::Hung,
         ] {
-            ask_pin(command);
-            assert_eq!(
-                take_pin_command(),
-                Some(command),
-                "{command:?} does not survive being left for the loop"
-            );
-        }
-
-        // Two asks are two commands, in the order they were made. A single slot dropped the
-        // first: a double-click on `Next` is two `WM_LBUTTONUP`s, and moving two files along is
-        // what double-clicking a `Next` is for.
-        ask_pin(PinCommand::Previous);
-        ask_pin(PinCommand::Next);
-        assert_eq!(take_pin_command(), Some(PinCommand::Previous));
-        assert_eq!(take_pin_command(), Some(PinCommand::Next));
-        assert_eq!(take_pin_command(), None, "a command is taken once");
-    }
-
-    #[test]
-    fn a_command_queue_drops_the_oldest_rather_than_growing_without_end() {
-        // A loop that cannot keep up with a hand drumming on a button must not be the reason a
-        // session ends. What goes is the oldest, so what survives is what was last asked for.
-        for _ in 0..(PIN_COMMANDS_MAX + 4) {
-            ask_pin(PinCommand::Next);
-        }
-
-        let mut drained = Vec::new();
-        while let Some(command) = take_pin_command() {
-            drained.push(command);
-        }
-
-        assert_eq!(
-            drained.len(),
-            PIN_COMMANDS_MAX,
-            "the queue is bounded, however many asks are made of it"
-        );
-    }
-
-    #[test]
-    fn every_road_out_of_a_pin_leaves_no_command_behind_it() {
-        // A command left in the slot when a pin ends is a command about a window that is gone,
-        // fired against whatever pin comes next — the caption is drawn for the file now on
-        // screen, so a `Close` that belonged to the last one closes this one.
-        ask_pin(PinCommand::Close);
-        end_pin_state_guards(&Win32PinWindow);
-
-        assert_eq!(
-            take_pin_command(),
-            None,
-            "a pin that is over leaves nothing waiting to be acted on"
-        );
-    }
-
-    /// The one teardown settles every part of a pin, from every road out of it, so the parts
-    /// cannot drift apart.
-    ///
-    /// Every item here is a thing a pin is holding that belongs to no window and no other
-    /// object: the state, the keyboard claim, the pointer, a queued walk, a queued command, the
-    /// bubble's drag, and the box a drag left the window at. The watchdog had its own
-    /// hand-written list of four of them and left the rest standing, which is how a pin killed
-    /// because its loop was stuck ended still holding the keyboard and a focusable window.
-    ///
-    /// It is asserted for both roads and not one of them, because the two lists were separate
-    /// and one of them was the copy. The window half is asserted whole as well, and through a
-    /// recorder rather than through the desktop, because the part that drifted was the window
-    /// work and the part that drifted is the part a live desktop will not tell you about until
-    /// a pin has been killed and a desktop has stopped answering the mouse.
-    ///
-    /// A test that asserts the whole list is what stops the list from being two lists again.
-    #[test]
-    fn the_one_teardown_settles_every_part_of_a_pin() {
-        for exit in [PinExit::Loop, PinExit::Watchdog] {
-            // A pin holding all of it: state up and collapsed, the keyboard claimed with a
-            // window in front of it, a walk queued and a command left, a bubble mid-drag, and a
-            // box a drag has left the window at.
-            if let Ok(mut pinned) = PINNED.lock() {
-                *pinned = Some(overlay_pin((0, 0, 100, 100), PinChrome::always()));
-            }
-            PIN_ACTIVE.store(true, Ordering::Release);
-            PIN_COLLAPSED.store(true, Ordering::Release);
-            PIN_FOCUSED.store(true, Ordering::Release);
-            PIN_PREVIOUS_FOREGROUND.store(0x1234, Ordering::Release);
+            install(PinnedPreview::for_test());
             PIN_BUBBLE_MOVED.store(true, Ordering::Release);
             if let Ok(mut drag) = PIN_BUBBLE_DRAG.lock() {
                 *drag = Some(((0, 0), (10, 10)));
@@ -27780,7 +28645,6 @@ mod tests {
             if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
                 *request = Some((0, 0, 10, 10));
             }
-            ask_pin(PinCommand::Close);
             assert!(
                 queue_pin_job(PinJob::OpenWith {
                     path: PathBuf::from("x")
@@ -27788,78 +28652,29 @@ mod tests {
                 "a walk is queued for the pin going down"
             );
 
-            let window = RecordedPinWindow::new(0x1000);
-            let mut settle = |window: &dyn PinWindow| end_pin_state_guards(window);
-            take_pin_down(exit, &window, &mut settle);
+            end_pin(reason, &RecordedPinWindow::new(0x1000));
 
             assert!(
-                PINNED.lock().ok().is_some_and(|pinned| pinned.is_none()),
-                "{exit:?}: the state is gone"
-            );
-            assert!(
-                !PIN_ACTIVE.load(Ordering::Acquire),
-                "{exit:?}: no pin is up"
-            );
-            assert!(
-                !PIN_COLLAPSED.load(Ordering::Acquire),
-                "{exit:?}: no pin is collapsed"
-            );
-            assert!(
-                !PIN_FOCUSED.load(Ordering::Acquire),
-                "{exit:?}: the keyboard is given back, by every road out"
-            );
-            assert_eq!(
-                PIN_PREVIOUS_FOREGROUND.load(Ordering::Acquire),
-                0,
-                "{exit:?}: and no window is remembered to give it back to"
-            );
-            assert_eq!(
-                take_pin_command(),
-                None,
-                "{exit:?}: no command is left over"
-            );
-            assert!(
                 PIN_JOBS.0.lock().ok().is_some_and(|jobs| jobs.is_none()),
-                "{exit:?}: the queued walk is dropped with the pin it was worked out for"
+                "{reason:?}: the queued walk is dropped with the pin it was worked out for"
             );
             assert!(
                 !PIN_BUBBLE_MOVED.load(Ordering::Acquire),
-                "{exit:?}: the bubble's drag latch does not outlive the pin"
+                "{reason:?}: the bubble's drag latch does not outlive the pin"
             );
             assert!(
                 PIN_BUBBLE_DRAG
                     .lock()
                     .ok()
                     .is_some_and(|drag| drag.is_none()),
-                "{exit:?}: nor the drag it was latched for"
+                "{reason:?}: nor the drag it was latched for"
             );
             assert!(
                 PIN_BOX_REQUEST
                     .lock()
                     .ok()
                     .is_some_and(|box_| box_.is_none()),
-                "{exit:?}: nor the box a drag had left a window that is going away at"
-            );
-
-            // The window half, whole, and with the order in it. Every road hands the keyboard
-            // back the same way — the focus off, the style off, the window that had it back in
-            // front — because the watchdog's copy did not do it at all, and this is the list
-            // that says so.
-            let mut expected = vec![
-                PinWindowCall::SetFocus,
-                PinWindowCall::SetFocusable { focusable: false },
-                PinWindowCall::SetForeground,
-            ];
-            if exit.may_release_pointer() {
-                expected.insert(0, PinWindowCall::ReleaseCapture);
-            } else {
-                expected.push(PinWindowCall::Post(WM_PIN_RELEASE_POINTER));
-            }
-
-            assert_eq!(
-                window.calls(),
-                expected,
-                "{exit:?}: the whole of what this road asked of the window, in the order it asked"
+                "{reason:?}: nor the box a drag had left a window that is going away at"
             );
         }
     }
@@ -27917,24 +28732,10 @@ mod tests {
     /// media and whose chrome is drawn over it.
     fn overlay_pin(content: ScreenRegion, chrome: PinChrome) -> PinnedPreview {
         PinnedPreview {
-            path: PathBuf::from("picture.png"),
             bound: Some((content.2 - content.0).max(content.3 - content.1).max(1)),
             content,
-            restore: None,
-            dpi: 96,
-            transport_bar: false,
-            transport_live: false,
-            frame: PinFrame::Shaped,
-            overlay: true,
             chrome,
-            collapsed: false,
-            bubble_pause: None,
-            hovered: None,
-            pressed: None,
-            tooltip: PinTooltip::default(),
-            dragging: None,
-            transport: PinTransport::default(),
-            volume: PinVolume::default(),
+            ..PinnedPreview::for_test()
         }
     }
 
@@ -28333,16 +29134,14 @@ mod tests {
     #[test]
     fn a_level_moved_on_a_pin_is_the_pins_and_not_the_setting() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let mut video = create_loading_media(320, 240);
         video.media_type = MediaType::NativeVideo;
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = Some(video);
         }
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(overlay_pin((100, 100, 420, 340), PinChrome::always()));
-        }
+        stand_pin(Some(overlay_pin((100, 100, 420, 340), PinChrome::always())));
 
         let setting = current_video_volume();
         set_pin_volume(12);
@@ -28354,9 +29153,7 @@ mod tests {
             "`Volume → Video` is left exactly where the user put it"
         );
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -30161,7 +30958,7 @@ mod tests {
     #[test]
     fn a_pinned_film_the_engine_failed_at_is_stepped_over_rather_than_closed() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let mut film = create_loading_media(8, 8);
         film.media_type = MediaType::NativeVideo;
@@ -30171,9 +30968,7 @@ mod tests {
 
         let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
         pin.path = PathBuf::from("C:\\folder\\broken.mp4");
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(pin);
-        }
+        stand_pin(Some(pin));
 
         // The loop's own flag, from the four slots that mean a next file is already pending. The
         // walk is the one that matters here: the tick that finds the failure out queues it here,
@@ -30199,19 +30994,14 @@ mod tests {
         );
         assert!(
             pin_media_is_alive(
-                walk.is_some()
-                    || load.is_some()
-                    || awaiting_box.is_some()
-                    || held_pick.is_some()
+                walk.is_some() || load.is_some() || awaiting_box.is_some() || held_pick.is_some()
             ),
             "and the same film with the walk queued is not a pin that came apart: the player is \
              gone because the pin is on its way to being shown something else, so the walk gets \
              to be taken up rather than the window coming down under it"
         );
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -30221,7 +31011,7 @@ mod tests {
     #[test]
     fn an_engine_coming_up_for_a_pinned_document_is_not_a_pin_that_came_apart() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-engine");
         std::fs::create_dir_all(&folder).expect("a test folder");
@@ -30240,9 +31030,7 @@ mod tests {
 
         let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
         pin.path = path.clone();
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(pin);
-        }
+        stand_pin(Some(pin));
 
         // The browser is coming up for this document: the engine owes it, and no window exists yet.
         webview_preview::publish_want_for_test(&path);
@@ -30259,9 +31047,7 @@ mod tests {
             "a document the engine no longer owes and no window shows is a window onto nothing"
         );
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -30272,7 +31058,7 @@ mod tests {
     #[test]
     fn a_player_the_bubble_parked_is_not_a_pin_that_came_apart() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let mut video = create_loading_media(8, 8);
         video.media_type = MediaType::Video;
@@ -30283,9 +31069,7 @@ mod tests {
         let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
         pin.collapsed = true;
         pin.bubble_pause = Some(BubblePause::Player(12.5));
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(pin);
-        }
+        stand_pin(Some(pin));
 
         assert!(
             pin_media_is_alive(false),
@@ -30298,9 +31082,7 @@ mod tests {
             "and a video whose player is simply gone is what it always was"
         );
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -30310,7 +31092,7 @@ mod tests {
     #[test]
     fn a_pinned_sound_is_not_a_pin_that_came_apart_between_passes() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-sound");
         let path = folder.join("pass.mp3");
@@ -30325,9 +31107,7 @@ mod tests {
 
         let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
         pin.path = path.clone();
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(pin);
-        }
+        stand_pin(Some(pin));
 
         assert!(
             pin_media_is_alive(false),
@@ -30336,9 +31116,7 @@ mod tests {
              every pass"
         );
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -30489,14 +31267,12 @@ mod tests {
     #[test]
     fn a_failed_file_with_nowhere_to_step_to_is_left_standing_as_the_mark() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let broken = PathBuf::from("C:\\folder\\broken.mp4");
         let mut pin = overlay_pin((0, 0, 320, 240), PinChrome::always());
         pin.path = broken.clone();
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(pin);
-        }
+        stand_pin(Some(pin));
 
         // The mark itself, drawn against a palette of its own rather than the one this run
         // happens to be reading: a cross over an empty buffer would pass the liveness read below
@@ -30597,22 +31373,28 @@ mod tests {
             show_pin_failure(&broken, &mut load),
             "a pin that is up is given the mark"
         );
-        let answer = take_pin_load(&mut load).expect("the mark's load is answered before it is handed over");
-        assert_eq!(answer.path, broken, "for the file that failed, and not for any other");
+        let answer =
+            take_pin_load(&mut load).expect("the mark's load is answered before it is handed over");
+        assert_eq!(
+            answer.path, broken,
+            "for the file that failed, and not for any other"
+        );
         assert!(
             answer.walk.is_none(),
             "and it is not a step of a walk, there being none to step"
         );
         let answer = answer.media.expect("a mark is always a frame");
-        assert_eq!(answer.media_type, MediaType::Unplayable, "of the kind that reads as alive");
+        assert_eq!(
+            answer.media_type,
+            MediaType::Unplayable,
+            "of the kind that reads as alive"
+        );
         assert!(
             !answer.is_streaming(),
             "and it is not something still being decoded: a cross this app drew is not queued"
         );
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -30654,13 +31436,11 @@ mod tests {
     #[test]
     fn a_pin_being_shown_another_file_is_alive_whatever_is_on_screen() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
         pin.path = PathBuf::from("C:\\folder\\whatever.mp4");
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = Some(pin);
-        }
+        stand_pin(Some(pin));
 
         for media_type in [
             MediaType::StaticImage,
@@ -30724,9 +31504,7 @@ mod tests {
             );
         }
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
@@ -31076,7 +31854,7 @@ mod tests {
     #[test]
     fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-        let previous_pin = PINNED.lock().ok().and_then(|mut pinned| pinned.take());
+        let previous_pin = take_pin_for_a_test();
 
         let mut video = create_loading_media(320, 240);
         video.media_type = MediaType::NativeVideo;
@@ -31093,38 +31871,36 @@ mod tests {
         let cases: [(Option<f64>, Option<f64>); 2] = [(Some(30.0), Some(90.0)), (None, None)];
 
         for (paused_at, wanted) in cases {
-            if let Ok(mut pinned) = PINNED.lock() {
-                *pinned = Some(PinnedPreview {
-                    path: path.clone(),
-                    bound: Some(320),
-                    content: (0, 0, 320, 240),
-                    restore: None,
-                    dpi: 96,
-                    transport_bar: true,
-                    transport_live: true,
-                    frame: PinFrame::Shaped,
-                    overlay: true,
-                    chrome: PinChrome::on_arrival(Instant::now()),
-                    collapsed: false,
-                    bubble_pause: None,
-                    hovered: None,
-                    pressed: None,
-                    tooltip: PinTooltip::default(),
-                    dragging: None,
-                    transport: PinTransport {
-                        duration: Some(120.0),
-                        paused_at,
-                        ..Default::default()
-                    },
-                    volume: PinVolume::default(),
-                });
-            }
+            stand_pin(Some(PinnedPreview {
+                path: path.clone(),
+                bound: Some(320),
+                content: (0, 0, 320, 240),
+                restore: None,
+                dpi: 96,
+                transport_bar: true,
+                transport_live: true,
+                frame: PinFrame::Shaped,
+                overlay: true,
+                chrome: PinChrome::on_arrival(Instant::now()),
+                collapsed: false,
+                bubble_pause: None,
+                hovered: None,
+                pressed: None,
+                tooltip: PinTooltip::default(),
+                dragging: None,
+                transport: PinTransport {
+                    duration: Some(120.0),
+                    paused_at,
+                    ..Default::default()
+                },
+                volume: PinVolume::default(),
+            }));
 
             seek_pinned_playback(&path, (0, 0, 320, 240), 90.0);
 
-            let transport = PINNED.lock().ok().and_then(|pinned| {
-                pinned
-                    .as_ref()
+            let transport = pin_state().and_then(|state| {
+                state
+                    .pin()
                     .map(|pin| (pin.transport.paused_at, pin.transport.seeking))
             });
 
@@ -31136,9 +31912,7 @@ mod tests {
             );
         }
 
-        if let Ok(mut pinned) = PINNED.lock() {
-            *pinned = previous_pin;
-        }
+        stand_pin(previous_pin);
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }

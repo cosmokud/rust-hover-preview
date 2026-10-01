@@ -1,162 +1,47 @@
+//! How a file's name is read, which is the question every list in the app is asked through.
+//!
+//! The lists themselves — what each of them holds, what this app held of them before, and the
+//! four rules their entries are read by — are rows of `crate::formats::lists`, the one table every
+//! kind's list is a row of. What is kept here is the part of the question that is not a list: a
+//! name is read the same way for every kind, and it is read in two ways because a file's name is
+//! not always an extension.
+//!
+//! A dot file is the reason `lookup_extension` is not one call to `Path::extension`: `.gitignore`
+//! has no extension — the dot begins its name — so a leading dot is stripped and what follows is
+//! the name the lists are written with, which is what makes `gitignore` in the extension list mean
+//! `.gitignore`. And a repository is recognized by files with no extension at all, which is the
+//! second list rather than a first one: `lookup_name` reads a whole file name, and the text gate
+//! asks both (`matches_text_lists`).
+//!
+//! The two rules that are not the shared one are the two that are not about extensions: the text
+//! extension list admits a `#` for `C#`, and the name list admits a dot inside a name. Both live in
+//! `formats::lists` with the lists they read, because a rule for reading an entry and a list of
+//! entries to read are one thing here rather than two that have to agree.
+
 use std::path::Path;
 
-/// Extensions previewed as text before the list is edited in `config.ini`.
+/// The four rules a list's entries are read by, under the names the tree has always called them
+/// by.
 ///
-/// The list is written to the configuration on first run and read back from
-/// there, so adding or removing an extension is an edit in the file rather than
-/// a rebuild. Anything in it that no syntax definition claims is still
-/// previewed, as plain text.
+/// Nothing in the running app asks for one of them any more — every list is read through its row
+/// in `formats::lists`, which is what a list is for — but a test that wants to know what a
+/// hand-typed list is read as asks for the rule by name rather than matching on an enum, and
+/// there are a good many of those.
+#[cfg(test)]
+pub use crate::formats::lists::{sanitize_archive_extension_list, sanitize_extension_list};
+
+/// Whether `path` is a page of HTML — the two names a web page goes by, and no other.
 ///
-/// `.ts` and `.mts` belong to both lists: they are TypeScript sources and MPEG
-/// transport streams, so the video gate decides those two by content (an MPEG-TS
-/// sync byte) and a TypeScript file falls through to a text preview. Every other
-/// extension here is disjoint from the image, video and PDF gates.
-pub const DEFAULT_TEXT_EXTENSIONS: &str =
-    "adb,adoc,ads,asciidoc,asm,asp,aspx,astro,awk,bash,bat,bib,bzl,c,cc,cfg,cg,cjs,clj,cljc,cljs,\
-cmake,cmd,comp,conf,cpp,cs,csh,cshtml,css,csv,csx,cts,cxx,d,dart,diff,diz,edn,ejs,el,elm,env,erb,\
-erl,ex,exs,f,f03,f77,f90,f95,fish,for,frag,fs,fsi,fsx,ftn,fx,geom,glsl,go,gql,gradle,graphql,\
-groovy,h,haml,hbs,hcl,hh,hlsl,hpp,hrl,hs,htm,html,hxx,inc,ini,ipynb,java,jl,js,json,json5,jsonc,\
-jsonl,jsp,jsx,ksh,kt,kts,latex,less,lhs,liquid,lisp,ll,lock,log,lsp,lua,m,mak,man,markdown,md,\
-mdown,metal,mjs,mk,mkd,ml,mli,mm,mts,mustache,nasm,nfo,nim,ninja,nix,njk,org,pas,patch,php,phtml,\
-pl,plist,pm,properties,proto,ps1,psd1,psm1,py,pyi,pyw,r,rake,rb,rkt,rmd,rs,rst,rtf,s,sass,scala,\
-scm,scss,sh,slim,sol,sql,srt,ss,styl,sv,svelte,svh,swift,tcl,tex,text,tf,tfvars,toml,ts,tsv,tsx,\
-twig,txt,v,vbs,vert,vhd,vhdl,vtt,vue,wat,wgsl,xhtml,xml,xsd,xsl,xslt,yaml,yml,zig,zsh";
-
-/// Read one extension out of the configured list into the lowercase form the
-/// lookups use. A leading dot is accepted because `py` and `.py` are both what
-/// a user might type, and an entry that is not a bare extension is dropped so a
-/// stray path or sentence in the list cannot turn into a match.
-fn sanitized_extension(value: &str) -> Option<String> {
-    sanitized_by(value, &['+', '-', '_', '#'])
-}
-
-/// The characters an extension may hold besides its alphanumerics, for the lists that
-/// differ on which.
-///
-/// Every list in this app is a comma-separated list of extensions read out of `config.ini`,
-/// and twelve of the fourteen sanitizers that read them were byte-identical. The two that were
-/// not are this one and the archive list's: the archive list has to carry a dotted compound
-/// such as `tar.gz`, which is the whole of what [`sanitize_archive_extensions`] is for, and a
-/// name list has to hold a dot for `cmakelists.txt`.
-///
-/// So the character set is a parameter and the body is one function. The twelve identical
-/// copies were 200 lines that any edit to one of them could have left disagreeing with the
-/// other eleven — which is the failure mode of a rule copied rather than shared.
-fn sanitized_by(value: &str, extra: &[char]) -> Option<String> {
-    let trimmed = value.trim().trim_start_matches('.').to_lowercase();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let is_extension = trimmed
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c));
-    is_extension.then_some(trimmed)
-}
-
-/// The characters every ordinary extension list admits besides its alphanumerics.
-///
-/// Deliberately without `#` and without `.`, which are what the two lists that need them
-/// add: `#` for a name like `C#`, `.` for a compound like `tar.gz`. Twelve of the fourteen
-/// lists admit exactly this set, and the two that admitted more are the two this is not.
-const PLAIN_EXTENSION_CHARS: &[char] = &['+', '-', '_'];
-
-/// The one sanitiser for the twelve lists that differ on nothing but their names.
-///
-/// A caller's list is sanitized by this, which is a `fn(&str) -> Vec<String>` it can be handed
-/// as a value rather than named fourteen times in an array of coercions.
-pub fn sanitize_extension_list(list: &str) -> Vec<String> {
-    sanitized_list(list, PLAIN_EXTENSION_CHARS)
-}
-
-/// The archive list's own sanitiser, which is the one list that holds a dotted compound name.
-///
-/// `tar.gz` is a name rather than an extension, and `matches_archive_list` matches it against
-/// the end of a whole file name — so a sanitiser that dropped the dot would silently stop the
-/// list claiming the format it exists to claim.
-pub fn sanitize_archive_extension_list(list: &str) -> Vec<String> {
-    sanitized_list(list, &['.', '+', '-', '_', '#'])
-}
-
-/// A list split into its entries, each read by the rule `extra` names.
-fn sanitized_list(list: &str, extra: &[char]) -> Vec<String> {
-    let mut extensions: Vec<String> = Vec::new();
-    for entry in list.split(',') {
-        if let Some(extension) = sanitized_by(entry, extra) {
-            if !extensions.contains(&extension) {
-                extensions.push(extension);
-            }
-        }
-    }
-    extensions
-}
-
-/// File names previewed as text before the list is edited in `config.ini`.
-///
-/// An extension is not enough for the files a repository is recognized by: a
-/// `.gitignore` has no extension at all as far as the path is concerned — the dot
-/// is the start of its *name* — and `LICENSE`, `Makefile` and `Dockerfile` have no
-/// dot in them anywhere. So the gate has a second list, of names, and a file
-/// matches if either list does.
-///
-/// The entries are ordered by the name each one matches, a leading dot aside, since
-/// a dot begins a name rather than changing it: `.gitattributes` sits where
-/// `gitattributes` would, which is also the form this list is written to `config.ini`
-/// in and looked up by.
-pub const DEFAULT_TEXT_NAMES: &str = "authors,.babelrc,brewfile,caddyfile,changelog,changes,.clang-format,.clang-tidy,cmakelists.txt,\
-code_of_conduct,containerfile,contributing,contributors,copying,copyright,dockerfile,\
-.dockerignore,.editorconfig,.env,.env.example,.env.local,.eslintignore,.eslintrc,gemfile,\
-.gitattributes,.gitconfig,.gitignore,.gitkeep,.gitmodules,gnumakefile,.golangci.yml,history,\
-.htaccess,install,jenkinsfile,justfile,licence,license,.mailmap,makefile,makefile.am,makefile.in,\
-notice,.npmignore,.prettierignore,.prettierrc,procfile,rakefile,readme,.rustfmt.toml,security,\
-.stylelintrc,unlicense,vagrantfile";
-
-/// Read one name out of the configured list into the lowercase form the lookups
-/// use. A leading dot is accepted and dropped, because `.gitignore` and
-/// `gitignore` are the same file to everything except the filesystem, and an entry
-/// that is not a plausible file name is dropped so a stray path or sentence in the
-/// list cannot turn into a match.
-fn sanitized_name(value: &str) -> Option<String> {
-    sanitized_by(value, &['.', '-', '_'])
-}
-
-/// The configured name list split into the entries lookups compare against.
-pub fn sanitize_names(list: &str) -> Vec<String> {
-    let mut names: Vec<String> = Vec::new();
-    for entry in list.split(',') {
-        if let Some(name) = sanitized_name(entry) {
-            if !names.contains(&name) {
-                names.push(name);
-            }
-        }
-    }
-    names
-}
-
-/// The name `path` will be looked up by: its file name in lowercase, with a
-/// leading dot dropped, so `.gitignore` and `gitignore` are one entry.
-fn lookup_name(path: &Path) -> Option<String> {
-    let name = path.file_name()?.to_str()?.to_lowercase();
-    if name.is_empty() {
-        return None;
-    }
-    Some(name.trim_start_matches('.').to_string())
-}
-
-/// The configured list split into the entries lookups compare against.
-///
-/// The text list is the one list that admits `#` as well as the plain characters, so it is not
-/// the shared sanitiser above — see [`sanitized_by`].
-pub fn sanitize_extensions(list: &str) -> Vec<String> {
-    let mut extensions: Vec<String> = Vec::new();
-    for entry in list.split(',') {
-        if let Some(extension) = sanitized_extension(entry) {
-            if !extensions.contains(&extension) {
-                extensions.push(extension);
-            }
-        }
-    }
-    extensions
+/// The question is the name alone, exactly as `svg_preview::is_svg_file` asks it: what the
+/// browser would be handed is decided by what the file is called, and the switch over it
+/// belongs to the configuration rather than to this module (see `render_html`). The
+/// extension is read through `lookup_extension`, so `.HTML` and `.html` are one name and a
+/// dot file is read the way every other list reads one.
+pub fn is_html_extension(path: &Path) -> bool {
+    matches!(
+        lookup_extension(path).as_deref(),
+        Some("htm") | Some("html")
+    )
 }
 
 /// The extension `path` will be looked up by.
@@ -180,18 +65,14 @@ pub(crate) fn lookup_extension(path: &Path) -> Option<String> {
     (!stripped.is_empty() && !stripped.contains('.')).then(|| stripped.to_lowercase())
 }
 
-/// Whether `path` is a page of HTML — the two names a web page goes by, and no other.
-///
-/// The question is the name alone, exactly as `svg_preview::is_svg_file` asks it: what the
-/// browser would be handed is decided by what the file is called, and the switch over it
-/// belongs to the configuration rather than to this module (see `render_html`). The
-/// extension is read through `lookup_extension`, so `.HTML` and `.html` are one name and a
-/// dot file is read the way every other list reads one.
-pub fn is_html_extension(path: &Path) -> bool {
-    matches!(
-        lookup_extension(path).as_deref(),
-        Some("htm") | Some("html")
-    )
+/// The name `path` will be looked up by: its file name in lowercase, with a
+/// leading dot dropped, so `.gitignore` and `gitignore` are one entry.
+fn lookup_name(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?.to_lowercase();
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.trim_start_matches('.').to_string())
 }
 
 /// Whether `path` carries an extension the configuration previews as text.
@@ -212,24 +93,37 @@ pub fn matches_configured_name(path: &Path, names: &[String]) -> bool {
     names.contains(&name)
 }
 
-/// Whether either configured list claims `path`.
-///
-/// This is the classification without the gate: the lists as they stand, so a
-/// caller that already holds the configuration can ask what kind of preview a
-/// file is without asking whether that kind is switched on — which is how the
-/// router asks it, and what the hook, the loader and the layout all end up
-/// asking (`routing::kind_of`).
-///
-/// It is the configured lists' own answer rather than the app's: a name these
-/// lists hold and an earlier list claims as well is that earlier kind, and what
-/// kind a file is, is asked of the one order every side asks it in.
-pub fn matches_text_lists(path: &Path, extensions: &[String], names: &[String]) -> bool {
-    matches_configured_extension(path, extensions) || matches_configured_name(path, names)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one rule every list in the app is read through, and it used to be written out
+    /// fourteen times: a leading dot is what a user types, an entry that is not a bare
+    /// extension is dropped rather than matched against, and a repeat is not a second entry.
+    ///
+    /// It is pinned here and not only through the row that uses it because the rule is what
+    /// every list has in common: the tests beside the ones that do use the rule through a row
+    /// pin one hand-typed string per list, and a rule cannot be pinned by a sample of the
+    /// strings it reads.
+    #[test]
+    fn a_sanitized_list_drops_a_leading_dot_a_duplicate_and_anything_that_is_not_an_extension() {
+        let typed = sanitize_extension_list(" .ZIP , zip,,book*.azw,epub,..,tar.gz");
+
+        // `book*.azw` is a path fragment and `tar.gz` a compound name: neither is a bare
+        // extension, so neither is in a list that is matched against one.
+        assert_eq!(typed, vec!["zip", "epub"]);
+    }
+
+    /// `tar.gz` is a name rather than an extension, and the archive list matches it against
+    /// the end of a whole file name - so a sanitiser that dropped the dot would silently
+    /// stop the list claiming the format it exists to claim. This is the only difference
+    /// between the two lists, and it is the reason they are two functions.
+    #[test]
+    fn the_archive_list_is_the_one_that_keeps_a_dotted_compound_name() {
+        let typed = sanitize_archive_extension_list(" .ZIP , zip,,nonsense*,docx,tar.gz");
+
+        assert_eq!(typed, vec!["zip", "docx", "tar.gz"]);
+    }
 
     /// A page of HTML is a page of HTML under either of its two names and under no other
     /// one: `.xhtml` is XML, which the text preview still reads, and a file with no

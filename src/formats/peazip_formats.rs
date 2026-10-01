@@ -84,109 +84,14 @@
 //! copy, and where there is none a hover onto one of these names shows nothing at all — the same
 //! answer a camera raw gets on a machine without ImageMagick. A name is answered only where the
 //! tool that reads it is there, so a portable copy carrying a few of them shows the names those
-//! few read and no others. The list lives in `config.ini` as `[peazip] extensions`, written from
-//! the built-in list on first run and read back from there, so a user can add a format a tool of
-//! theirs reads and this app does not know, or take one out.
-//!
-//! The question here is only what a file is *called*, and for most of these names that is the
-//! whole of it: what the file *is* — whether a tool can read it at all — is settled by the tool,
-//! and a name it cannot read is answered with no preview once and then remembered, so a name put
-//! in this list by mistake costs one launch and never another. The three single-stream names are
-//! the exception, and the reason is the one written above: nothing is started for one, so there
-//! is no answer to remember and nothing to refuse. See `is_engine_archive`, which asks the file's
-//! own bytes before its name and is the one question every side asks before a tool is started.
+//! The list of names this answers for is a row of `crate::formats::lists` — the one table
+//! every kind's list is a row of, and the one place a list is written down, the built-in
+//! entries and the older lists this app shipped and then changed included.
 
 use crate::config::config::PreviewType;
-use crate::formats::text_formats;
+use crate::formats::{lists, text_formats};
 use crate::CONFIG;
 use std::path::Path;
-
-/// The extensions written to `config.ini` on first run: the names the tools of an installed
-/// PeaZip can be asked about, that no list of this app's own already claims, and that are
-/// containers of files rather than programs.
-///
-/// Three groups, in the order they are written:
-///
-/// * The archives and installers nothing else on the machine opens: `001`, `ar`, `arc`, `arj`,
-///   `cab`, `chm`, `cpio`, `deb`, `esd`, `hfs`, `hfsx`, `hxs`, `iso`, `lha`, `lzh`, `msi`,
-///   `msp`, `pkg`, `ppkg`, `rpm`, `swm`, `udf`, `wim`, `xar`, `xip` and `zpaq`. Some are
-///   containers of files in the ordinary sense (an installer, a compiled help file, a Linux package,
-///   a disk image), some are the volume of a backup, and all of them are read by a tool of PeaZip's
-///   and by nothing this app has. Two of them are that tool's rather than the console archiver's:
-///   an `arc` is FreeArc's and a `zpaq` is zpaq's, and neither is read by the archiver at all.
-///   A Microsoft Reader book was of this group once and is not any more: the ebook engine draws a
-///   page of one, so it is `[calibre]`'s, and `PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS` below is what
-///   takes it out of a file this app wrote before that. A compiled help file went the other way —
-///   out of this group and back into it — which is what `PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE` is
-///   written down for.
-/// * The single-stream compressors: `bcm`, `br`, `bz2`, `bzip2`, `gz`, `gzip`, `lpaq8`, `lzma`,
-///   `xz`, `z` and `zst`, with the tarball spellings that name them (`taz`, `tbz`, `tbz2`, `tpz`,
-///   `tzst`). One of these is a file put through a compressor rather than a container, so the
-///   answer is one member, often one whose name is not in the stream at all — and the reading of
-///   that answer is what puts a name to it (see `archive_listing`). They are here because a tool
-///   of PeaZip's reads them and this app does not, and because what a hover shows for one — the
-///   name, the size where the tool knows it, and how much smaller it was made — is the useful
-///   part of opening it. `bcm`, `br` and `lpaq8` are the three whose tools cannot say even that
-///   much; nothing is started for one of them.
-/// * And the disk images whose names are their own: `apfs`, `cramfs`, `dmg`, `qcow`, `qcow2`,
-///   `squashfs`, `vdi`, `vhd`, `vhdx`, `vmdk`.
-///
-/// Deliberately absent, and each for a reason the module documentation above gives: the names
-/// another list of this app's already reads (`7z`, `zip`, `rar`, `tar`, `zipx`, `jar`, `apk`,
-/// `xpi`, `cbz`, `cbr`, `cbc`, `chm`, `lit`, `tgz`, `pmd`, `swf`, `flv`, `doc`, `xls`, `ppt`),
-/// the programs the engine lists as resources (`exe`, `dll`, `sys`, `obj`, `elf`, `macho`, `te`,
-/// `b64`, `ihex`, `simg`, `uefif`, `scap`, `lpimg`, `nsis`, `mslz`, `mub`), the extensions that
-/// are words rather than formats (`img`, `ext`, `ext2`, `ext3`, `ext4`, `fat`, `ntfs`, `apm`,
-/// `mbr`, `gpt`), the codecs its build carries no format for and no tool of its own opens (`lz4`,
-/// `lz5`, `lizard`, `flzma2`), the two names this installation carries no tool for at all (`pea`,
-/// which no tool of PeaZip's lists, and `paq8`, whose folder holds no executable — both are written
-/// down in TODO.md), and the compression formats this app has no need of an engine for (`xz` is
-/// here, `lzma86` and `base64` are not).
-pub const DEFAULT_PEAZIP_EXTENSIONS: &str =
-    "001,apfs,ar,arc,arj,bcm,br,bz2,bzip2,cab,chm,cpio,cramfs,deb,dmg,esd,gz,gzip,\
-hfs,hfsx,hxs,iso,lha,lpaq8,lzh,lzma,msi,msp,pkg,ppkg,qcow,qcow2,rpm,squashfs,swm,\
-taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zpaq,zst";
-
-/// The built-in `[peazip]` list as it stood while a compiled help file was the ebook engine's.
-///
-/// A file holding exactly these entries is this app's own earlier list rather than a user's edit, so
-/// it is brought up to the built-in list rather than kept as written — which is what gives the name
-/// back to the archiver, on an installation that ran the build that had taken it away. `chm` is the
-/// only name to have moved twice, and the reason it moved back is worth putting beside it: what the
-/// engine draws for one is a page and takes two to three seconds to draw, and what a help file is
-/// hovered for is usually nothing at all — so the listing that is there immediately is the better
-/// answer, and the page it gives up is one nobody was waiting for (see `calibre_formats`).
-pub const PEAZIP_EXTENSIONS_BEFORE_THE_HELP_FILE: &str =
-    "001,apfs,ar,arc,arj,bcm,br,bz2,bzip2,cab,cpio,cramfs,deb,dmg,esd,gz,gzip,\
-hfs,hfsx,hxs,iso,lha,lpaq8,lzh,lzma,msi,msp,pkg,ppkg,qcow,qcow2,rpm,squashfs,swm,\
-taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zpaq,zst";
-
-/// The built-in `[peazip]` list as it stood while `chm` and `lit` were the archiver's names.
-///
-/// A file holding exactly these entries is the app's own older list rather than a user's edit, so it
-/// is brought up to the built-in list rather than kept as written — which is what takes the two
-/// names out of every `config.ini` already written. Both are books rather than archives: a
-/// compiled help file and a Microsoft Reader book are read by the ebook engine and previewed as a
-/// page of one, which needs Calibre installed, where the archiver listed what they hold (see
-/// `calibre_formats`). A user who would rather have the listing back adds the name to this list
-/// again, and takes it out of `[calibre]` with it.
-pub const PEAZIP_EXTENSIONS_BEFORE_THE_EBOOKS: &str =
-    "001,apfs,ar,arc,arj,bcm,br,bz2,bzip2,cab,chm,cpio,cramfs,deb,dmg,esd,gz,gzip,\
-hfs,hfsx,hxs,iso,lha,lit,lpaq8,lzh,lzma,msi,msp,pkg,ppkg,qcow,qcow2,rpm,squashfs,swm,\
-taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zpaq,zst";
-
-/// The list this app wrote before the tools beside the console archiver were driven: the names
-/// that list held, which is what tells a file written by that build from one a user has edited
-/// (see `crate::config::config::repair_older_lists`).
-///
-/// A list holding exactly these entries is this app's own — nobody typed it — and is brought up
-/// to `DEFAULT_PEAZIP_EXTENSIONS`, which is how an installation that already exists is given the
-/// names the archiver's own table never declared: `arc`, `zpaq`, `br`, `bcm` and `lpaq8`. The
-/// entries are written in the order they were written then, since that is what a file holds.
-pub const PEAZIP_EXTENSIONS_BEFORE_THE_BACKENDS: &str =
-    "001,apfs,ar,arj,bz2,bzip2,cab,chm,cpio,cramfs,deb,dmg,esd,gz,gzip,\
-hfs,hfsx,hxs,iso,lha,lit,lzh,lzma,msi,msp,pkg,ppkg,qcow,qcow2,rpm,squashfs,swm,\
-taz,tbz,tbz2,tpz,txz,tzst,udf,udeb,vdi,vhd,vhdx,vmdk,wim,xar,xip,xz,z,zst";
 
 /// The tool inside an installed PeaZip that reads a file, and so the tool this app runs to list it.
 ///
@@ -268,13 +173,8 @@ impl Backend {
     }
 }
 
-/// Whether the configured list claims `path`.
-pub fn matches_peazip_list(path: &Path, extensions: &[String]) -> bool {
-    text_formats::matches_configured_extension(path, extensions)
-}
-
-/// Whether the configured list claims `path`, without asking whether these previews are switched
-/// on, and without claiming a file a reader of this app's own already reads.
+/// Whether this kind's list claims `path`, without asking whether these previews are switched on,
+/// and without claiming a file a reader of this app's own already reads.
 ///
 /// The second half is what keeps a tarball out of the engine's hands. This list carries the bare
 /// `gz` a single compressed stream is named by, and the archive list carries the dotted `tar.gz`
@@ -283,26 +183,21 @@ pub fn matches_peazip_list(path: &Path, extensions: &[String]) -> bool {
 /// list look per question; what it buys is that a file this app reads itself is never a file an
 /// engine is started for, whatever a user's own edit to either list says. The gate is asked
 /// beside it by the hook, the way every other kind's is.
-pub fn is_peazip_file(path: &Path) -> bool {
-    let claimed = CONFIG
-        .lock()
-        .map(|config| matches_peazip_list(path, &config.peazip_extensions))
-        .unwrap_or(false);
-
-    // Asked after the lock is given up rather than inside it: the archive list's own question
-    // takes the same lock, and one lock taken twice on a thread is a deadlock.
-    claimed && !crate::formats::archive_formats::is_archive_file(path)
-}
-
-/// Whether a preview may be shown for `path`: the file the configured list claims, and the
-/// `Peazip` gate in the tray's `Preview Types` submenu.
 ///
-/// Both halves ask it where a kind can be switched off under a preview that is already on
-/// screen: a hover is not sent for a kind that is off, and the layout places nothing for a file
-/// whose kind is off, which is how a preview of that kind comes down when the switch does. See
-/// `PreviewType::enabled`.
-pub fn is_peazip_preview(path: &Path) -> bool {
-    is_peazip_file(path) && PreviewType::Peazip.enabled()
+/// Both halves are asked under one guard rather than under two, which is the shape this had when
+/// the archive list's question took the same lock the peazip one had given up: one lock taken
+/// twice on a thread is a deadlock, and the two list comparisons are both in memory.
+pub fn is_peazip_file(path: &Path) -> bool {
+    CONFIG
+        .lock()
+        .map(|config| {
+            lists::PEAZIP.claims(path, &config)
+                && !crate::formats::archive_formats::claims_in(
+                    path,
+                    lists::ARCHIVE.entries(&config),
+                )
+        })
+        .unwrap_or(false)
 }
 
 /// Whether the engine is the one that lists this file at all: a name its own list carries, or the
@@ -320,8 +215,8 @@ pub fn is_engine_archive(path: &Path) -> bool {
     use crate::formats::content_type::Content;
 
     // The entry is read before the lock, so the guard is not held across the read (see
-    // `calibre_formats::content_of`).
-    let content = crate::formats::calibre_formats::content_of(path);
+    // `content_type::of_reaching_config`).
+    let content = crate::formats::content_type::of_reaching_config(path);
 
     match content {
         Content::Kind(PreviewType::Peazip) => true,
@@ -339,44 +234,22 @@ mod tests {
     /// picture are all answered elsewhere, and none of them is here.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_PEAZIP_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         let claimed_elsewhere = |path: &Path| {
-            crate::formats::image_formats::matches_image_list(path, &config.image_extensions)
-                || crate::formats::vector_formats::matches_vector_list(
-                    path,
-                    &config.vector_extensions,
-                )
-                || crate::formats::design_formats::matches_design_list(
-                    path,
-                    &config.design_extensions,
-                )
-                || crate::formats::font_formats::matches_font_list(path, &config.font_extensions)
-                || crate::formats::libre_formats::matches_libre_list(path, &config.libre_extensions)
-                || crate::formats::magick_formats::matches_magick_list(
-                    path,
-                    &config.magick_extensions,
-                )
+            crate::formats::lists::IMAGE.claims(path, &config)
+                || crate::formats::lists::VECTOR.claims(path, &config)
+                || crate::formats::lists::DESIGN.claims(path, &config)
+                || crate::formats::lists::FONT.claims(path, &config)
+                || crate::formats::lists::LIBRE.claims(path, &config)
+                || crate::formats::lists::MAGICK.claims(path, &config)
                 || crate::formats::video_formats::matches_any_video_list(path, &config)
-                || crate::formats::archive_formats::matches_archive_list(
-                    path,
-                    &config.archive_extensions,
-                )
-                || crate::formats::office_formats::matches_office_list(
-                    path,
-                    &config.office_extensions,
-                )
-                || crate::formats::ebook_formats::matches_ebook_list(path, &config.ebook_extensions)
-                || crate::formats::calibre_formats::matches_calibre_list(
-                    path,
-                    &config.calibre_extensions,
-                )
-                || crate::formats::text_formats::matches_text_lists(
-                    path,
-                    &config.text_extensions,
-                    &config.text_names,
-                )
+                || crate::formats::lists::ARCHIVE.claims(path, &config)
+                || crate::formats::lists::OFFICE.claims(path, &config)
+                || crate::formats::lists::EBOOK.claims(path, &config)
+                || crate::formats::lists::CALIBRE.claims(path, &config)
+                || crate::formats::lists::TEXT.claims(path, &config)
+                || crate::formats::lists::NAMES.claims(path, &config)
         };
 
         for name in [
@@ -404,7 +277,7 @@ mod tests {
                 "`{name}` is read by another kind, so this expectation is written the wrong way round"
             );
             assert!(
-                !matches_peazip_list(path, &list),
+                !crate::formats::lists::PEAZIP.claims(path, &config),
                 "`{name}` is read by another kind, so the engine is not asked about it"
             );
         }
@@ -417,14 +290,11 @@ mod tests {
         // `is_peazip_file`).
         let tarball = Path::new("sources.tar.gz");
         assert!(
-            crate::formats::archive_formats::matches_archive_list(
-                tarball,
-                &config.archive_extensions
-            ),
+            crate::formats::lists::ARCHIVE.claims(tarball, &config),
             "a tarball is the archive list's, by the dotted entry that names it"
         );
         assert!(
-            matches_peazip_list(tarball, &list),
+            crate::formats::lists::PEAZIP.claims(tarball, &config),
             "and this list names its tail, which is why the difference exists at all"
         );
         assert!(
@@ -437,7 +307,7 @@ mod tests {
     /// single-stream compressors, and the disk images whose names are their own.
     #[test]
     fn holds_the_archives_no_reader_here_opens() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_PEAZIP_EXTENSIONS);
+        let config = crate::config::config::AppConfig::default();
 
         for name in [
             "backup.arj",
@@ -467,7 +337,7 @@ mod tests {
             "archive.lzh",
         ] {
             assert!(
-                matches_peazip_list(Path::new(name), &list),
+                crate::formats::lists::PEAZIP.claims(Path::new(name), &config),
                 "`{name}` is one of the engine's archives"
             );
         }
@@ -544,7 +414,8 @@ mod tests {
     /// other list of this app's answers a hand-edited entry.
     #[test]
     fn reads_a_list_of_bare_extensions() {
-        let extensions = text_formats::sanitize_extension_list(" .CAB , arj,,archive*.iso ,cab,msi");
+        let extensions =
+            crate::formats::lists::sanitize_extension_list(" .CAB , arj,,archive*.iso ,cab,msi");
 
         assert_eq!(extensions, vec!["cab", "arj", "msi"]);
     }

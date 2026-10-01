@@ -161,7 +161,7 @@ pub fn refused(path: &Path) -> bool {
 /// and what a caller watches for is the page appearing in the folder it is kept in, or the mark
 /// that says it is not coming. A hover that asked for one is replayed when it is there.
 pub fn request(path: &Path) {
-    if !imports(path) || !available() {
+    if !crate::formats::calibre_formats::is_engine_ebook(path) || !available() {
         return;
     }
     if rendered_page(path).is_some() || refused(path) {
@@ -194,17 +194,6 @@ pub fn request(path: &Path) {
 /// The thread conversions run on, and the one book waiting behind whatever is being converted now.
 /// Nothing is done between conversions but the wait, so the thread is asked for nothing there.
 static WORKER: Lazy<Worker> = Lazy::new(|| Worker::new(None));
-
-/// Whether the engine is the one that reads this file: a name of its own list, or the bytes of a
-/// book it reads under a name no list holds — a `.mobi` renamed to `.dat`, say.
-///
-/// The question is asked where it is answered for every caller — see
-/// `calibre_formats::is_engine_ebook` — so that a book one side asks about is a book the other
-/// side will convert. Nothing is asked of a file that is what it is called but is not one of the
-/// engine's formats, and nothing is asked of one whose bytes are another kind's.
-fn imports(path: &Path) -> bool {
-    crate::formats::calibre_formats::is_engine_ebook(path)
-}
 
 /// Convert `source` into a page, by running the engine the way a user would: one book in, one PDF
 /// out, and a wait that ends rather than holding a hover for good.
@@ -310,10 +299,9 @@ mod tests {
     #[test]
     fn asks_about_the_books_its_own_list_names() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.calibre_extensions =
-                crate::formats::text_formats::sanitize_extension_list(
-                    crate::formats::calibre_formats::DEFAULT_CALIBRE_EXTENSIONS,
-                );
+            config.calibre_extensions = crate::formats::text_formats::sanitize_extension_list(
+                crate::formats::calibre_formats::DEFAULT_CALIBRE_EXTENSIONS,
+            );
         }
 
         for name in [
@@ -324,14 +312,14 @@ mod tests {
             "book.djvu",
         ] {
             assert!(
-                imports(Path::new(name)),
+                crate::formats::calibre_formats::is_engine_ebook(Path::new(name)),
                 "`{name}` is one of the engine's books"
             );
         }
 
         for name in ["photo.png", "report.docx", "notes.txt", "archive.zip"] {
             assert!(
-                !imports(Path::new(name)),
+                !crate::formats::calibre_formats::is_engine_ebook(Path::new(name)),
                 "`{name}` is another kind's, and the engine is not asked about it"
             );
         }

@@ -1,30 +1,14 @@
 //! Which files are Office documents.
 //!
-//! The extension list lives in `config.ini`, written from the built-in list on
-//! first run and read back from there, exactly as the text preview's lists and the
-//! archive list are — so a user can add a format this list does not name, or take
-//! one out, without a rebuild.
-//!
-//! The question here is only what a file is *called*. What it *is* — an OOXML
-//! package or an OLE compound file — is settled by reading the file's own header,
-//! and that split is deliberate: the hover gate asks its question of every item the
-//! pointer touches, and a synchronizing provider's placeholder is a directory entry
-//! that can be answered for but a file that must not be opened, because opening it
-//! is what starts the download.
+//! The list of names this answers for is a row of `crate::formats::lists` — the one table
+//! every kind's list is a row of, and the one place a list is written down, the built-in
+//! entries and the older lists this app shipped and then changed included.
 
-use crate::config::config::{AppConfig, OfficeEngine, PreviewType};
-use crate::formats::text_formats;
+use crate::config::config::{AppConfig, OfficeEngine};
 use crate::CONFIG;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-
-/// The extensions written to `config.ini` on first run: the Word, Excel and
-/// PowerPoint formats a hover is expected to meet, templates and slide shows
-/// included.
-pub const DEFAULT_OFFICE_EXTENSIONS: &str =
-    "doc,docm,docx,dot,dotm,dotx,pot,potm,potx,pps,ppsm,ppsx,ppt,pptm,pptx,xls,xlsb,xlsm,xlsx,xlt,\
-xltm,xltx";
 
 /// The bytes a container is recognized by: an OOXML package is a zip, so it starts
 /// with the local header of its first part, and a legacy document is an OLE
@@ -70,27 +54,6 @@ impl OfficeApp {
             Self::PowerPoint => "POWERPNT.EXE",
         }
     }
-}
-
-/// Whether the configured list claims `path`.
-pub fn matches_office_list(path: &Path, extensions: &[String]) -> bool {
-    text_formats::matches_configured_extension(path, extensions)
-}
-
-/// Whether the configured list claims `path`, without asking whether Office
-/// previews are switched on.
-pub fn is_office_file(path: &Path) -> bool {
-    CONFIG
-        .lock()
-        .map(|config| matches_office_list(path, &config.office_extensions))
-        .unwrap_or(false)
-}
-
-/// Whether the file is previewed as an Office document under the current
-/// configuration. The `Document` gate is checked on top of the list, so turning
-/// document previews off leaves the list alone and turning them back on restores it.
-pub fn is_office_preview(path: &Path) -> bool {
-    is_office_file(path) && PreviewType::Document.enabled()
 }
 
 /// Which application renders a document with this name, by the family its
@@ -147,7 +110,7 @@ impl OfficeEngine {
     /// is answered does not depend on when it is asked; see `page_engine` for the answer the
     /// app goes by.
     pub fn for_document(config: &AppConfig, path: &Path) -> Option<Self> {
-        if !matches_office_list(path, &config.office_extensions) {
+        if !crate::formats::lists::OFFICE.claims(path, config) {
             return None;
         }
 

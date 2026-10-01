@@ -114,11 +114,28 @@ pub fn is_pdf_file(path: &Path) -> bool {
 /// Explorer, and the whole app's other threads queue up behind it on the same lock, which is what
 /// the first PDF a pointer came to rest on used to do to it (see `explorer_hook::is_media_file`).
 pub fn is_pdf_file_in(path: &Path, extensions: &[String]) -> bool {
-    if crate::formats::ebook_formats::matches_page_name(path, extensions) {
+    is_pdf_file_in_of(path, extensions, cloud_files::needs_download(path))
+}
+
+/// The same question, of a file whose directory entry has already been read.
+///
+/// It is the fix above generalised one step further: whether the content of an `.ai` is on this
+/// machine is a question about that entry, and asking it was a second `fs::metadata` on the
+/// thread that places the hover for the answer to six other questions about the same file. A
+/// hover reads the entry once and hands it down (see `crate::formats::head::Facts`), so the
+/// question is asked of the entry rather than of the volume.
+pub fn is_pdf_file_in_of(path: &Path, extensions: &[String], remote: bool) -> bool {
+    // The name half of the question is the book's own list and the three spellings a page is
+    // called by, which live where that rule has always been written down
+    // (`formats::ebook_formats::page_spelling`) — so that the router's `Page::Pdf` and this
+    // reader's answer are one rule read twice rather than two rules.
+    if crate::formats::text_formats::matches_configured_extension(path, extensions)
+        && crate::formats::ebook_formats::page_spelling(path)
+    {
         return true;
     }
 
-    named(path, "ai") && !cloud_files::needs_download(path) && has_pdf_header(path)
+    named(path, "ai") && !remote && has_pdf_header(path)
 }
 
 /// Whether a PDF preview may be shown for `path`: the file a page would be read
@@ -614,7 +631,7 @@ mod tests {
     #[test]
     fn reads_a_page_name_out_of_the_list_it_is_given() {
         let list = crate::formats::text_formats::sanitize_extension_list(
-            crate::formats::ebook_formats::DEFAULT_EBOOK_EXTENSIONS,
+            crate::formats::lists::DEFAULT_EBOOK_EXTENSIONS,
         );
 
         for name in ["report.pdf", "archived.pdfa", "encapsulated.epdf"] {
@@ -647,7 +664,7 @@ mod tests {
         std::fs::create_dir_all(&folder).expect("a test folder");
 
         let list = crate::formats::text_formats::sanitize_extension_list(
-            crate::formats::ebook_formats::DEFAULT_EBOOK_EXTENSIONS,
+            crate::formats::lists::DEFAULT_EBOOK_EXTENSIONS,
         );
 
         let compatible = folder.join("artwork.ai");

@@ -1,49 +1,32 @@
 //! Which files are archives.
 //!
-//! The extension list lives in `config.ini`, written from the built-in list on
-//! first run and read back from there, exactly as the text preview's lists are —
-//! so a user can add the container formats this list does not name, or take one
-//! out, without a rebuild.
+//! The list of names this answers for is a row of `crate::formats::lists` — the one table every
+//! kind's list is a row of, and the one place a list is written down, the built-in entries and the
+//! older lists this app shipped and then changed included.
 //!
-//! The question here is only what a file is *called*. What it *is* — which of the
-//! readers can open it — is settled in `archive_listing` by reading the file's
-//! own header, and that split is deliberate: the hover gate asks its question of
-//! every item the pointer touches, and a synchronizing provider's placeholder is
-//! a directory entry that can be answered for but a file that must not be opened,
-//! because opening it is what starts the download.
+//! What is kept here is the one thing about the archive list that is not a list: `tar.gz` is a
+//! name rather than an extension. The last dot of `sources.tar.gz` is `gz`, which is not an
+//! archive on its own, so an entry containing a dot is matched against the end of the file's name
+//! instead of against its extension — and the sanitiser that lets the entry hold a dot at all is
+//! the same one, which is why the two are one row rather than two rules that have to agree.
+//!
+//! The question here is otherwise only what a file is *called*. What it *is* — which of the
+//! readers can open it — is settled in `archive_listing` by reading the file's own header, and
+//! that split is deliberate: the hover gate asks its question of every item the pointer touches,
+//! and a synchronizing provider's placeholder is a directory entry that can be answered for but a
+//! file that must not be opened, because opening it is what starts the download.
 
-use crate::config::config::PreviewType;
 use crate::formats::text_formats;
-use crate::CONFIG;
 use std::path::Path;
 
-/// The extensions written to `config.ini` on first run: the archive formats a
-/// hover is expected to meet, plus the zip containers that cost nothing extra to
-/// list (`.jar`, `.apk`, `.xpi`, `.cbz` are all zips).
+/// Whether the `[archive]` row's list claims `path`: its last extension, or a dotted tail of its
+/// whole name for the two-part formats.
 ///
-/// `tar.gz` is a name rather than an extension — the last dot of `sources.tar.gz`
-/// is `gz`, which is not an archive on its own — so an entry containing a dot is
-/// matched against the end of the file's name instead.
-pub const DEFAULT_ARCHIVE_EXTENSIONS: &str = "7z,apk,jar,rar,tar,tar.gz,tgz,xpi,zip,zipx";
-
-/// The built-in `[archive]` list as it stood while `cbz` was an archive rather than a comic.
-///
-/// A file holding exactly these entries is the app's own older list rather than a user's edit —
-/// nobody has typed it — so it is brought up to the built-in list rather than kept as written,
-/// which is what takes the name out of every `config.ini` already written. What it costs is the
-/// page of contents a `.cbz` used to be shown as: the name is a comic's now, and what a hover on
-/// one shows is its first page (see `ebook_formats` and `comic_preview`). A user who would rather
-/// have the listing back adds `cbz` to this list again — both lists are theirs — and the order the
-/// two are asked in is what decides; see `content_type::kind_claiming`.
-///
-/// An archive this app still reads itself, in the order it was written then: the dotted `tar.gz`
-/// is what a tarball is claimed by, so it is written as it was.
-pub const ARCHIVE_EXTENSIONS_BEFORE_THE_COMICS: &str =
-    "7z,apk,cbz,jar,rar,tar,tar.gz,tgz,xpi,zip,zipx";
-
-/// Whether either form of the configured list claims `path`: its last extension,
-/// or a dotted tail of its name for the two-part formats.
-pub fn matches_archive_list(path: &Path, extensions: &[String]) -> bool {
+/// The list-taking form is what `lists` asks for and what its own test uses, because a caller that
+/// has a list in hand — the row, or a test that built one — is a caller asking about that list
+/// rather than about the archive kind. Everything else asks `routing::named_as`, which asks the
+/// row and so asks this.
+pub fn claims_in(path: &Path, extensions: &[String]) -> bool {
     if text_formats::matches_configured_extension(path, extensions) {
         return true;
     }
@@ -58,28 +41,13 @@ pub fn matches_archive_list(path: &Path, extensions: &[String]) -> bool {
         .any(|extension| extension.contains('.') && name.ends_with(&format!(".{extension}")))
 }
 
-/// Whether the configured list claims `path`, without asking whether archive
-/// previews are switched on.
-pub fn is_archive_file(path: &Path) -> bool {
-    CONFIG
-        .lock()
-        .map(|config| matches_archive_list(path, &config.archive_extensions))
-        .unwrap_or(false)
-}
-
-/// Whether the file is previewed as an archive under the current configuration.
-/// The `Archives` gate is checked on top of the list, so turning archive previews
-/// off leaves the list alone and turning them back on restores it.
-pub fn is_archive_preview(path: &Path) -> bool {
-    is_archive_file(path) && PreviewType::Archives.enabled()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::formats::lists::{sanitize_archive_extension_list, DEFAULT_ARCHIVE_EXTENSIONS};
+    use std::path::PathBuf;
 
     fn list() -> Vec<String> {
-        crate::formats::text_formats::sanitize_archive_extension_list(DEFAULT_ARCHIVE_EXTENSIONS)
+        sanitize_archive_extension_list(DEFAULT_ARCHIVE_EXTENSIONS)
     }
 
     #[test]
@@ -89,40 +57,27 @@ mod tests {
         assert!(extensions.contains(&"zip".to_string()));
         // A leading dot is what a user types; anything that is not an extension
         // is dropped rather than matched against.
-        let typed = crate::formats::text_formats::sanitize_archive_extension_list(".ZIP, tar.gz ,nonsense*,,docx");
+        let typed = sanitize_archive_extension_list(".ZIP, tar.gz ,nonsense*,,docx");
         assert_eq!(typed, vec!["zip", "tar.gz", "docx"]);
     }
 
     #[test]
     fn matches_names_the_way_the_list_writes_them() {
-        use std::path::PathBuf;
+        let config = crate::config::config::AppConfig::default();
 
-        let extensions = list();
-        assert!(matches_archive_list(
-            &PathBuf::from(r"C:\downloads\release.zip"),
-            &extensions
-        ));
-        assert!(matches_archive_list(
-            &PathBuf::from(r"C:\downloads\sources.tar.gz"),
-            &extensions
-        ));
-        assert!(matches_archive_list(
-            &PathBuf::from(r"C:\downloads\sources.TAR.GZ"),
-            &extensions
-        ));
-        assert!(matches_archive_list(
-            &PathBuf::from(r"C:\downloads\archive.tgz"),
-            &extensions
-        ));
+        assert!(crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\release.zip"), &config));
+        assert!(crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\sources.tar.gz"), &config));
+        assert!(crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\sources.TAR.GZ"), &config));
+        assert!(crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\archive.tgz"), &config));
         // `tar` is in the list, `gzip` is not, and a bare `.gz` is not an
         // archive: its table is not in the file to read.
-        assert!(!matches_archive_list(
-            &PathBuf::from(r"C:\downloads\notes.gz"),
-            &extensions
-        ));
-        assert!(!matches_archive_list(
-            &PathBuf::from(r"C:\downloads\report.docx"),
-            &extensions
-        ));
+        assert!(!crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\notes.gz"), &config));
+        assert!(!crate::formats::lists::ARCHIVE
+            .claims(&PathBuf::from(r"C:\downloads\report.docx"), &config));
     }
 }
