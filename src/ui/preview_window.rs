@@ -1177,6 +1177,20 @@ enum MediaType {
     /// and note that what draws it is this window rather than an engine — there is nothing to wait
     /// for and nothing to keep.
     Comic,
+    /// A file the pin was shown and its player could not draw, standing as the cross
+    /// `pin_chrome::paint_failure_mark` draws. It is a kind of its own because it has to be:
+    /// the whole of what it is for is that `pin_media_is_alive` reads it as *there* — a frame
+    /// this app holds is a frame nothing outside this thread can take away, and that is the
+    /// answer a window standing over this mark wants — and because a file that was tried and
+    /// failed must stay distinguishable from a file that was never previewable, whose pin keeps
+    /// the file it already had and shows nothing of the new one at all.
+    ///
+    /// Its own kind rather than a still image of the cross, which is the cheaper arrangement and
+    /// the dishonest one: everything that keys on `StaticImage` would answer about this file as
+    /// though the cross were its picture — the image gates, the animated-image handling, the
+    /// cache key it would be held under — and a file that fails must never be cached as the
+    /// mark that stood in for it (see `unplayable_media`).
+    Unplayable,
     Loading,
 }
 
@@ -1225,6 +1239,11 @@ impl MediaType {
             // switch for books and nothing else.
             Self::Comic => Some(PreviewType::Ebook),
             Self::Vector => Some(PreviewType::Vector),
+            // The mark a failed file stands as is this app's own answer rather than a preview of
+            // the file's kind, so it is behind no gate: turning a kind off is a statement about
+            // what the pointer is offered, and a window already standing over a file it could not
+            // draw does not become a file that can be hidden the moment the user hides films.
+            Self::Unplayable => None,
             Self::Loading => None,
         }
     }
@@ -1284,6 +1303,9 @@ impl MediaType {
                 | Self::Office
                 | Self::Libre
                 | Self::Calibre
+                // The cross is a frame like any other, so a bubble collapsed over a file that
+                // failed shows the failure rather than a mark standing in for a picture.
+                | Self::Unplayable
         )
     }
 
@@ -12171,6 +12193,12 @@ impl ScreenBounds {
             (self.bottom - self.top).max(1) as u32,
         )
     }
+
+    /// The same room as a box on screen, which is what the sizing functions take: they measure
+    /// into a room and never read where it stands (see `scale_dimensions`).
+    fn region(self) -> ScreenRegion {
+        (self.left, self.top, self.right, self.bottom)
+    }
 }
 
 /// Where the pointer is, in screen coordinates.
@@ -14764,7 +14792,22 @@ fn end_pin_beside_the_state() {
 /// And the question is whether the thing is *there*, not whether it has drawn anything yet: a
 /// browser still coming up, and a document it has been asked for that has not landed, are a pin
 /// with something to be a window onto (see `webview_preview::is_behind`).
-fn pin_media_is_alive() -> bool {
+///
+/// What `navigating` is for is the case where the player is not running *because* this app is
+/// asking for a different file, which is not a pin that came apart at all. A swap empties the
+/// slot this is read out of before it knows whether the file it is swapping in will play (see
+/// `swap_pinned_media`), so a refused swap leaves a pin with nothing behind it — and read as a
+/// pin that came apart, that took the window down a tick before the walk could step onto the next
+/// file. That is why a corrupted film closed a pinned window while a corrupted picture did not: a
+/// picture is refused by the plan, which empties nothing (see `pin_step_off`).
+fn pin_media_is_alive(navigating: bool) -> bool {
+    // A pin that is already being shown another file is a pin with something to be a window onto:
+    // whether the player behind the file it is showing right now has gone is answered by what is
+    // being shown instead, and not by this.
+    if navigating {
+        return true;
+    }
+
     // What kind it is, is taken in one look and the lock is let go of before anything is asked
     // *about* the answer. What a player's liveness is asked through — `is_video_process_running`
     // — reads the media itself, so asking it with the media already locked by this thread is
@@ -14809,8 +14852,76 @@ fn pin_media_is_alive() -> bool {
         MediaType::EngineSvg | MediaType::EngineFont => {
             pinned_media_owner().is_some_and(|(path, _)| webview_preview::is_behind(&path))
         }
+        // A frame this app holds is a frame nothing outside this thread can take away, and the
+        // mark a failed file stands as is exactly that: a window with the cross in it is a window
+        // with a file's own shape in it, and reading it as a window onto nothing is what closed
+        // the pin of a file put straight onto a corrupted one. The arm is written out rather than
+        // left to the catch-all below because it is load-bearing — the catch-all happens to answer
+        // the same way today, and nothing would say so if it stopped (see `show_pin_failure`).
+        MediaType::Unplayable => true,
         // A frame this app holds is a frame nothing outside this thread can take away.
         _ => true,
+    }
+}
+
+/// How long a player behind a file a pin has just been started is given to draw something of it
+/// before a player that is not there is read as one that died rather than as a pin that came
+/// apart.
+///
+/// It is a give-up rather than a wait anything is expected to reach, and it is well under
+/// `VIDEO_START_WAIT_SECS` on purpose: that is how long a start may run while a *window* is on its
+/// way up, where a player that is gone has plainly died and only the window has not appeared yet.
+/// What is asked about here is the other way round — a player that is not there — and FFmpeg's
+/// player opens a file it cannot read, prints its complaint and exits well inside a second, so a
+/// third of that is a hundred times over the answer's own arrival. Past the give-up a player that
+/// is gone is a film watched to its end or a window the user closed, and neither is a file to step
+/// over.
+const PIN_PLAYER_GIVE_UP: Duration = Duration::from_secs(3);
+
+/// The file a pin is showing whose player died without ever drawing anything of it, if what is on
+/// screen now is such a file.
+///
+/// It is the question `pin_media_is_alive` asks from the other side: that one is whether what the
+/// pin is a window onto is still there, and this is whether what was there ever arrived. The two
+/// players fail in different ways and each is asked in its own terms. The engine takes a file it
+/// cannot draw and then hands over no frame of it — or reports an error and hands over nothing at
+/// all — which `failing_before_a_frame` is the whole of, and which already excludes a file that
+/// played and died afterwards. FFmpeg's player leaves no such record: it is either running or it
+/// is not, and all that says a file was refused rather than watched is that it is not running and
+/// has not been running long.
+///
+/// Which file it is is the pin's to say rather than the media's, for the reason written down where
+/// the kind is taken: the media's own lock is let go of before anything is asked about the player,
+/// because what a player's liveness is asked through reads the media. `player_started` is when
+/// the player behind what is on screen now was started, read here rather than asked of the player
+/// because a player that does not exist cannot say when it began.
+fn pin_media_failed_before_a_frame(player_started: Option<Instant>) -> Option<PathBuf> {
+    // The kind is taken in one look and the lock is let go of with the statement, before anything
+    // is asked *about* the answer — the reason `pin_media_is_alive` writes down at length.
+    let kind = CURRENT_MEDIA
+        .lock()
+        .ok()?
+        .as_ref()
+        .map(|media| media.media_type)?;
+
+    match kind {
+        // The file the engine is failing at, and it is this file: a pin is a window onto the file
+        // it is showing and not onto whatever session happens to be running.
+        MediaType::NativeVideo => video_player::failing_before_a_frame()
+            .filter(|path| pinned_path().as_deref() == Some(path.as_path())),
+        MediaType::Video => {
+            if is_video_process_running() {
+                return None;
+            }
+
+            player_started
+                .filter(|started| started.elapsed() < PIN_PLAYER_GIVE_UP)
+                .and_then(|_| pinned_path())
+        }
+        // Everything else a pin can be showing is either this app's own drawing or something with
+        // a wait of its own on being up, and a player that refused the file is not what those
+        // come apart over.
+        _ => None,
     }
 }
 
@@ -15021,10 +15132,17 @@ fn take_pin_engine_answer(
 /// same file would take; and a maximized window stays maximized, since a swap is not the gesture
 /// that takes it out of the state the user put it in.
 ///
-/// Three kinds are exceptions. A page of text and a listing keep the box exactly — they are
-/// measured against the room they are drawn in, not against a size the file holds — which is why a
-/// swap to one neither takes a bound nor gives one. A sound's card is given the box its own measure
-/// came out at, centred on the box the pin has now: the file before it left no size for a card.
+/// Four kinds are exceptions, and they are exceptions the same way. A page of text, a listing out
+/// of an archive, a page an engine draws and a sound's card hold no shape of their own: what sizes
+/// them is the room they are laid out in at the share their kind names — which is the answer a
+/// hover of the same file gives, and so the one `Scaling` names — and the box comes out centred on
+/// the box the pin has now rather than fitted into it. The bound is a size some other file came out
+/// at, and none of these four is drawn to that or fitted into it; the window keeps its place on the
+/// display and changes size about the middle of it, which is the only half of the promise a swap
+/// makes about where it stands that is kept.
+///
+/// Which is also why a swap to one neither takes a bound nor gives one: a box laid out in the room
+/// is a size the file was laid out at and no ceiling for the files after it.
 ///
 /// And a file whose box is still being read is not laid out at all: what the measure answered is
 /// the wait for a box rather than one, and a window made of it would be a square with the file's
@@ -15077,17 +15195,45 @@ fn pin_update_content(
         return Some(PinBox::Waiting);
     }
 
-    if pin_keeps_its_box(path) {
-        return Some(PinBox::Measured(space.current));
-    }
-
+    let scale = effective_preview_scale(path, current_hover_scales());
     let shape = media_dimensions(path, bounds, dpi)?;
 
-    // A box still being read is the same answer, reached the other way: the measure this call has
-    // just taken starts the read that settles it, so what the pin has of the new file is a wait to
-    // keep rather than a shape to lay out (see `pin_swap_awaits`).
+    // A box still being read is the wait for a box rather than one, whichever file it was asked
+    // for: the measure this call has just taken is what starts the read that settles it, so what
+    // the pin has of the new file is a wait to keep rather than a shape to lay out (see
+    // `pin_swap_awaits`).
     if pin_swap_awaits(path, shape) {
         return Some(PinBox::Waiting);
+    }
+
+    // A kind that holds no shape of its own — a page of text, a listing, a page an engine draws, a
+    // sound's card — is laid out in the room rather than fitted into the bound, at the share its
+    // kind names: which is the answer a hover of the same file is given, and so the one `Scaling`
+    // names. A bound is a size some *other* file came out at, and none of these four is drawn to
+    // that or fitted into it.
+    //
+    // The box it comes out with is centred on the box the pin occupies rather than fitted into the
+    // room it was laid out in, so the window keeps its place on the display the hand put it and
+    // only its size moves — the same answer a card is given, and for the same reason: a box fitted
+    // into the room is centred on the middle of the *screen* (see `pin_update_box`), which is a
+    // fresh placement rather than the one a swap promises.
+    //
+    // The maximize is left out of it deliberately, and not because a maximum cannot be given here:
+    // it is because these are already measured against this very room, so there is nothing left for
+    // it to add (see `pin_keeps_its_box`).
+    //
+    // The room is the pin's own, which is the one the file before this one left its chrome in. All
+    // four carry no transport bar and draw no chrome over their media, so what the file before it
+    // was decides only whether the room a picture left is a caption shorter than this one's — and
+    // which way that goes, every other swap in this file already measures the same way (see
+    // `pin_swap_room`).
+    if pin_keeps_its_box(path) {
+        let laid_out = pin_update_box(space.room.region(), shape, scale);
+
+        return Some(PinBox::Measured(centred_at(
+            (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1),
+            pin_swap_centre(space),
+        )));
     }
 
     if space.maximized {
@@ -15100,21 +15246,16 @@ fn pin_update_content(
         // Measured against the room every time, a walk of shapes is a window of the same
         // size showing something else — which is what every other swap in this file is for.
         return Some(PinBox::Measured(pin_update_box(
-            (
-                space.room.left,
-                space.room.top,
-                space.room.right,
-                space.room.bottom,
-            ),
+            space.room.region(),
             shape,
-            PreviewScale::FitToScreen,
+            scale,
         )));
     }
 
     Some(PinBox::Measured(pin_update_box(
         pin_swap_room(space, bounds, dpi),
         shape,
-        effective_preview_scale(path, current_hover_scales()),
+        scale,
     )))
 }
 
@@ -15159,10 +15300,6 @@ fn pin_swap_room(space: PinSwapSpace, bounds: ScreenBounds, dpi: u32) -> ScreenR
     let (room_width, room_height) =
         pinned_room(bounds, dpi, space.transport_bar, space.overlay).room();
     let (room_width, room_height) = (room_width.max(1) as i32, room_height.max(1) as i32);
-    let centre = (
-        (space.current.0 + space.current.2) / 2,
-        (space.current.1 + space.current.3) / 2,
-    );
 
     // The bound is the room's own ceiling, and a pin without one is left the whole of it — which
     // is what the file swapped into such a pin is scaled into, at the scale its kind names.
@@ -15171,7 +15308,21 @@ fn pin_swap_room(space: PinSwapSpace, bounds: ScreenBounds, dpi: u32) -> ScreenR
         None => (room_width, room_height),
     };
 
-    centred_at((width, height), centre)
+    centred_at((width, height), pin_swap_centre(space))
+}
+
+/// The middle of the box the pin occupies now: where a swap puts the box it comes out with, so a
+/// window the hand has moved keeps its place while it changes size.
+///
+/// Every file a swap lays out is centred here — one fitted into the bound as well as one laid out
+/// in the room — because that is the promise a swap makes about where it stands, and it is a
+/// promise about the middle rather than about a corner: a box whose top left stood still would walk
+/// its way across the display as its size changed (see `pin_update_content`).
+fn pin_swap_centre(space: PinSwapSpace) -> (i32, i32) {
+    (
+        (space.current.0 + space.current.2) / 2,
+        (space.current.1 + space.current.3) / 2,
+    )
 }
 
 /// The box a pinned window's media takes for another file's shape: the largest box of that shape
@@ -15195,14 +15346,19 @@ fn pin_update_box(room: ScreenRegion, shape: (u32, u32), scale: PreviewScale) ->
 }
 
 /// Whether a preview of this file is drawn to the box it is given rather than scaled into it by a
-/// shape of its own: a page of text, a listing this app or an engine reads out of an archive, and a
-/// sound's card are all measured against the room they are drawn in — there is no size in the file
-/// to take a shape from — and they are the kinds `media_dimensions` answers for itself rather than
-/// through the file's own dimensions (see `media_dimensions`).
+/// shape of its own: a page of text, a listing this app or an engine reads out of an archive, a page
+/// an engine draws, and a sound's card are all measured against the room they are drawn in — there
+/// is no size in the file to take a shape from — and they are the kinds `media_dimensions` answers
+/// for itself rather than through the file's own dimensions (see `media_dimensions`).
 ///
-/// A sound's card is asked of this for the bound alone: the box a swap gives a card is the one its
-/// own measure came out at rather than the box the pin has (see `pin_update_content`), and what the
-/// answer is for here is that a box the file was *drawn* to is no ceiling for the files after it.
+/// It decides two things about a swap, and they are the same thing said twice: the box the new
+/// file is laid out in is the display's whole room rather than the pin's bound, because a bound is
+/// a size some other file came out at and none of these is drawn to it or fitted into it; and the
+/// file neither takes a bound nor gives one, since a box laid out in the room is not a ceiling for
+/// the files after it (see `pin_update_content` and `pin_bound_after`).
+///
+/// A sound's card is here for the second of those only, as it was: the box a swap gives a card is
+/// the one its own measure came out at rather than the box the pin has (see `pin_update_content`).
 fn pin_keeps_its_box(path: &Path) -> bool {
     // Asked of the content, with the entry read before the lock rather than the whole
     // configuration copied out of it: the take-up that asks this one is a take-up that must
@@ -15456,6 +15612,28 @@ impl PinLoad {
             update,
             answer,
             walk,
+        }
+    }
+
+    /// A load that has already answered, for the mark a file that could not be shown is drawn as.
+    ///
+    /// The channel is the one every load answers on, and it is answered before the load is
+    /// handed over rather than by a thread: there is no read and no decode behind a cross, so a
+    /// thread would be a wait for nothing, and `take_pin_load` reads the answer with `try_recv` —
+    /// which is what makes this one taken up on the tick it is queued on (see `show_pin_failure`).
+    fn answered(path: &Path, update: PinUpdate) -> Self {
+        let (answer, answers) = channel();
+        let _ = answer.send(Some(unplayable_media((
+            (update.content.2 - update.content.0).max(1) as u32,
+            (update.content.3 - update.content.1).max(1) as u32,
+        ))));
+
+        PinLoad {
+            path: path.to_path_buf(),
+            arc: PinArc::new(),
+            update,
+            answer: answers,
+            walk: None,
         }
     }
 }
@@ -16230,6 +16408,7 @@ fn pin_command_request(
     audio_started: &mut Option<Instant>,
     audio_start_offset: &mut f64,
     audio_paused: &mut Option<f64>,
+    navigating: bool,
 ) -> Option<PinStep> {
     let step = match take_pin_command() {
         Some(PinCommand::Close) => {
@@ -16260,7 +16439,7 @@ fn pin_command_request(
     // The thing the pin is a window onto came apart: the player's process is gone, or the engine
     // took a document and never drew it. This is the half of "until it is closed, or it comes
     // apart" that is not a button (see `pin_media_is_alive`).
-    if !pin_media_is_alive() {
+    if !pin_media_is_alive(navigating) {
         *request = Some(end_pin_state(Reason::MediaGone));
     }
 
@@ -16574,25 +16753,125 @@ pub(crate) enum PinPlanned {
     OpenWith { path: PathBuf, name: String },
 }
 
-/// Carry a walk on past a file the pin could not be shown, putting it back where the loop holds
-/// it with the next file of the list standing under it.
+/// Put the pin on its next file after one it could not be shown, and say where that is.
 ///
-/// It is put back rather than spent here, and that is the whole of what makes a walk more than
-/// one file: the file it lands on next is picked up on a tick of its own, and a walk dropped
-/// after the first file it could not show is a walk of one — which is the navigation stopping on
-/// a corrupted file with the button still pressed.
+/// A walk is put back where the loop holds it, with the next file of the list standing under it,
+/// and that is the whole of what makes a walk more than one file: the file it lands on next is
+/// picked up on a tick of its own, and a walk dropped after the first file it could not show is a
+/// walk of one — which is the navigation stopping on a corrupted file with the button still
+/// pressed. The list wraps (see `pin_navigation::step_to`) and the walk's budget bounds it, so a
+/// walk put back is a walk that ends rather than one that goes round for ever (see
+/// `walk_budget`).
 ///
-/// Nothing is put back where the walk has run out: a folder of nothing this app can show is a
-/// walk that ends, and the pin keeps what it was showing, which is the only answer there is for a
-/// window that is already up (see `PinStep`).
-fn step_pin_over(walk: Option<PinStep>, held: &mut Option<PinStep>) {
-    let Some(mut walk) = walk else {
-        return;
+/// Where the walk has run out — or where the failure had no walk to begin with, which is what a
+/// file a pick in the listing failed at is — nothing is queued. Navigation moves forward only, and
+/// that is the whole of the rule: a walk that had fallen back to the file before it would have
+/// been walked back to where it came from, so a folder with one corrupted file in it could not be
+/// got past by pressing **Next** at all. A file that cannot be shown is stepped over; a file that
+/// was working is not something to step back onto.
+///
+/// Which is what leaves the placeholder: with nothing queued there is nowhere to step to, and a
+/// window with nothing to show is a window that comes apart. So the file that failed is shown as
+/// the cross instead — the window stays up, says so about the file it could not draw, and the
+/// walk is free to start again from wherever the user presses next (see `show_pin_failure`).
+fn pin_step_off(walk: Option<PinStep>, held: &mut Option<PinStep>) {
+    if let Some(mut walk) = walk {
+        if walk.step().is_some() {
+            *held = Some(walk);
+        }
+    }
+}
+
+/// The side a failed file is shown at, in pixels: the shape the cross is drawn in and the box a
+/// pin is given for it.
+///
+/// It is its own size rather than the shape of the file that failed, for two reasons. The file's
+/// own shape is not knowable — a corrupted container has whatever the header claims, and a header
+/// that survived is exactly what a file nobody can play usually has — and a window the size of a
+/// 4K frame with a cross in the middle of it is a window that has to be dragged to be read. And a
+/// square is a shape the pin can be given whatever the pin's bound is, so installing it never
+/// depends on measuring the file, which is the measurement that cannot be trusted here.
+const PIN_FAILURE_SIDE: u32 = 128;
+
+/// The mark a failed file is shown as, as a frame of a preview.
+///
+/// It is built rather than loaded, and that is the whole of what it is for: there is no picture
+/// of a file that could not be shown, so anything that came out of a decoder would be a
+/// fabrication. Which also settles the cache question — a frame handed in here never goes near
+/// the image cache, so the next visit to a file that has since been fixed re-renders the file
+/// rather than painting the cross over a picture that is now there (see `load_static_image`).
+fn unplayable_media(size: (u32, u32)) -> MediaData {
+    let (width, height) = (size.0.max(1), size.1.max(1));
+    let mut pixels = vec![0u8; width as usize * height as usize * 4];
+
+    // No palette is a mark with no ink, which is the same answer the chrome gives everywhere else
+    // it is asked for one and cannot read a theme: nothing is painted, and the frame is the
+    // tray's own backdrop showing through it. The bundled themes make this unreachable in
+    // practice, and a wrong guess of a colour would be worse than none (see `ChromePalette`).
+    if let Some(palette) = pin_chrome::ChromePalette::current() {
+        pin_chrome::paint_failure_mark(&mut pixels, width, height, &palette);
+    }
+
+    static_image_media(
+        Arc::new(ImageFrame::new(pixels, width, height, 0)),
+        MediaType::Unplayable,
+    )
+}
+
+/// The plan a pin is given the mark for a file it could not draw: the square of
+/// `PIN_FAILURE_SIDE`, fitted into the pin's own room and centred on the box the pin has now.
+///
+/// It is the same room every other swap is fitted into and at `Percent(100)` rather than
+/// `FitToScreen`, which is the one place the two differ and matters: fitted to the screen, a
+/// mark this small would be blown up to the size of the display, and a cross across the whole
+/// screen is not a thing anyone is meant to read. A room smaller than the mark clamps it, which
+/// is the ordinary rule (see `pin_swap_room` and `pinned_media_box`).
+fn pin_failure_plan() -> Option<PinUpdate> {
+    let (space, volume, collapsed) = {
+        let state = pin_state()?;
+        let pin = state.pin()?;
+        (pin_swap_space(pin), pin.volume.level, pin.collapsed)
     };
 
-    if walk.step().is_some() {
-        *held = Some(walk);
+    // A bubble has no window to show the mark in, and a pin that is collapsed is one about to
+    // be restored on a file the user picked (see `pin_bubble_pick`).
+    if collapsed {
+        return None;
     }
+
+    let dpi = dpi_at(space.current.0, space.current.1);
+    let bounds = work_area_at(space.current.0, space.current.1);
+
+    Some(PinUpdate {
+        content: pin_update_box(
+            pin_swap_room(space, bounds, dpi),
+            (PIN_FAILURE_SIDE, PIN_FAILURE_SIDE),
+            PreviewScale::Percent(100),
+        ),
+        dpi,
+        volume,
+    })
+}
+
+/// Hand the pin the mark for a file it could not draw, in the slot every other swap's file is
+/// handed in, and say whether it was.
+///
+/// It is a load rather than an installation, which is the whole of the design: everything a swap
+/// has to do to the window — end the player the dead file had, take a browser down, work out the
+/// chrome, put the window up at a new box, write down the file on screen — is the same work for
+/// a cross as for a picture, and re-doing it here would be a second copy of the take-up that
+/// drifts from the first (see `take_pin_load`). The load is answered before it is handed over,
+/// because there is nothing to read and nothing to decode, so it is taken up on the very tick
+/// that noticed the failure rather than a tick later — which matters, because the tick that
+/// notices is the tick `pin_command_request` asks on the same breath whether the pin is still
+/// there, and it is asked while the media is still the dead file's own.
+fn show_pin_failure(path: &Path, pin_load: &mut Option<PinLoad>) -> bool {
+    let Some(update) = pin_failure_plan() else {
+        return false;
+    };
+
+    *pin_load = Some(PinLoad::answered(path, update));
+    true
 }
 
 /// Whether the pin key brings a bubble back, from the two facts that make the question askable.
@@ -19645,6 +19924,17 @@ pub fn run_preview_window() {
         // asked for on a tick of its own, with the walk carried onto it. What the walk stands
         // on is the file to be shown next (see `PinStep`).
         let mut pin_walk: Option<PinStep> = None;
+        // The walk whose file is the one on screen now, kept so that a failure has something to
+        // step on: `PinLoad` spends the walk that made the file it loaded, and an engine that
+        // takes the file and then never draws a frame of it says so a tick or three later, long
+        // after the walk that reached it is gone. Without this a corrupted film ends the walk
+        // rather than the walk stepping past it (see `pin_step_off`).
+        let mut pin_walk_of_current: Option<PinStep> = None;
+        // When FFmpeg's player behind the file the pin is showing now was started, which is what
+        // says a player that is gone was one that refused the file rather than one that was
+        // watched to its end or closed by the user. `None` for every other kind, and for a pin
+        // that is not up (see `pin_media_failed_before_a_frame`).
+        let mut pin_player_started: Option<Instant> = None;
         // A walk the planner is reading the folder for, and the wait it is. It is held here
         // rather than inside a tick for the same reason a load is: the read is on another
         // thread, so the question is still out when this tick ends and the answer to it
@@ -19869,6 +20159,41 @@ pub fn run_preview_window() {
                 // drag (see `Carry`).
                 carried_preview_messages.extend(carry_pin_drag_with_the_hand(hwnd, &rx));
 
+                // A file the pin was shown and its player cannot draw is not a pin that
+                // came apart — it is a pin that is about to be shown something else, and the
+                // step off is queued here rather than left to the next tick so that the
+                // `navigating` flag below is true while the command that runs there asks
+                // whether the pin is still there. Read after the drag and the carry, because a
+                // file the engine failed at is one this app has already been told about and
+                // nothing on this thread's channel is going to say so.
+                if let Some(failing) = pin_media_failed_before_a_frame(pin_player_started) {
+                    // The file is written down before anything is stepped over, or the
+                    // next visit routes it to the engine again and fails there again for
+                    // as long as the pin is up (see `video_player::mark_unplayable`). And
+                    // the hover's own flag goes with it: under a pin nothing replays a
+                    // hover from it, so it would only sit there being true about a file
+                    // this tick has already dealt with.
+                    video_player::mark_unplayable(&failing);
+                    engine_failed = None;
+
+                    pin_step_off(pin_walk_of_current.take(), &mut pin_walk);
+
+                    // And where the walk has nothing left to offer, the mark for the file is
+                    // what is shown instead of nothing being queued: a window with no file in
+                    // it is a window that comes apart, and this file did not come apart — it
+                    // came back from a player. The load is answered before it is handed over,
+                    // so it is taken up on this tick rather than the next (see
+                    // `show_pin_failure`).
+                    //
+                    // Not where something else is already on its way, which is the one
+                    // condition: a load in hand is a read and a decode that have not been paid
+                    // for yet, and putting the mark over it would throw that work away for a
+                    // window that is about to be shown the file it was for.
+                    if pin_walk.is_none() && pin_load.is_none() {
+                        show_pin_failure(&failing, &mut pin_load);
+                    }
+                }
+
                 // A step the caption's own walk buttons took is a pick like any other, and is
                 // held in the walk rather than in the pick slot: the file it stands on is the
                 // file to be shown, and the walk is what carries it on when that file turns out
@@ -19877,12 +20202,23 @@ pub fn run_preview_window() {
                 // than a walk — the walk arrives as its own answer (see `step_pinned_file`).
                 // A key a pinned window was given is answered here too, because the player it
                 // acts on is this thread's.
+                //
+                // Whether the pin is still there is asked with `navigating` true wherever a
+                // next file is already in hand, because a swap that has been refused leaves
+                // nothing behind the window and the player behind that nothing is not a player
+                // that has gone (see `pin_media_is_alive`). The mark is a load, so it is in
+                // there for the one tick it is in hand; the tick after it, the media answers
+                // for itself (see `MediaType::Unplayable`).
                 if let Some(walk) = pin_command_request(
                     &mut pin_request,
                     &mut pin_walk_wait,
                     &mut audio_started,
                     &mut audio_start_offset,
                     &mut audio_paused,
+                    pin_walk.is_some()
+                        || pin_load.is_some()
+                        || pin_awaiting_box.is_some()
+                        || pin_held_pick.is_some(),
                 ) {
                     pin_walk = Some(walk);
                 }
@@ -21502,6 +21838,11 @@ pub fn run_preview_window() {
                 // belongs to the window it was pressed on, and the pin that follows is shown
                 // whatever the user picks rather than the rest of a walk behind it.
                 pin_walk = None;
+                // And so is the walk that made the file it ended up showing: it is about a
+                // window that is gone, and a pin taken up later is shown the file the user
+                // names rather than the rest of a walk behind it (see `pin_step_off`).
+                pin_walk_of_current = None;
+                pin_player_started = None;
                 // And the walk it was reading the folder for is a wait on a window that is
                 // gone: it is not waited for, and the arc it may have put up goes down with
                 // it (see `PinWait`).
@@ -21528,6 +21869,12 @@ pub fn run_preview_window() {
                 // stopped at. A pick from the listing is a file the user named, and has no
                 // walk to carry on from (see `PinStep`).
                 let walk = pin_walk.take();
+                // And with no walk behind it there is no walk standing on what is on screen, so
+                // a failure on this file has nothing to step onto and the mark is what the pin
+                // is left standing over.
+                if walk.is_none() {
+                    pin_walk_of_current = None;
+                }
                 // Whatever was loading is a load for a file nobody is asking for any more, and
                 // the answer it lands with is dropped with it: what the pin shows next is
                 // planned here, for this file, and taking up an answer for another one would
@@ -21643,7 +21990,14 @@ pub fn run_preview_window() {
                             // A file the pin cannot be shown is stepped over rather than stopped
                             // at: one press of a caption button is one gesture, and the gesture
                             // is the next file there is to look at (see `PinStep`).
-                            step_pin_over(walk, &mut pin_walk);
+                            //
+                            // The mark is not put up for it. Nothing has failed here — the pin was
+                            // never shown this file, and the one it is showing is still on screen
+                            // and still good — so a cross would be drawn over a picture that is
+                            // working, in answer to a file the user is not looking at. What the
+                            // walk runs out on is the other case, and the mark is the answer to
+                            // that (see `show_pin_failure`).
+                            pin_step_off(walk, &mut pin_walk);
                         }
                     }
                 }
@@ -21676,6 +22030,14 @@ pub fn run_preview_window() {
                 });
 
                 if let Some((media, audio)) = swapped {
+                    // The walk that made the file now on screen is kept rather than spent
+                    // with the load: `PinLoad` hands it over for a swap that fails at the
+                    // plan, and an engine that takes this file and then never draws a frame
+                    // of it says so a tick or three from here, with nothing left to step on.
+                    // A pick that was not a walk's arms no walk, which is the same answer
+                    // (see `pin_step_off`).
+                    pin_walk_of_current = walk;
+
                     // A volume popup floating over the media belongs to the box it was
                     // opened over, and that box has just been given another file: it is put
                     // away rather than left where the hand left it (see the box change
@@ -21720,6 +22082,11 @@ pub fn run_preview_window() {
                         MediaType::Video => Some(path.clone()),
                         _ => None,
                     };
+                    // When the player behind what is on screen now was started, which is what
+                    // tells a player that is gone from a file that refused it rather than from
+                    // a film that ended or a window the user closed (see
+                    // `pin_media_failed_before_a_frame`).
+                    pin_player_started = (media.media_type == MediaType::Video).then(Instant::now);
 
                     if let Ok(mut current) = CURRENT_MEDIA.lock() {
                         *current = Some(media);
@@ -21743,8 +22110,13 @@ pub fn run_preview_window() {
                 } else {
                     // A file this app cannot read, a file still in the cloud, a player that
                     // would not start: nothing of it to show, so the walk is asked for the
-                    // next file rather than left on one that cannot be shown.
-                    step_pin_over(walk, &mut pin_walk);
+                    // next file rather than left on one that cannot be shown — and where the
+                    // walk has nothing left to ask for, the mark for the file is what the pin
+                    // is left standing over (see `pin_step_off` and `show_pin_failure`).
+                    pin_step_off(walk, &mut pin_walk);
+                    if pin_walk.is_none() && pin_load.is_none() {
+                        show_pin_failure(&path, &mut pin_load);
+                    }
                 }
             }
 
@@ -29636,11 +30008,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
     }
 
-    /// And the kinds that *are* drawn to their box keep it, which is what the rule above would take
-    /// from them if it were asked of everything: a page of text is measured against the room it is
-    /// drawn in, and the pin's own box is the room it is being read in (see `pin_keeps_its_box`).
+    /// A file drawn to whatever box it is given is laid out in the room rather than fitted into the
+    /// bound, which is what a sound's card is already given: the bound is a size some *other* file
+    /// came out at, and neither a page of text nor a card is drawn to that or fitted into it. The
+    /// window keeps the place it stands on the display and only its size changes about the middle of
+    /// it (see `pin_keeps_its_box`).
     #[test]
-    fn a_text_file_picked_into_a_pin_keeps_the_box_it_has() {
+    fn a_text_file_picked_into_a_pin_is_laid_out_in_the_room_and_not_fitted_into_the_bound() {
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-text");
         std::fs::create_dir_all(&folder).expect("a test folder");
         let path = folder.join("notes.txt");
@@ -29652,19 +30026,56 @@ mod tests {
             right: 1920,
             bottom: 1080,
         };
-        let space = PinSwapSpace {
+        let space = |bound| PinSwapSpace {
             current: (760, 440, 1160, 640),
-            bound: Some(400),
+            bound,
             transport_bar: false,
             overlay: false,
             maximized: false,
             room: bounds,
         };
 
+        let laid_out = |bound| {
+            let Some(PinBox::Measured(laid_out)) =
+                pin_update_content(space(bound), &path, bounds, 96)
+            else {
+                panic!("a page of text was not laid out");
+            };
+            laid_out
+        };
+
+        // The bound of the file before it is no ceiling for this one, and what says so is that the
+        // box comes out the same whatever that bound is: a page of text is measured against the
+        // room it is drawn in, so the number a picture left behind has nothing to say about it.
+        // Under the bound it would have been fitted into, the two boxes below differ by all of it.
+        let small = laid_out(Some(400));
+        let large = laid_out(Some(1600));
+
         assert_eq!(
-            pin_update_content(space, &path, bounds, 96),
-            Some(PinBox::Measured(space.current))
+            small, large,
+            "the box the file before it left was used as the ceiling for a page of text anyway"
         );
+        assert_ne!(
+            small,
+            space(Some(400)).current,
+            "the page kept the box the pin already had rather than being laid out for itself"
+        );
+
+        // The middle is the pin's own: a window the hand has moved keeps its place on the display
+        // while it changes size about it.
+        assert_eq!(
+            (small.0 + small.2) / 2,
+            (space(None).current.0 + space(None).current.2) / 2,
+            "the window moved off the place it stood rather than changing size about its middle"
+        );
+        assert_eq!(
+            (small.1 + small.3) / 2,
+            (space(None).current.1 + space(None).current.3) / 2
+        );
+
+        // And it neither takes a bound nor gives one: a box laid out in the room is a size the file
+        // was drawn to and no ceiling for the files after it (see `pin_bound_after`).
+        assert_eq!(pin_bound_after(None, true, small), None);
 
         let _ = std::fs::remove_dir_all(&folder);
     }
@@ -30516,7 +30927,7 @@ mod tests {
 
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(pin_media_is_alive());
+            let _ = sender.send(pin_media_is_alive(false));
         });
 
         let answer = receiver.recv_timeout(Duration::from_secs(5)).expect(
@@ -30525,8 +30936,74 @@ mod tests {
         );
         assert!(!answer, "a video with no player behind it is not alive");
 
+        // And the same question asked of the same player while a next file is already in hand
+        // has the other answer: nothing is running because a swap was asked for, and a pin that
+        // is on its way to being shown something else is not a window onto nothing.
+        assert!(
+            pin_media_is_alive(true),
+            "a pin already being shown another file is not a pin that came apart"
+        );
+
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous;
+        }
+    }
+
+    /// a pinned film the media engine took and then failed at, with the walk that steps /// over it already queued.
+    ///
+    /// This is the case the liveness close was wrong about: the swap that reached the file
+    /// emptied the media slot before it knew the engine would take it, so the player being gone
+    /// is what this app asked for rather than a window onto nothing — and reading it the other
+    /// way took the window down a tick before the queued walk could be taken up.
+    #[test]
+    fn a_pinned_film_the_engine_failed_at_is_stepped_over_rather_than_closed() {
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = take_pin_for_a_test();
+
+        let mut film = create_loading_media(8, 8);
+        film.media_type = MediaType::NativeVideo;
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(film);
+        }
+
+        let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
+        pin.path = PathBuf::from("C:\\folder\\broken.mp4");
+        stand_pin(Some(pin));
+
+        // The loop's own flag, from the four slots that mean a next file is already pending. The
+        // walk is the one that matters here: the tick that finds the failure out queues it here,
+        // and `pin_command_request` asks whether the pin is still there on the very next tick.
+        let walk: Option<PinStep> = Some(PinStep {
+            at: PathBuf::from("C:\\folder\\next.mp4"),
+            from: PathBuf::from("C:\\folder\\broken.mp4"),
+            step: 1,
+            left: 1,
+            list: vec![
+                PathBuf::from("C:\\folder\\broken.mp4"),
+                PathBuf::from("C:\\folder\\next.mp4"),
+            ],
+        });
+        let load: Option<PinLoad> = None;
+        let awaiting_box: Option<PathBuf> = None;
+        let held_pick: Option<PathBuf> = None;
+
+        assert!(
+            !pin_media_is_alive(false),
+            "a film the engine is failing at, with nothing queued to replace it, is still a pin \
+             that has come apart: this is the close that stays"
+        );
+        assert!(
+            pin_media_is_alive(
+                walk.is_some() || load.is_some() || awaiting_box.is_some() || held_pick.is_some()
+            ),
+            "and the same film with the walk queued is not a pin that came apart: the player is \
+             gone because the pin is on its way to being shown something else, so the walk gets \
+             to be taken up rather than the window coming down under it"
+        );
+
+        stand_pin(previous_pin);
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
         }
     }
 
@@ -30558,7 +31035,7 @@ mod tests {
         // The browser is coming up for this document: the engine owes it, and no window exists yet.
         webview_preview::publish_want_for_test(&path);
         assert!(
-            pin_media_is_alive(),
+            pin_media_is_alive(false),
             "a browser that is coming up is the thing the pin is a window onto"
         );
 
@@ -30566,7 +31043,7 @@ mod tests {
         // comes down.
         webview_preview::clear_want_for_test();
         assert!(
-            !pin_media_is_alive(),
+            !pin_media_is_alive(false),
             "a document the engine no longer owes and no window shows is a window onto nothing"
         );
 
@@ -30595,13 +31072,13 @@ mod tests {
         stand_pin(Some(pin));
 
         assert!(
-            pin_media_is_alive(),
+            pin_media_is_alive(false),
             "the player is parked rather than gone: the pin is a bubble standing for it"
         );
 
         update_pin_bubble_pause(None);
         assert!(
-            !pin_media_is_alive(),
+            !pin_media_is_alive(false),
             "and a video whose player is simply gone is what it always was"
         );
 
@@ -30633,7 +31110,7 @@ mod tests {
         stand_pin(Some(pin));
 
         assert!(
-            pin_media_is_alive(),
+            pin_media_is_alive(false),
             "a card is this app's own text: a player between two passes is not a window onto \
              nothing, and taking the window down for it closed a looping sound at the end of \
              every pass"
@@ -30751,9 +31228,11 @@ mod tests {
             list: vec![folder.join("a.png"), folder.join("b.png")],
         };
 
-        step_pin_over(Some(walk), &mut held);
+        pin_step_off(Some(walk), &mut held);
 
-        let walk = held.expect("the walk is handed back rather than spent");
+        let walk = held
+            .clone()
+            .expect("the walk is handed back rather than spent");
         assert_eq!(
             walk.at,
             folder.join("b.png"),
@@ -30761,16 +31240,276 @@ mod tests {
         );
 
         // And a walk that has nothing left is not held: a folder of files this app cannot show
-        // is a walk that ends rather than one that goes for ever.
+        // is a walk that ends rather than one that goes for ever, and nothing is queued in its
+        // place — which is what the mark for the file it stopped on is for.
         let mut spent: Option<PinStep> = None;
-        step_pin_over(Some(walk), &mut spent);
+        pin_step_off(Some(walk), &mut spent);
         assert!(
             spent.is_none(),
             "the walk that has run out of files is not held, so nothing is asked for again"
         );
+
+        // And so is a failure that had no walk to begin with: a file a pick in the listing
+        // failed at, which is the same case with nothing to step from. Nothing is queued, and
+        // what a pin is left standing over is the mark rather than the file it came from — the
+        // file before a pin is on screen is not somewhere the walk goes *back* to (see
+        // `show_pin_failure`).
+        let mut none_left: Option<PinStep> = None;
+        pin_step_off(None, &mut none_left);
+        assert!(
+            none_left.is_none(),
+            "a failure with no walk under it queues nothing: navigation moves forward only, so a \
+             folder with one broken file in it can be walked past with Next"
+        );
     }
 
-    /// the arc a pinned window waits with, and when it is put up.
+    /// a file the pin could not draw is shown as the mark rather than as the file it /// came from, and the mark is a live kind.
+    #[test]
+    fn a_failed_file_with_nowhere_to_step_to_is_left_standing_as_the_mark() {
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = take_pin_for_a_test();
+
+        let broken = PathBuf::from("C:\\folder\\broken.mp4");
+        let mut pin = overlay_pin((0, 0, 320, 240), PinChrome::always());
+        pin.path = broken.clone();
+        stand_pin(Some(pin));
+
+        // The mark itself, drawn against a palette of its own rather than the one this run
+        // happens to be reading: a cross over an empty buffer would pass the liveness read below
+        // and show nothing at all, which is the one way this could be wrong with every other
+        // assertion here still green.
+        let palette = pin_chrome::ChromePalette {
+            background: [10, 20, 30],
+            foreground: [240, 240, 240],
+            accent: [0, 0, 0],
+            dark: true,
+        };
+        let mut pixels = vec![0u8; 128 * 128 * 4];
+        pin_chrome::paint_failure_mark(&mut pixels, 128, 128, &palette);
+
+        assert_eq!(
+            pixels.len(),
+            128 * 128 * 4,
+            "a 128 by 128 mark is a whole bitmap and not a quarter of one"
+        );
+        assert!(
+            pixels.chunks(4).all(|pixel| pixel[3] == 255),
+            "every pixel of it is written, so it is a surface the pin's own compositor may copy \
+             rather than blend, and the tray's backdrop is never seen through it"
+        );
+        let panel = [30u8, 20, 10, 255];
+        let ink = [240u8, 240, 240, 255];
+        let painted = pixels.chunks(4).filter(|pixel| **pixel == ink).count();
+        assert!(
+            painted > 0 && painted < pixels.len() / 4,
+            "and something is drawn on the panel in the theme's ink: a cross fills part of it \
+             rather than all of it, and a flat panel says nothing at all about the file that \
+             failed"
+        );
+        assert!(
+            pixels
+                .chunks(4)
+                .all(|pixel| *pixel == panel || *pixel == ink),
+            "and the two of them are the only colours in it, so the cross has an edge rather \
+             than a blend into whatever was behind it"
+        );
+        // Two strokes crossing, which is the whole of what the mark is. A row through the middle
+        // carries both strokes and so does a row well above and below it: a bar or a ring would
+        // carry one at the middle and none at the edges, and a single diagonal would carry one at
+        // the top left and none at the bottom right.
+        let row = |y: usize| {
+            pixels
+                .chunks(4)
+                .skip(y * 128)
+                .take(128)
+                .filter(|pixel| **pixel == ink)
+                .count()
+        };
+        assert!(
+            row(64) >= 8,
+            "the middle of the mark is where the strokes cross"
+        );
+        assert!(
+            row(32) >= 8 && row(96) >= 8,
+            "and the strokes reach out towards all four corners of the panel, which is what says \
+             *could not be shown* rather than *empty*"
+        );
+
+        // The media that mark becomes: a square of its own, and not the shape of a file whose
+        // header survived.
+        let media = unplayable_media((PIN_FAILURE_SIDE, PIN_FAILURE_SIDE));
+        assert_eq!(
+            (media.current_width(), media.current_height()),
+            (PIN_FAILURE_SIDE, PIN_FAILURE_SIDE),
+            "the mark is the shape the pin is given, so installing it never depends on measuring \
+             a file whose measurement is what cannot be trusted"
+        );
+
+        // A mark on screen is a frame this app holds, so the liveness read — which is what
+        // closed a pin put straight onto a corrupted file — has to find it alive with nothing
+        // queued behind it.
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(media);
+        }
+        assert!(
+            pin_media_is_alive(false),
+            "a window with the mark in it is a window with something in it: a file that fails and \
+             has nowhere to step to is shown, not closed"
+        );
+
+        // Which is a property of the kind and not of the media's pixels: an engine kind, a film
+        // and a sound each answer the question in their own terms, and a mark is not one of those
+        // — nothing outside this thread can take a cross away.
+        assert!(
+            pin_media_failed_before_a_frame(None).is_none(),
+            "and the mark is not a failure a second time, so it is not stepped over or re-marked \
+             for ever"
+        );
+
+        // And the whole of how it gets there: a load that has already answered, so that nothing
+        // is waited for between the tick that notices the failure and the tick that shows it.
+        let mut load: Option<PinLoad> = None;
+        assert!(
+            show_pin_failure(&broken, &mut load),
+            "a pin that is up is given the mark"
+        );
+        let answer =
+            take_pin_load(&mut load).expect("the mark's load is answered before it is handed over");
+        assert_eq!(
+            answer.path, broken,
+            "for the file that failed, and not for any other"
+        );
+        assert!(
+            answer.walk.is_none(),
+            "and it is not a step of a walk, there being none to step"
+        );
+        let answer = answer.media.expect("a mark is always a frame");
+        assert_eq!(
+            answer.media_type,
+            MediaType::Unplayable,
+            "of the kind that reads as alive"
+        );
+        assert!(
+            !answer.is_streaming(),
+            "and it is not something still being decoded: a cross this app drew is not queued"
+        );
+
+        stand_pin(previous_pin);
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
+    }
+
+    /// the mark behind a bubble, and behind a pin that has come apart for some other /// reason, is still a kind this app draws.
+    #[test]
+    fn the_mark_is_drawn_wherever_a_frame_is() {
+        assert!(
+            MediaType::Unplayable.has_bubble_picture(),
+            "a bubble collapsed over a file that failed shows the failure, not a mark standing in \
+             for a picture that is not there"
+        );
+        assert_eq!(
+            MediaType::Unplayable.kind(),
+            None,
+            "and it is behind no preview gate: a window already standing over a file it could \
+             not draw does not become hideable the moment the user hides films"
+        );
+        assert_eq!(
+            pin_frame(Some(MediaType::Unplayable)),
+            PinFrame::Shaped,
+            "a square of its own is a shape a window scales both sides of"
+        );
+        assert!(
+            !pin_transport_kind(Some(MediaType::Unplayable)),
+            "and there is nothing playing behind it, so there is no bar to carry a playhead"
+        );
+    }
+
+    /// the short-circuit that keeps a pin up while it is being shown another file, over every /// kind there is — including the new one.
+    ///
+    /// It is asked here for every kind rather than for the one it was written for because the
+    /// kinds it is a short-circuit *over* are the whole of it: `NativeVideo`, `Video` and the
+    /// two the engine draws all answer "gone" on this machine, with no player running and no
+    /// browser standing, and a kind that answers "gone" wrongly is the defect this rule exists
+    /// to prevent. Every other kind answers "there" either way, so listing them is what makes
+    /// the four above it a real answer rather than an accident of where they are written.
+    #[test]
+    fn a_pin_being_shown_another_file_is_alive_whatever_is_on_screen() {
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = take_pin_for_a_test();
+
+        let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
+        pin.path = PathBuf::from("C:\\folder\\whatever.mp4");
+        stand_pin(Some(pin));
+
+        for media_type in [
+            MediaType::StaticImage,
+            MediaType::Dds,
+            MediaType::EngineSvg,
+            MediaType::EngineFont,
+            MediaType::AnimatedGif,
+            MediaType::AnimatedApng,
+            MediaType::AnimatedWebP,
+            MediaType::AnimatedHeif,
+            MediaType::AnimatedJxl,
+            MediaType::Video,
+            MediaType::NativeVideo,
+            MediaType::Audio,
+            MediaType::Pdf,
+            MediaType::Text,
+            MediaType::Archive,
+            MediaType::Peazip,
+            MediaType::Office,
+            MediaType::Design,
+            MediaType::Vector,
+            MediaType::Libre,
+            MediaType::Magick,
+            MediaType::Calibre,
+            MediaType::Comic,
+            MediaType::Unplayable,
+            MediaType::Loading,
+        ] {
+            let mut media = create_loading_media(8, 8);
+            media.media_type = media_type;
+            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                *current = Some(media);
+            }
+
+            assert!(
+                pin_media_is_alive(true),
+                "{media_type:?} with a next file already in hand is a pin with something to be a \
+                 window onto, whatever is behind it right now"
+            );
+        }
+
+        // And the four that make the rule worth anything: asked without a next file in hand,
+        // each of them says the player or the engine behind it has gone, which is what the
+        // short-circuit is there to overrule.
+        for media_type in [
+            MediaType::EngineSvg,
+            MediaType::EngineFont,
+            MediaType::Video,
+            MediaType::NativeVideo,
+        ] {
+            let mut media = create_loading_media(8, 8);
+            media.media_type = media_type;
+            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                *current = Some(media);
+            }
+
+            assert!(
+                !pin_media_is_alive(false),
+                "{media_type:?} with nothing queued and no player or engine behind it really has \
+                 come apart: the answer above is the short-circuit and not the kind"
+            );
+        }
+
+        stand_pin(previous_pin);
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
+    }
+
     #[test]
     fn a_pin_wait_puts_its_arc_up_only_once_it_has_outlasted_the_delay() {
         let mut load = PinLoad {
