@@ -24,20 +24,20 @@
 //! still a separate question: it is about the machine and the run rather than about the file,
 //! and it costs a registry lookup per engine.
 //!
-//! The lists themselves are not here: they are `config.ini`'s, and which names each one holds
-//! is the user's to edit. What this module owns is the *order* they are asked in, and what
-//! each kind is drawn by — see [`chain`]. A name that sits in two lists is settled by that
-//! order rather than by the name, which is why the order has one author.
+//! Which names each list holds is not written here either: it is `config.ini`'s, it is the user's
+//! to edit, and it is a row of [`crate::formats::lists`] — one table every kind's list is a row
+//! of, keyed by the section the file writes it under. Every claim below reads its list as that
+//! row rather than as a field of the configuration, which is what makes the table the one owner of
+//! a list rather than one of two places it is written down: a kind's names are the row's, and what
+//! this module owns is the *order* the rows are asked in and what each kind is drawn by — see
+//! [`chain`]. A name that sits in two lists is settled by that order rather than by the name,
+//! which is why the order has one author.
 
 use crate::config::config::{AppConfig, PreviewType, TransparentBackground};
 use crate::engines::{
     calibre_render, imagemagick_render, libreoffice_render, peazip_render, webview_preview,
 };
-use crate::formats::{
-    archive_formats, audio_formats, calibre_formats, codecs, design_formats, ebook_formats,
-    font_formats, image_formats, libre_formats, magick_formats, native_formats::NativeJob,
-    office_formats, peazip_formats, text_formats, vector_formats, video_formats,
-};
+use crate::formats::{audio_formats, codecs, lists, native_formats::NativeJob, office_formats, video_formats};
 use crate::readers::pdf_preview;
 use crate::readers::svg_preview;
 use std::path::Path;
@@ -544,7 +544,7 @@ fn claim_audio(
     _asked: Asked,
     entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    let named = audio_formats::matches_audio_list(path, &config.audio_extensions);
+    let named = lists::AUDIO.claims(path, config);
     // Of the key the walk already has where there is one: this is the second of the two claims
     // that asks the probe's answer, and the entry it was keyed by was read once for both.
     let probed = match entry.map(crate::formats::head::Facts::key) {
@@ -564,10 +564,10 @@ fn claim_audio(
 /// is that somebody, because the loader used to ask the same question a second time for itself
 /// and the answer cost a read of the file (see `native_formats::page_job`).
 ///
-/// The names are asked of the list in hand rather than of the gate that reads it, since the
-/// caller holds the configuration already. Three names make a page outright and an Illustrator
-/// document carrying a PDF inside it makes one of its own bytes, which is the only half here
-/// that is not the name's to answer (see `pdf_preview::is_pdf_file_in`).
+/// The names are asked of the row in hand rather than of the gate that reads it, since the caller
+/// holds the configuration already. Three names make a page outright and an Illustrator document
+/// carrying a PDF inside it makes one of its own bytes, which is the only half here that is not
+/// the name's to answer (see `pdf_preview::is_pdf_file_in_of`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     /// A page: a PDF, or a document of another name carrying one, which the PDF engine reads.
@@ -592,11 +592,10 @@ pub fn page_of(
     config: &AppConfig,
     entry: Option<&crate::formats::head::Facts>,
 ) -> Page {
+    let list = lists::EBOOK.entries(config);
     let is_page = match entry {
-        Some(facts) => {
-            pdf_preview::is_pdf_file_in_of(path, &config.ebook_extensions, facts.needs_download())
-        }
-        None => pdf_preview::is_pdf_file_in(path, &config.ebook_extensions),
+        Some(facts) => pdf_preview::is_pdf_file_in_of(path, list, facts.needs_download()),
+        None => pdf_preview::is_pdf_file_in(path, list),
     };
 
     if is_page {
@@ -619,7 +618,7 @@ fn claim_ebook(
     _asked: Asked,
     entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    let book = ebook_formats::matches_ebook_list(path, &config.ebook_extensions);
+    let book = lists::EBOOK.claims(path, config);
 
     (page_of(path, config, entry) == Page::Pdf || book).then_some(PreviewType::Ebook)
 }
@@ -631,7 +630,8 @@ fn claim_archives(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    archive_formats::matches_archive_list(path, &config.archive_extensions)
+    lists::ARCHIVE
+        .claims(path, config)
         .then_some(PreviewType::Archives)
 }
 
@@ -644,7 +644,8 @@ fn claim_peazip(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    peazip_formats::matches_peazip_list(path, &config.peazip_extensions)
+    lists::PEAZIP
+        .claims(path, config)
         .then_some(PreviewType::Peazip)
 }
 
@@ -655,7 +656,8 @@ fn claim_calibre(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    calibre_formats::matches_calibre_list(path, &config.calibre_extensions)
+    lists::CALIBRE
+        .claims(path, config)
         .then_some(PreviewType::Calibre)
 }
 
@@ -668,7 +670,8 @@ fn claim_document(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    office_formats::matches_office_list(path, &config.office_extensions)
+    lists::OFFICE
+        .claims(path, config)
         .then_some(PreviewType::Document)
 }
 
@@ -680,7 +683,9 @@ fn claim_libre(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    libre_formats::matches_libre_list(path, &config.libre_extensions).then_some(PreviewType::Libre)
+    lists::LIBRE
+        .claims(path, config)
+        .then_some(PreviewType::Libre)
 }
 
 /// A picture an image converter develops — a camera raw above all — asked before the design
@@ -691,7 +696,8 @@ fn claim_magick(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    magick_formats::matches_magick_list(path, &config.magick_extensions)
+    lists::MAGICK
+        .claims(path, config)
         .then_some(PreviewType::Magick)
 }
 
@@ -703,7 +709,8 @@ fn claim_design(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    design_formats::matches_design_list(path, &config.design_extensions)
+    lists::DESIGN
+        .claims(path, config)
         .then_some(PreviewType::Design)
 }
 
@@ -714,7 +721,8 @@ fn claim_vector(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    vector_formats::matches_vector_list(path, &config.vector_extensions)
+    lists::VECTOR
+        .claims(path, config)
         .then_some(PreviewType::Vector)
 }
 
@@ -726,7 +734,7 @@ fn claim_text(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    text_formats::matches_text_lists(path, &config.text_extensions, &config.text_names)
+    (lists::TEXT.claims(path, config) || lists::NAMES.claims(path, config))
         .then_some(PreviewType::Text)
 }
 
@@ -738,7 +746,9 @@ fn claim_fonts(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    font_formats::matches_font_list(path, &config.font_extensions).then_some(PreviewType::Fonts)
+    lists::FONT
+        .claims(path, config)
+        .then_some(PreviewType::Fonts)
 }
 
 /// Which half of the `Vector` kind a file is: an SVG document the browser engine draws, or a
@@ -789,7 +799,7 @@ fn claim_images(
     _asked: Asked,
     _entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    if !image_formats::matches_image_list(path, &config.image_extensions) {
+    if !lists::IMAGE.claims(path, config) {
         return None;
     }
 
@@ -935,48 +945,80 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// Every list this app ships, as the paths that reach it: an extension is reached by a
-    /// name carrying it, and a text name is reached by the name itself, since that is the
-    /// lookup the list is written for (see `text_formats::lookup_name`).
+    /// Which kind each list's names belong to, by the section the list is written under.
+    ///
+    /// The two keys of the text section are the only pair anywhere that shares one, and they are
+    /// the same kind: the extensions and the names are the two ways a file is a text file (see
+    /// `text_formats::matches_text_lists`). Everything else is one section to one kind.
+    ///
+    /// It is keyed by section rather than written into the table because which kind a list
+    /// belongs to is a fact about this app's kinds and not about a list: the `[ffmpeg]` list is
+    /// the same kind as the `[video]` one — which engine plays a name rather than what a name is
+    /// — and no row could say so without also having to say what a kind is.
+    const KIND_OF_SECTION: &[(&str, &str, PreviewType)] = &[
+        ("archive", "extensions", PreviewType::Archives),
+        ("audio", "extensions", PreviewType::Audio),
+        ("calibre", "extensions", PreviewType::Calibre),
+        ("design", "extensions", PreviewType::Design),
+        ("ebook", "extensions", PreviewType::Ebook),
+        ("ffmpeg", "extensions", PreviewType::Videos),
+        ("font", "extensions", PreviewType::Fonts),
+        ("image", "extensions", PreviewType::Images),
+        ("libre", "extensions", PreviewType::Libre),
+        ("magick", "extensions", PreviewType::Magick),
+        ("office", "extensions", PreviewType::Document),
+        ("peazip", "extensions", PreviewType::Peazip),
+        ("text", "extensions", PreviewType::Text),
+        ("text", "names", PreviewType::Text),
+        ("vector", "extensions", PreviewType::Vector),
+        ("video", "extensions", PreviewType::Videos),
+    ];
+
+    /// Every list this app ships, as the paths that reach it: an extension is reached by a name
+    /// carrying it, and a text name is reached by the name itself, since that is the lookup the
+    /// list is written for (see `text_formats::lookup_name`).
+    ///
+    /// It is walked from the table rather than written out list by list, which is what the table
+    /// is for: a list this test does not name is a list whose names nothing here says reach the
+    /// kind they are written for, which is the one drift in this app nothing else in the tree
+    /// would have caught (see `every_shipped_name_reaches_the_kind_its_list_is_written_for`).
     fn shipped_lists(config: &AppConfig) -> Vec<(PreviewType, Vec<PathBuf>)> {
-        let extensions = |names: &[String]| -> Vec<PathBuf> {
-            names
+        let mut lists: Vec<(PreviewType, Vec<PathBuf>)> = Vec::new();
+
+        for list in crate::formats::lists::LISTS {
+            let kind = KIND_OF_SECTION
                 .iter()
-                .map(|name| PathBuf::from(format!("preview.{name}")))
-                .collect()
-        };
+                .find(|(section, key, _)| *section == list.section && *key == list.key)
+                .map(|(_, _, kind)| *kind)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "`[{}] {}` is a list this test does not name, so nothing here says what \
+                         kind its names belong to",
+                        list.section, list.key
+                    )
+                });
 
-        // A video is the two lists together: the kind is what a file is, and which of the two
-        // lists its name is in is only which engine plays it.
-        let mut video_names = extensions(&config.video_extensions);
-        video_names.extend(extensions(&config.ffmpeg_extensions));
+            // An extension is reached by a name carrying it, `preview.tar.gz` included — the
+            // archive row's compound entry is reached the only way it can be, by a name that ends
+            // in it. A name row has no extension at all and is reached by the name itself.
+            let paths = match list.entries {
+                crate::formats::lists::Entries::Name => list
+                    .entries(config)
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect(),
+                _ => list
+                    .entries(config)
+                    .iter()
+                    .map(|name| PathBuf::from(format!("preview.{name}")))
+                    .collect(),
+            };
 
-        let mut lists = vec![
-            (PreviewType::Videos, video_names),
-            (PreviewType::Audio, extensions(&config.audio_extensions)),
-            (PreviewType::Ebook, extensions(&config.ebook_extensions)),
-            (
-                PreviewType::Archives,
-                extensions(&config.archive_extensions),
-            ),
-            (PreviewType::Peazip, extensions(&config.peazip_extensions)),
-            (PreviewType::Calibre, extensions(&config.calibre_extensions)),
-            (PreviewType::Document, extensions(&config.office_extensions)),
-            (PreviewType::Libre, extensions(&config.libre_extensions)),
-            (PreviewType::Magick, extensions(&config.magick_extensions)),
-            (PreviewType::Design, extensions(&config.design_extensions)),
-            (PreviewType::Vector, extensions(&config.vector_extensions)),
-            (PreviewType::Text, extensions(&config.text_extensions)),
-            (PreviewType::Fonts, extensions(&config.font_extensions)),
-            (PreviewType::Images, extensions(&config.image_extensions)),
-        ];
-
-        let names = config
-            .text_names
-            .iter()
-            .map(PathBuf::from)
-            .collect::<Vec<PathBuf>>();
-        lists.push((PreviewType::Text, names));
+            match lists.iter_mut().find(|(held, _)| *held == kind) {
+                Some((_, already)) => already.extend(paths),
+                None => lists.push((kind, paths)),
+            }
+        }
 
         lists
     }
@@ -1084,8 +1126,8 @@ mod tests {
         // The names the shipped list holds that are a page and a comic, read off the list
         // rather than written here, so a name added to either list is covered by this without
         // being added to this.
-        let expected: Vec<(String, Page)> = config
-            .ebook_extensions
+        let expected: Vec<(String, Page)> = lists::EBOOK
+            .entries(&config)
             .iter()
             .map(|name| {
                 let page = matches!(name.trim_start_matches('.'), "pdf" | "pdfa" | "epdf");
@@ -1153,13 +1195,13 @@ mod tests {
 
         // The drawings this app ships, read off the two lists that hold them rather than
         // written here, so a name added to either is covered by this without being added here.
-        let shipped: Vec<(String, PreviewType)> = config
-            .vector_extensions
+        let shipped: Vec<(String, PreviewType)> = lists::VECTOR
+            .entries(&config)
             .iter()
             .map(|name| (name.clone(), PreviewType::Vector))
             .chain(
-                config
-                    .image_extensions
+                lists::IMAGE
+                    .entries(&config)
                     .iter()
                     .map(|name| (name.clone(), PreviewType::Images)),
             )
