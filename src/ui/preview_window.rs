@@ -85,6 +85,9 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
@@ -97,7 +100,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::Shell::{
-    AssocQueryStringW, ShellExecuteW, ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME,
+    AssocQueryStringW, ShellExecuteW, ASSOCF_NONE, ASSOCSTR, ASSOCSTR_EXECUTABLE,
+    ASSOCSTR_FRIENDLYAPPNAME,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
@@ -13541,22 +13545,38 @@ fn shell_format(path: &Path) -> String {
 /// stored under, so what comes back is what the user would read in Explorer's "Open with" —
 /// which is the whole point of naming the default on a button that opens it.
 ///
-/// Two calls, because the Shell asks for the length first: a call with no buffer is how it says
-/// how long the answer is. A file nothing is filed against, a format the machine has no program
-/// for, and a path the Shell will not take are all one answer — no name — and none of them is a
-/// fault here, so nothing is asserted and nothing is reported.
-///
 /// It is Shell work and it is not bounded, which is the whole of why it is asked once per
 /// format rather than once per file, and never with the pin's own lock held (see the take-up in
-/// `run_preview_window`).
+/// `run_preview_window`). A machine with nothing filed against the format has no name to print,
+/// which is a button that says nothing rather than a fault to report.
+unsafe fn ask_default_app_name(path: &Path) -> String {
+    ask_association(path, ASSOCSTR_FRIENDLYAPPNAME).unwrap_or_default()
+}
+
+/// One string out of a file's association, as the machine has it filed — which is the same
+/// call whatever string is asked for, and the same three ways of getting nothing back.
+///
+/// `what` is the question rather than an argument to be checked here: `ASSOCSTR`'s strings
+/// are the Shell's own vocabulary for "which part of this association do you want", from
+/// the executable to the icon index to a verb and its command line, and asking one of them
+/// is asking the same registry the same way. Two of them are asked here rather than one —
+/// the name a button is written with, and the handler a dialog's answer is read out of (see
+/// `ask_default_handler`) — and the two are not a list to be kept in step, because each is
+/// the only one of its kind and neither is a special case of the other.
+///
+/// Nothing when there is nothing: a file nothing is filed against, a format the machine has
+/// no program for, and a path the Shell will not take are all one answer, and `None` is
+/// what says that rather than an empty string pretending to be a name. A caller that wants
+/// a name to print takes the empty string instead, and a caller comparing two readings
+/// wants to know that one of them is nothing, which a pair of empty strings would not say.
 ///
 /// # Safety
 ///
-/// `AssocQueryStringW` is a plain `extern "system"` call whose every pointer is this function's
-/// own: the two buffers are allocated here, sized by the first call from the count it wrote,
-/// and both are dropped before the function returns. The wide string handed in is the caller's
-/// file, which outlives the call.
-unsafe fn ask_default_app_name(path: &Path) -> String {
+/// `AssocQueryStringW` is a plain `extern "system"` call whose every pointer is this
+/// function's own: the two buffers are allocated here, sized by the first call from the
+/// count it wrote, and both are dropped before the function returns. The wide string handed
+/// in is the caller's file, which outlives the call.
+unsafe fn ask_association(path: &Path, what: ASSOCSTR) -> Option<String> {
     let wide: Vec<u16> = std::ffi::OsStr::new(&plain_path(path))
         .encode_wide()
         .chain(std::iter::once(0))
@@ -13566,27 +13586,27 @@ unsafe fn ask_default_app_name(path: &Path) -> String {
     let mut length = 0u32;
     let asked = AssocQueryStringW(
         ASSOCF_NONE,
-        ASSOCSTR_FRIENDLYAPPNAME,
+        what,
         file,
         PCWSTR::null(),
         PWSTR::null(),
         &mut length,
     );
     if asked.is_err() || length == 0 {
-        return String::new();
+        return None;
     }
 
     let mut buffer = vec![0u16; length as usize];
     let answered = AssocQueryStringW(
         ASSOCF_NONE,
-        ASSOCSTR_FRIENDLYAPPNAME,
+        what,
         file,
         PCWSTR::null(),
         PWSTR(buffer.as_mut_ptr()),
         &mut length,
     );
     if answered.is_err() {
-        return String::new();
+        return None;
     }
 
     buffer.truncate(
@@ -13595,7 +13615,7 @@ unsafe fn ask_default_app_name(path: &Path) -> String {
             .position(|unit| *unit == 0)
             .unwrap_or(buffer.len()),
     );
-    String::from_utf16_lossy(&buffer)
+    (!buffer.is_empty()).then(|| String::from_utf16_lossy(&buffer))
 }
 
 /// The volume a pinned preview is playing at.
@@ -19427,7 +19447,14 @@ fn resize_pinned_content(
 /// Nothing is asked of the file here and nothing is waited for: the Shell hands the file to
 /// the program and returns, and what that program does with it is the program's own business
 /// and never the pin's — a pin that came back up afterwards would be a second window of a
-/// file this app is already showing.
+/// file this app is already showing. Which is why this one comes down: the file is the
+/// program's now, and a window left over it is a window of a file somebody else is holding.
+/// It comes down only when the Shell says it started something, so a format with nothing
+/// filed against it leaves the pin standing over a file the user still has — see
+/// `shell_execute_launched` and `request_pin_end`.
+///
+/// Returns whether the file was handed to a program, which is the Shell's own answer and
+/// nothing more (see `shell_execute_launched`).
 ///
 /// # Safety
 ///
@@ -19436,21 +19463,13 @@ fn resize_pinned_content(
 /// handed it is null rather than borrowed, so there is nothing for the caller to keep alive
 /// across the call and nothing it can invalidate underneath it. The file itself belongs to
 /// whichever program the Shell starts, and this side has no handle on it to release.
-unsafe fn open_path_with_default_app(path: &Path) {
+unsafe fn open_path_with_default_app(path: &Path) -> bool {
     let wide: Vec<u16> = std::ffi::OsStr::new(&plain_path(path))
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
 
-    // The Shell hands back the handle of a program it started, and one of its own error codes
-    // at or below 32 for anything it would not start: no association for the format, a path it
-    // will not take, a Shell that is not answering. Which of those it was is not asked, and not
-    // asserted either — a format with nothing filed against it is the user's machine rather
-    // than a fault in this one, so a check that panicked on it would be an alarm that goes off
-    // for an ordinary machine. A pin has nowhere to put an error and nothing to say about it,
-    // so a button that did not work says so by having not worked, and the value is read only to
-    // keep the boundary written down where the call is.
-    let launched = ShellExecuteW(
+    let started = ShellExecuteW(
         HWND(std::ptr::null_mut()),
         w!("open"),
         PCWSTR(wide.as_ptr()),
@@ -19458,7 +19477,22 @@ unsafe fn open_path_with_default_app(path: &Path) {
         PCWSTR::null(),
         SW_SHOWNORMAL,
     );
-    let _ = launched.0 as usize > 32;
+
+    shell_execute_launched(started.0 as usize)
+}
+
+/// Whether what the Shell handed back says a program was started, which is the documented
+/// test and the whole of what is known here: a handle above 32, and one of its own error
+/// codes at or below 32 for anything it would not start.
+///
+/// Which of those codes it was is not asked, and not asserted either — a format with nothing
+/// filed against it is the user's machine rather than a fault in this one, so a check that
+/// panicked on it would be an alarm that goes off for an ordinary machine. A pin has nowhere
+/// to put an error and nothing to say about it, so a button that did not work says so by
+/// having not worked, and says so by leaving the window up: a pin that closed on a hand-off
+/// that never happened is a preview of a file the user is still looking at, gone.
+fn shell_execute_launched(handle: usize) -> bool {
+    handle > 32
 }
 
 /// Whether the Open With dialog is up, which is held here only so that the tick has
@@ -19468,10 +19502,187 @@ unsafe fn open_path_with_default_app(path: &Path) {
 /// The answer itself is the child's, not this flag's — see `settle_open_with_dialog`.
 static OPEN_WITH_UP: AtomicBool = AtomicBool::new(false);
 
-/// The `rundll32` the dialog is running in, kept in hand for as long as it is up and dropped
-/// as soon as it has gone: a `Child` left behind is a handle this process has no further use
-/// for and has not been given back.
-static OPEN_WITH_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+/// The `rundll32` the dialog is running in and what has been read of it, kept in hand for as
+/// long as it is up and dropped as soon as it has gone: a `Child` left behind is a handle
+/// this process has no further use for and has not been given back.
+///
+/// It is one slot and not two because the two are one moment: the child is what says the
+/// dialog is still up, and the readings below are readings of a dialog that is up. A second
+/// slot could be left holding a file and a handler while the child beside it had gone, and
+/// then the tick would be comparing two readings of two different dialogs.
+static OPEN_WITH_CHILD: Mutex<Option<OpenWithDialog>> = Mutex::new(None);
+
+/// The Open With dialog that is up, as the tick needs to know it: which process is running
+/// it, which file it was put up for, and what has been seen while it stood there.
+struct OpenWithDialog {
+    /// The child itself, which is the whole of "the dialog is still up" (see
+    /// `settle_open_with_dialog`).
+    child: Child,
+    /// Which process that is — the parent every program the user picks is started from, and
+    /// so the thing a snapshot of the machine is searched for.
+    pid: u32,
+    /// The file the dialog was put up for, read once more when the dialog is over: it is the
+    /// file whose default the user may have changed while the list was standing there.
+    path: PathBuf,
+    /// The program filed against that file before the dialog went up, which is the other
+    /// half of what a "just once" answer leaves behind untouched and a "always use this app"
+    /// answer does not.
+    handler_before: Option<String>,
+    /// Whether anything has been seen parented to `pid`. Sticky, because the process that
+    /// proves it may be gone by the time the tick next comes round — that is the ordinary
+    /// case, and a fact about a moment cannot be asked again.
+    launched_from_the_dialog: bool,
+    /// When the machine's process list was last read, so that it is not read on every tick
+    /// (see `OPEN_WITH_SAMPLE_EVERY`).
+    sampled: Option<Instant>,
+}
+
+/// How often the machine's process list is read while an Open With dialog is up.
+///
+/// A snapshot walks every process on the machine — hundreds of them — and a pinned window's
+/// tick comes round every `STATIC_PIN_WAIT_MS` for as long as the dialog is standing there,
+/// which is however long the user takes to look at it. Once a quarter of a second is short
+/// enough to see anything that is still running an instant after the dialog closes, and a
+/// program that is gone again by then is caught by a sample taken while the dialog was up
+/// rather than by a faster one: which is why the sampling is repeated at all.
+const OPEN_WITH_SAMPLE_EVERY: Duration = Duration::from_millis(250);
+
+impl OpenWithDialog {
+    /// Read the machine's process list for anything started out of the dialog, unless the
+    /// last read was recent enough.
+    ///
+    /// Asked of the list rather than of the child, and asked of it *here* rather than at the
+    /// end, for the reason the whole of this is here at all: the program the user picks is
+    /// very often single-instance, so a process the choice started can begin and end between
+    /// two consecutive ticks — and certainly between the moment the dialog closes and the
+    /// moment the tick that notices finds out that it has. A question asked once the
+    /// dialog is gone is a question asked after the answer has left.
+    fn sample(&mut self) {
+        if self
+            .sampled
+            .is_some_and(|last| last.elapsed() < OPEN_WITH_SAMPLE_EVERY)
+        {
+            return;
+        }
+        self.sampled = Some(Instant::now());
+
+        if snapshot_holds_a_child_of(&process_parents(), self.pid) {
+            self.launched_from_the_dialog = true;
+        }
+    }
+}
+
+/// Whether a snapshot of the machine's processes holds anything started by `parent`.
+///
+/// A list of `(pid, parent)` pairs rather than a list of pids, because the question is about
+/// the edge between two processes and an edge is only in the snapshot as both of its ends.
+/// An empty list is what a snapshot that would not open comes back as, and it is not a
+/// negative: nothing was seen, and nothing seen is a pin that stays up.
+fn snapshot_holds_a_child_of(processes: &[(u32, u32)], parent: u32) -> bool {
+    processes.iter().any(|(_, found)| *found == parent)
+}
+
+/// The machine's processes, each with the process that started it.
+///
+/// A snapshot is a copy taken at an instant and walked until it runs out, which is the only
+/// way to ask about a process this app started and does not own: `rundll32` is nobody's
+/// child as far as `engine_processes` is concerned — it is not adopted, has no record on
+/// disk, and must not be ended with this app — so nothing on this side is keeping the
+/// children of that pid, and the machine's own list is where they are to be read.
+///
+/// An answer that cannot be given is an empty one. A snapshot that will not open, or one
+/// that will not be walked, is not evidence that nothing is running: it is evidence that
+/// this side did not see anything, which is a different thing and is read as no evidence
+/// rather than as a negative.
+fn process_parents() -> Vec<(u32, u32)> {
+    let mut processes = Vec::new();
+
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return processes;
+        };
+
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                processes.push((entry.th32ProcessID, entry.th32ParentProcessID));
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+
+        let _ = CloseHandle(snapshot);
+    }
+
+    processes
+}
+
+/// The program the machine has filed against a file, as the executable behind it.
+///
+/// Read rather than the display name `ask_default_app_name` asks for, because this one is
+/// not for printing and is for comparing: what the dialog's "Always use this app" box
+/// writes down is a handler, and a handler is an executable. A name is a name the user
+/// reads, and two ways of running one program have one name between them.
+///
+/// # Safety
+///
+/// The wide string handed to the Shell is this function's own, and `ask_association` is
+/// given nothing borrowed: see it for the rest.
+unsafe fn ask_default_handler(path: &Path) -> Option<String> {
+    ask_association(path, ASSOCSTR_EXECUTABLE)
+}
+
+/// Whether what the two signals have seen is a program the user's hand started.
+///
+/// Either is enough, and both firing is not a stronger answer than one: a user who ticks
+/// "always use this app" gets a process parented to the `rundll32` *and* a changed
+/// registry, and the two are one event rather than two. What neither is a launch is what
+/// makes this the answer to the only question that matters here, which is whether a user
+/// who opened the list and then thought better of it keeps their pin.
+///
+/// The two miss opposite ends of the same road, which is why one of them is not enough:
+///
+/// * `from_the_dialog` is a process seen parented to the `rundll32`, and so it sees "just
+///   once" — the app launched, the choice remembered nowhere. It is blind to a Store app,
+///   which the Shell hands to `explorer.exe` to be brokered, and so is parented to a
+///   process this app never spawned and cannot see the child of.
+/// * The handler is the registry, and so it sees the box being ticked — including for a
+///   Store app, which is the one case the process list cannot reach. It is blind to "just
+///   once", which by definition writes nothing down.
+///
+/// A reading that is missing is not a negative on either side: `None` from the registry and
+/// an empty snapshot are both "this side saw nothing", and a pin the user is still looking
+/// at is what a dialog dismissed without a choice must leave standing. A process list that
+/// would not open lands here as an empty one and the same is true of a registry key nobody
+/// would answer, so a machine that will not co-operate with the watch has a pin that stays
+/// up — which is the safe way round for both of the mistakes available: a pin left standing
+/// over a file that has been opened is an annoyance, and a pin taken away from a user who
+/// dismissed a dialog is the file they were reading.
+fn open_with_saw_a_launch(
+    from_the_dialog: bool,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> bool {
+    from_the_dialog || handler_moved(before, after)
+}
+
+/// Whether the program filed against a file is a different one than it was, which is what
+/// the user ticking "always use this app" looks like from outside the dialog.
+///
+/// Two answers and no answer is not a change. The registry is not rewritten by a dialog
+/// being dismissed, so `None` either side of one is the same nothing said twice, and a
+/// reading that could not be made at all is the same nothing again — a pair of them is
+/// nothing, and nothing is not a change.
+fn handler_moved(before: Option<&str>, after: Option<&str>) -> bool {
+    match (before, after) {
+        (Some(before), Some(after)) => before != after,
+        _ => false,
+    }
+}
 
 /// Show the Shell's own "How do you want to open this?" dialog for a file: the list of
 /// programs installed on this machine that could open it, which is the only way into a second
@@ -19492,6 +19703,15 @@ static OPEN_WITH_CHILD: Mutex<Option<Child>> = Mutex::new(None);
 /// the default in Settings instead of offering the list. A button whose only job is to offer
 /// the list cannot be built on an entry point that has stopped offering it, so this is the
 /// other way in and not a preference between two that both work.
+///
+/// The pin comes down when the user goes through with it. That is the whole of what the
+/// dialog is for from this side — the file is the program's now, and a window left over it
+/// is a window of a file somebody else is holding — and the button beside this one answers
+/// it from the Shell's own return value. Here there is no return value to ask: the child
+/// this puts up is `rundll32`, and `OpenAs_RunDLL` is a `void` export, so the child says
+/// only that the dialog closed and not whether anything was chosen or launched. The child's
+/// exit is the answer to *when*, and two independent readings are the answer to *whether*
+/// (see `settle_open_with_dialog` and `open_with_saw_a_launch`).
 ///
 /// # Safety
 ///
@@ -19537,6 +19757,12 @@ unsafe fn show_open_with_dialog(hwnd: HWND, path: &Path) {
     );
     OPEN_WITH_UP.store(true, Ordering::Release);
 
+    // What the file is filed against, read before the dialog is up and read here because
+    // here is the only moment at which "before" means anything: the tick that finds the
+    // dialog gone compares this against what the registry says then, and a reading taken
+    // after the fact would be the same registry entry twice.
+    let handler_before = ask_default_handler(path);
+
     // The child is deliberately not waited for. `rundll32` holds itself open for as long as
     // its dialog is, and the pin's own loop keeps running underneath it, so waiting here
     // would be waiting on this thread's message loop from inside itself.
@@ -19548,7 +19774,14 @@ unsafe fn show_open_with_dialog(hwnd: HWND, path: &Path) {
     {
         Ok(child) => {
             if let Ok(mut slot) = OPEN_WITH_CHILD.lock() {
-                *slot = Some(child);
+                *slot = Some(OpenWithDialog {
+                    pid: child.id(),
+                    child,
+                    path: path.to_path_buf(),
+                    handler_before,
+                    launched_from_the_dialog: false,
+                    sampled: None,
+                });
             }
         }
         // A `rundll32` that would not start is a question this button has nowhere to put an
@@ -19582,29 +19815,50 @@ unsafe fn restore_pin_topmost(hwnd: HWND) {
 }
 
 /// Notice that the Open With dialog has gone: the pin's topmost band is held down for as long
-/// as one is up, and put back the moment it is not.
+/// as one is up, and put back the moment it is not — and, if the user went through with the
+/// dialog rather than dismissing it, the pin itself comes down with the band.
 ///
-/// The question is asked of the child rather than of a flag, because a dialog that failed to
-/// come up looks exactly like one that is up if the only record of it is that something was
-/// started. `rundll32` is running for exactly as long as its dialog is, so its handle is the
-/// whole of the answer.
+/// The question of *when* is asked of the child rather than of a flag, because a dialog that
+/// failed to come up looks exactly like one that is up if the only record of it is that
+/// something was started. `rundll32` is running for exactly as long as its dialog is, so its
+/// handle is the whole of the answer to that.
+///
+/// The question of *whether* is not asked of the child at all, because a `void` export leaves
+/// nothing behind but the fact that a dialog closed. So the same tick reads the two things
+/// that do carry it — a process parented to that child, and the file's own handler read
+/// either side of the dialog — and it reads the first of them *before* it learns the dialog
+/// has gone, which is the whole of why the sampling is repeated while the dialog stands there
+/// rather than taken once at the end (see `OpenWithDialog::sample`). What the two are worth
+/// between them is `open_with_saw_a_launch`, and a pin whose two signals both came back empty
+/// stays exactly where it is: the user opened a list, read it, and put it away, and the file
+/// is still theirs.
+///
+/// The child is out of the slot before the second reading is taken, which is the same reason
+/// the sample runs under the lock and this does not: a `Child` is a handle to be given back
+/// the moment the dialog is gone, and a Shell call inside the lock is a lock held for
+/// however long the Shell takes.
 ///
 /// # Safety
 ///
-/// See `restore_pin_topmost`: this reads a process's exit state and, on the strength of that
-/// reading alone, puts this app's own window back in the z-order.
+/// See `restore_pin_topmost`: this reads a process's exit state and the machine's process
+/// list, reads the registry, and on the strength of those readings puts this app's own
+/// window back in the z-order and asks the loop to end the pin. The end is the loop's own
+/// (see `request_pin_end`), and the window handle is this app's own, which the caller holds.
 unsafe fn settle_open_with_dialog(hwnd: HWND) {
     if !OPEN_WITH_UP.load(Ordering::Acquire) {
         return;
     }
 
     let finished = match OPEN_WITH_CHILD.lock() {
-        Ok(mut child) => match child.as_mut() {
+        Ok(mut slot) => match slot.as_mut() {
             // A wait that could not be answered has not shown the dialog to be gone, and a
             // dialog still up behind an unanswerable wait is a pin the user cannot reach. The
             // band is left down for another tick rather than raised over a dialog that is in
             // fact still there.
-            Some(process) => !matches!(process.try_wait(), Ok(None)),
+            Some(dialog) => {
+                dialog.sample();
+                !matches!(dialog.child.try_wait(), Ok(None))
+            }
             // The slot is empty and the flag says otherwise, which is only reachable if the
             // tick that cleared it has not run yet.
             None => true,
@@ -19618,10 +19872,32 @@ unsafe fn settle_open_with_dialog(hwnd: HWND) {
         return;
     }
 
-    if let Ok(mut child) = OPEN_WITH_CHILD.lock() {
-        *child = None;
-    }
+    let ended = OPEN_WITH_CHILD.lock().ok().and_then(|mut slot| slot.take());
+    let Some(dialog) = ended else {
+        restore_pin_topmost(hwnd);
+        return;
+    };
+
+    // The other reading, taken now that the dialog is over: the program the file is filed
+    // against, which is not the one it was if the user ticked the box on their way out.
+    let launched = open_with_saw_a_launch(
+        dialog.launched_from_the_dialog,
+        dialog.handler_before.as_deref(),
+        ask_default_handler(&dialog.path).as_deref(),
+    );
+
+    // The band goes back on either way. A pin that is about to be closed does not need it,
+    // but the flag above does need clearing, and the function that clears it is the one that
+    // puts the band on — so the pin is raised for the one tick between this and the tick
+    // that ends it, which is the same pin the user was looking at a moment ago.
     restore_pin_topmost(hwnd);
+
+    // Asked of the loop rather than done here, for the same reason every other road out of
+    // a pin is: what a pin *is* belongs to the preview loop, and this is a tick that has
+    // read a process and a registry key and must not be the thing that takes a window down.
+    if launched {
+        request_pin_end();
+    }
 }
 
 /// Put away whatever name the caption is currently saying, whether or not it has been long
@@ -19696,10 +19972,15 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
                 pin_chrome::CaptionButton::Next => ask_pin(PinCommand::Next),
                 // The file is in hand here and the Shell takes it as it stands, so this one
                 // is asked for where it was pressed rather than written down for the loop
-                // to pick up: nothing about opening a file is the loop's business.
+                // to pick up: nothing about opening a file is the loop's business. The one
+                // thing asked of the loop is the pin's own end, and only where the Shell
+                // says there is a program to end it for — a format with nothing filed
+                // against it leaves the user looking at the file they were looking at.
                 pin_chrome::CaptionButton::OpenWith => {
                     if let Some(path) = pinned_path() {
-                        open_path_with_default_app(&path);
+                        if open_path_with_default_app(&path) {
+                            request_pin_end();
+                        }
                     }
                 }
                 // The Shell's own list, the same way round: the file is in hand and the dialog
@@ -32047,5 +32328,143 @@ mod tests {
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
+    }
+
+    /// The Shell's own answer is what says a hand-off happened, and 32 is the line it draws
+    /// for itself.
+    ///
+    /// The test exists because the reading used to be thrown away, so the button that hands
+    /// a file to the program filed against it left the pin up over a file that program now
+    /// has. The number is the documented one and it is not this app's to move: 32 is where
+    /// the Shell's own error codes stop and its process handles begin, so a test that
+    /// treated 32 as a handle would close a pin over a format nothing is filed against, and
+    /// a test that treated 33 as an error would leave one standing over a file Word has.
+    #[test]
+    fn only_a_handle_above_the_shells_own_error_codes_is_a_program_was_started() {
+        assert!(
+            shell_execute_launched(33),
+            "a handle above 32 is a process the Shell started, and the file is that program's"
+        );
+        assert!(
+            shell_execute_launched(64_000),
+            "and a large one is no different: the test is the number, not its size"
+        );
+
+        assert!(
+            !shell_execute_launched(32),
+            "32 is the Shell's own code and not a handle, so nothing was started"
+        );
+        assert!(
+            !shell_execute_launched(0),
+            "and a Shell that would not answer is not a program either, however it says so"
+        );
+    }
+
+    /// A process parented to the `rundll32` running the dialog is the program the user
+    /// picked, and nothing else in the machine's process list is.
+    ///
+    /// The test exists because this is the reading that catches "just once", and it can
+    /// only catch it if the *parent* is the thing looked for: the whole list is full of
+    /// processes, most of them started by something other than this dialog, and a test that
+    /// asked only whether the list had anything in it would pass on a snapshot taken over
+    /// an idle machine and prove nothing at all.
+    #[test]
+    fn only_a_process_parented_to_the_dialogs_rundll32_is_a_launch() {
+        // The `rundll32` is 4000, and the program the user chose was started by it.
+        let snapshot = [
+            (4, 2),      // The machine's idle processes, whose parents are not ours.
+            (4000, 355), // The `rundll32` itself, started by this app.
+            (4100, 4000),
+        ];
+
+        assert!(
+            snapshot_holds_a_child_of(&snapshot, 4000),
+            "a process whose parent is the rundll32 was started out of the dialog"
+        );
+        assert!(
+            !snapshot_holds_a_child_of(&snapshot, 4200),
+            "a pid that is not in the snapshot as a parent is not a parent of anything here, and \
+             neither is the child of some other program entirely"
+        );
+    }
+
+    /// A snapshot that could not be read is not a snapshot with nothing in it, and neither
+    /// one is a reason to take a window away from a user.
+    ///
+    /// The test exists because the two are the same value here and must not be the same
+    /// decision: a machine that refuses the process list, a snapshot that will not be walked,
+    /// and a list of processes none of which was started out of the dialog all arrive as an
+    /// empty list, and the failure a test guards is the pin closing anyway — which takes a
+    /// preview away from someone who opened a list, read it, and pressed Cancel.
+    #[test]
+    fn a_snapshot_nobody_could_read_is_no_evidence_rather_than_an_answer() {
+        let unreadable: [(u32, u32); 0] = [];
+        let notepad = Some("C:\\Windows\\notepad.exe");
+
+        assert!(
+            !snapshot_holds_a_child_of(&unreadable, 4000),
+            "a list this side could not read holds nothing it may act on"
+        );
+        assert!(
+            !open_with_saw_a_launch(false, notepad, notepad),
+            "and with both readings empty the pin is left up: a dismissed dialog is not a launch"
+        );
+        assert!(
+            !open_with_saw_a_launch(false, None, None),
+            "a registry nobody would answer either side of the dialog is the same nothing, and is \
+             not read as a change"
+        );
+    }
+
+    /// Either of the two signals is a launch on its own, and a user who went through with the
+    /// dialog gets a pin that comes down.
+    ///
+    /// The test exists because the two miss opposite ends of the same road — a process list
+    /// cannot see a Store app brokered through `explorer.exe`, and a registry cannot see
+    /// "just once", which by definition writes nothing down — so neither being sufficient
+    /// alone is the whole of the design rather than a belt to a pair of braces. And both
+    /// firing at once is one event, not a stronger one, so it is asked about here too: a
+    /// double close would be a second `Reason` for a single press.
+    #[test]
+    fn either_signal_alone_is_the_user_going_through_with_the_dialog() {
+        let notepad = Some("C:\\Program Files\\WindowsApps\\Notepad\\notepad.exe");
+        let word = Some("C:\\Program Files\\Microsoft Office\\WINWORD.EXE");
+
+        // "Just once": the program is started, and nothing anywhere remembers it.
+        assert!(
+            open_with_saw_a_launch(true, notepad, notepad),
+            "a process out of the rundll32 is a launch even when the file is still filed under \
+             the program it was always filed under"
+        );
+
+        // "Always use this app" on a Store app, which the process list cannot see at all.
+        assert!(
+            open_with_saw_a_launch(false, notepad, word),
+            "a different handler is a launch even when nothing was seen parented to the rundll32"
+        );
+
+        // Both, which is what ticking the box and launching looks like from out here.
+        assert!(
+            open_with_saw_a_launch(true, notepad, word),
+            "and both together is still one launch, not two closes"
+        );
+    }
+
+    /// A user who opens the list and puts it away keeps their pin.
+    ///
+    /// The test exists because this is the failure the whole of the two signals is arranged
+    /// around: the child's exit says the dialog closed, and reading that as "the user chose
+    /// something" would take a preview away from somebody who only ever looked at the list.
+    /// Both signals empty is not a rare reading either — it is what every cancel on a
+    /// machine whose default is already the program the user was about to pick produces.
+    #[test]
+    fn a_dialog_dismissed_without_a_choice_leaves_the_pin_standing() {
+        let notepad = Some("C:\\Windows\\notepad.exe");
+
+        assert!(
+            !open_with_saw_a_launch(false, notepad, notepad),
+            "the handler the file was already filed against either side of the dialog is the \
+             same handler twice, and a registry that was not rewritten is not a launch"
+        );
     }
 }
