@@ -2127,6 +2127,69 @@ fn paint_mark(
     }
 }
 
+/// The mark that stands in for a file a pinned window was shown and could not draw: a cross of
+/// two strokes walked a pixel at a time, on a panel of the theme's own page.
+///
+/// It is a mark rather than a frame of a file because there is no file behind it: nothing was
+/// read, nothing was decoded, and there is nothing to read the next time the file is visited —
+/// which is the whole of why this is drawn rather than loaded, and why it is never put in the
+/// image cache (see `unplayable_media`). It is a cross rather than the empty band a file this
+/// app has no preview for leaves, because the two are different answers: this one says the file
+/// was tried and failed, where the other says it was never previewable at all.
+///
+/// The cross is the caption's own close mark (`draw_cross`) walked across the whole panel, at
+/// a stroke of its own rather than the glyph's, and every pixel of it is opaque — which is what
+/// lets the same premultiplied buffer be a preview's frame: at full coverage the premultiplied
+/// and the straight readings of a pixel are the same pixel (see the module documentation).
+///
+/// The panel is filled first and in full, so what the cross is drawn over is the theme rather
+/// than whatever the buffer held: a mark that were transparent between its strokes would show
+/// the tray's backdrop through and read as a broken picture rather than as an answer.
+pub(crate) fn paint_failure_mark(
+    buffer: &mut [u8],
+    width: u32,
+    height: u32,
+    palette: &ChromePalette,
+) {
+    let side = width.min(height);
+    if side == 0 || buffer.len() < width as usize * height as usize * 4 {
+        return;
+    }
+
+    let (w, h) = (width as i32, height as i32);
+    fill_box(
+        buffer,
+        w,
+        RECT {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: h,
+        },
+        palette.background,
+        1.0,
+    );
+
+    // Too small for a cross to be a cross, and the panel is the answer anyway: a mark the size of
+    // a few pixels is read as the file being small, which is a different thing entirely.
+    if side < 16 {
+        return;
+    }
+
+    let side = side as f32;
+    let span = (side * 0.62).round() as i32;
+    let stroke = (side * 0.085).round().max(2.0);
+    draw_cross(
+        buffer,
+        w,
+        w / 2,
+        h / 2 - (stroke.round() as i32) / 2,
+        span,
+        stroke,
+        palette.foreground,
+    );
+}
+
 /// The surface's pixels, which every box, disc and glyph here is drawn into.
 ///
 /// # Safety
