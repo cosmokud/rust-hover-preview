@@ -18,6 +18,7 @@
 
 use crate::text::text_paint::{self, DibSurface};
 use crate::CONFIG;
+use std::cell::RefCell;
 use windows::Win32::Foundation::{RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{GetTextExtentPoint32W, SelectObject};
 
@@ -1356,6 +1357,37 @@ pub(crate) fn paint_caption(
     caption: &Caption,
     dpi: u32,
 ) {
+    let length = surface.width as usize * surface.height as usize * 4;
+
+    // Copied rather than drawn again where the same strip has been asked for before, which is
+    // what a repaint is: a pinned window repaints sixty times a second to move a playhead that
+    // is drawn on the bar and not on this, and a caption that redrew its own name every one of
+    // those frames paid a font create and delete, a handful of `GetTextExtentPoint32W` and a
+    // per-pixel walk of every glyph to arrive at the same bytes.
+    //
+    // The key is every input the drawing below reads, not the ones that seemed to matter: the
+    // size and the scale, the four theme colors, the name, and which button the pointer is on
+    // and holding down. A key missing the hovered or pressed button would be a caption whose
+    // button kept the wash it had when the pointer first crossed it and never gave it back.
+    let reused = CAPTION_STRIP.with(|cell| {
+        let cached = cell.borrow();
+        let Some(strip) = cached.as_ref() else {
+            return false;
+        };
+        if strip.pixels.len() != length || !strip.painted_from(surface, palette, caption, dpi) {
+            return false;
+        }
+
+        unsafe {
+            std::slice::from_raw_parts_mut(surface_pixels(surface), length)
+                .copy_from_slice(&strip.pixels);
+        }
+        true
+    });
+    if reused {
+        return;
+    }
+
     let width = surface.width as i32;
     let height = surface.height as i32;
     let scale = dpi as f32 / 96.0;
@@ -1406,14 +1438,91 @@ pub(crate) fn paint_caption(
     // text rather than after each run, because a caption whose title was sealed and whose
     // tooltip was sealed separately would leave the tooltip's run as a hole in the bar (see the
     // module documentation).
-    let buffer = unsafe {
-        std::slice::from_raw_parts_mut(
-            surface_pixels(surface),
-            surface.width as usize * surface.height as usize * 4,
-        )
-    };
-    for pixel in buffer.as_chunks_mut::<4>().0 {
+    let pixels = unsafe { std::slice::from_raw_parts_mut(surface_pixels(surface), length) };
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel[3] = 255;
+    }
+
+    // Kept as it stands rather than as the drawing that made it, so what the next repaint of
+    // this same strip copies is the bytes the eye has already been shown — including the
+    // coverage the seal above has just handed back, which a copy of the strip before it would
+    // not have carried.
+    let painted = pixels.to_vec();
+    CAPTION_STRIP.with(|cell| {
+        *cell.borrow_mut() = Some(CaptionStrip {
+            width: surface.width,
+            height: surface.height,
+            dpi,
+            title: caption.title.to_string(),
+            maximized: caption.maximized,
+            maximizable: caption.maximizable,
+            hovered: caption.hovered,
+            pressed: caption.pressed,
+            background: palette.background,
+            foreground: palette.foreground,
+            accent: palette.accent,
+            dark: palette.dark,
+            pixels: painted,
+        });
+    });
+}
+
+// One caption strip kept whole, with everything it was drawn from.
+//
+// Kept per thread because a strip is painted into a surface the preview thread owns and read
+// back off that same one: one cache shared between two windows would be handing each of them
+// the other's pixels.
+thread_local! {
+    static CAPTION_STRIP: RefCell<Option<CaptionStrip>> = const { RefCell::new(None) };
+}
+
+/// A caption strip, and the whole of what it was drawn from.
+struct CaptionStrip {
+    width: u32,
+    height: u32,
+    dpi: u32,
+    title: String,
+    maximized: bool,
+    maximizable: bool,
+    hovered: Option<CaptionButton>,
+    pressed: Option<CaptionButton>,
+    background: [u8; 3],
+    foreground: [u8; 3],
+    accent: [u8; 3],
+    dark: bool,
+    pixels: Vec<u8>,
+}
+
+impl CaptionStrip {
+    /// Whether this strip is the one asked for: every input the drawing reads, so a theme
+    /// change, a resized window, another display's scale, another file, or a pointer that has
+    /// moved onto — or off — a button all of them redraw rather than copy.
+    ///
+    /// All four theme colors are compared and not only the two the strip's own pixels are mostly
+    /// made of, because the close button is washed with a red that does not come from the theme
+    /// at all and every other wash is the background moved toward the text — which branches on
+    /// `dark`. A key left off the background would hand a dark theme's caption to a light one,
+    /// and one left off the hovered button would leave the wash under a pointer that has since
+    /// walked away.
+    fn painted_from(
+        &self,
+        surface: &DibSurface,
+        palette: &ChromePalette,
+        caption: &Caption,
+        dpi: u32,
+    ) -> bool {
+        self.width == surface.width
+            && self.height == surface.height
+            && self.dpi == dpi
+            && self.title == caption.title
+            && self.maximized == caption.maximized
+            && self.maximizable == caption.maximizable
+            && self.hovered == caption.hovered
+            && self.pressed == caption.pressed
+            && self.background == palette.background
+            && self.foreground == palette.foreground
+            && self.accent == palette.accent
+            && self.dark == palette.dark
     }
 }
 
@@ -3002,6 +3111,144 @@ mod tests {
                 "a caption is opaque wherever it is painted, and {transparent} of its pixels were not"
             );
         }
+    }
+
+    /// The strip a repaint copies is the strip that was painted, and every change that would
+    /// have moved a pixel on it is a change that misses the cache.
+    ///
+    /// A cached caption that does not repaint is the worst failure this module has available: a
+    /// window whose title bar shows the last file's name, or a button that stays washed under a
+    /// pointer that has walked off it, with nothing in the window to say so. So each input the
+    /// drawing reads is changed on its own and the strip is required to change with it — and
+    /// then the *same* strip is asked for twice and required to come back byte for byte, which
+    /// is what makes the cache worth having at all.
+    #[test]
+    fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
+        let palette = ChromePalette {
+            background: [250, 250, 250],
+            foreground: [30, 30, 30],
+            accent: [10, 90, 200],
+            dark: false,
+        };
+        let dark = ChromePalette {
+            background: [30, 30, 30],
+            foreground: [220, 220, 220],
+            accent: [10, 140, 240],
+            dark: true,
+        };
+        // A name short enough to be drawn whole on the strip: a caption whose name is cut away
+        // entirely is the same picture whichever file it is, so a test on one of those could not
+        // tell a stale strip from a changed one.
+        let caption = Caption {
+            title: "Readme.md",
+            maximized: false,
+            maximizable: true,
+            hovered: Some(CaptionButton::OpenWith),
+            pressed: None,
+        };
+        let surface = DibSurface::create(600, 30).expect("a surface");
+
+        let strip = |palette: &ChromePalette, caption: &Caption, dpi: u32| {
+            paint_caption(&surface, palette, caption, dpi);
+            surface.pixels()
+        };
+
+        let first = strip(&palette, &caption, 96);
+        // The same strip again, and byte for byte the one before: a cached caption is the bytes
+        // the eye has already been shown, or it is a caption that flickers for nothing.
+        assert_eq!(
+            strip(&palette, &caption, 96),
+            first,
+            "the same caption asked for twice is not the strip it was"
+        );
+
+        // And every one of these is a different strip. Each is asked for straight after the
+        // first one rather than after the one before it, so that only what it changes differs —
+        // a cache missing one field is only caught by a change that is *only* that field.
+        let changed = [
+            (
+                "another file",
+                &palette,
+                &Caption {
+                    title: "Cargo.toml",
+                    ..caption
+                },
+                96,
+            ),
+            (
+                "the hovered button left",
+                &palette,
+                &Caption {
+                    hovered: None,
+                    ..caption
+                },
+                96,
+            ),
+            (
+                "the pressed button arrived",
+                &palette,
+                &Caption {
+                    hovered: None,
+                    pressed: Some(CaptionButton::Close),
+                    ..caption
+                },
+                96,
+            ),
+            (
+                "a close button is washed red and another one is not",
+                &palette,
+                &Caption {
+                    hovered: Some(CaptionButton::Close),
+                    ..caption
+                },
+                96,
+            ),
+            (
+                "a window with a maximum to go to and one without",
+                &palette,
+                &Caption {
+                    maximizable: false,
+                    ..caption
+                },
+                96,
+            ),
+            (
+                "a maximized window draws a restore pair and an ordinary one does not",
+                &palette,
+                &Caption {
+                    maximized: true,
+                    ..caption
+                },
+                96,
+            ),
+            ("another display's scale", &palette, &caption, 144),
+            ("another theme", &dark, &caption, 96),
+        ];
+        for (what, other_palette, other_caption, other_dpi) in changed {
+            // Straight back to the strip painted above, so the cache holds it and the only thing
+            // that differs about the next paint is what this case changes.
+            assert_eq!(
+                strip(&palette, &caption, 96),
+                first,
+                "{what}: the base moved"
+            );
+            assert_ne!(
+                strip(other_palette, other_caption, other_dpi),
+                first,
+                "`{what}` painted the caption that was already there"
+            );
+        }
+
+        // And a wider window is not a narrow one's strip with room at the end of it: the buttons
+        // are against the right edge and the name is cut against the left one, so both of them
+        // move with the window.
+        let wide = DibSurface::create(900, 30).expect("a surface");
+        paint_caption(&wide, &palette, &caption, 96);
+        assert_ne!(
+            wide.pixels(),
+            first,
+            "a resized window painted the strip of the width it had"
+        );
     }
 
     /// The pictures this test writes are the design under review: the six marks the caption's
