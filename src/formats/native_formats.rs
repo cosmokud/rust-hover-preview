@@ -24,9 +24,7 @@
 //! those is named by `routing::chain` rather than by this table.
 
 use crate::config::config::{AppConfig, PreviewType};
-use crate::readers::{
-    archive_listing, metafile_image, psd_image, wic_image,
-};
+use crate::readers::{archive_listing, metafile_image, psd_image, wic_image};
 use std::path::Path;
 
 /// What of this app's own reads a file.
@@ -127,12 +125,26 @@ pub enum NativeJob {
 /// always, which is also what the content tier does before this one (see `content_type::of`).
 /// A file whose head could not be read — one that is not there — is answered by the still choice
 /// below, the same way it was when the name was the whole of the answer.
-pub fn job_for(path: &Path, kind: PreviewType, config: &AppConfig) -> Option<NativeJob> {
+///
+/// The entry is handed in rather than read here, for the same reason `content_type::Probe`
+/// exists: a hover asks what a file is from the layout, the loader and the renderer's own
+/// request side, and each of them read the file's directory entry for itself. The only job that
+/// reads anything at all is a book's, and what it reads is what an `.ai` keeps at an offset
+/// (see `routing::page_of`). `None` is the form for a caller with no hover facts of its own.
+pub fn job_for(
+    path: &Path,
+    kind: PreviewType,
+    config: &AppConfig,
+    facts: Option<&crate::formats::head::Facts>,
+) -> Option<NativeJob> {
+    // A drawing's half is the router's own answer for the same reason a book's is, and it is
+    // the name's to give rather than the bytes': the browser draws a document and the drawing
+    // layer replays a metafile, which is no engine window at all.
     match kind {
         PreviewType::Images => Some(picture_job(path)),
         PreviewType::Design => Some(design_job(path)),
         PreviewType::Vector => Some(drawing_job(path)),
-        PreviewType::Ebook => Some(page_job(path, config)),
+        PreviewType::Ebook => Some(page_job(path, config, facts)),
         PreviewType::Archives => archive_job(path),
         PreviewType::Text => Some(NativeJob::Text),
         PreviewType::Fonts => Some(NativeJob::FontSpecimen),
@@ -226,8 +238,12 @@ fn drawing_job(path: &Path) -> NativeJob {
 /// twice for the one question — once to reach the kind and once to pick the reader — and the
 /// second read was a read of the file, on a name three spellings of which make a page and a
 /// fourth of which is an Illustrator document carrying one (see `routing::page_of`).
-fn page_job(path: &Path, config: &AppConfig) -> NativeJob {
-    match crate::formats::routing::page_of(path, config) {
+fn page_job(
+    path: &Path,
+    config: &AppConfig,
+    facts: Option<&crate::formats::head::Facts>,
+) -> NativeJob {
+    match crate::formats::routing::page_of(path, config, facts) {
         crate::formats::routing::Page::Pdf => NativeJob::Pdf,
         crate::formats::routing::Page::Comic => NativeJob::Comic,
     }
@@ -256,7 +272,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn job_for_name(name: &str, kind: PreviewType) -> Option<NativeJob> {
-        job_for(&PathBuf::from(name), kind, &AppConfig::default())
+        job_for(&PathBuf::from(name), kind, &AppConfig::default(), None)
     }
 
     /// A picture is the crate where the crate carries the format and the codec where it does
@@ -331,10 +347,10 @@ mod tests {
             ("chapter.cbc", NativeJob::Comic),
         ] {
             let path = PathBuf::from(name);
-            let half = routing::page_of(&path, &config);
+            let half = routing::page_of(&path, &config, None);
 
             assert_eq!(
-                job_for(&path, PreviewType::Ebook, &config),
+                job_for(&path, PreviewType::Ebook, &config, None),
                 Some(job),
                 "`{name}` is read by {job:?}"
             );
@@ -430,7 +446,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("`{name}` reaches a kind"));
 
             assert!(
-                job_for(&path, kind, &config).is_some(),
+                job_for(&path, kind, &config, None).is_some(),
                 "`{name}` reaches {kind:?}, which has a reader of this app's own"
             );
         }
@@ -455,7 +471,7 @@ mod tests {
             let path = folder.join(name);
             std::fs::write(&path, bytes).expect("a test file");
 
-            job_for(&path, PreviewType::Images, &config)
+            job_for(&path, PreviewType::Images, &config, None)
         };
 
         let still_gif = [sample::gif_open(), sample::gif_frame(), vec![0x3B]].concat();

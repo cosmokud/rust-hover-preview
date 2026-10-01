@@ -124,12 +124,158 @@ pub enum Content {
     Unknown,
 }
 
+/// Everything one question about a file's own bytes needs read, and nothing else.
+///
+/// It is the half of this module that touches the disk, and it is separate from the half that
+/// consults the configuration's lists because the two were once one function: a caller that
+/// held the process-wide configuration lock to have the lists in hand was holding it across
+/// the four kilobytes this reads, and a guard held across a read on a slow volume is a guard
+/// every thread of the app — the one pumping this window's own messages included — waits on for
+/// as long as the disk takes. Asking for the two halves in that order is the whole of the fix,
+/// and it is a shape rather than a rule: [`read`] takes no configuration, so there is nothing
+/// for a caller to be holding while it runs.
+///
+/// The front of the file is read to its front and no further, and the whole window is read here
+/// only where the front settles nothing — which is exactly where the tables below would have
+/// asked for it, so nothing is read that was not read before (see `head::PROBE_BYTES`). One
+/// file's front and its whole window both being wanted by one hover is what made this worth a
+/// type: a hover asks this question and five others about the same file, and every one of them
+/// was reading the same directory entry for itself (see `crate::formats::head::Facts`).
+pub struct Probe {
+    path: PathBuf,
+    facts: Option<crate::formats::head::Facts>,
+    front: Option<std::sync::Arc<crate::formats::head::Head>>,
+    /// The whole window, read here only where the front says nothing — the one case where the
+    /// tables below cannot answer from the front alone.
+    window: Option<std::sync::Arc<crate::formats::head::Head>>,
+}
+
+impl Probe {
+    /// Everything the question below needs from the disk, read once.
+    pub fn read(path: &Path) -> Self {
+        #[cfg(test)]
+        ENTRY_READS.with(|reads| reads.set(reads.get() + 1));
+
+        // A file whose content is not on this machine is not opened at all, and that question
+        // is answered out of the directory entry rather than by trying (see `cloud_files`).
+        let Some(facts) = crate::formats::head::Facts::read(path) else {
+            let front = crate::formats::head::of(path);
+            let window = front.clone().filter(|head| needs_the_window(head));
+            return Self {
+                path: path.to_path_buf(),
+                facts: None,
+                front,
+                window,
+            };
+        };
+
+        let front = crate::formats::head::of_with_facts(path, &facts);
+        let window = front
+            .as_ref()
+            .filter(|head| needs_the_window(head))
+            .and_then(|_| crate::formats::head::full_with_facts(path, &facts));
+
+        Self {
+            path: path.to_path_buf(),
+            facts: Some(facts),
+            front,
+            window,
+        }
+    }
+
+    /// The same for a caller that has already read the file's own entry, which reads the head
+    /// against that entry rather than reading the entry again.
+    fn borrowed(path: &Path, facts: &crate::formats::head::Facts) -> Self {
+        let front = crate::formats::head::of_with_facts(path, facts);
+        let window = front
+            .as_ref()
+            .filter(|head| needs_the_window(head))
+            .and_then(|_| crate::formats::head::full_with_facts(path, facts));
+
+        Self {
+            path: path.to_path_buf(),
+            facts: None,
+            front,
+            window,
+        }
+    }
+
+    /// The file's own directory entry, for a question that needs the version of the file to
+    /// hold an answer under — the probe's verdict, the router's video claim — rather than to
+    /// read anything.
+    pub fn facts(&self) -> Option<&crate::formats::head::Facts> {
+        self.facts.as_ref()
+    }
+
+    /// The file this probe is of.
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+
+    /// Whether reading the file would have to fetch its content first (see `cloud_files`).
+    ///
+    /// A caller that has read the entry gets the answer out of it; a file with no entry to
+    /// read has nothing on this machine either way, and the question is asked of the path as
+    /// it always has been.
+    pub fn needs_download(&self) -> bool {
+        self.facts
+            .as_ref()
+            .is_none_or(crate::formats::head::Facts::needs_download)
+    }
+}
+
+// How many times a probe has read a file's directory entry, which is how many `fs::metadata`
+// calls a run of hovers paid for reading "what is this file" against the disk.
+//
+// It is the count the whole of this module's split is for, and it is counted rather than
+// argued about: six questions about one file used to make six of them, one per question,
+// because nothing was handed down between them. It is per-thread because the tests that read
+// it run beside each other, and a count of one thread's probes taken while another's are added
+// to it says nothing about either. It is a comment rather than a doc because a `thread_local!`
+// block carries no doc of its own.
+#[cfg(test)]
+thread_local! {
+    static ENTRY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The entry reads this thread has made, and a way to start counting again from nothing.
+#[cfg(test)]
+pub(crate) fn entry_reads() -> usize {
+    ENTRY_READS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn count_entry_reads_from_now() {
+    ENTRY_READS.with(|reads| reads.set(0));
+}
+
+/// Whether the tables below cannot answer from the front alone, and so the whole window is
+/// what they will ask about: a front that names nothing, and a front that names the container
+/// a camera raw is written in rather than a picture of its own.
+///
+/// The condition is the one `read` below uses to decide whether to go on to the window, written
+/// once here so that the read above and the question below cannot disagree about it. It is
+/// deliberately blind to the lists: a front that names a format no list claims is the one case
+/// where the window is wanted and the front did not say so, and it is answered by reading the
+/// window under whatever the caller happens to hold — which is `head`'s own cache for every
+/// hover after the first.
+fn needs_the_window(head: &crate::formats::head::Head) -> bool {
+    head.complete()
+        || head.front().is_none()
+        || head
+            .nature()
+            .is_some_and(|nature| nature.container_of_a_raw)
+}
+
 /// The kind a file's content belongs to, where that is not what its name says.
 ///
 /// Asked where a file's kind is decided — the hook's gate, the loader and the layout —
 /// and answered from the cache where the same file has been asked about already in this
 /// hover. `Content::Unknown`, where that is the answer, leaves the kind to the list the
 /// name is written in.
+///
+/// It is [`Probe::read`] followed by [`answer`], which is the shape every caller that has more
+/// than one question about a file wants: read once, answer as often as asked.
 ///
 /// The configuration is passed in rather than taken here: the lists are what the names a
 /// file's bytes answered with are turned into a kind by, and the caller either has them in
@@ -138,54 +284,41 @@ pub enum Content {
 /// lock taken twice hangs the thread that asked, and this question is asked from the hook, the
 /// loader, the layout and the engines' own request sides.
 pub fn of(path: &Path, config: &AppConfig) -> Content {
-    // The one reading of the directory entry this question makes, and everything below is
-    // keyed by it. It used to be made twice: once here for the answer, and once inside
-    // `probed_audio_only` to look up a table that is already in memory. A hover asks this
-    // question from several places for one file, so the second read was paid several times
-    // over for an answer that was in memory both times.
-    let facts = crate::formats::head::Facts::read(path);
-    of_read(path, config, facts.as_ref())
+    answer(&Probe::read(path), config)
 }
 
-/// The same question, for a caller that has already read the file's own entry.
+/// The same question of a file whose own bytes have already been read into a [`Probe`].
 ///
-/// The entry is the one thing this needs from the disk before the lists are consulted, and
-/// reading it is what lets the caller hand the same reading to every other question about the
-/// file — a hover asks this one and five others, and each was reading the same directory entry
-/// for itself (see `crate::formats::head::Facts`).
-pub fn of_entry_read(path: &Path, config: &AppConfig, facts: &crate::formats::head::Facts) -> Content {
-    of_read(path, config, Some(facts))
-}
-
-/// Both forms above, once the entry has been settled.
-fn of_read(path: &Path, config: &AppConfig, facts: Option<&crate::formats::head::Facts>) -> Content {
-    let key = facts.map_or_else(
-        || crate::formats::head::key(path),
+/// This is the half that consults the lists, and it is a separate function from [`Probe::read`]
+/// so that what it reads and what it consults cannot be done in the wrong order: the reading is
+/// over before this is called, and a caller holding the configuration to have the lists in hand
+/// is holding it over a cache lookup and a set of list comparisons rather than over a
+/// `File::open`.
+pub fn answer(probe: &Probe, config: &AppConfig) -> Content {
+    let key = probe.facts.as_ref().map_or_else(
+        || crate::formats::head::key(&probe.path),
         |facts| facts.key().clone(),
     );
 
-    answered(key, path, facts, config)
+    answered(key, probe, config)
 }
 
-/// The same for a caller that has already read the file's own entry: the answer is held under
-/// the version that entry names, and the head is read from that entry as well, so a hover that
-/// has asked a file's own claim is not asking the volume for the same metadata twice (see
-/// `crate::formats::head::Facts`).
+/// The same question, for a caller that has already read the file's own entry and wants to hand
+/// the reading on rather than keep it.
+///
+/// It is the form the hook asks it in — the entry is in hand there because the hook read it to
+/// answer whether the file is a file at all — so nothing is read again and nothing is held that
+/// the caller has not already chosen to hold (see `explorer_hook::normalize_media_path`).
 pub fn of_with_facts(
     path: &Path,
     facts: &crate::formats::head::Facts,
     config: &AppConfig,
 ) -> Content {
-    answered(facts.key().clone(), path, Some(facts), config)
+    answered(facts.key().clone(), &Probe::borrowed(path, facts), config)
 }
 
 /// The kind a file's content belongs to, held under the key it was read at.
-fn answered(
-    key: crate::formats::head::Key,
-    path: &Path,
-    facts: Option<&crate::formats::head::Facts>,
-    config: &AppConfig,
-) -> Content {
+fn answered(key: crate::formats::head::Key, probe: &Probe, config: &AppConfig) -> Content {
     // The one answer that is not a table's, and it is asked before the cache rather than after
     // it: a container whose own streams a probe found a sound in and no picture is a sound
     // whatever its box is called, and the answer held below was read before that probe ran —
@@ -205,7 +338,7 @@ fn answered(
         }
     }
 
-    let answer = read(path, facts, config);
+    let answer = read(probe, config);
 
     if let Ok(mut answers) = ANSWERS.lock() {
         if answers.len() >= ANSWERS_MAX_ENTRIES {
@@ -225,13 +358,16 @@ fn answered(
 /// formats every tool agrees on and then through the ones an engine here reads that no
 /// such table carries, and the name the file is under last, for the formats whose own head
 /// is nothing either table knows — see [`KIND_BY_NAME`] for what is in that one.
-fn read(path: &Path, facts: Option<&crate::formats::head::Facts>, config: &AppConfig) -> Content {
+fn read(probe: &Probe, config: &AppConfig) -> Content {
+    let path = probe.path.as_path();
     // The front of the file first, and the kind its own form settles by itself: the bytes
     // at the front of a picture are a picture's, whatever the file is called, and nothing
     // further is read of one. A front that settles nothing — a container a camera raw is
     // written in, a file whose signature is further in, a file whose form says nothing at
-    // all — is the front the whole window is read for.
-    if let Some(head) = head_of(path, facts) {
+    // all — is the front the whole window is read for, and that read is `Probe`'s rather than
+    // this function's: it is made before the caller had any configuration in hand, which is
+    // the whole of what `Probe` is for.
+    if let Some(head) = probe.front.as_deref() {
         if let Some(names) = head.front() {
             if !head
                 .nature()
@@ -244,7 +380,7 @@ fn read(path: &Path, facts: Option<&crate::formats::head::Facts>, config: &AppCo
         }
     }
 
-    let Some(head) = head_full(path, facts) else {
+    let Some(head) = window_of(probe) else {
         return Content::Unknown;
     };
     let probe = head.bytes();
@@ -261,26 +397,22 @@ fn read(path: &Path, facts: Option<&crate::formats::head::Facts>, config: &AppCo
         .unwrap_or(Content::Unknown)
 }
 
-/// The front of a file's head, read from the entry its caller already has where it has one
-/// (see `crate::formats::head::Facts`).
-fn head_of(
-    path: &Path,
-    facts: Option<&crate::formats::head::Facts>,
-) -> Option<std::sync::Arc<crate::formats::head::Head>> {
-    match facts {
-        Some(facts) => crate::formats::head::of_with_facts(path, facts),
-        None => crate::formats::head::of(path),
+/// The window the tables are asked about, read into the probe where its front said the window
+/// was what the question needed, and read here where it did not.
+///
+/// The second of those two is the one case where a file's whole four kilobytes are read while
+/// the caller holds the configuration, and it is left there rather than read twice: a front that
+/// names a format no list claims is the only way to reach it, the lists are what make that
+/// answer "no", and reading the window for every front that names anything would be four
+/// kilobytes read for every picture on the machine (see [`Probe::read`]).
+fn window_of(probe: &Probe) -> Option<std::sync::Arc<crate::formats::head::Head>> {
+    if let Some(window) = probe.window.as_ref() {
+        return Some(std::sync::Arc::clone(window));
     }
-}
 
-/// The same for the whole window the tables are asked about.
-fn head_full(
-    path: &Path,
-    facts: Option<&crate::formats::head::Facts>,
-) -> Option<std::sync::Arc<crate::formats::head::Head>> {
-    match facts {
-        Some(facts) => crate::formats::head::full_with_facts(path, facts),
-        None => crate::formats::head::full(path),
+    match probe.facts.as_ref() {
+        Some(facts) => crate::formats::head::full_with_facts(&probe.path, facts),
+        None => crate::formats::head::full(&probe.path),
     }
 }
 
@@ -1427,9 +1559,7 @@ const SIGNATURES: &[Signature] = &[
     // with, and the `MP+` its predecessor used.
     Signature {
         names: &["mpc"],
-        matches: Matcher::Test(|probe| {
-            starts_with(probe, b"MPCK") || starts_with(probe, b"MP+")
-        }),
+        matches: Matcher::Test(|probe| starts_with(probe, b"MPCK") || starts_with(probe, b"MP+")),
     },
     // WavPack, whose four characters open every file of the format.
     Signature {
@@ -1450,9 +1580,7 @@ const SIGNATURES: &[Signature] = &[
     // the one that keeps its samples in a separate file.
     Signature {
         names: &["ofr", "ofs"],
-        matches: Matcher::Test(|probe| {
-            starts_with(probe, b"OFR ") || starts_with(probe, b"OFS ")
-        }),
+        matches: Matcher::Test(|probe| starts_with(probe, b"OFR ") || starts_with(probe, b"OFS ")),
     },
     // Shorten, whose four letters open every file of it.
     Signature {
