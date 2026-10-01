@@ -3008,31 +3008,63 @@ impl HoverFacts {
         // The content is asked first because it is the answer the others are read beside: a
         // file whose bytes named a kind is settled, and the router is asked about its name only
         // where they named nothing.
+        //
+        // Both are lookups against a head already in hand, which is what makes it right to ask
+        // them under the guard: `Probe::read` brought the whole window with it wherever the front
+        // settled nothing, so there is nothing here for the guard to be held across.
         let content = crate::formats::content_type::answer(&probe, &config);
         let named = crate::formats::routing::kind_of_with_facts(path, &config, probe.facts());
 
+        let video_named = video_formats::matches_any_video_list(path, &config);
+        let audio_named = audio_formats::matches_audio_list(path, &config.audio_extensions);
+        let archive_named = archive_formats::matches_archive_list(path, &config.archive_extensions);
+        let peazip_named = peazip_formats::matches_peazip_list(path, &config.peazip_extensions);
+        let html_named = crate::formats::text_formats::is_html_extension(path);
+        let font_named = font_formats::matches_font_list(path, &config.font_extensions);
+        // The name is the whole of it, and deliberately so: an `svg` that is not a document is a
+        // drawing the browser refuses rather than a metafile, and the renderer has the last word
+        // on whether a document is a document at all (see `svg_preview::is_svg_file`).
+        let svg_document = svg_preview::is_svg_file(path);
+        let video_enabled = PreviewType::Videos.enabled_in(&config);
+        let audio_enabled = PreviewType::Audio.enabled_in(&config);
+        let text_enabled = PreviewType::Text.enabled_in(&config);
+        let scales = HoverScales::of(&config);
+        let follow_cursor = config.follow_cursor;
+        drop(config);
+
+        // And last, with the guard gone. Which of this app's own readers does the work is the
+        // one question here that still opens the file — a book's is settled by what an `.ai`
+        // keeps at an offset, a picture's by its own head — so it is the one that must not be
+        // asked with a guard in hand. It is asked of the entry read above, which makes it a
+        // lookup rather than a second `fs::metadata`, and it takes the lock for the one list it
+        // consults and gives it back at once.
+        //
+        // A configuration that will not open is answered as the page a book most often is, which
+        // is what this arm has always done (see `native_formats::page_job`).
+        let native_job = named.and_then(|kind| {
+            CONFIG
+                .lock()
+                .ok()
+                .and_then(|config| native_formats::job_for(path, kind, &config, probe.facts()))
+        });
+
         Self {
-            video_named: video_formats::matches_any_video_list(path, &config),
-            audio_named: audio_formats::matches_audio_list(path, &config.audio_extensions),
-            archive_named: archive_formats::matches_archive_list(path, &config.archive_extensions),
-            peazip_named: peazip_formats::matches_peazip_list(path, &config.peazip_extensions),
-            html_named: crate::formats::text_formats::is_html_extension(path),
-            font_named: font_formats::matches_font_list(path, &config.font_extensions),
-            // The name is the whole of it, and deliberately so: an `svg` that is not a
-            // document is a drawing the browser refuses rather than a metafile, and the
-            // renderer has the last word on whether a document is a document at all (see
-            // `svg_preview::is_svg_file`).
-            svg_document: svg_preview::is_svg_file(path),
-            native_job: named
-                .and_then(|kind| native_formats::job_for(path, kind, &config, probe.facts())),
-            video_enabled: PreviewType::Videos.enabled_in(&config),
-            audio_enabled: PreviewType::Audio.enabled_in(&config),
-            text_enabled: PreviewType::Text.enabled_in(&config),
             probe,
             content,
             named,
-            scales: HoverScales::of(&config),
-            follow_cursor: config.follow_cursor,
+            video_named,
+            audio_named,
+            archive_named,
+            peazip_named,
+            html_named,
+            font_named,
+            svg_document,
+            native_job,
+            video_enabled,
+            audio_enabled,
+            text_enabled,
+            scales,
+            follow_cursor,
         }
     }
 
