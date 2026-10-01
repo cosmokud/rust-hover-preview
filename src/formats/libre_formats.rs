@@ -23,35 +23,9 @@
 //! entries and the older lists this app shipped and then changed included.
 
 use crate::config::config::{OfficeEngine, PreviewType};
-use crate::formats::text_formats;
+use crate::formats::lists;
 use crate::CONFIG;
 use std::path::Path;
-
-/// Whether the configured list claims `path`.
-pub fn matches_libre_list(path: &Path, extensions: &[String]) -> bool {
-    text_formats::matches_configured_extension(path, extensions)
-}
-
-/// Whether the configured list claims `path`, without asking whether these previews are
-/// switched on. The gate is asked beside it by the hook, the way every other kind's is.
-pub fn is_libre_file(path: &Path) -> bool {
-    CONFIG
-        .lock()
-        .map(|config| matches_libre_list(path, &config.libre_extensions))
-        .unwrap_or(false)
-}
-
-/// Whether a preview may be shown for `path`: the file the configured list claims, and
-/// the `Document` gate in the tray's `Preview Types` submenu — the same gate the Office
-/// documents beside these answer to, since what either is previewed as is a page.
-///
-/// Both halves ask it where a kind can be switched off under a preview that is already
-/// on screen: a hover is not sent for a kind that is off, and a layout finds no size for
-/// a file whose kind is off, which is how a preview of that kind comes down when the
-/// switch does. See `PreviewType::enabled`.
-pub fn is_libre_preview(path: &Path) -> bool {
-    is_libre_file(path) && PreviewType::Libre.enabled()
-}
 
 /// Which kind a page the render engine draws for this file is shown under, or `None` for a
 /// file the engine is not asked about at all.
@@ -76,11 +50,12 @@ pub fn is_libre_preview(path: &Path) -> bool {
 pub fn engine_page_kind(path: &Path) -> Option<PreviewType> {
     use crate::formats::content_type::Content;
 
-    // What follows the question asks the machine rather than a list — the name's own list, and
+    // What follows the question asks the machine rather than a list — the name's own row, and
     // which of the two kinds the page belongs to — and takes its own answers. The question
     // itself reads the file's entry before taking the lock, so the guard is not held across
-    // the read (see `calibre_formats::content_of`).
-    let content = crate::formats::calibre_formats::content_of(path);
+    // the read (see `content_type::of_reaching_config`), and this list comparison is in memory
+    // under a guard of its own.
+    let content = crate::formats::content_type::of_reaching_config(path);
 
     match content {
         Content::Kind(PreviewType::Libre) => return Some(PreviewType::Libre),
@@ -88,7 +63,10 @@ pub fn engine_page_kind(path: &Path) -> Option<PreviewType> {
         Content::Unknown => {}
     }
 
-    if is_libre_file(path) {
+    if CONFIG
+        .lock()
+        .is_ok_and(|config| lists::LIBRE.claims(path, &config))
+    {
         return Some(PreviewType::Libre);
     }
 
@@ -114,8 +92,6 @@ mod tests {
     /// rule is worth stating rather than assuming.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list =
-            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_LIBRE_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         for name in [
@@ -139,35 +115,25 @@ mod tests {
             "animation.swf",
         ] {
             let path = std::path::Path::new(name);
-            let claimed =
-                crate::formats::image_formats::matches_image_list(path, &config.image_extensions)
-                    || crate::formats::vector_formats::matches_vector_list(
-                        path,
-                        &config.vector_extensions,
-                    )
-                    || crate::formats::office_formats::matches_office_list(
-                        path,
-                        &config.office_extensions,
-                    )
-                    || crate::formats::video_formats::matches_any_video_list(path, &config)
-                    || crate::formats::text_formats::matches_text_lists(
-                        path,
-                        &config.text_extensions,
-                        &config.text_names,
-                    );
+            let claimed = crate::formats::lists::IMAGE.claims(path, &config)
+                || crate::formats::lists::VECTOR.claims(path, &config)
+                || crate::formats::lists::OFFICE.claims(path, &config)
+                || crate::formats::video_formats::matches_any_video_list(path, &config)
+                || crate::formats::lists::TEXT.claims(path, &config)
+                || crate::formats::lists::NAMES.claims(path, &config);
 
             if !claimed {
                 continue;
             }
 
             assert!(
-                !matches_libre_list(path, &list),
+                !crate::formats::lists::LIBRE.claims(path, &config),
                 "`{name}` is read by another kind, so the engine is not asked about it"
             );
         }
 
         assert!(
-            matches_libre_list(std::path::Path::new("logo.cdr"), &list),
+            crate::formats::lists::LIBRE.claims(std::path::Path::new("logo.cdr"), &config),
             "a CorelDRAW document is in this list as well as the design list: the engine \
              draws the drawing where this app reads the picture it keeps"
         );
@@ -177,8 +143,7 @@ mod tests {
     /// of the nineties to the open formats of today.
     #[test]
     fn holds_the_documents_no_reader_of_this_app_takes() {
-        let list =
-            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_LIBRE_EXTENSIONS);
+        let config = crate::config::config::AppConfig::default();
 
         for name in [
             "letter.wpd",
@@ -207,7 +172,7 @@ mod tests {
             "drawing.pmd",
         ] {
             assert!(
-                matches_libre_list(std::path::Path::new(name), &list),
+                crate::formats::lists::LIBRE.claims(std::path::Path::new(name), &config),
                 "`{name}` is one of the engine's documents"
             );
         }
@@ -220,8 +185,7 @@ mod tests {
     /// that made it worth checking is beside them.
     #[test]
     fn hands_over_no_name_the_engine_has_no_filter_for() {
-        let list =
-            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_LIBRE_EXTENSIONS);
+        let config = crate::config::config::AppConfig::default();
 
         for name in [
             "book.swf",
@@ -252,7 +216,7 @@ mod tests {
             "drawing.vor",
         ] {
             assert!(
-                !matches_libre_list(std::path::Path::new(name), &list),
+                !crate::formats::lists::LIBRE.claims(std::path::Path::new(name), &config),
                 "`{name}` is a name no filter of the engine's declares"
             );
         }
@@ -265,7 +229,7 @@ mod tests {
     #[test]
     fn a_page_the_engine_draws_answers_with_the_kind_it_is_shown_under() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.libre_extensions = text_formats::sanitize_extension_list(
+            config.libre_extensions = crate::formats::lists::sanitize_extension_list(
                 crate::formats::lists::DEFAULT_LIBRE_EXTENSIONS,
             );
         }

@@ -7,7 +7,7 @@
 //! lists too, so a file of either name is settled by its own bytes, and the two lists are asked
 //! together wherever the question is what a file *is* rather than which engine plays it.
 
-use crate::config::config::{AppConfig, PreviewType};
+use crate::config::config::AppConfig;
 use crate::CONFIG;
 use std::fs::File;
 use std::io::Read;
@@ -21,27 +21,8 @@ const MPEGTS_PROBE_BYTES: usize = 2048;
 // TypeScript also uses these two extensions, so they need a content check
 const TYPESCRIPT_SHARED_EXTENSIONS: &[&str] = &["ts", "mts"];
 
-/// Whether one of the two video lists claims `path` as a video.
-///
-/// `.ts` and `.mts` are claimed by the text lists too, so a file of either name is
-/// settled by its content: an MPEG-TS sync byte makes it the transport stream the
-/// list says it is, and a file without one falls through to the text preview of the
-/// TypeScript source it is.
-///
-/// The two lists are asked together wherever the question is what a file *is* — which is
-/// every question but the engine's own: `[video]` and `[ffmpeg]` are what a video is played
-/// by, not what it is, so a name in either is a video to the router, the layout and the
-/// engines that exclude the video names from their own lists.
-pub fn matches_video_list(path: &Path, extensions: &[String]) -> bool {
-    let Some(extension) = crate::formats::text_formats::lookup_extension(path) else {
-        return false;
-    };
-
-    list_matches_video(&extension, path, extensions)
-}
-
 /// Whether one list claims a name already looked up, asking the file only for the two names the
-/// text lists share with these (see [`matches_video_list`]).
+/// text lists share with these (see [`matches_any_video_list`]).
 fn list_matches_video(extension: &str, path: &Path, extensions: &[String]) -> bool {
     if !extensions
         .iter()
@@ -65,9 +46,21 @@ fn list_claims_video_name(extension: &str, extensions: &[String]) -> bool {
         .any(|claimed| claimed.as_str() == extension)
 }
 
-/// Whether either of the two lists claims `path`, asked of a configuration in hand: what every
-/// caller that already holds the configuration asks rather than the one above, which is the
-/// question with the global read out of it.
+/// Whether either of the two lists claims `path` as a video, asked of a configuration in hand.
+///
+/// `.ts` and `.mts` are claimed by the text lists too, so a file of either name is settled by its
+/// content: an MPEG-TS sync byte makes it the transport stream the list says it is, and a file
+/// without one falls through to the text preview of the TypeScript source it is.
+///
+/// The two lists are asked together wherever the question is what a file *is* — which is every
+/// question but the engine's own: `[video]` and `[ffmpeg]` are what a video is played by, not what
+/// it is, so a name in either is a video to the router, the layout and the engines that exclude
+/// the video names from their own lists.
+///
+/// It reads the two rows of the table rather than two fields of the configuration, because the
+/// rows are what own them, and because this is the one function in the app that opens a file from
+/// inside a kind's list question: a caller holding the configuration's lock must not ask it (see
+/// `routing::named_as`, which is what `preview_window` asks instead).
 pub fn matches_any_video_list(path: &Path, config: &AppConfig) -> bool {
     // The name is read once for both lists: a lookup is an allocation, and this is the question
     // every caller without an answer of its own asks (see `lookup_extension`).
@@ -75,8 +68,15 @@ pub fn matches_any_video_list(path: &Path, config: &AppConfig) -> bool {
         return false;
     };
 
-    list_matches_video(&extension, path, &config.video_extensions)
-        || list_matches_video(&extension, path, &config.ffmpeg_extensions)
+    list_matches_video(
+        &extension,
+        path,
+        crate::formats::lists::VIDEO.entries(config),
+    ) || list_matches_video(
+        &extension,
+        path,
+        crate::formats::lists::FFMPEG.entries(config),
+    )
 }
 
 /// As above, by name alone: the half of [`matches_any_video_list`] that asks nothing of the file.
@@ -86,8 +86,25 @@ pub fn claims_any_video_name(path: &Path, config: &AppConfig) -> bool {
         return false;
     };
 
-    list_claims_video_name(&extension, &config.video_extensions)
-        || list_claims_video_name(&extension, &config.ffmpeg_extensions)
+    list_claims_video_name(&extension, crate::formats::lists::VIDEO.entries(config))
+        || list_claims_video_name(&extension, crate::formats::lists::FFMPEG.entries(config))
+}
+
+/// Whether the `[video]` row's own list claims `path`, as a question about a *name* — the two
+/// names the text lists share are settled by the name alone, with no read of the file.
+///
+/// It exists because that is the one shape the video kind has that no row can answer: the caller
+/// wants the list's own answer for a file it has not opened and may not open — a synchronizing
+/// provider's placeholder is a directory entry that can be answered for but a file that must not
+/// be opened, because opening it is what starts the download — and so the two shared names are
+/// left to the text lists, which is the same answer [`matches_any_video_list`] gives for a name
+/// the content has already spoken for.
+pub fn claims_video_name(path: &Path, extensions: &[String]) -> bool {
+    let Some(extension) = crate::formats::text_formats::lookup_extension(path) else {
+        return false;
+    };
+
+    list_claims_video_name(&extension, extensions)
 }
 
 /// Whether the configured lists claim `path`, without asking whether video previews
@@ -97,17 +114,6 @@ pub fn is_video_file(path: &Path) -> bool {
         .lock()
         .map(|config| matches_any_video_list(path, &config))
         .unwrap_or(false)
-}
-
-/// Whether a video preview may be shown for `path`: the file the configured list
-/// claims, and the `Videos` gate in the tray's `Preview Types` submenu.
-///
-/// [`is_video_file`] is the classification on its own, which is what asks whether
-/// a file is a video rather than whether one may be shown — a `.ts` a video gate
-/// turned down must still be recognized as the transport stream it is, or the
-/// text lists would claim it.
-pub fn is_video_preview(path: &Path) -> bool {
-    is_video_file(path) && PreviewType::Videos.enabled()
 }
 
 fn looks_like_mpegts(path: &Path) -> bool {
@@ -198,7 +204,12 @@ mod tests {
     #[test]
     fn the_two_lists_put_each_engine_where_it_belongs() {
         let config = AppConfig::default();
-        let native = |name: &str| matches_video_list(Path::new(name), &config.video_extensions);
+        let native = |name: &str| {
+            claims_video_name(
+                Path::new(name),
+                crate::formats::lists::VIDEO.entries(&config),
+            )
+        };
 
         // `ts` and `mts` are left out of this: they are claimed by the text lists too, so a file
         // of either name is settled by its own bytes rather than by the list it is in (see

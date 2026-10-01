@@ -807,7 +807,7 @@ impl List {
             Entries::Bare | Entries::Hashed => {
                 crate::formats::text_formats::matches_configured_extension(path, entries)
             }
-            Entries::Compound => crate::formats::archive_formats::matches_archive_list(path, entries),
+            Entries::Compound => crate::formats::archive_formats::claims_in(path, entries),
             Entries::Name => crate::formats::text_formats::matches_configured_name(path, entries),
         }
     }

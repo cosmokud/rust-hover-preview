@@ -4,16 +4,11 @@
 //! every kind's list is a row of, and the one place a list is written down, the built-in
 //! entries and the older lists this app shipped and then changed included.
 
-use crate::formats::{head, text_formats};
+use crate::formats::head;
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
-
-/// Whether the configured list claims `path`.
-pub fn matches_audio_list(path: &Path, extensions: &[String]) -> bool {
-    text_formats::matches_configured_extension(path, extensions)
-}
 
 /// The containers a probe found a sound in and no picture, held for the run.
 ///

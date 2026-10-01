@@ -73,34 +73,9 @@
 //! entries and the older lists this app shipped and then changed included.
 
 use crate::config::config::PreviewType;
-use crate::formats::text_formats;
+use crate::formats::lists;
 use crate::CONFIG;
 use std::path::Path;
-
-/// Whether the configured list claims `path`.
-pub fn matches_magick_list(path: &Path, extensions: &[String]) -> bool {
-    text_formats::matches_configured_extension(path, extensions)
-}
-
-/// Whether the configured list claims `path`, without asking whether these previews are
-/// switched on. The gate is asked beside it by the hook, the way every other kind's is.
-pub fn is_magick_file(path: &Path) -> bool {
-    CONFIG
-        .lock()
-        .map(|config| matches_magick_list(path, &config.magick_extensions))
-        .unwrap_or(false)
-}
-
-/// Whether a preview may be shown for `path`: the file the configured list claims, and
-/// the `Magick` gate in the tray's `Preview Types` submenu.
-///
-/// Both halves ask it where a kind can be switched off under a preview that is already on
-/// screen: a hover is not sent for a kind that is off, and the layout places nothing for a
-/// file whose kind is off, which is how a preview of that kind comes down when the switch
-/// does. See `PreviewType::enabled`.
-pub fn is_magick_preview(path: &Path) -> bool {
-    is_magick_file(path) && PreviewType::Magick.enabled()
-}
 
 /// Whether the engine is the one that develops this file at all: a name its own list carries,
 /// or the bytes of a picture it reads under a name no list holds.
@@ -116,13 +91,17 @@ pub fn is_engine_picture(path: &Path) -> bool {
     use crate::formats::content_type::Content;
 
     // The entry is read before the lock, so the guard is not held across the read (see
-    // `calibre_formats::content_of`).
-    let content = crate::formats::calibre_formats::content_of(path);
+    // `content_type::of_reaching_config`), and this list comparison is in memory under a guard
+    // of its own.
+    let content = crate::formats::content_type::of_reaching_config(path);
 
     match content {
         Content::Kind(PreviewType::Magick) => true,
         Content::Kind(_) | Content::Foreign => false,
-        Content::Unknown => is_magick_file(path),
+        Content::Unknown => CONFIG
+            .lock()
+            .map(|config| lists::MAGICK.claims(path, &config))
+            .unwrap_or(false),
     }
 }
 
@@ -136,8 +115,6 @@ mod tests {
     /// worth stating rather than assuming.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list =
-            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_MAGICK_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         for name in [
@@ -178,45 +155,23 @@ mod tests {
             "picture.palm",
         ] {
             let path = std::path::Path::new(name);
-            let claimed =
-                crate::formats::image_formats::matches_image_list(path, &config.image_extensions)
-                    || crate::formats::vector_formats::matches_vector_list(
-                        path,
-                        &config.vector_extensions,
-                    )
-                    || crate::formats::design_formats::matches_design_list(
-                        path,
-                        &config.design_extensions,
-                    )
-                    || crate::formats::font_formats::matches_font_list(
-                        path,
-                        &config.font_extensions,
-                    )
-                    || crate::formats::libre_formats::matches_libre_list(
-                        path,
-                        &config.libre_extensions,
-                    )
-                    || crate::formats::video_formats::matches_any_video_list(path, &config)
-                    || crate::formats::archive_formats::matches_archive_list(
-                        path,
-                        &config.archive_extensions,
-                    )
-                    || crate::formats::office_formats::matches_office_list(
-                        path,
-                        &config.office_extensions,
-                    )
-                    || crate::formats::text_formats::matches_text_lists(
-                        path,
-                        &config.text_extensions,
-                        &config.text_names,
-                    );
+            let claimed = crate::formats::lists::IMAGE.claims(path, &config)
+                || crate::formats::lists::VECTOR.claims(path, &config)
+                || crate::formats::lists::DESIGN.claims(path, &config)
+                || crate::formats::lists::FONT.claims(path, &config)
+                || crate::formats::lists::LIBRE.claims(path, &config)
+                || crate::formats::video_formats::matches_any_video_list(path, &config)
+                || crate::formats::lists::ARCHIVE.claims(path, &config)
+                || crate::formats::lists::OFFICE.claims(path, &config)
+                || crate::formats::lists::TEXT.claims(path, &config)
+                || crate::formats::lists::NAMES.claims(path, &config);
 
             if !claimed {
                 continue;
             }
 
             assert!(
-                !matches_magick_list(path, &list),
+                !crate::formats::lists::MAGICK.claims(path, &config),
                 "`{name}` is read by another kind, so the engine is not asked about it"
             );
         }
@@ -226,8 +181,7 @@ mod tests {
     /// exists for: nothing else on the machine opens one.
     #[test]
     fn holds_the_camera_raw_formats_and_the_pictures_beside_them() {
-        let list =
-            text_formats::sanitize_extension_list(crate::formats::lists::DEFAULT_MAGICK_EXTENSIONS);
+        let config = crate::config::config::AppConfig::default();
 
         for name in [
             "shot.nef",
@@ -265,7 +219,7 @@ mod tests {
             "fax.dcx",
         ] {
             assert!(
-                matches_magick_list(std::path::Path::new(name), &list),
+                crate::formats::lists::MAGICK.claims(std::path::Path::new(name), &config),
                 "`{name}` is one of the engine's pictures"
             );
         }
@@ -275,7 +229,8 @@ mod tests {
     /// dropped rather than matched against.
     #[test]
     fn reads_a_list_of_bare_extensions() {
-        let extensions = text_formats::sanitize_extension_list(" .NEF , cr2,,*.raw ,nef,3fr");
+        let extensions =
+            crate::formats::lists::sanitize_extension_list(" .NEF , cr2,,*.raw ,nef,3fr");
 
         assert_eq!(extensions, vec!["nef", "cr2", "3fr"]);
     }
