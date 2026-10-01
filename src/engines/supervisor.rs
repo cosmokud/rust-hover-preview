@@ -223,6 +223,20 @@ struct InFlight {
 static IN_FLIGHT: Lazy<Mutex<HashMap<Adapter, InFlight>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// A lock the tests that put a run in the table above take, so that one of them runs at a time.
+///
+/// It is the same hazard `engine_processes::STAND_IN` guards against, reached from the other end:
+/// four private records were four things no other test could reach, and one keyed table is one
+/// thing every adapter's tests reach. So a test in one adapter's module that begins a run under
+/// that adapter's key is writing into the entry another module's test is asserting is empty —
+/// `a_run_is_said_to_be_what_it_is_and_forgotten_when_it_stops` failed on
+/// `running_source(Adapter::ImageMagick)` while `imagemagick_render`'s own test had an ImageMagick
+/// run in flight, which is a test answering for a run it never began. Only the tests share the
+/// table; nothing in the app does, and nothing here is shared that the record itself is not.
+/// Held for the length of one test, which is under a second.
+#[cfg(test)]
+pub(crate) static IN_FLIGHT_TAKEN: Mutex<()> = Mutex::new(());
+
 /// Say what `adapter` is running, and which process is running it, for the threads that may decide
 /// it has stopped answering while the one that started it waits.
 pub fn begin(adapter: Adapter, source: &Path, pid: u32) {
@@ -546,6 +560,10 @@ mod tests {
     /// own accord is not left standing as one that is still going.
     #[test]
     fn a_run_is_said_to_be_what_it_is_and_forgotten_when_it_stops() {
+        let _in_flight = IN_FLIGHT_TAKEN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let source = PathBuf::from("book.epub");
         let pid = std::process::id();
 
@@ -585,6 +603,10 @@ mod tests {
     /// answer for. This is what four private records could not do.
     #[test]
     fn one_adapters_run_is_not_anothers() {
+        let _in_flight = IN_FLIGHT_TAKEN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         begin(Adapter::PeaZip, Path::new("backup.cab"), std::process::id());
         begin(
             Adapter::ImageMagick,
@@ -642,8 +664,11 @@ mod tests {
     /// and it is recorded by image name, which is the check that keeps an id from being acted on
     /// by itself.
     #[test]
-    fn a_run_that_has_outrun_its_give_up_is_ended_and_one_that_has_not_is_not() {
+    fn a_run_that_has_outran_its_give_up_is_ended_and_one_that_has_not_is_not() {
         let _stand_in = engine_processes::STAND_IN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _in_flight = IN_FLIGHT_TAKEN
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
