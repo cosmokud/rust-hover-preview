@@ -18,6 +18,7 @@ target/
 
 AGENTS.md
 GLOSSARY.md
+MEMORY.md
 /docs/agents
 /docs/adr
 /scratchpad/
