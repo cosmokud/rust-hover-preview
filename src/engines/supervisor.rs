@@ -119,7 +119,12 @@ impl Worker {
     /// it did in each adapter this came out of — a thread that is already waiting has to be woken
     /// by it, and one that is not yet waiting looks at its own slot and its adapter's flag before
     /// it ever waits, so nothing is lost either way.
-    pub fn wake(&'static self) {
+    ///
+    /// It is reachable from outside the module for the one adapter whose ask is a flag rather than
+    /// a piece of work (see `libreoffice_render::warm`); the other three reach it only through
+    /// [`Worker::request`], which is a request that puts something down. What is reachable is a
+    /// thread this app owns and nothing outside `engines`, the module itself being crate-private.
+    pub(crate) fn wake(&'static self) {
         self.ready.notify_all();
 
         if self.started.swap(true, Ordering::AcqRel) {
