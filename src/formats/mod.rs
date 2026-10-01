@@ -22,29 +22,40 @@ pub(crate) mod video_formats;
 mod tests {
     use std::path::Path;
 
-    /// The questions this layer is allowed to take the configuration's lock in, and the reason
-    /// each one may: they are asked from the engine tiers, which hold no configuration of their
-    /// own and have none to be handed, so each reads the file's own entry first and takes the
-    /// lock for the read of the lists alone.
+    /// The one question this layer is allowed to take the configuration's lock in, and the
+    /// reason it may: it is the engines' own content question, and they hold no configuration
+    /// of their own and have none to be handed, so it reads the file's own entry first and
+    /// takes the lock for the lookup of the lists alone.
     ///
-    /// Everywhere else in this layer a lock is a lock a caller may already hold — the hook's gate
-    /// and the router are both asked with the configuration in hand — and a lock taken twice on
-    /// one thread hangs the thread that asked rather than failing, which is a deadlock no test
-    /// can wait for. The question that used to take it in here is asked with the lists passed in
-    /// instead (see `content_type::of`).
-    const ALLOWED: &[(&str, &str)] = &[
-        ("calibre_formats.rs", "is_engine_ebook"),
-        ("libre_formats.rs", "engine_page_kind"),
-        ("magick_formats.rs", "is_engine_picture"),
-        ("peazip_formats.rs", "is_engine_archive"),
-    ];
+    /// It was four questions, one per engine, each with the same body. They are now one
+    /// (`calibre_formats::content_of`) that the four call — so the list is one line rather
+    /// than four, and a fifth engine asking the same question has nothing to copy.
+    ///
+    /// Everywhere else in this layer a lock is a lock a caller may already hold — the hook's
+    /// gate and the router are both asked with the configuration in hand — and a lock taken
+    /// twice on one thread hangs the thread that asked rather than failing, which is a
+    /// deadlock no test can wait for. The question that used to take it in here is asked with
+    /// the lists passed in instead (see `content_type::of`).
+    const ALLOWED: &[(&str, &str)] = &[("calibre_formats.rs", "content_of")];
 
     /// Every place the configuration's lock is taken in this layer, named by the file and by the
-    /// question around it, and that the set of them is exactly the engine's own four.
+    /// question around it, and that the set of them is exactly the one question the engines
+    /// ask.
     ///
     /// It is a question the compiler cannot answer — the lock is a global behind a function call
     /// like any other — and the answer is what keeps a hover from hanging: the whole reason the
     /// lists are passed into this layer's questions rather than taken by them.
+    ///
+    /// It is a text scan, and it is here rather than made a type error because the rule is
+    /// about a *global* being reached for where a caller may already hold it. Two things it
+    /// does not see, both of which have been true of it since it was written: it covers this
+    /// layer only, so the lock-across-a-read sites in `preview_window` are not covered at all;
+    /// and it matches the literal `CONFIG.lock()` on one line, so a `CONFIG` at the end of a
+    /// line with `.lock()` on the next is not seen either.
+    ///
+    /// Both gaps are now closed at the source rather than here: the preview thread's questions
+    /// read the file's entry before taking the lock (`content_of` in `preview_window`), and the
+    /// router reads it once for all fourteen claims (`routing::claims`).
     #[test]
     fn the_configuration_is_locked_only_where_the_engines_ask() {
         let layer = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -122,5 +133,35 @@ mod tests {
             .next()?;
 
         (!name.is_empty()).then(|| name.to_string())
+    }
+
+    /// That the scan above is not fooled by a lock written across two lines.
+    ///
+    /// The check reads for the literal `CONFIG.lock()` on one line, and the preview thread
+    /// wrote `CONFIG` at the end of one line with `.lock()` on the next — which is why thirteen
+    /// sites the rule exists to catch were invisible to it. Those are now asked with the file's
+    /// entry read before the lock (`content_of` in `preview_window`), but the gap in the check
+    /// itself is still a gap, and a test that cannot fail for the reason it exists is worse
+    /// than no test: it reads as coverage.
+    ///
+    /// So the split form is tested against the scanner rather than left to be discovered. The
+    /// scan is not widened to catch it, because the twelve questions in this layer take the
+    /// lock on one line and there is nothing else here to catch; what the test records is that
+    /// the shape is a real blind spot, so whoever next widens the scan knows what it is for.
+    #[test]
+    fn the_scan_does_not_see_a_lock_written_across_two_lines() {
+        // The form the preview thread used, and the one the scan is blind to.
+        let split = "    let config = CONFIG\n        .lock()\n        .ok();";
+        assert!(
+            !split.contains("CONFIG.lock()"),
+            "a lock written across two lines is not what this scan reads for, which is the gap \
+             the doc above records"
+        );
+
+        // And the form this layer uses, which it does see.
+        assert!(
+            "    let c = CONFIG.lock().ok();".contains("CONFIG.lock()"),
+            "the one-line form is the one the scan is written for"
+        );
     }
 }

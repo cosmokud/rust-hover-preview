@@ -273,30 +273,6 @@ pub fn matches_peazip_list(path: &Path, extensions: &[String]) -> bool {
     text_formats::matches_configured_extension(path, extensions)
 }
 
-/// Read one entry out of the configured list into the lowercase form the lookups use.
-///
-/// Every name in this list is a bare extension — unlike the archive list, which has to carry the
-/// dotted `tar.gz` — so anything that is not one is dropped rather than matched against.
-pub fn sanitize_peazip_extensions(list: &str) -> Vec<String> {
-    let mut extensions: Vec<String> = Vec::new();
-
-    for entry in list.split(',') {
-        let trimmed = entry.trim().trim_start_matches('.').to_lowercase();
-        let is_extension = !trimmed.is_empty()
-            && !trimmed.starts_with('.')
-            && !trimmed.ends_with('.')
-            && trimmed
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_'));
-
-        if is_extension && !extensions.contains(&trimmed) {
-            extensions.push(trimmed);
-        }
-    }
-
-    extensions
-}
-
 /// Whether the configured list claims `path`, without asking whether these previews are switched
 /// on, and without claiming a file a reader of this app's own already reads.
 ///
@@ -341,22 +317,11 @@ pub fn is_peazip_preview(path: &Path) -> bool {
 /// the caller's to ask (`PreviewType::enabled`), because the same question is asked of a preview
 /// that is already on screen when a switch is thrown.
 pub fn is_engine_archive(path: &Path) -> bool {
-    use crate::formats::content_type::{self, Content};
+    use crate::formats::content_type::Content;
 
-    // The file's own entry first and the configuration after it: the question is asked with the
-    // lists in hand, and the head it reads is read outside the lock (see `content_type::of`).
-    let facts = crate::formats::head::Facts::read(path);
-
-    let content = {
-        let Ok(config) = crate::CONFIG.lock() else {
-            return false;
-        };
-
-        match &facts {
-            Some(facts) => content_type::of_with_facts(path, facts, &config),
-            None => content_type::of(path, &config),
-        }
-    };
+    // The entry is read before the lock, so the guard is not held across the read (see
+    // `calibre_formats::content_of`).
+    let content = crate::formats::calibre_formats::content_of(path);
 
     match content {
         Content::Kind(PreviewType::Peazip) => true,
@@ -374,7 +339,7 @@ mod tests {
     /// picture are all answered elsewhere, and none of them is here.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS);
+        let list = text_formats::sanitize_extension_list(DEFAULT_PEAZIP_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         let claimed_elsewhere = |path: &Path| {
@@ -472,7 +437,7 @@ mod tests {
     /// single-stream compressors, and the disk images whose names are their own.
     #[test]
     fn holds_the_archives_no_reader_here_opens() {
-        let list = sanitize_peazip_extensions(DEFAULT_PEAZIP_EXTENSIONS);
+        let list = text_formats::sanitize_extension_list(DEFAULT_PEAZIP_EXTENSIONS);
 
         for name in [
             "backup.arj",
@@ -579,7 +544,7 @@ mod tests {
     /// other list of this app's answers a hand-edited entry.
     #[test]
     fn reads_a_list_of_bare_extensions() {
-        let extensions = sanitize_peazip_extensions(" .CAB , arj,,archive*.iso ,cab,msi");
+        let extensions = text_formats::sanitize_extension_list(" .CAB , arj,,archive*.iso ,cab,msi");
 
         assert_eq!(extensions, vec!["cab", "arj", "msi"]);
     }

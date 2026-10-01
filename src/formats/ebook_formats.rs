@@ -71,30 +71,6 @@ pub fn matches_ebook_list(path: &Path, extensions: &[String]) -> bool {
     text_formats::matches_configured_extension(path, extensions)
 }
 
-/// Read one entry out of the configured list into the lowercase form the lookups use.
-///
-/// Every name in this list is a bare extension — unlike the archive list, which has to carry the
-/// dotted `tar.gz` — so anything that is not one is dropped rather than matched against.
-pub fn sanitize_ebook_extensions(list: &str) -> Vec<String> {
-    let mut extensions: Vec<String> = Vec::new();
-
-    for entry in list.split(',') {
-        let trimmed = entry.trim().trim_start_matches('.').to_lowercase();
-        let is_extension = !trimmed.is_empty()
-            && !trimmed.starts_with('.')
-            && !trimmed.ends_with('.')
-            && trimmed
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_'));
-
-        if is_extension && !extensions.contains(&trimmed) {
-            extensions.push(trimmed);
-        }
-    }
-
-    extensions
-}
-
 /// Whether the configured list claims `path`, without asking whether these previews are switched
 /// on. The gate is asked beside it by the hook, the way every other kind's is.
 pub fn is_ebook_file(path: &Path) -> bool {
@@ -148,7 +124,7 @@ mod tests {
     /// book the engine beside this app has to convert.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS);
+        let list = crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         let claimed_elsewhere = |path: &Path| {
@@ -255,7 +231,7 @@ mod tests {
     /// And what it does hold is the PDF's three spellings and the three comic containers.
     #[test]
     fn holds_the_pages_and_the_comics() {
-        let list = sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS);
+        let list = crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS);
 
         for name in ["book.pdf", "report.pdfa", "encapsulated.epdf"] {
             let path = Path::new(name);
@@ -288,7 +264,7 @@ mod tests {
     /// configuration again would be a lock taken twice on that thread (see `matches_page_name`).
     #[test]
     fn asks_for_the_pdf_names_of_the_list_it_is_given() {
-        let list = sanitize_ebook_extensions(DEFAULT_EBOOK_EXTENSIONS);
+        let list = crate::formats::text_formats::sanitize_extension_list(DEFAULT_EBOOK_EXTENSIONS);
 
         for name in ["book.pdf", "report.pdfa", "encapsulated.epdf"] {
             assert!(
@@ -308,7 +284,7 @@ mod tests {
         assert!(
             !matches_page_name(
                 Path::new("book.pdf"),
-                &sanitize_ebook_extensions("cbz,cbr,cbc")
+                &crate::formats::text_formats::sanitize_extension_list("cbz,cbr,cbc")
             ),
             "a name taken out of the list is a name this app stops drawing"
         );
@@ -318,7 +294,7 @@ mod tests {
     /// reader that decides that is the comic one — nothing here claims a name is a comic.
     #[test]
     fn a_name_added_by_hand_is_asked_of_the_reader_that_reads_it() {
-        let added = sanitize_ebook_extensions("cbc,cbr,cbz,myalbum,pdf,pdfa,epdf");
+        let added = crate::formats::text_formats::sanitize_extension_list("cbc,cbr,cbz,myalbum,pdf,pdfa,epdf");
 
         assert!(
             matches_ebook_list(Path::new("book.myalbum"), &added),
@@ -335,7 +311,7 @@ mod tests {
     /// other list of this app's answers a hand-edited entry.
     #[test]
     fn reads_a_list_of_bare_extensions() {
-        let extensions = sanitize_ebook_extensions(" .PDF , cbz,,cbr,pdf,pdfa");
+        let extensions = crate::formats::text_formats::sanitize_extension_list(" .PDF , cbz,,cbr,pdf,pdfa");
 
         assert_eq!(extensions, vec!["pdf", "cbz", "cbr", "pdfa"]);
     }

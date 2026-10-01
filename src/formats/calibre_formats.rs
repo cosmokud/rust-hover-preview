@@ -135,30 +135,6 @@ pub fn matches_calibre_list(path: &Path, extensions: &[String]) -> bool {
     text_formats::matches_configured_extension(path, extensions)
 }
 
-/// Read one entry out of the configured list into the lowercase form the lookups use.
-///
-/// Every name in this list is a bare extension — unlike the archive list, which has to carry the
-/// dotted `tar.gz` — so anything that is not one is dropped rather than matched against.
-pub fn sanitize_calibre_extensions(list: &str) -> Vec<String> {
-    let mut extensions: Vec<String> = Vec::new();
-
-    for entry in list.split(',') {
-        let trimmed = entry.trim().trim_start_matches('.').to_lowercase();
-        let is_extension = !trimmed.is_empty()
-            && !trimmed.starts_with('.')
-            && !trimmed.ends_with('.')
-            && trimmed
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_'));
-
-        if is_extension && !extensions.contains(&trimmed) {
-            extensions.push(trimmed);
-        }
-    }
-
-    extensions
-}
-
 /// Whether the configured list claims `path`, without asking whether these previews are switched
 /// on. The gate is asked beside it by the hook, the way every other kind's is.
 pub fn is_calibre_file(path: &Path) -> bool {
@@ -191,27 +167,43 @@ pub fn is_calibre_preview(path: &Path) -> bool {
 /// caller's to ask (`PreviewType::enabled`), because the same question is asked of a preview that
 /// is already on screen when a switch is thrown.
 pub fn is_engine_ebook(path: &Path) -> bool {
-    use crate::formats::content_type::{self, Content};
+    use crate::formats::content_type::Content;
 
-    // The file's own entry first and the configuration after it: the question is asked with the
-    // lists in hand, and the head it reads is read outside the lock (see `content_type::of`).
-    let facts = crate::formats::head::Facts::read(path);
-
-    let content = {
-        let Ok(config) = crate::CONFIG.lock() else {
-            return false;
-        };
-
-        match &facts {
-            Some(facts) => content_type::of_with_facts(path, facts, &config),
-            None => content_type::of(path, &config),
-        }
-    };
+    let content = content_of(path);
 
     match content {
         Content::Kind(PreviewType::Calibre) => true,
         Content::Kind(_) | Content::Foreign => false,
         Content::Unknown => is_calibre_file(path),
+    }
+}
+
+/// What a file's content says it is, with the configuration's lock not held across the file.
+///
+/// The one question the four engine tiers all ask, in the shape the rule wants it: the file's
+/// own entry read first without the lock, and the lists taken under it for the lookup that
+/// consults them. Those four are the only places in this layer that may take that lock at all,
+/// because they are the only questions in it with no configuration of their own to be handed
+/// one through — and they were the only places allowed to take it for exactly that long (see
+/// `mod tests::the_configuration_is_locked_only_where_the_engines_ask`, which still holds).
+///
+/// A guard held across a `content_type::of` is a guard every other thread of the app waits on
+/// for as long as the disk takes, and these are asked from the engine's own thread as well as
+/// the preview's.
+pub(crate) fn content_of(path: &Path) -> crate::formats::content_type::Content {
+    use crate::formats::content_type;
+
+    // The file's own entry, read before the lock: it is the one thing this needs from the disk,
+    // and reading it here rather than inside `of` is what keeps the guard off the file.
+    let facts = crate::formats::head::Facts::read(path);
+
+    let Ok(config) = crate::CONFIG.lock() else {
+        return content_type::Content::Unknown;
+    };
+
+    match &facts {
+        Some(facts) => content_type::of_with_facts(path, facts, &config),
+        None => content_type::of(path, &config),
     }
 }
 
@@ -224,7 +216,7 @@ mod tests {
     /// file are all answered elsewhere, and none of them is here.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS);
+        let list = text_formats::sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS);
         let config = crate::config::config::AppConfig::default();
 
         let claimed_elsewhere = |path: &Path| {
@@ -342,7 +334,7 @@ mod tests {
     /// of the dedicated readers.
     #[test]
     fn holds_the_ebooks_no_reader_here_opens() {
-        let list = sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS);
+        let list = text_formats::sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS);
 
         for name in [
             "book.azw",
@@ -370,7 +362,7 @@ mod tests {
     /// other list of this app's answers a hand-edited entry.
     #[test]
     fn reads_a_list_of_bare_extensions() {
-        let extensions = sanitize_calibre_extensions(" .MOBI , epub,,book*.azw ,epub,tcr");
+        let extensions = text_formats::sanitize_extension_list(" .MOBI , epub,,book*.azw ,epub,tcr");
 
         assert_eq!(extensions, vec!["mobi", "epub", "tcr"]);
     }
@@ -382,7 +374,7 @@ mod tests {
     #[test]
     fn asks_the_engine_about_a_file_by_its_bytes_before_its_name() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.calibre_extensions = sanitize_calibre_extensions(DEFAULT_CALIBRE_EXTENSIONS);
+            config.calibre_extensions = text_formats::sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS);
         }
 
         let folder = std::env::temp_dir().join("rust-hover-preview-calibre-engine-ebook");

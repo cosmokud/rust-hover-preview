@@ -2175,6 +2175,12 @@ fn is_current_search_view_legacy(resolver: &mut ItemResolver, pointer: &PointerT
 /// The facts one view's own description holds, as the probes that watch for a change of place
 /// read them: the folder it has open, the URL it was opened with, and whether it is a search —
 /// whose root is the folder behind the results rather than the view's own.
+///
+/// The folder is the one fact here that is not free, and it is kept only as a fallback for a
+/// search whose root the URL does not name (see `resolve_search_root_from_context`). Everywhere
+/// else it is read once and then only compared, and the comparison works on the URL and the
+/// view's own handle, because those name the same place for a folder view (see
+/// `place_of_window`).
 fn view_resolver_hints(context: &ActiveShellViewContext) -> HoverResolverHints {
     let is_search_view = is_probable_search_view_context(context);
     let search_root = if is_search_view {
@@ -2201,6 +2207,14 @@ fn view_resolver_hints(context: &ActiveShellViewContext) -> HoverResolverHints {
 /// opened with — and by nothing else: the resolution of a file does not depend on it, so a
 /// view the shell does not describe leaves the hints empty rather than sending the hook
 /// looking for another witness.
+///
+/// The folder is only asked for where it is the fact that decides something. Reading it is
+/// five crossings into the shell plus a canonicalize and two `stat`s, paid at this probe's
+/// rate, and of the four facts here it is the only one that is not free — the URL names the
+/// same place as the folder does for a folder view (see `place_of_window`), and the view's
+/// own handle says which of two tabs. So a folder view is described by the URL alone, and
+/// only a search asks for the folder: there it is what the root behind the results is
+/// resolved out of, and nothing else supplies one.
 fn get_current_hover_resolver_hints(
     resolver: &mut ItemResolver,
     pointer: &PointerTick,
@@ -2209,9 +2223,20 @@ fn get_current_hover_resolver_hints(
         return HoverResolverHints::default();
     };
 
-    anchored_view_context(resolver, window, true)
-        .map(|context| view_resolver_hints(&context))
-        .unwrap_or_default()
+    let Some(context) = anchored_view_context(resolver, window, false) else {
+        return HoverResolverHints::default();
+    };
+
+    // A search is the one view whose folder is not a place of its own but the root of another,
+    // so it is the one view that cannot be described without it. The cheap look has already
+    // said which kind of view this is by the time the folder is asked for.
+    let context = if is_probable_search_view_context(&context) {
+        anchored_view_context(resolver, window, true).unwrap_or(context)
+    } else {
+        context
+    };
+
+    view_resolver_hints(&context)
 }
 
 /// The place a window's own view is showing, in the form places are compared in: the view that

@@ -40,30 +40,6 @@ use std::sync::Mutex;
 /// the list is a list of the ones that do.
 pub const DEFAULT_AUDIO_EXTENSIONS: &str = "aac,ac3,aif,aifc,aiff,amr,ape,au,awb,caf,dff,dsf,dts,dtshd,eac3,flac,m4a,m4b,mka,mp2,mp3,mpa,mpc,oga,ogg,ofr,ofs,opus,ra,shn,snd,spx,tak,tta,voc,wav,wave,wma,wv";
 
-/// Read one entry out of the configured list into the lowercase form the lookups use.
-///
-/// Every name in this list is a bare extension — unlike the archive list, which has to carry
-/// the dotted `tar.gz` — so anything that is not one is dropped rather than matched against.
-pub fn sanitize_audio_extensions(list: &str) -> Vec<String> {
-    let mut extensions: Vec<String> = Vec::new();
-
-    for entry in list.split(',') {
-        let trimmed = entry.trim().trim_start_matches('.').to_lowercase();
-        let is_extension = !trimmed.is_empty()
-            && !trimmed.starts_with('.')
-            && !trimmed.ends_with('.')
-            && trimmed
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_'));
-
-        if is_extension && !extensions.contains(&trimmed) {
-            extensions.push(trimmed);
-        }
-    }
-
-    extensions
-}
-
 /// Whether the configured list claims `path`.
 pub fn matches_audio_list(path: &Path, extensions: &[String]) -> bool {
     text_formats::matches_configured_extension(path, extensions)
@@ -107,4 +83,20 @@ pub fn probed_audio_only(path: &Path) -> bool {
     AUDIO_ONLY
         .lock()
         .is_ok_and(|remembered| remembered.contains(&key))
+}
+
+/// Whether a probe has already found a sound in this version of `path` and no picture.
+///
+/// The question is a `HashSet` lookup, and taking it used to cost a `fs::metadata` of the file
+/// to build the key: the entry is read to answer a question about a table already in memory.
+/// A caller that has read the entry for something else — the head, a cache key, the hook's own
+/// gate — has the key already, and one hover asks this question from four places, so the
+/// repeated `metadata` calls were the same read of the same directory entry several times over.
+///
+/// Nothing is asked of the file here: a file that is not there has a key like any other, and
+/// the table cannot hold it because nothing ever remembered it.
+pub fn probed_audio_only_in(key: &head::Key) -> bool {
+    AUDIO_ONLY
+        .lock()
+        .is_ok_and(|remembered| remembered.contains(key))
 }
