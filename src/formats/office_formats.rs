@@ -1,16 +1,8 @@
 //! Which files are Office documents.
 //!
-//! The extension list lives in `config.ini`, written from the built-in list on
-//! first run and read back from there, exactly as the text preview's lists and the
-//! archive list are — so a user can add a format this list does not name, or take
-//! one out, without a rebuild.
-//!
-//! The question here is only what a file is *called*. What it *is* — an OOXML
-//! package or an OLE compound file — is settled by reading the file's own header,
-//! and that split is deliberate: the hover gate asks its question of every item the
-//! pointer touches, and a synchronizing provider's placeholder is a directory entry
-//! that can be answered for but a file that must not be opened, because opening it
-//! is what starts the download.
+//! The list of names this answers for is a row of `crate::formats::lists` — the one table
+//! every kind's list is a row of, and the one place a list is written down, the built-in
+//! entries and the older lists this app shipped and then changed included.
 
 use crate::config::config::{AppConfig, OfficeEngine, PreviewType};
 use crate::formats::text_formats;
@@ -19,12 +11,12 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-/// The extensions written to `config.ini` on first run: the Word, Excel and
-/// PowerPoint formats a hover is expected to meet, templates and slide shows
-/// included.
-pub const DEFAULT_OFFICE_EXTENSIONS: &str =
-    "doc,docm,docx,dot,dotm,dotx,pot,potm,potx,pps,ppsm,ppsx,ppt,pptm,pptx,xls,xlsb,xlsm,xlsx,xlt,\
-xltm,xltx";
+/// The Office list itself, which is a row of `crate::formats::lists` like every other.
+///
+/// It is named here as well because the preview thread's own tests still ask for it by this path,
+/// and until they are moved across the table keeps the name they reach for.
+#[cfg(test)]
+pub use crate::formats::lists::DEFAULT_OFFICE_EXTENSIONS;
 
 /// The bytes a container is recognized by: an OOXML package is a zip, so it starts
 /// with the local header of its first part, and a legacy document is an OLE

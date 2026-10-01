@@ -1,63 +1,35 @@
-//! Which files are fonts.
-//!
-//! The extension list lives in `config.ini`, written from the built-in list on
-//! first run and read back from there, exactly as the text preview's lists and the
-//! archive and office lists are — so a user can add a format this list does not
-//! name, or take one out, without a rebuild.
-//!
-//! The question here is only what a file is *called*. What it *is* — a TrueType or
-//! CFF outline font, a collection of faces, or one of the two webfont containers —
-//! is settled in `font_preview` by reading the file's own header, and that split is
-//! deliberate: the hover gate asks its question of every item the pointer touches,
-//! and a synchronizing provider's placeholder is a directory entry that can be
-//! answered for but a file that must not be opened, because opening it is what
-//! starts the download.
+// Which files are fonts.
+//
+// The list of names this answers for is a row of `crate::formats::lists` — the one table every
+// kind's list is a row of, and the one place a list is written down. What is left here is the
+// question the list cannot answer, which is the same question every other kind's file asks.
+//
+// What a file *is* — a TrueType or CFF outline font, a collection of faces, or one of the two
+// webfont containers — is settled in `font_preview` by reading the file's own header, and that
+// split is deliberate: the hover gate asks its question of every item the pointer touches, and a
+// synchronizing provider's placeholder is a directory entry that can be answered for but a file
+// that must not be opened, because opening it is what starts the download.
 
 use crate::config::config::PreviewType;
-use crate::formats::text_formats;
-use crate::CONFIG;
 use std::path::Path;
-
-/// The extensions written to `config.ini` on first run: the font formats a hover is
-/// expected to meet.
-///
-/// The two webfont containers and the three desktop ones, which are the same
-/// outlines in different wrappers. What draws one is the browser engine the SVG
-/// previews already use — it reads all five, and a `.ttc` is the one of them it
-/// cannot be *pointed* at, which is why that face is written out as a font of its
-/// own on this side; see `webview_preview` and `font_preview`. What this side reads
-/// of them is two tables, the character map and the name, and the drawing is the
-/// engine's.
-///
-/// Those five are also the *whole* of what the engine can be given, which is why no
-/// other font format is listed here and none can be added that would work. Every font
-/// a page asks for goes through the engine's own sanitizer before its font stack sees
-/// it — the OpenType Sanitizer, which parses OpenType in its two shapes and the two
-/// WebFont containers and turns everything else down — so a PostScript Type 1 face
-/// (`pfa`, `pfb`), a Macintosh suitcase (`dfont`), a Windows bitmap font (`fon`) and a
-/// face inside a collection's other shape are all files the specimen can be told about
-/// and cannot be drawn with. Measured on the runtime this app uses: a `.ttf` loads and
-/// an 11 KB `.fon` beside it is refused, which is the sanitizer answering rather than
-/// the font.
-pub const DEFAULT_FONT_EXTENSIONS: &str = "otf,ttc,ttf,woff,woff2";
 
 /// Whether the configured list claims `path`.
 pub fn matches_font_list(path: &Path, extensions: &[String]) -> bool {
-    text_formats::matches_configured_extension(path, extensions)
+    crate::formats::text_formats::matches_configured_extension(path, extensions)
 }
 
 /// Whether the configured list claims `path`, without asking whether font previews
 /// are switched on.
 pub fn is_font_file(path: &Path) -> bool {
-    CONFIG
+    crate::CONFIG
         .lock()
         .map(|config| matches_font_list(path, &config.font_extensions))
         .unwrap_or(false)
 }
 
 /// Whether the file is previewed as a font under the current configuration. The
-/// `Fonts` gate is checked on top of the list, so turning font previews off leaves
-/// the list alone and turning them back on restores it.
+/// `Fonts` gate is checked on top of the list, so turning font previews off leaves the
+/// list alone and turning them back on restores it.
 pub fn is_font_preview(path: &Path) -> bool {
     is_font_file(path) && PreviewType::Fonts.enabled()
 }
@@ -68,7 +40,9 @@ mod tests {
     use std::path::PathBuf;
 
     fn list() -> Vec<String> {
-        crate::formats::text_formats::sanitize_extension_list(DEFAULT_FONT_EXTENSIONS)
+        crate::formats::lists::sanitize_extension_list(
+            crate::formats::lists::DEFAULT_FONT_EXTENSIONS,
+        )
     }
 
     #[test]
@@ -80,7 +54,9 @@ mod tests {
         assert!(extensions.contains(&"woff".to_string()));
         assert!(extensions.contains(&"woff2".to_string()));
 
-        let typed = crate::formats::text_formats::sanitize_extension_list(".TTF, woff2 ,nonsense*,,ttf,.Font-Regular.otf");
+        let typed = crate::formats::lists::sanitize_extension_list(
+            ".TTF, woff2 ,nonsense*,,ttf,.Font-Regular.otf",
+        );
         assert_eq!(typed, vec!["ttf", "woff2"]);
     }
 
