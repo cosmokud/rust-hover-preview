@@ -20,10 +20,13 @@
 //! installation of Calibre, looked for where it installs — and beside `config.ini` for a portable
 //! copy — and run as the user runs it. A name is answered only where the engine is there, and a
 //! machine without Calibre shows no preview for one of these names rather than the first page of
-//! text the text preview would make of the bytes, which is what a `.fb2` is under its markup. The
-//! list lives in `config.ini` as `[calibre] extensions`, written from the built-in list on first
-//! run and read back from there, so a user can add a format the engine reads and this app does not
-//! know, or take one out.
+//! text the text preview would make of the bytes, which is what a `.fb2` is under its markup.
+//!
+//! The list of names this answers for is a row of `crate::formats::lists` — the one table every
+//! kind's list is a row of, and the one place a list is written down, the built-in entries and the
+//! older lists this app shipped and then changed included. A user can still add a format the
+//! engine reads and this app does not know, or take one out: the list is theirs, and the file it is
+//! read from is `config.ini`.
 //!
 //! What is listed here is what the engine's own input plugins declare, checked one name at a time,
 //! and what no other list of this app's already claims:
@@ -86,49 +89,12 @@ use crate::formats::text_formats;
 use crate::CONFIG;
 use std::path::Path;
 
-/// The extensions written to `config.ini` on first run: the ebook formats the engine reads as
-/// input that no list of this app's own already claims.
+/// The Calibre list itself, which is a row of `crate::formats::lists` like every other.
 ///
-/// The four groups are the module documentation's, in the order they are written there: the Kindle
-/// and Mobipocket family (`azw`, `azw3`, `azw4`, `mobi`, `prc`), the two books whose text is packed
-/// the way no reader here unpacks it (`chm`, `lit`), the open and single-reader formats (`djvu`,
-/// `epub`, `fb2`, `lrf`), and the formats of the dedicated readers and of the engine itself
-/// (`htmlz`, `pml`, `snb`, `tcr`).
-///
-/// Deliberately absent, and each for a reason the module documentation above gives: the names
-/// another list of this app's already reads (`cbz`, `docx`, `odt`, `pdb`, `html`, `rtf`, `txt`,
-/// `pdf`), the comic books, which this app reads itself and needs no engine for (`cbr`, `cbc`), the
-/// name that is a programming language (`rb`), the Sony container's protected spelling (`lrx`), and
-/// the names the engine does not read at all (`tpz`, and the `kfx` a plugin would be needed for).
-pub const DEFAULT_CALIBRE_EXTENSIONS: &str =
-    "azw,azw3,azw4,djvu,epub,fb2,htmlz,lit,lrf,mobi,pml,prc,snb,tcr";
-
-/// The built-in `[calibre]` list as it stood while a compiled help file was this engine's to draw.
-///
-/// `chm` was in this list for one build and is not any more: the page the engine draws for one is
-/// right, and the two to three seconds it takes to draw it is not — a help file is a file a pointer
-/// crosses on its way somewhere else, and the listing the archiver prints for one is there before a
-/// hover has finished settling (see `peazip_formats`, which is where the name is again). A file
-/// holding this list is a file this app wrote, so it is brought up to the list of now rather than
-/// kept as written, and the name goes back where it came from.
-pub const CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE: &str =
-    "azw,azw3,azw4,chm,djvu,epub,fb2,htmlz,lit,lrf,mobi,pml,prc,snb,tcr";
-
-/// The built-in `[calibre]` list as it stood before `chm` and `lit` became the engine's names.
-///
-/// A file holding exactly these entries is this app's own earlier list rather than a user's edit —
-/// nobody has typed it — so it is brought up to the built-in list rather than kept as written, which
-/// is what gives an installation that already exists the name that stayed. Without it that name would
-/// reach a fresh installation only: every `config.ini` already written holds the list as it was, and a
-/// list nobody has touched is indistinguishable from one a user edited unless the older spellings of
-/// it are written down here (see `config::repair_older_lists`).
-///
-/// Both names were the `[peazip]` list's until then, so the same change takes them out of that list.
-/// `chm` has since gone back — see [`CALIBRE_EXTENSIONS_WITH_THE_HELP_FILE`] — so a file can hold
-/// either of the two older spellings of this list, and both are written down for that reason: a list
-/// this app shipped is a list it brings up to now, whichever of them it is.
-pub const CALIBRE_EXTENSIONS_BEFORE_THE_EBOOKS: &str =
-    "azw,azw3,azw4,djvu,epub,fb2,htmlz,lrf,mobi,pml,prc,snb,tcr";
+/// It is named here as well because the ebook engine's own tests still ask for it by this path,
+/// and until they are moved across the table keeps the name they reach for.
+#[cfg(test)]
+pub use crate::formats::lists::DEFAULT_CALIBRE_EXTENSIONS;
 
 /// Whether the configured list claims `path`.
 pub fn matches_calibre_list(path: &Path, extensions: &[String]) -> bool {
@@ -216,7 +182,9 @@ mod tests {
     /// file are all answered elsewhere, and none of them is here.
     #[test]
     fn holds_no_name_another_kind_already_reads() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS);
+        let list = text_formats::sanitize_extension_list(
+            crate::formats::lists::DEFAULT_CALIBRE_EXTENSIONS,
+        );
         let config = crate::config::config::AppConfig::default();
 
         let claimed_elsewhere = |path: &Path| {
@@ -334,7 +302,9 @@ mod tests {
     /// of the dedicated readers.
     #[test]
     fn holds_the_ebooks_no_reader_here_opens() {
-        let list = text_formats::sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS);
+        let list = text_formats::sanitize_extension_list(
+            crate::formats::lists::DEFAULT_CALIBRE_EXTENSIONS,
+        );
 
         for name in [
             "book.azw",
@@ -362,7 +332,8 @@ mod tests {
     /// other list of this app's answers a hand-edited entry.
     #[test]
     fn reads_a_list_of_bare_extensions() {
-        let extensions = text_formats::sanitize_extension_list(" .MOBI , epub,,book*.azw ,epub,tcr");
+        let extensions =
+            text_formats::sanitize_extension_list(" .MOBI , epub,,book*.azw ,epub,tcr");
 
         assert_eq!(extensions, vec!["mobi", "epub", "tcr"]);
     }
@@ -374,7 +345,9 @@ mod tests {
     #[test]
     fn asks_the_engine_about_a_file_by_its_bytes_before_its_name() {
         if let Ok(mut config) = crate::CONFIG.lock() {
-            config.calibre_extensions = text_formats::sanitize_extension_list(DEFAULT_CALIBRE_EXTENSIONS);
+            config.calibre_extensions = text_formats::sanitize_extension_list(
+                crate::formats::lists::DEFAULT_CALIBRE_EXTENSIONS,
+            );
         }
 
         let folder = std::env::temp_dir().join("rust-hover-preview-calibre-engine-ebook");
