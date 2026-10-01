@@ -25,7 +25,7 @@
 
 use crate::config::config::{AppConfig, PreviewType};
 use crate::readers::{
-    archive_listing, metafile_image, psd_image, svg_preview, wic_image,
+    archive_listing, metafile_image, psd_image, wic_image,
 };
 use std::path::Path;
 
@@ -202,8 +202,13 @@ fn design_job(path: &Path) -> NativeJob {
 
 /// A drawing: the browser engine's where the document is an SVG, the drawing layer's where it
 /// is a metafile, and the encapsulated PostScript reader's for the rest.
+///
+/// Which half of the kind a file is is the router's own answer, for the same reason a book's
+/// is: the image list asks the same name the same way to reach this kind, and a name the two
+/// answered differently about is a metafile the browser engine was handed and a window that
+/// never filled (see `routing::drawing_of`).
 fn drawing_job(path: &Path) -> NativeJob {
-    if svg_preview::is_svg_file(path) {
+    if crate::formats::routing::drawing_of(path) == crate::formats::routing::Drawing::Svg {
         return NativeJob::SvgDocument;
     }
 
