@@ -1164,6 +1164,23 @@ mod tests {
                     unexpected.push(format!(
                         "{name}: the {kind:?} list's, reached {reached:?}, expected {expected:?}"
                     ));
+                    continue;
+                }
+
+                // And the kind it was reached as is one whose own row says so, which is the half
+                // of this that used not to be testable at all: `named_as` is a second answer to
+                // the same question — asked of one kind rather than of the order — and a kind
+                // whose row was taken out of it, or pointed at the wrong row, would gate nothing
+                // while the router still answered with it. The eleven `is_<kind>_file` functions
+                // were that second answer, one per module, and nothing in the tree ever compared
+                // the two; this compares them for every name this app ships.
+                if let Some(reached) = reached {
+                    if !named_as(path, &config, reached) {
+                        unexpected.push(format!(
+                            "{name}: the router calls it {reached:?} and its own lists do not \
+                             claim it, so nothing gated would be drawn"
+                        ));
+                    }
                 }
             }
         }
