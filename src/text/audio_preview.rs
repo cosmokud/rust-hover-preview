@@ -135,8 +135,8 @@ pub(crate) struct Fact {
 /// The clock's two numbers are the preview loop's business rather than the file's: a sound
 /// played by Windows' engine reports its own position, and one played by FFmpeg's is timed by
 /// this app's clock, so what arrives here is whatever the player had to say when the card was
-/// drawn. `elapsed` is nothing where no player is running — a card at `Volume → Audio` 0% is
-/// drawn without one — and `duration` is nothing where the file does not say.
+/// drawn. `elapsed` is nothing where no player is running — a file nothing will play
+/// is drawn without one — and `duration` is nothing where the file does not say.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Card {
     pub name: String,
