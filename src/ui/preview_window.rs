@@ -16015,6 +16015,28 @@ fn take_down_pinned_media() {
     }
 }
 
+/// End the player the file a pinned window is standing on has, keeping that file and the frame
+/// this side holds of it.
+///
+/// The take-down a swap performs is a take-down of the whole media for every kind but a video the
+/// media engine plays, and that one is held rather than dropped so the window does not flash the
+/// backdrop while the engine's first frame is a tick away (see `PinSwapHold`). The hold is about
+/// the frame alone, and the player behind it is not part of it: a sound FFmpeg is playing, or a
+/// film it is drawing in a window of its own, goes the moment the swap starts, or it is heard (or
+/// seen) over the file that replaced it for as long as the hold is out — and nothing else ends
+/// it, the leftover sweep standing down for as long as a pin is up (see `kill_stray_video_process`).
+///
+/// The media engine's own session needs nothing here: whatever the standing file was, the `play`
+/// this is asked for stops what was playing before it starts anything of its own (see
+/// `video_player::play`), which is why the standing file is not asked whether it is one first.
+fn stop_pinned_player() {
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(ref mut existing) = *current {
+            kill_player_process(existing);
+        }
+    }
+}
+
 /// Show a pinned window another file: what is on screen is taken down — the frame this app holds,
 /// the player it started, the browser another engine draws in — and the file that replaces it is
 /// put up in the box the pin's media occupies.
@@ -16078,7 +16100,12 @@ fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     // first, because for those the frame in hand is the frame the pin is shown the moment this
     // returns, and a player that would still be running behind it is a player playing over the
     // file that replaced it.
-    if !file.media.media_type.is_native_video() {
+    //
+    // The hold keeps the frame and nothing else: the player behind the standing file goes all the
+    // same, and at once (see `stop_pinned_player`).
+    if file.media.media_type.is_native_video() {
+        stop_pinned_player();
+    } else {
         take_down_pinned_media();
     }
 
