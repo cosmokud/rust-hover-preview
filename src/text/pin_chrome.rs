@@ -579,8 +579,8 @@ fn draw_track_step(
     let head = (span - bar_width - gap).max(1);
     let half = span / 2;
 
-    // The bar: at the trailing edge of the mark for a step forward and at the leading edge for a
-    // step back, so that the bar is always the wall the triangle is pushed off.
+    // The bar: at the far edge of the mark, which is the leading edge for a step forward and the
+    // trailing one for a step back, so that the bar is always the wall the triangle is pushed off.
     let bar_left = if forward {
         center_x + half - bar_width
     } else {
@@ -599,20 +599,21 @@ fn draw_track_step(
         1.0,
     );
 
-    // The triangle, walked as a scan of half-widths in the direction the step goes: widest at
-    // the bar and closing to nothing at the far edge, which is what a triangle is.
-    let tip = if forward {
+    // The triangle, walked as a scan of half-widths in the direction the step goes: widest at the
+    // far edge and closing to nothing at the bar, which is what a triangle is.
+    //
+    // The far edge is the last *column* of the mark rather than its first, on both sides: the mark
+    // is a whole number of columns wide, so the two ends it has are a pixel either side of the
+    // centreline rather than at it. Measuring the far edge from the centre instead is what makes
+    // the back one a column wider than the on one and its triangle sit across its own bar.
+    let far = if forward {
         center_x - half
     } else {
-        center_x + half - head
+        center_x + half - 1
     };
     for step in 0..=head {
-        let x = if forward { tip + step } else { tip - step };
-        let share = if forward {
-            1.0 - (step as f32 / head as f32)
-        } else {
-            step as f32 / head as f32
-        };
+        let x = if forward { far + step } else { far - step };
+        let share = 1.0 - (step as f32 / head as f32);
         for y in 0..=(half as f32 * share).round() as i32 {
             put(buffer, width, x, center_y - y, color, 1.0);
             put(buffer, width, x, center_y + y, color, 1.0);
@@ -3840,6 +3841,73 @@ mod tests {
                 bottom - top + 1,
                 span + 1,
                 "a chevron is a glyph tall, whatever else it is"
+            );
+        }
+    }
+
+    /// The two steps of a walk are one another's mirror: a bar at the far edge of the mark and a
+    /// triangle beside it pointing the way the step goes — ⏮ beside a step back and ⏭ beside a
+    /// step on, which is what a hand has been reaching for beside a play button for thirty years.
+    ///
+    /// The bar is the wall the triangle is pushed off, and it is at a different end for each of
+    /// them; so is the triangle's wide end. A mark whose triangle is walked from the wrong end is
+    /// a mark whose bar and triangle are the wrong distance apart and, once the walk runs past
+    /// the far edge of the button, a mark cut in half at one end and drawn twice at the other —
+    /// none of which a test on the boxes alone can see.
+    #[test]
+    fn the_two_steps_of_a_walk_are_mirrors_of_one_another() {
+        const W: i32 = 32;
+        const H: i32 = 24;
+        let centre = 16;
+        let span = 14;
+        let ink = [0u8, 0, 0];
+
+        // The rows drawn in one column. The buffer is filled with a colour first, so that a
+        // blank column reads as blank rather than as ink.
+        fn drawn(buffer: &[u8], x: i32) -> Vec<i32> {
+            (0..H)
+                .filter(|y| buffer[((*y * W + x) * 4) as usize] == 0)
+                .collect()
+        }
+
+        let mut on = vec![255u8; (W * H * 4) as usize];
+        draw_track_step(&mut on, W, centre, 12, span, ink, true);
+        let mut back = vec![255u8; (W * H * 4) as usize];
+        draw_track_step(&mut back, W, centre, 12, span, ink, false);
+
+        // The two are the same mark facing the other way, so what the back one draws in a column
+        // is what the on one draws in the column reflected about the centreline — which is the line
+        // between the two middle columns, a whole mark being an even number of columns wide. Two
+        // marks drawn the same way round would be equal column for column instead, and a mark drawn
+        // a column too wide would fail only on one of the two ends, and this is what catches that.
+        for x in 0..W {
+            let mirror = 2 * centre - 1 - x;
+            if !(0..W).contains(&mirror)
+                || (drawn(&back, x).is_empty() && drawn(&on, mirror).is_empty())
+            {
+                continue;
+            }
+            assert_eq!(
+                drawn(&back, x),
+                drawn(&on, mirror),
+                "the two steps are each other turned about at x={x}"
+            );
+        }
+
+        // And both are inside the button they are drawn in, which is what a walk past the far edge
+        // would otherwise have lost: neither mark is a column wider than the other, or wider than
+        // the button.
+        for (buffer, name) in [(&on, "the on one"), (&back, "the back one")] {
+            let mut columns = (0..W).filter(|x| !drawn(buffer, *x).is_empty());
+            assert_eq!(
+                columns.next(),
+                Some(centre - span / 2),
+                "{name} begins at its own near edge"
+            );
+            assert_eq!(
+                columns.next_back(),
+                Some(centre + span / 2 - 1),
+                "{name} ends at its own far one"
             );
         }
     }

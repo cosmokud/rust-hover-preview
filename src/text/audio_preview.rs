@@ -1873,6 +1873,72 @@ mod tests {
         let _ = boxes;
     }
 
+    /// A pinned card is as tall as the row of controls on it and the margin under that row, and
+    /// nothing of either is cut off by the box the card is drawn in.
+    ///
+    /// The card a hover is measured with carries no controls and so carries no row of buttons, which
+    /// makes it shorter: a window given the hover's box is a window with the bottom of the card gone
+    /// — the bar's own row cut through, and every press that landed in what was left of it answered
+    /// by the margin rather than by the bar. The height is the card's own arithmetic rather than a
+    /// number written down here, which is what makes it a claim about every row rather than this one.
+    #[test]
+    fn a_pinned_card_is_as_tall_as_its_row_of_controls_and_the_margin_under_it() {
+        let (width, height) =
+            measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+        let page = scrolled(&pinned(), width, 0);
+
+        let dc = unsafe { CreateCompatibleDC(None) };
+        let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+        let row = bar_row(&metrics, true);
+        let row_top = row.top;
+        let edge = row.top + row.height + metrics.padding;
+        let boxes = page.boxes.as_ref().expect("a card that carries controls");
+        let band = bar_band(row, boxes.bar.left, boxes.bar.right, &metrics);
+        unsafe {
+            let _ = DeleteDC(dc);
+        }
+
+        assert_eq!(
+            page.height, edge as u32,
+            "the card runs to the end of the controls' row and one margin below it"
+        );
+        assert_eq!(
+            height, page.height,
+            "and the take-up measures the card at the height it is drawn at"
+        );
+
+        // Which is only worth anything if the controls are on it: every one of them, and the bar
+        // between the ends of the row, is inside the card rather than through it.
+        for control in [
+            CardControl::Previous,
+            CardControl::Play,
+            CardControl::Next,
+            CardControl::Seek,
+            CardControl::Volume,
+        ] {
+            let rect = boxes
+                .rect(control)
+                .expect("a box on a card that carries controls");
+            assert!(rect.left >= 0 && rect.top >= 0, "{control:?} at {rect:?}");
+            assert!(
+                rect.right <= page.width as i32 && (rect.bottom as u32) <= page.height,
+                "{control:?} at {rect:?} against a card of {}x{}",
+                page.width,
+                page.height
+            );
+        }
+
+        // And the reach a press on the bar is answered against stops at the card's own edge rather
+        // than running off it — which is the same margin counted from the other end, and is what
+        // keeps the last few rows of the card's margin a place a hand carries the window from.
+        assert!(
+            band.top < row_top && band.bottom <= edge && (band.bottom as u32) <= page.height,
+            "the band a press on the bar is answered against is on the card: {}..{} against {edge}",
+            band.top,
+            band.bottom
+        );
+    }
+
     /// A card that carries no controls is the card it has always been: no control anywhere on it,
     /// and a bar that runs from margin to margin rather than from one button to the other.
     #[test]
