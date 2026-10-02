@@ -27,7 +27,9 @@
 //! the middle of the facts line. Only a pinned window asks: a hover's own window is a window
 //! nobody is in, and a click on one of those lands on the file behind it, so the card a hover
 //! shows is the card it has always been — no buttons, and a bar from margin to margin (see
-//! [`Card::controls`]).
+//! [`Card::controls`]). The row the buttons stand in is the bar's own line either way, so the
+//! card a pin shows is the size the card a hover shows is: what the buttons cost is the width of
+//! the bar, not the height of the card (see `bar_row`).
 
 use crate::config::config::TextTheme;
 use crate::readers::audio_track::Track;
@@ -86,10 +88,12 @@ const BAR_REACH_PIXELS: i32 = 8;
 
 /// The side of one of the card's own buttons at a display's scale, and the room between two of
 /// them: a button is a square a hand can be asked to hit, and the gap is what keeps three of them
-/// from reading as one wide target. It is larger than the bar's own height, which is the whole of
-/// why the row the bar stands in is as tall as a button rather than as tall as the bar.
-const CONTROL_SIDE_PIXELS: i32 = 22;
-const CONTROL_GAP_PIXELS: i32 = 4;
+/// from reading as one wide target. Both are compact on purpose — a button is wider than the bar
+/// is tall and stands centred on it, reaching into the gap above and the margin below, so the card
+/// a pin shows is the size the card a hover shows is and the buttons are carved out of it rather
+/// than added to it (see `bar_row`).
+const CONTROL_SIDE_PIXELS: i32 = 16;
+const CONTROL_GAP_PIXELS: i32 = 2;
 
 /// How long the block takes to cross a bar of unknown length, in seconds, and the share of the
 /// bar it takes.
@@ -387,7 +391,7 @@ pub(crate) fn bar_share_at(
     }
 
     let share = TextMetrics::new(dc, dpi, options.font_scale_percent).and_then(|metrics| {
-        let row = bar_row(&metrics, controls);
+        let row = bar_row(&metrics);
         let boxes = control_boxes(&metrics, width, controls);
         let left = boxes.map_or(metrics.padding, |boxes| boxes.bar.left);
         let right = boxes.map_or(width as i32 - metrics.padding, |boxes| boxes.bar.right);
@@ -441,7 +445,7 @@ pub(crate) fn control_at(
 
     let found = TextMetrics::new(dc, dpi, options.font_scale_percent).and_then(|metrics| {
         let boxes = control_boxes(&metrics, width, controls)?;
-        let row = bar_row(&metrics, controls);
+        let row = bar_row(&metrics);
 
         boxes
             .rect(CardControl::Volume)
@@ -659,10 +663,11 @@ struct BarRow {
     track_height: i32,
 }
 
-/// The bar's row, as tall as the buttons standing in it where there are buttons and as tall as
-/// the bar itself where there are none: a card a hover shows carries no controls, and a card that
-/// carried no controls is the card it was before they existed.
-fn bar_row(metrics: &TextMetrics, controls: bool) -> BarRow {
+/// The bar's row: the bar's own height, whether or not buttons are standing in it. A button is
+/// taller than that line, and stands centred on it rather than growing the row — which is what
+/// makes a card a pin shows the same size as the card a hover shows, with the four buttons carved
+/// out of the bar's line instead of the card growing to hold them (see `control_boxes`).
+fn bar_row(metrics: &TextMetrics) -> BarRow {
     BarRow {
         // The same walk down the page `build_page` makes, from the top margin to the bar: the
         // name, the rule under it, the facts, and the gap the bar is set out after.
@@ -673,15 +678,7 @@ fn bar_row(metrics: &TextMetrics, controls: bool) -> BarRow {
             + scaled(RULE_GAP_PIXELS, metrics.scale)
             + metrics.line_height[BODY_LEVEL as usize]
             + scaled(BAR_GAP_PIXELS, metrics.scale),
-        // The row is as tall as the buttons standing in it rather than as tall as the bar: a
-        // three-pixel bar in a row a button is the height of is a bar with three pixels of card
-        // above and below it, and the buttons are what the row is for. The bar is centred in it
-        // either way, so a card with no buttons is not a card with a bar somewhere else.
-        height: if controls {
-            scaled(CONTROL_SIDE_PIXELS, metrics.scale).max(scaled(BAR_PIXELS, metrics.scale))
-        } else {
-            scaled(BAR_PIXELS, metrics.scale)
-        },
+        height: scaled(BAR_PIXELS, metrics.scale),
         track_height: scaled(TRACK_PIXELS, metrics.scale),
     }
 }
@@ -761,10 +758,12 @@ fn control_boxes(metrics: &TextMetrics, width: u32, controls: bool) -> Option<Ca
 
     let side = scaled(CONTROL_SIDE_PIXELS, metrics.scale);
     let gap = scaled(CONTROL_GAP_PIXELS, metrics.scale);
-    let row = bar_row(metrics, true);
+    let row = bar_row(metrics);
 
-    // The row's own height rather than `side`, so that a display scale at which the two disagree
-    // by a pixel puts the buttons where they are drawn and not a pixel out of the bar's own band.
+    // The buttons stand centred on the bar's own line, so they reach above it into the gap and
+    // below it into the margin: which is what keeps the card the size a hover's card is rather
+    // than a taller one. A button is asked for at this centre and nothing else, so a press is
+    // answered by the box it is drawn in (see `control_at`).
     let centre = row.top + row.height / 2;
     let top = centre - side / 2;
     let button = |left: i32| RECT {
@@ -788,14 +787,16 @@ fn control_boxes(metrics: &TextMetrics, width: u32, controls: bool) -> Option<Ca
         play,
         next,
         volume,
-        // The bar is what is left of the content box between the two ends of the row. A card too
-        // narrow to hold both is a card whose bar has no width, and `bar_share_at` answers
-        // nothing for it rather than a share of a line it does not have.
+        // The bar is what is left of the content box between the two ends of the row, and it is
+        // the bar's own line rather than the buttons' height: a seek is answered against the
+        // track a person can see, which is where it is drawn (see `bar_band`). A card too narrow
+        // to hold both is a card whose bar has no width, and `bar_share_at` answers nothing for
+        // it rather than a share of a line it does not have.
         bar: RECT {
             left: bar_left,
-            top,
+            top: row.top,
             right: (volume.left - gap).max(bar_left),
-            bottom: top + side,
+            bottom: row.top + row.height,
         },
     })
 }
@@ -844,7 +845,7 @@ fn build_page(
 
     let rule_gap = scaled(RULE_GAP_PIXELS, metrics.scale);
     let rule_height = scaled(RULE_PIXELS, metrics.scale);
-    let bar_row = bar_row(metrics, card.controls.is_some());
+    let bar_row = bar_row(metrics);
 
     let page_color = rgb(theme.background());
     let foreground = rgb(theme.foreground());
@@ -869,23 +870,12 @@ fn build_page(
     let facts_line = facts_width(&card.facts, body_advance)
         + body_advance * TIME_GAP_ADVANCES
         + body_advance * CLOCK_ADVANCES;
-    // A card whose facts are narrow still needs room for the four buttons and the track they are
-    // put beside: the bar is what takes a sound to a second of it, and a bar a hundred pixels
-    // long is not the same control as one that fills the card. The buttons cost the same whether
-    // the file says anything or not, which is why the term is added rather than folded into the
-    // facts — a card with four short facts is not four pixels narrower for having four buttons on
-    // it (see `CONTROL_SIDE_PIXELS`).
-    let side = scaled(CONTROL_SIDE_PIXELS, metrics.scale);
-    let control_row = if card.controls.is_some() {
-        side * 4
-            + scaled(CONTROL_GAP_PIXELS, metrics.scale) * 3
-            + body_advance * MIN_CONTENT_ADVANCES
-    } else {
-        0
-    };
-    let content = facts_line
-        .max(body_advance * MIN_CONTENT_ADVANCES)
-        .max(control_row);
+    // A card whose facts are narrow still needs room for the four buttons the bar is carved out
+    // beside: the bar is what takes a sound to a second of it, and a bar a hundred pixels long is
+    // not the same control as one that fills the card. The bar gives way for them rather than the
+    // card giving way — a pin's card is the width a hover's is, and what the buttons cost is the
+    // track's width (see `control_boxes`).
+    let content = facts_line.max(body_advance * MIN_CONTENT_ADVANCES);
     let width = (content + padding * 2).clamp(1, box_width.max(1) as i32) as u32;
 
     // A card with no room for a name and a line under it is a card that cannot be drawn, which
@@ -1216,9 +1206,9 @@ fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scale: f32) {
     }
 
     if page.bar.width > 0 && page.bar.height > 0 {
-        // The track is centred in the row rather than laid out from its top: the row is as tall
-        // as the buttons standing in it, and a hairline under the top of a row a button fills is
-        // a hairline a third of the way down that button (see `BarRow`).
+        // The track is centred in the row rather than laid out from its top, so that a row a
+        // button stands across puts the line where the button is rather than a third of the way
+        // down it (see `BarRow`).
         let centre = page.bar.top + page.bar.height / 2;
         let track_top = centre - page.bar.track_height / 2;
         fill_rect(
@@ -1234,8 +1224,8 @@ fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scale: f32) {
 
         if page.bar.fill_width > 0 {
             // The played part is `BAR_PIXELS` thick about the same centre, which is what makes it
-            // read as the same line at a heavier weight: `page.bar.height` is the row's height now
-            // (see `BarRow`), and the row is the buttons' — not the line's.
+            // read as the same line at a heavier weight: it is the bar's own height
+            // whichever controls stand in the row (see `BarRow`).
             let played = scaled(BAR_PIXELS, scale);
             let played_top = centre - played / 2;
             fill_rect(
@@ -1814,6 +1804,18 @@ mod tests {
         metrics.scale
     }
 
+    /// The card's own margin, read of the metrics rather than written down, for the same reason
+    /// `metrics_scale` is.
+    fn metrics_padding() -> i32 {
+        let dc = unsafe { CreateCompatibleDC(None) };
+        let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+        unsafe {
+            let _ = DeleteDC(dc);
+        }
+
+        metrics.padding
+    }
+
     /// Every control of a pinned card is answered inside its own box and nowhere else, which is
     /// the whole of what "a button hit-tested by one arithmetic and drawn by another is a button
     /// that answers a press in the middle of the facts line" means.
@@ -1873,24 +1875,28 @@ mod tests {
         let _ = boxes;
     }
 
-    /// A pinned card is as tall as the row of controls on it and the margin under that row, and
-    /// nothing of either is cut off by the box the card is drawn in.
+    /// A pinned card is the size the card a hover shows is: its controls stand in the bar's own
+    /// row, so they are carved out of the card rather than added to it — and everything they are
+    /// drawn on is still inside it.
     ///
-    /// The card a hover is measured with carries no controls and so carries no row of buttons, which
-    /// makes it shorter: a window given the hover's box is a window with the bottom of the card gone
-    /// — the bar's own row cut through, and every press that landed in what was left of it answered
-    /// by the margin rather than by the bar. The height is the card's own arithmetic rather than a
-    /// number written down here, which is what makes it a claim about every row rather than this one.
+    /// Which is the whole of what the take-up does not have to do: a window given the hover's box
+    /// is the window the card is drawn in, and the buttons reach a few pixels above the bar and
+    /// below it into the gap and the margin that are already there. The height is the card's own
+    /// arithmetic rather than a number written down here, which is what makes it a claim about
+    /// every row rather than this one.
     #[test]
-    fn a_pinned_card_is_as_tall_as_its_row_of_controls_and_the_margin_under_it() {
+    fn a_pinned_card_is_the_size_a_hovers_card_is_and_its_controls_stay_inside_it() {
         let (width, height) =
             measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+        let (hover_width, hover_height) =
+            measure(&card(), 4096, 2160, 96, options()).expect("a measured card");
         let page = scrolled(&pinned(), width, 0);
 
         let dc = unsafe { CreateCompatibleDC(None) };
         let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
-        let row = bar_row(&metrics, true);
+        let row = bar_row(&metrics);
         let row_top = row.top;
+        let row_bottom = row.top + row.height;
         let edge = row.top + row.height + metrics.padding;
         let boxes = page.boxes.as_ref().expect("a card that carries controls");
         let band = bar_band(row, boxes.bar.left, boxes.bar.right, &metrics);
@@ -1899,8 +1905,14 @@ mod tests {
         }
 
         assert_eq!(
+            (width, height),
+            (hover_width, hover_height),
+            "a card carrying its controls is drawn in the box a hover's is: a pin's window is \
+             the hover's window"
+        );
+        assert_eq!(
             page.height, edge as u32,
-            "the card runs to the end of the controls' row and one margin below it"
+            "the card runs to the end of the bar's own row and one margin below it"
         );
         assert_eq!(
             height, page.height,
@@ -1927,6 +1939,20 @@ mod tests {
                 page.height
             );
         }
+
+        // And the buttons really are carved out of the card rather than laid out inside the row:
+        // they stand taller than the bar's line, reaching into the gap above it and the margin
+        // below — no further, or they would be off the card.
+        let previous = boxes.previous;
+        assert!(
+            previous.top < row_top && previous.bottom > row_bottom,
+            "a button is centred on the bar and reaches beyond it: {previous:?} against a row at \
+             {row_top}"
+        );
+        assert!(
+            previous.bottom <= edge,
+            "and no further than the margin under the row holds: {previous:?} against {edge}"
+        );
 
         // And the reach a press on the bar is answered against stops at the card's own edge rather
         // than running off it — which is the same margin counted from the other end, and is what
@@ -2037,24 +2063,26 @@ mod tests {
         );
     }
 
-    /// A card that carries its controls is at least as wide as the same card without them, and
-    /// wide enough for four buttons beside a track the hand can aim at: the bar is what takes a
-    /// sound to a second of it, and a bar a hundred pixels long is a different control.
+    /// A card is as wide with its controls as without them: the four buttons are carved out of
+    /// the bar rather than added to the card, so a pin's card is the width a hover's is and what
+    /// the buttons cost is the track's length — which is still a track, because a bar a hundred
+    /// pixels long is a different control.
     #[test]
-    fn the_card_widens_for_its_controls() {
+    fn the_controls_are_carved_out_of_the_bar_rather_than_out_of_the_card() {
         // A card whose facts say plenty is as wide as its facts ask for either way — the row of
-        // buttons is paid for out of what the bar would have had, not out of the name's room.
-        let (plain, _) = measure(&card(), 4096, 2160, 96, options()).expect("a measured card");
-        let (with, _) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+        // buttons is paid for out of what the bar would have had, not out of the card.
+        let (plain, plain_height) =
+            measure(&card(), 4096, 2160, 96, options()).expect("a measured card");
+        let (with, with_height) =
+            measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
         assert_eq!(
-            with, plain,
-            "a card with buttons is no wider than one without them where the facts ask for more \
-             than the row does"
+            (with, with_height),
+            (plain, plain_height),
+            "a card with buttons is exactly the card it would have been without them"
         );
 
-        // And a card whose facts are narrow is not: the bar is what takes a sound to a second of
-        // it, and a bar a hundred pixels long is a different control, so the four buttons and the
-        // gaps between them are added to whatever the facts asked for.
+        // And a card whose facts are narrow is not widened either: the width comes from the
+        // narrowest bar there is either way, and the buttons come out of that bar.
         let narrow = |controls| Card {
             facts: vec![Fact {
                 text: "FLAC".to_string(),
@@ -2073,28 +2101,35 @@ mod tests {
             options(),
         )
         .expect("a measured card");
-        assert!(
-            narrow_with > narrow_plain,
-            "a card with buttons is wider than the same card without: {narrow_with} vs \
-             {narrow_plain}"
+        assert_eq!(
+            narrow_with, narrow_plain,
+            "a narrow card is not widened by four buttons on it: {narrow_with} vs {narrow_plain}"
         );
 
-        // And the width it gained is the buttons and their gaps, with a track left beside them.
-        let gain = narrow_with as i32 - narrow_plain as i32;
+        // What the buttons cost is what the bar gave up: the four squares, the gaps between them
+        // and the margin at either end of the content box — and a track is left beside them.
         let side = scaled(CONTROL_SIDE_PIXELS, metrics_scale());
         let gap = scaled(CONTROL_GAP_PIXELS, metrics_scale());
+        let padding = metrics_padding();
+        let page = scrolled(&narrow(Some(CardChrome::default())), narrow_with, 0);
         assert_eq!(
-            gain,
-            side * 4 + gap * 3,
-            "which is four buttons and three gaps and nothing else"
+            page.bar.left,
+            padding + side * 3 + gap * 3,
+            "the bar begins after the three buttons at the left of the row and the gaps between them"
         );
-
-        let bar = scrolled(&narrow(Some(CardChrome::default())), narrow_with, 0).bar;
+        assert_eq!(
+            page.bar.left + page.bar.width,
+            narrow_with as i32 - padding - side - gap,
+            "and ends before the volume button at the row's right edge"
+        );
+        assert_eq!(
+            narrow_with as i32 - 2 * padding - side * 4 - gap * 4,
+            page.bar.width,
+            "so the four buttons and their four gaps cost the bar's width and nothing else"
+        );
         assert!(
-            bar.width > narrow_plain as i32 - 2 * side - 2 * gap,
-            "a track is left beside four buttons even when the facts ask for little: {} of {}",
-            bar.width,
-            narrow_with
+            page.bar.width > 0,
+            "and a card with buttons still has a bar to take a sound to a second of it"
         );
     }
 

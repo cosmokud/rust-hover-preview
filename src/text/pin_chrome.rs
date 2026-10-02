@@ -91,11 +91,10 @@ impl ChromePalette {
 
         let background = text_paint::rgb(theme.background());
         let foreground = text_paint::rgb(theme.foreground());
-        let accent = text_paint::rgb(
-            theme
-                .style_for_scopes(&["keyword.control", "keyword"])
-                .foreground,
-        );
+        // The same accent a sound's card draws its bar and its clock in, so that the knob on this
+        // chrome and the track on that card are one color rather than two near neighbours (see
+        // `audio_preview::build_page`).
+        let accent = text_paint::rgb(theme.style_for_scopes(&["support.function"]).foreground);
 
         Some(Self {
             background,
