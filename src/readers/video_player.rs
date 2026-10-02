@@ -21,10 +21,19 @@
 //!     (`TransferVideoFrame`) into a bitmap of its own, from the crop the probe settled on
 //!     where it settled on one (see [`Crop`]).
 //!
-//! Who *scales* the picture is settled by the two sizes alone: a box larger than the picture is
-//! one this side scales into it ([`scale_rows`]), because which filter the engine reads a
-//! picture at is not a question this app can ask it, let alone choose. What each side of that
-//! choice costs is written where it is made (see [`play`]).
+//! A tick is not a frame. The clock this side ticks on is a vertical blank, sixty times a
+//! second whatever the file runs at, so most ticks of a film find the engine offering the
+//! picture it offered the last four of them, and a tick that finds one is answered without
+//! taking it at all (see [`is_a_new_frame`]). That is most of the difference between a video
+//! previewed on the engine and a video previewed by FFmpeg's player: the same file is
+//! decoded, copied and handed to the compositor as many times as it has frames rather than
+//! as many times as the display refreshes, and a 4K one is four times the frame of a
+//! 1080p one throughout.
+//!
+//! Who *scales* the picture is settled by the two sizes alone: a box meaningfully larger than
+//! the picture is one this side scales into it ([`scale_rows`]), because which filter the
+//! engine reads a picture at is not a question this app can ask it, let alone choose. What each
+//! side of that choice costs is written where it is made (see [`play`]).
 //!
 //! What that buys over the ffplay path is the whole of the window machinery a player's
 //! own window needs — the style monitor, the topmost re-assertion, the PID record, the
@@ -119,6 +128,30 @@ const SEEK_GIVE_UP: Duration = Duration::from_secs(3);
 /// start would be a preview taken away from the engine that could have drawn it.
 const FIRST_FRAME_GIVE_UP: Duration = Duration::from_secs(3);
 
+/// How much bigger than the picture a box has to be before this side is the one that scales into
+/// it, as a share of the picture's own size: one part in fifty.
+///
+/// The choice is between the two engines, and they cost very different amounts. The engine
+/// scales on the GPU as part of the frame it is already writing, so its share of the work is
+/// nothing this app can measure; this side's share is a scalar bilinear over every pixel of
+/// every frame, on the preview thread (see [`scale_rows`]). So the answer to "who is bigger" has
+/// to be a threshold and not a comparison, and what it is worth is a trade between a picture
+/// very slightly too small for its box — where the engine scales and the difference is a
+/// hundredth of a pixel per pixel, and nobody would ever have known — against the alternative,
+/// where a box one pixel wider than the picture sends a whole film down the scalar path and
+/// pays for it on every frame.
+///
+/// What makes this the number rather than anything near it is that the two sizes do not move
+/// together. A box is the picture at the scale setting times the share of the work area it was
+/// given, and the layout computes both in integers: a 1920-wide picture at 50% is 960 and
+/// nothing is round, so the smallest enlargement a box of a whole size can arrive at is a
+/// fraction of a percent, and a threshold of a hair would fire on nearly every file at every
+/// setting but 100%. Two per cent is above every one of those and far below the enlargements
+/// worth resampling for, and the largest share that is not worth it — a 4K file shown on a
+/// 4K display by `fit`, where the two sizes are within a pixel of one another — is exactly the
+/// case this is here for.
+const ENLARGEMENT_WORTH_RESAMPLING: f64 = 1.02;
+
 /// The engine's event sink, which is what the engine needs before it will run at all —
 /// `MF_MEDIA_ENGINE_CALLBACK` is required in every mode.
 ///
@@ -186,6 +219,12 @@ struct Session {
     /// a picture will come of it, since the engine accepts a file whose decoder and converter
     /// are both there and whose *pipeline* is not (see [`failing_path`]).
     drew: bool,
+    /// The time of the frame the caller is holding, in the hundred-nanosecond units the engine
+    /// ticks in, and `None` where the next frame is owed whatever the engine says about it — a
+    /// session that has just been begun, resized or sought somewhere has a picture the caller
+    /// has not seen, and a seek in particular can land on the very time it has just drawn
+    /// (see [`is_a_new_frame`]).
+    drawn: Option<i64>,
     /// Where the sound was asked to start, while the engine has not taken it there yet: `Load`
     /// answers before the header is there, so the position is kept and made on the first tick
     /// that finds the engine loaded (see `apply_seek`).
@@ -306,12 +345,15 @@ fn source_rect(crop: Crop) -> Option<MFVideoNormalizedRect> {
 /// Start playing `path` into a surface of `width` by `height`, at `volume` per cent, from the
 /// picture `picture` names.
 ///
-/// The two sizes are what settles who scales the picture into that box: a box larger than the
-/// picture is a file being shown above its own size, and one the engine is asked for at the
-/// picture's own size and this side scales (see [`scale_rows`]), while a box that is not larger
-/// is the engine's to fill as it always was (see `scales_here`). What the first costs is a
-/// resample of every frame and what the second costs is nothing beyond the copy every frame paid
-/// before it — a preview drawn at or below the picture's own size is the copy it always was.
+/// The two sizes are what settles who scales the picture into that box: a box meaningfully
+/// larger than the picture is a file being shown above its own size, and one the engine is
+/// asked for at the picture's own size and this side scales (see [`scale_rows`]), while a box
+/// that is not larger is the engine's to fill as it always was (see `scales_here`). What the
+/// first costs is a resample of every frame and what the second costs is nothing beyond the
+/// copy every frame paid before it — a preview drawn at or below the picture's own size is the
+/// copy it always was, and a preview drawn a per cent above it is deliberately left there too,
+/// since the difference between the two engines' scaling and this one's is not worth a whole
+/// film at a hundredth of a pixel (see [`ENLARGEMENT_WORTH_RESAMPLING`]).
 ///
 /// Anything already playing is stopped first, so a video is never two videos. A call that
 /// could not start one leaves nothing behind rather than a session that will never produce
@@ -376,6 +418,14 @@ pub fn set_paused(paused: bool) {
                 engine.Play()
             }
         };
+
+        // The picture the caller is holding is not known to be the picture the engine is
+        // holding: a file asked to pause with a frame queued up hands that frame over on
+        // the way, and whether the next tick reports it as a new one is the engine's
+        // business rather than a question this app can answer from here. What a pause or
+        // an unpause costs is one frame drawn that may have been drawn already, which is
+        // nothing beside the frame that is not drawn because a hold was mistaken for one.
+        session.drawn = None;
     });
 }
 
@@ -429,12 +479,12 @@ pub fn seek(seconds: f64) {
 /// into.
 ///
 /// Which rectangle that is depends on the box the new size makes, and the two sides of the
-/// picture's own size cost different things. A box larger than the picture is this side's to
-/// scale, and the surface it reads is the picture's own — the same surface whatever the box is,
-/// so a window dragged about up there is dragged about without a bitmap being made. A box at or
-/// below the picture's size is the engine's to scale into, and the surface has to *be* that box:
-/// the engine writes where it is told to, so a box that changed is a bitmap that is made again
-/// (see `scales_here`).
+/// picture's own size cost different things. A box meaningfully larger than the picture is
+/// this side's to scale, and the surface it reads is the picture's own — the same surface
+/// whatever the box is, so a window dragged about up there is dragged about without a bitmap
+/// being made. A box at or below the picture's size is the engine's to scale into, and the
+/// surface has to *be* that box: the engine writes where it is told to, so a box that changed
+/// is a bitmap that is made again (see `scales_here`).
 pub fn resize(width: u32, height: u32) {
     SESSION.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -474,19 +524,39 @@ pub fn resize(width: u32, height: u32) {
         session.scaled = scaled;
         session.width = width;
         session.height = height;
+
+        // A box is not a picture, and the frame the caller is holding was drawn at the size
+        // the last box was: the next frame is owed to it whatever the engine makes of the
+        // time, because the time has not changed at all. This is where the frame is first
+        // asked for again, so it is also where the tick has to be believed for the first
+        // time after it.
+        session.drawn = None;
     });
 }
 
 /// Whether this side scales the picture into the box rather than asking the engine to: a box
-/// larger than the picture on either axis is a file shown above its own size, which is the one
-/// case the engine's own scaling is not asked for.
+/// meaningfully larger than the picture on either axis is a file shown above its own size,
+/// which is the one case the engine's own scaling is not asked for.
+///
+/// "Meaningfully" is [`ENLARGEMENT_WORTH_RESAMPLING`] and the difference matters because of
+/// what the two sides cost, which is written on [`play`]: this side's share is a scalar
+/// bilinear over every pixel of every frame and the engine's is a share of a frame it is
+/// writing anyway, so a box one pixel wider than the picture is a whole film resampled on the
+/// preview thread to correct for a hundredth of a pixel. A preview at 100% is the picture
+/// itself and is not scaled by anybody, and that is where a hover leaves a video most of the
+/// time — the resampler is for a file deliberately shown larger than it is, not for the
+/// rounding of a box that was meant to be its own size.
 ///
 /// Either axis rather than both, because the two are not always scaled alike — a file whose
 /// pixels are not square is stretched along one of them at every size — and a picture already
-/// being asked for at its own size may as well be scaled by the one sampler for both directions.
-/// A picture with no size at all is a sound, which has nothing to scale and nothing to ask for.
+/// being asked for at its own size may as well be scaled by the one sampler for both
+/// directions. A picture with no size at all is a sound, which has nothing to scale and
+/// nothing to ask for.
 fn scales_here(picture: (u32, u32), width: u32, height: u32) -> bool {
-    picture.0 > 0 && picture.1 > 0 && (width > picture.0 || height > picture.1)
+    picture.0 > 0
+        && picture.1 > 0
+        && (f64::from(width) > f64::from(picture.0) * ENLARGEMENT_WORTH_RESAMPLING
+            || f64::from(height) > f64::from(picture.1) * ENLARGEMENT_WORTH_RESAMPLING)
 }
 
 /// The file being played, which is what a hover that lands on the same file again compares
@@ -895,6 +965,12 @@ fn codec_name(subtype: &GUID) -> Option<String> {
 /// to the pixel, at the size the surface is. It is handed to the caller's buffer rather
 /// than returned in one of its own, because this runs for every frame of a video that is
 /// playing and a fresh megabyte a frame is a megabyte a frame.
+///
+/// `None` is the whole of "there is nothing to repaint for", and a caller is to read it that
+/// way and leave both its buffer and the compositor alone. It is a deliberately wider answer
+/// than it was: a tick that finds the engine still holding the picture already on the screen
+/// is a tick with no work in it, and the buffer is left as it was rather than filled again
+/// with the picture the caller already has (see [`is_a_new_frame`]).
 pub fn copy_frame_into(pixels: &mut Vec<u8>) -> Option<(u32, u32)> {
     SESSION.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -1032,6 +1108,10 @@ impl Session {
             path: path.to_path_buf(),
             failed,
             drew: false,
+            // The first frame of a session is the first picture the caller has of the file,
+            // so it is owed one whatever the engine makes of a tick that finds its own
+            // first frame already on its clock.
+            drawn: None,
             pending_seek: None,
             began: Instant::now(),
         };
@@ -1094,6 +1174,13 @@ impl Session {
 
         let _ = unsafe { self.engine.SetCurrentTime(target) };
         self.pending_seek = None;
+
+        // A seek is not told apart from playing by the picture: the engine moves its own
+        // clock and the next tick can hand over a frame whose time is the one the caller
+        // is already holding, and on a video cut at a whole second — or on a bar dragged
+        // back to where it was — that is not a corner case but the ordinary one. So a
+        // position change is a new picture owed, whatever its time turns out to say.
+        self.drawn = None;
     }
 
     fn copy_into(&mut self, pixels: &mut Vec<u8>) -> Option<(u32, u32)> {
@@ -1114,7 +1201,26 @@ impl Session {
             return None;
         }
 
-        unsafe { self.engine.OnVideoStreamTick() }.ok()?;
+        // The tick is where the engine says whether there is a *new* frame, and answers
+        // with the presentation time of the one there is. `S_FALSE` — which arrives as
+        // anything but `S_OK` here — is the engine saying there is not, and is the
+        // ordinary answer on two ticks in three of a file that runs at half the tick: a
+        // tick that finds no new frame is no frame, and the caller is told so rather than
+        // shown the picture it already has.
+        let pts = match unsafe { self.engine.OnVideoStreamTick() } {
+            Ok(pts) => pts,
+            Err(_) => return None,
+        };
+
+        // And the engine saying there is one is not the same question as whether it is a
+        // different one: while a film plays, the same picture is offered on every tick
+        // until the next one is ready, and copying one out of the engine and into the
+        // compositor again is thirty megabytes of memory traffic at the size of a 4K
+        // display for a picture nobody is waiting for. The time is the identity, and a
+        // frame at a time already drawn is left in the engine's own surface where it is.
+        if !is_a_new_frame(self.drawn, pts) {
+            return None;
+        }
 
         // The rectangle the engine is asked to write: the box, where it is the one scaling, and the
         // picture's own size where this side is — where what comes back is the picture as the file
@@ -1151,8 +1257,12 @@ impl Session {
         .ok()?;
 
         // A frame of the file has been drawn: whatever becomes of this session later, it is not
-        // a session that never had one (see `failing_path`).
+        // a session that never had one (see `failing_path`). What is drawn is what the
+        // caller is holding from here on, and it is held only once the engine has written
+        // it: a transfer that failed leaves the surface as it was, so recording the frame
+        // as taken would be a picture the caller never saw remembered as one it has.
         self.drew = true;
+        self.drawn = Some(pts);
 
         let copied = if self.scaled {
             resample_locked(
@@ -1168,6 +1278,29 @@ impl Session {
 
         copied.then_some((self.width, self.height))
     }
+}
+
+/// Whether the frame the engine says is ready at `pts` is one the caller has not been given.
+///
+/// The tick carries the presentation time of the picture it is offering, and a picture is not
+/// new because a tick happened: the clock this side ticks on is a vertical blank and runs at
+/// whatever refresh the display is set to, so between one frame of a film and the next the
+/// engine offers that same frame three or four times over. Every one of those offers costs a
+/// transfer out of the engine, a copy into the caller and a hand of the whole frame to the
+/// compositor, and none of them is a picture anybody is waiting for — which is why this is the
+/// difference between a preview on the engine and a preview of a film at four times its own
+/// size, since the frame is the largest thing in the loop and it is proportional to the square
+/// of the file.
+///
+/// `drawn` is `None` wherever the next frame is owed rather than merely new, and each of the
+/// places that leaves it `None` is a place where the caller's picture and the engine's have no
+/// reason to agree: a session has drawn nothing yet, a box has changed size under a frame
+/// drawn at the old one, and a seek has moved a clock a transport bar is drawn from. A seek is
+/// the one that earns the distinction outright — a bar dragged back to where it was asks for
+/// the very time just drawn, and a picture that genuinely changed hands back a time the caller
+/// is already holding.
+fn is_a_new_frame(drawn: Option<i64>, pts: i64) -> bool {
+    drawn != Some(pts)
 }
 
 /// A surface for the engine to deliver into: a bitmap in the format a frame is composed
@@ -1220,6 +1353,17 @@ pub(crate) fn open_stream(path: &Path) -> Option<IMFByteStream> {
     Some(stream)
 }
 
+/// The alpha byte a frame of this app's is composed with, which is what every frame is
+/// written with whether the codec behind it had an opinion or not.
+///
+/// It is a named constant rather than the literal at each of the four places that write one,
+/// because the four are the same decision: the samplers below write it because their
+/// arithmetic has no alpha channel to carry, the copy writes it because the converter that
+/// produced the frame has no reason to have written one either (see [`force_opaque`]), and
+/// `heif_sequence` writes it because the format it read the frame in does not have the byte
+/// at all.
+const OPAQUE: u8 = 255;
+
 /// A frame's alpha bytes forced opaque, which is what every frame of this app's is composed with
 /// and is shared with `heif_sequence`.
 ///
@@ -1228,13 +1372,29 @@ pub(crate) fn open_stream(path: &Path) -> Option<IMFByteStream> {
 /// frame that carried an alpha of nothing composites to a preview that fades out or opens blank.
 /// What the engine hands over in `RGB32` has no alpha written into it at all (see
 /// `heif_sequence::set_output_type`).
+///
+/// That last point was settled by measurement for `ARGB32` as well rather than assumed from the
+/// format's name, since the natural question is whether the colour converter writes `0xFF` into
+/// a destination that has an alpha channel and so makes all of this unnecessary. It does not: a
+/// 1920 x 800 frame read straight out of the engine's own surface after a transfer into
+/// `MFVideoFormat_ARGB32` carried a histogram of the fourth byte over the whole surface of
+/// `253`, `254` and `255` — which is not opaque, is not stable, and is not a value anybody
+/// could have drawn with — and the very first frame of a session, before the converter had
+/// written anything at all into the surface it had just been handed, was `0` throughout. So the
+/// byte is written here and this function is not merely a convenience for the one caller who
+/// needs a whole frame of it forced: it is the reason a video preview is opaque at all.
+///
+/// It is no longer on the video path itself, which sets the byte as it copies rather than
+/// walking the frame afterwards, because a pass of its own over thirty megabytes is a pass of
+/// its own over thirty megabytes (see [`copy_locked`]). What is left here is `heif_sequence`,
+/// which has no copy of its own to fold it into.
 pub(crate) fn force_opaque(pixels: &mut [u8]) {
     // `as_chunks_mut` rather than `chunks_exact_mut`: a frame is a few million bytes and this
     // is a per-pixel pass over every one of them, so the bounds check the other form carries is
     // worth taking out. A frame that is not a whole number of pixels is left alone rather than
     // shortened, since it is not a frame.
     for pixel in pixels.as_chunks_mut::<4>().0 {
-        pixel[3] = 255;
+        pixel[3] = OPAQUE;
     }
 }
 
@@ -1309,6 +1469,49 @@ fn resample_locked(
     scale_rows(source, stride, picture, box_size, rows, pixels)
 }
 
+// How many rows of the picture the scaler has read on this thread since the last time it was
+// asked, which is the only question a cache of two rows can be judged by.
+//
+// It is counted rather than reasoned about because the whole of the cache is invisible from
+// the picture it draws: a resampler that reads every row twice and one that reads each once
+// draw exactly the same frame. It is thread-local because the tests that ask are run beside
+// one another and a counter they all wrote to would be counting every test's frame, and it is
+// compiled in only under `cfg(test)` because a number only a test reads is not worth an
+// increment on the preview thread.
+#[cfg(test)]
+thread_local! {
+    static ROWS_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+// How many source rows a resample read per destination row of the box: the number the cache
+// exists to keep at one per source row of the picture, and which no test can get at any other
+// way.
+#[cfg(test)]
+fn rows_read_per_destination_row(source: &[u8], picture: (u32, u32), box_size: (u32, u32)) -> f64 {
+    let mut out = vec![0u8; box_size.0 as usize * box_size.1 as usize * 4];
+    let mut rows = [Vec::new(), Vec::new()];
+    ROWS_READ.with(|read| read.set(0));
+
+    assert!(scale_rows(
+        source,
+        picture.0 as usize * 4,
+        picture,
+        box_size,
+        &mut rows,
+        &mut out
+    ));
+
+    ROWS_READ.with(|read| read.replace(0)) as f64 / f64::from(box_size.1)
+}
+
+/// One source pixel for one destination pixel, in the 16.16 the two axes are mapped in.
+///
+/// It is named because a step of exactly this is the one that says the axis needs nothing done
+/// to it, which is a different kind of fact from the mapping itself and is not obvious from the
+/// arithmetic: every column lands on the column it started on, so the whole of the horizontal
+/// half of the scaling is a copy.
+const A_WHOLE_PIXEL: u64 = 1 << 16;
+
 /// The scaling itself: the picture at its own size read into a buffer of the box's.
 ///
 /// Bilinear and separable — a row of the box is two rows of the picture read across to the box's
@@ -1321,9 +1524,13 @@ fn resample_locked(
 /// The row of the picture a row of the box takes its lower half from is the row the next one takes
 /// its upper half from wherever the box is the larger of the two, and reading it across twice is
 /// half the scaling's work done twice over, so the two rows a row of the box is mixed from are
-/// kept in `rows` between the rows that need them. Below the picture's own size the rows no longer
-/// come in pairs and every row is read for itself, which is `resample_into_band`'s arrangement for
-/// the same reason: a scale down is not what this is here for.
+/// kept in `rows` between the rows that need them. Both of them are looked for, and neither is
+/// read across twice while the buffer that has it is still holding it: at four times the
+/// picture's size a pair of rows is mixed into sixteen rows of the box, and the cache as it
+/// stood was reading the lower one on all sixteen of them, so it kept the row for the ticks
+/// that needed it and paid for the ones that did not. Below the picture's own size the rows no
+/// longer come in pairs and every row is read for itself, which is `resample_into_band`'s
+/// arrangement for the same reason: a scale down is not what this is here for.
 fn scale_rows(
     source: &[u8],
     stride: usize,
@@ -1398,17 +1605,35 @@ fn scale_rows(
                 0
             }
         };
-        let lower = 1 - upper;
 
-        interpolate_row(
-            source,
-            stride,
-            picture_width,
-            lower_row as usize,
-            step_x,
-            &mut rows[lower],
-        );
-        held[lower] = Some(lower_row);
+        // The lower half of the pair is asked for the same way and for the same reason, and this
+        // is where the cache was not doing its job: a pair of rows mixed into four of the box is
+        // read across five times, and one mixed into sixteen is read across seventeen, all of it
+        // into a buffer that has held the row since the first of them. Reading it again costs a
+        // pass over the whole picture for nothing, which at a large enlargement is most of what
+        // the scaling is.
+        let lower = if lower_row == upper_row {
+            // The last row of the picture is its own lower half — the mapping is clamped to the
+            // picture's own rows, and the row below the last one does not exist. It is mixed
+            // with itself, which is the row, so it is read once and read for both.
+            upper
+        } else if let Some(index) = held.iter().position(|row| *row == Some(lower_row)) {
+            index
+        } else {
+            let index = 1 - upper;
+
+            interpolate_row(
+                source,
+                stride,
+                picture_width,
+                lower_row as usize,
+                step_x,
+                &mut rows[index],
+            );
+            held[index] = Some(lower_row);
+
+            index
+        };
 
         let destination = &mut out[y * row_bytes..(y + 1) * row_bytes];
         blend_rows(&rows[upper], &rows[lower], weight, destination);
@@ -1422,6 +1647,15 @@ fn scale_rows(
 ///
 /// The alpha is not read at all — a picture is opaque here, so the fourth byte of every pixel
 /// written is 255 whatever the codec put beside it (see [`force_opaque`]).
+///
+/// A box exactly as wide as the picture is the one case where this is not a resample at all, and
+/// it is worth the branch because it is the case a box that enlarged one axis only arrives at: a
+/// file whose pixels are not square is stretched along one axis at every size, so the other
+/// comes out equal, and every row of every frame of it would be read by the loop below, two
+/// pixels at a time, mixed by nothing, to arrive at the row it was given. A step of
+/// [`A_WHOLE_PIXEL`] says exactly that — one pixel per pixel, with the half-pixel offset the
+/// mapping takes leaving every column standing on its own — and the whole of the row comes then
+/// from [`copy_row_opaque`], which is what copying a row here already is.
 fn interpolate_row(
     source: &[u8],
     stride: usize,
@@ -1430,8 +1664,17 @@ fn interpolate_row(
     step: u64,
     out: &mut [u8],
 ) {
+    #[cfg(test)]
+    ROWS_READ.with(|read| read.set(read.get() + 1));
+
     let start = picture_row * stride;
     let picture_row = &source[start..start + picture_width as usize * 4];
+
+    if step == A_WHOLE_PIXEL {
+        copy_row_opaque(picture_row, out);
+        return;
+    }
+
     let last = picture_width as usize - 1;
 
     for (x, pixel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
@@ -1448,7 +1691,7 @@ fn interpolate_row(
             pixel[channel] = ((mixed + 128) >> 8) as u8;
         }
 
-        pixel[3] = 255;
+        pixel[3] = OPAQUE;
     }
 }
 
@@ -1471,12 +1714,21 @@ fn blend_rows(upper: &[u8], lower: &[u8], weight: u32, out: &mut [u8]) {
             pixel[channel] = ((mixed + 128) >> 8) as u8;
         }
 
-        pixel[3] = 255;
+        pixel[3] = OPAQUE;
     }
 }
 
 /// Copy a locked bitmap out as the preview's frame, which is the one place a video's pixels
 /// are touched where the engine is the one that scaled them.
+///
+/// The copy and the alpha are one pass, which is the whole of what this function is for: a
+/// frame at the size of a display is thirty megabytes, so a second pass over it is a second
+/// thirty megabytes read back out of main memory and thirty more written over the compositor's
+/// copy — a hundred megabytes of traffic for a byte in every fourth position, on the preview
+/// thread, once for each frame of the file. Written as two passes it was two traversals of a
+/// buffer that does not fit in a cache, and the second one paid for every byte of the first.
+/// Written as one there is nothing to pay for at all: the fourth byte is set as the pixel goes
+/// past rather than by walking over what was just written.
 fn copy_locked(bitmap: &IWICBitmap, pixels: &mut Vec<u8>, width: u32, height: u32) -> bool {
     let Some(stride) = (width as usize).checked_mul(4) else {
         return false;
@@ -1502,12 +1754,34 @@ fn copy_locked(bitmap: &IWICBitmap, pixels: &mut Vec<u8>, width: u32, height: u3
     for row in 0..height as usize {
         let from = row * source_stride;
         let to = row * stride;
-        pixels[to..to + stride].copy_from_slice(&source[from..from + stride]);
 
-        force_opaque(&mut pixels[to..to + stride]);
+        copy_row_opaque(&source[from..from + stride], &mut pixels[to..to + stride]);
     }
 
     true
+}
+
+/// One row of the engine's surface into one row of the box's, with every pixel of it opaque as
+/// it goes past rather than by a walk over the row afterwards.
+///
+/// The two are separate functions for the reason every other row-level step in this file is
+/// one: this is the whole of [`copy_locked`] that can be looked at without a bitmap to lock,
+/// and the alpha is the part of it that is easy to get wrong. A pixel past the end of the
+/// pair is left as it was, which is the same rule [`force_opaque`] keeps and for the same
+/// reason — the two slices are the same length here, so a byte over is a byte over rather than
+/// a frame.
+fn copy_row_opaque(from: &[u8], to: &mut [u8]) {
+    // `as_chunks` rather than `chunks_exact`: pairing the two by index costs a bounds check
+    // per pixel on the way round a whole frame, and the pairing is the guarantee that each
+    // pixel is copied with its own alpha written beside it.
+    for (pixel, from) in to
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(from.as_chunks::<4>().0)
+    {
+        pixel.copy_from_slice(&[from[0], from[1], from[2], OPAQUE]);
+    }
 }
 
 #[cfg(test)]
@@ -1622,16 +1896,16 @@ mod tests {
         assert_eq!(out, [128, 0, 0, 255], "the pixel standing between them");
     }
 
-    /// Who scales the picture is one question and these are its two sizes: a box larger than the
-    /// picture on either axis is a file shown above its own size and is this side's to scale, and
-    /// everything at or below the picture's own size is the engine's, as it always was.
+    /// Who scales the picture is one question and these are its two sizes: a box meaningfully larger
+    /// than the picture on either axis is a file shown above its own size and is this side's to
+    /// scale, and everything at or below the picture's own size is the engine's, as it always
+    /// was.
     #[test]
     fn a_box_larger_than_the_picture_is_the_one_this_side_scales() {
         assert!(
             scales_here((640, 480), 1280, 960),
             "shown at twice its size"
         );
-        assert!(scales_here((640, 480), 641, 480), "over by a pixel");
 
         assert!(
             !scales_here((640, 480), 640, 480),
@@ -1649,6 +1923,162 @@ mod tests {
         );
     }
 
+    /// A box a hair bigger than the picture is not a file shown above its own size, and the
+    /// difference is the whole of this side's argument: the two sizes do not come out of the
+    /// layout equal even at 100%, and a comparison rather than a share resamples a whole film
+    /// for a hundredth of a pixel. So the three cases are the three answers, and the middle one
+    /// is the one that used to be the first.
+    #[test]
+    fn only_an_enlargement_worth_the_resampler_comes_to_this_side() {
+        assert!(
+            !scales_here((1920, 1080), 1920, 1080),
+            "an exact match is the picture itself, and is what a preview at 100% is"
+        );
+
+        // One per cent: a 4K file on a 4K display, which is what `fit` places, and the largest
+        // enlargement that is not worth resampling for by any distance.
+        assert!(
+            !scales_here((3840, 2160), 3878, 2182),
+            "a box a per cent bigger than a 4K picture is left to the engine"
+        );
+        assert!(
+            !scales_here((1920, 1080), 1939, 1094),
+            "and the same a per cent on either axis, however the rounding fell"
+        );
+
+        assert!(
+            !scales_here((640, 480), 641, 480),
+            "nor is one pixel, which is what the rounding of a box that was meant to be the picture gives"
+        );
+        assert!(!scales_here((640, 480), 640, 481), "on either axis alone");
+
+        assert!(
+            scales_here((640, 480), 960, 720),
+            "while one and a half times is a file deliberately shown larger than it is"
+        );
+        assert!(
+            scales_here((1920, 1080), 2560, 1440),
+            "and a 1080p file enlarged onto a 4K display, which is the case the resampler exists for"
+        );
+        assert!(
+            scales_here((1920, 1080), 1920, 2200),
+            "along one axis only, which is what a picture of non-square pixels asks of at every size"
+        );
+    }
+
+    /// The two rows a row of the box is mixed from are kept between the rows that need them,
+    /// and the only way to see whether they are is to count what is read: a resampler that
+    /// reads each row twice and one that reads each once draw exactly the same frame. At twice
+    /// the picture's size each source row is wanted by two rows of the box and at four times by
+    /// four, so the two numbers are one half and one quarter — and a cache that keeps the upper
+    /// row but reads the lower one again on every tick comes to one and a bit either way.
+    #[test]
+    fn every_row_of_the_picture_is_read_once_however_far_it_is_stretched() {
+        // A picture big enough for the mapping's arithmetic to be the whole of the cost and
+        // small enough to be written out by hand.
+        let picture = (100u32, 100u32);
+        let source = vec![0u8; picture.0 as usize * picture.1 as usize * 4];
+
+        let doubled = rows_read_per_destination_row(&source, picture, (200, 200));
+        assert!(
+            doubled <= 0.5,
+            "a row of the picture is wanted by two of the box, so it is read once each: {doubled:.3}"
+        );
+
+        let quadrupled = rows_read_per_destination_row(&source, picture, (400, 400));
+        assert!(
+            quadrupled <= 0.25,
+            "and by four at four times the size, for the same reason: {quadrupled:.3}"
+        );
+
+        // A box the same size as the picture is the other end of it: one row wanted by one row,
+        // and one read for it. It is also the last row of the picture under every other box,
+        // where the pair is a row and the same row again and so is read once rather than twice.
+        let matched = rows_read_per_destination_row(&source, picture, (100, 100));
+        assert!(
+            matched <= 1.0,
+            "the last row of a picture is its own lower half, so a whole frame reads one row fewer than it has: {matched:.3}"
+        );
+
+        // One axis equal and the other stretched is what a file of non-square pixels asks for at
+        // every size, and it is asked along the height here: the row cache does not care which
+        // axis it is, and the horizontal half of this is a copy rather than a resample.
+        let stretched = rows_read_per_destination_row(&source, picture, (100, 200));
+        assert!(
+            stretched <= 0.5,
+            "and a box stretched on one axis only reads each row of the picture once for it as well: {stretched:.3}"
+        );
+
+        let stretched_across = rows_read_per_destination_row(&source, picture, (200, 100));
+        assert!(
+            stretched_across <= 1.0,
+            "and one row for one row is one read for one row, whatever the columns are doing: {stretched_across:.3}"
+        );
+    }
+
+    /// A box as wide as the picture needs no resampling across, and the row it is given is the row
+    /// it was handed rather than a mix of it with itself: which is the difference between reading
+    /// a row and copying it, and is what a picture of non-square pixels gets on the axis that is
+    /// not being stretched.
+    #[test]
+    fn a_box_as_wide_as_the_picture_is_given_the_row_unchanged() {
+        // One row of a picture, with the alpha bytes a converter chose rather than this app.
+        let source = [
+            10u8, 20, 30, 0, //
+            40, 50, 60, 253, 70, 80, 90, 254, 100, 110, 120, 255,
+        ];
+        let mut row = [0u8; 16];
+
+        interpolate_row(&source, 16, 4, 0, A_WHOLE_PIXEL, &mut row);
+
+        let expected = [
+            [10u8, 20, 30, 255],
+            [40, 50, 60, 255],
+            [70, 80, 90, 255],
+            [100, 110, 120, 255],
+        ];
+
+        for (column, pixel) in expected.iter().enumerate() {
+            assert_eq!(
+                pixel_at(&row, 4, 0, column),
+                *pixel,
+                "column {column} arrived at from the source pixel and no other, and is opaque"
+            );
+        }
+    }
+
+    /// The alpha byte the colour converter writes into `ARGB32` is not one anybody could draw
+    /// with, so the copy writes it rather than reading it: which is what a row of the engine's
+    /// surface has to be for the preview to be opaque at all.
+    #[test]
+    fn a_copied_row_is_opaque_whatever_the_converter_wrote_in_it() {
+        // Three pixels carrying the three alpha values a transfer into `MFVideoFormat_ARGB32`
+        // has been seen to leave behind, plus the all-zero alpha of a frame nothing has been
+        // written into yet.
+        let source = [
+            10u8, 20, 30, 0, //
+            40, 50, 60, 253, 70, 80, 90, 254, 100, 110, 120, 255,
+        ];
+        let mut row = [0u8; 16];
+
+        copy_row_opaque(&source, &mut row);
+
+        let expected = [
+            [10u8, 20, 30, 255],
+            [40, 50, 60, 255],
+            [70, 80, 90, 255],
+            [100, 110, 120, 255],
+        ];
+
+        for (column, pixel) in expected.iter().enumerate() {
+            assert_eq!(
+                pixel_at(&row, 4, 0, column),
+                *pixel,
+                "pixel {column} keeps the colour it arrived with and is handed an alpha that can be composited"
+            );
+        }
+    }
+
     /// A picture the engine wrote less of than it said it would is answered with no frame rather
     /// than with one drawn from the rows it managed: half a picture is not a picture, and the
     /// frame the preview is holding is a better answer than a half-filled one.
@@ -1663,6 +2093,40 @@ mod tests {
         assert!(
             out.iter().all(|byte| *byte == 9),
             "and what was there is left as it was"
+        );
+    }
+
+    /// The engine offering the frame it offered last is not a frame, and a session that has
+    /// drawn nothing is owed the first picture whatever the engine has to say about it. This is
+    /// the whole of the question, and it is asked in hundred-nanosecond units because that is
+    /// what the tick is answered in.
+    #[test]
+    fn a_frame_the_engine_is_still_holding_is_not_drawn_again() {
+        assert!(
+            is_a_new_frame(None, 0),
+            "the first frame of a session is new however the engine times it"
+        );
+
+        assert!(
+            is_a_new_frame(Some(0), 333_333),
+            "and so is the frame that follows the one drawn, a hundredth of a second later"
+        );
+
+        assert!(
+            !is_a_new_frame(Some(333_333), 333_333),
+            "while the same time is the same picture however many ticks it is offered over"
+        );
+
+        // What a file that loops hands back, and what a seek hands back that a bar was
+        // dragged to: the beginning of the file arriving again, and the time of a frame
+        // that did change arriving as the time of one that did not.
+        assert!(
+            is_a_new_frame(Some(12_000_000), 0),
+            "the loop of a file starts its times over without starting its frames"
+        );
+        assert!(
+            is_a_new_frame(None, 12_000_000),
+            "and a seek leaves the caller owed the time it lands on, exactly as it was"
         );
     }
 }
