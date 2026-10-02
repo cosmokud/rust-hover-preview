@@ -9,7 +9,12 @@
 
 ### Changed
 
-- **A pinned sound's title bar now appears only when the pointer is over the window**, the way a picture's does, and stands eight pixels clear of the card rather than flush against it. Two reasons, and they are different ones. The bar is shown when the pointer is near because a sound's caption is a *band of the window* rather than a strip painted over the card, so hiding it costs the card nothing and leaves the window's box alone - the same gate (`pin_hides_chrome`) a picture's chrome goes through, arrived at separately and now answering both. It is cleared of the card because a sound's card opens with the file's own name, and a caption flush against it is two titles in a row with nothing saying they are two; the gap belongs to the chrome band rather than to the media, so a press inside it is a press on the band - a handle for carrying the window - and not on any button. A pin still shows its whole of the chrome for a moment after it comes up, as every kind does, since a pin brought up by a key has no pointer near it.
+- **A pinned sound now has no title bar at all.** The window is the card and nothing else: no caption band above it, no gap under one, and nothing to show or hide as the pointer comes and goes. A card opens with the file's own name at its own top and carries its own controls on its own row, so a title bar over it is a second name over the first with a close button on it, and there is nothing under it but the card the window is for. The keys still work - `Space` holds the sound and lets it go, the arrows walk the folder, `Escape` closes the pin - because those are answered by the pin's own window and not by a caption.
+
+### Fixed
+
+- **A pinned sound's card was cut off at the bottom**, which took the row of buttons off it and left the bar at the very edge of the window with its reach below the window rather than on the card - so a press on the bar did nothing at all. A card a *hover* shows carries no buttons and is therefore shorter, so the box a pin is taken up on is measured again with the controls on, and the card laid out again for the box that comes of it.
+- **The Previous button on a pinned sound's card was drawn the wrong way round**: a triangle pointing the wrong way with its bar on the far side of it, so it did not read as the mark every player has drawn for stepping back for thirty years. It is now the exact mirror of the Next button beside it, and the same size as it.
 
 ## [0.4.0]
 
