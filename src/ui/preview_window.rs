@@ -27155,7 +27155,7 @@ mod tests {
         // the engine is asked about and can decode. Reported for every file rather than only for
         // a video, because a probe is run to find out what the machine is doing.
         println!(
-            "video: played natively = {} (machine), {} (this file)",
+            "video: engine is the only player = {} (machine), engine can decode this file = {}",
             crate::formats::codecs::plays_video_natively(),
             media_engine_plays(&path)
         );
@@ -27801,8 +27801,13 @@ mod tests {
             return;
         };
 
+        // Both halves, because the name reads as a question about whether this machine can play
+        // video and is not one: what it answers is whether the media engine is the *only* player
+        // here, which is the absence of FFmpeg's rather than the presence of a decoder. Printed
+        // together so the two cannot be read as contradicting each other.
         println!(
-            "this machine plays video natively = {} (nothing of FFmpeg's installed)",
+            "ffmpeg installed = {}, so plays_video_natively = {}",
+            crate::formats::codecs::ffplay_available(),
             crate::formats::codecs::plays_video_natively()
         );
 
