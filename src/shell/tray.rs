@@ -190,8 +190,8 @@ const ID_TRAY_AUDIO_VOLUME_BASE: u16 = 1370;
 /// `the_two_volume_submenus_carry_a_range_apiece`, which holds all three away from the sounds
 /// gate and from each other.
 const ID_TRAY_AUDIO_SEEK_BASE: u16 = 1390;
-/// The `Volume → Audio` submenu's first row: whether a sound's loudest sample is measured and
-/// brought to full scale before it is played (see `Normalize`).
+/// The `Volume → Audio` submenu's first row: whether a sound's measured loudness is brought to one
+/// level before it is played (see `Normalize`).
 ///
 /// It is a switch of its own rather than a level of the list under it, so it takes an id of its
 /// own — out past the tick menu, where the tray's other lone switches sit, rather than in the
@@ -659,7 +659,7 @@ unsafe extern "system" fn tray_window_proc(
                     {
                         set_html_background(cmd - ID_TRAY_HTML_BACKGROUND_BASE)
                     }
-                    // The peak above the levels of each half of the `Volume` submenu, the sound's and
+                    // The row above the levels of each half of the `Volume` submenu, the sound's and
                     // the video's: switches rather than levels, and read where a player is started
                     // rather than here.
                     ID_TRAY_NORMALIZE_VOLUME => toggle_normalize_volume(),
@@ -1826,7 +1826,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // both would mean turning a film's soundtrack up to hear a song. Each half lists the same
     // ten levels, in the same order, which is what lets one table and one builder serve them;
     // the level each setting stands at carries the default mark (see `VOLUME_CHOICES`). Above
-    // each half's levels sits the switch the file itself answers — the peak it is played at —
+    // each half's levels sits the switch the file itself answers — the loudness it is played
+    // at —
     // and below the sound's own sits the other half of the same question, where in a file it
     // starts playing (see `AUDIO_SEEK_CHOICES`).
     let (video_volume, audio_volume, audio_seek) = CONFIG
@@ -1863,10 +1864,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
         }
     };
 
-    // Each half carries one row the levels do not answer, and it sits above them: the peak a file's
+    // Each half carries one row the levels do not answer, and it sits above them: the loudness a file's
     // playing is measured to. A level is asked of the hover and this is asked of the file, and the
-    // two are scaled into one another — what the file's own loudest sample is brought to is full
-    // scale, and the level under it is how much of that is heard (see `Normalize`). Both halves are
+    // two are scaled into one another — what the file's own measured loudness is brought to is one
+    // level, and the level under it is how much of that is heard (see `Normalize`). Both halves are
     // offered it because both can be heard; they start where they start, the way their levels do.
     let (normalize_audio, normalize_video) = CONFIG
         .lock()
@@ -1890,7 +1891,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 | if normalize_available {
                     MF_UNCHECKED
                 } else {
-                    // A machine without FFmpeg has nothing that measures a peak or applies one: the
+                    // A machine without FFmpeg has nothing that measures a loudness or applies
+                    // one: the
                     // row is shown as what it is there — a switch that cannot act — rather than as a
                     // click that would do nothing (see `codecs::normalize_available`).
                     MF_GRAYED
@@ -3916,8 +3918,8 @@ fn set_audio_volume(index: u16) {
     }
 }
 
-/// The switch above a sound's levels: whether a file's loudest sample is measured and brought to
-/// full scale before it is played, which is read where a player is started the way the level
+/// The switch above a sound's levels: whether a file's measured loudness is brought to one level
+/// before it is played, which is read where a player is started the way the level
 /// beside it is — nothing on screen is rebuilt, and a sound already playing is left where it is.
 ///
 /// It is the file that is measured rather than the playing that is re-scaled, so a file switched

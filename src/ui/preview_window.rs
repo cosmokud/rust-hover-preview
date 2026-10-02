@@ -6523,7 +6523,7 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     };
 
     // The film's soundtrack is measured beside its geometry where `Normalize` is on for videos,
-    // which is the same arrangement the sound probe's own peak is measured under: one read of the
+    // which is the same arrangement the sound probe's own loudness is measured under: one read of the
     // file, on the thread the hover is waiting on, held for every hover after this one (see
     // `measure_video_gain`).
     measure_video_gain(path);
@@ -6809,8 +6809,8 @@ fn set_noactivate_for_process(pid: u32) {
     wake_noactivate_monitor();
 }
 
-/// Start ffplay for video preview, at the level `volume` names and with the film's own peak
-/// folded into it where `Normalize` is on for videos (see `normalizing_video`).
+/// Start ffplay for video preview, at the level `volume` names and with the film's own measured
+/// loudness folded into it where `Normalize` is on for videos (see `normalizing_video`).
 ///
 /// The level is the caller's answer rather than a read of the configuration, because the two
 /// callers keep different ones: a preview that is beginning is played at `Volume → Video`, and a
@@ -6835,15 +6835,16 @@ fn start_video_playback(
     if volume == 0 {
         cmd.arg("-an");
     } else {
-        // The level, with the soundtrack's own peak folded into it where `Normalize` is on for
-        // videos and one has been measured: the two multiply, exactly as they do for a sound file
-        // (see `start_audio_player`). A film nothing has measured is played as the file holds it,
-        // and what measures it is a read on a thread of its own — the hover after this one is the
-        // one that hears it (see `spawn_gain_scan`).
+        // The level, with the soundtrack's own measured gain folded into it where `Normalize` is on
+        // for videos and one has been measured: the two multiply, exactly as they do for a sound
+        // file (see `start_audio_player`). A film nothing has measured is played as the file holds
+        // it, and what measures it is a read on a thread of its own — the hover after this one is
+        // the one that hears it (see `spawn_gain_scan`).
         let gain = if normalizing_video() {
             match audio_track::gain(path) {
-                Some(gain) if gain != 1.0 => Some(gain),
-                Some(_) => None,
+                // A gain of one is a gain, not the absence of one: a soundtrack already standing
+                // at the target is played through the filter like every other measured file.
+                Some(gain) => Some(gain),
                 None => {
                     spawn_gain_scan(path);
                     None
@@ -7898,7 +7899,7 @@ fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) -> Option<Med
 /// whole of what its probe is for — and everything else is FFmpeg's, where FFmpeg is installed
 /// at all. A file neither answers for is a file with no preview.
 ///
-/// The peak of a file that plays is measured here as well, where the tray's `Normalize` asks for
+/// The loudness of a file that plays is measured here as well, where the tray's `Normalize` asks for
 /// it: one read of one file, on the thread the hover is waiting on anyway, and the gain every
 /// hover after this one is played at (see `measure_audio_gain`).
 fn probe_audio_track(path: &Path) -> Option<audio_track::Track> {
@@ -8032,24 +8033,24 @@ fn codec_label(name: &str) -> String {
     .to_string()
 }
 
-/// How long a sound's peak is given — a decode of every sample in the file, which is what a peak
-/// that is the file's own costs — before the wait for it is over.
+/// How long a sound's loudness is given — a decode of every sample in the file, which is what a
+/// loudness that is the file's own costs — before the wait for it is over.
 ///
 /// It is longer than the probe's own cap for what it reads: a probe reads a header, and this reads
 /// the file. The cap is for the file no meter is coming back from, and one this side gives up on
 /// is played as it holds rather than waited for (see `finish_gain_scan`).
 const AUDIO_GAIN_TIMEOUT_SECS: u64 = 15;
 
-/// The sounds whose peak is being measured right now, which is what keeps a file hovered twice in
-/// the time one measurement takes from being read twice (see `begin_gain_scan`).
+/// The sounds whose loudness is being measured right now, which is what keeps a file hovered
+/// twice in the time one measurement takes from being read twice (see `begin_gain_scan`).
 static MEASURING_GAIN: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 /// Reads in flight this list holds before it is emptied, the same bound and the same reasoning as
 /// the measure list's own (see `MEASURING_MAX_ENTRIES`).
 const MEASURING_GAIN_MAX_ENTRIES: usize = 64;
 
-/// Whether a sound's peak is measured and applied at all: the setting is on and this machine has
-/// the two programs that make it possible (see `codecs::normalize_available`).
+/// Whether a sound's loudness is measured and applied at all: the setting is on and this machine
+/// has the two programs that make it possible (see `codecs::normalize_available`).
 fn normalizing_audio() -> bool {
     let wanted = CONFIG
         .lock()
@@ -8070,12 +8071,12 @@ fn normalizing_video() -> bool {
     normalize_available_for(wanted)
 }
 
-/// Whether a peak may be measured and applied at all, for whichever kind asked for it.
+/// Whether a loudness may be measured and applied at all, for whichever kind asked for it.
 fn normalize_available_for(wanted: bool) -> bool {
     wanted && codecs::normalize_available()
 }
 
-/// Say that this file's peak is being measured, answering whether one already is.
+/// Say that this file's loudness is being measured, answering whether one already is.
 fn begin_gain_scan(path: &Path) -> bool {
     let Ok(mut measuring) = MEASURING_GAIN.lock() else {
         return false;
@@ -8094,7 +8095,7 @@ fn begin_gain_scan(path: &Path) -> bool {
     true
 }
 
-/// Say that the measurement of this file's peak is done with.
+/// Say that the measurement of this file's loudness is done with.
 fn end_gain_scan(path: &Path) {
     let Ok(mut measuring) = MEASURING_GAIN.lock() else {
         return;
@@ -8103,7 +8104,7 @@ fn end_gain_scan(path: &Path) {
     measuring.retain(|running| running != path);
 }
 
-/// Measure a sound's peak where `Normalize` asks for it and nothing has measured it yet, on the
+/// Measure a sound's loudness where `Normalize` asks for it and nothing has measured it yet, on the
 /// thread that asked — which is a thread a hover is waiting on and never the tick (see
 /// `probe_audio_track`).
 fn measure_audio_gain(path: &Path) {
@@ -8145,28 +8146,74 @@ fn spawn_gain_scan(path: &Path) {
     std::thread::spawn(move || finish_gain_scan(&path));
 }
 
-/// Measure a sound's peak and hold the gain it asked for, which is where every measurement of one
-/// ends.
+/// Measure a sound's loudness and hold the gain it asked for, which is where every measurement of
+/// one ends.
 ///
 /// A measurement that answered nothing — a meter that failed, a file with no sound stream in it,
 /// a read that ran past its cap — is held as a gain of one rather than left unmeasured: what such
-/// a file is played at is what it holds, which is the same answer a peak already at full scale is
-/// played at, and a file that cannot be measured is not measured again on every hover of it.
+/// a file is played at is what it holds, and a file that cannot be measured is not measured again
+/// on every hover of it.
 fn finish_gain_scan(path: &Path) {
-    let gain = measure_audio_peak(path).unwrap_or(1.0);
+    let gain = measure_audio_loudness(path).unwrap_or(1.0);
 
     audio_track::remember_gain(path, gain);
     end_gain_scan(path);
 }
 
-/// The gain that brings a sound's loudest sample to the full scale of the format, as FFmpeg's own
-/// `volumedetect` measures it — or nothing where it could not be asked.
+/// The level a sound is brought to before it is played, in the units the meter reads: ITU-R
+/// BS.1770 integrated loudness, where `0 LUFS` is a full-scale sine and a number is how loud the
+/// file *sounds* rather than where its loudest sample happens to sit.
 ///
-/// The meter decodes every sample and reads the largest of them, which is what a peak is: `-3 dB`
-/// is a file whose loudest sample stands at half of full scale, and half of full scale is what `+3
-/// dB` of gain brings to the ceiling. Only the file's own sound stream is handed to the meter, and
-/// what it writes is nothing — the pass is the measurement (see `Normalize`).
-fn measure_audio_peak(path: &Path) -> Option<f64> {
+/// It is `-14 LUFS` because that is the level everything a sound is likely to be played beside is
+/// already at — every music service normalizes to it, and it is what a listener's ear has been
+/// trained on rather than what the format's ceiling allows. That last part is the whole of the
+/// difference between this and what the switch used to do, and it is deliberate: the target is a
+/// property of the app, so two files of the same loudness are given the same gain whatever their
+/// peaks happen to be. A target read off the file — the gain that brings *its* loudest sample to
+/// full scale — is a target the file chooses, and it makes the gain a statement about how hard the
+/// file was limited: two Suno renders at the same `-13.3 LUFS`, one limited to a peak of `0 dBFS`
+/// and one to `-2 dBFS`, came out 2 dB apart, which is the bug.
+///
+/// A file already at the target is therefore played exactly as it holds — a gain of one — and
+/// that is an answer rather than a lack of one: nothing has to be measured for a caller to tell
+/// it apart from a file nothing has measured (see `audio_track::gain`).
+const NORMALIZE_TARGET_LUFS: f64 = -14.0;
+
+/// How far above a file's own loudest inter-sample peak it may be lifted: the ceiling a gain that
+/// carries a file's peaks up is not carried past.
+///
+/// Loudness is an average and a peak is a worst case, so the two disagree — a heavily limited
+/// master measures loud and peaks at `0 dBFS`, and lifting it to `-14 LUFS` from a quieter one is
+/// worth twenty decibels that land on samples that are already at the ceiling, where a decoder
+/// clips them into the flat top nobody mixed on purpose. `-1 dBTP` is the ceiling every streaming
+/// codec works to and is short of that.
+///
+/// It is a clamp and not a limit on what a file may be played at: a file that needs more gain
+/// than its headroom allows is given the headroom and stops there, left quieter than the target
+/// rather than torn. The cost is that two files needing more than they have get gains decided by
+/// their peaks again, in the one case where there is nothing else to decide them by — a clipped
+/// file and a clipped file are both already torn.
+const NORMALIZE_PEAK_CEILING_DBFS: f64 = -1.0;
+
+/// The gain that brings a sound to the level the tray's `Normalize` plays files at, as FFmpeg's own
+/// `ebur128` measures it — or nothing where it could not be asked.
+///
+/// `ebur128` is the ITU-R BS.1770 scanner, and what this asks of it is the `Summary` it writes at
+/// the end of the pass: `I:` is the integrated loudness of the whole file and `Peak:` its true
+/// peak, and the gain is what carries the first to the target without carrying the second past the
+/// ceiling (see `NORMALIZE_TARGET_LUFS` and `NORMALIZE_PEAK_CEILING_DBFS`). `peak=true` is what
+/// asks for that peak at all, and `framelog=quiet` is what stops the scanner writing a line for
+/// every hundredth of a second on the way — a report of forty lines rather than one of two
+/// thousand, which is a file's own worth of work thrown away on a hover.
+///
+/// `loudnorm` is the other meter FFmpeg has and it answers the same question with a JSON object
+/// rather than a summary, and it was not the one to ask: its own pass runs the whole of a dynamic
+/// normalization to produce the numbers, which is 8× the decode for an answer this throws away —
+/// 0.45s against 3.8s for a three-minute file.
+///
+/// Only the file's own sound stream is handed to the meter, and what it writes is nothing — the
+/// pass is the measurement (see `Normalize`).
+fn measure_audio_loudness(path: &Path) -> Option<f64> {
     if !codecs::normalize_available() {
         return None;
     }
@@ -8178,7 +8225,8 @@ fn measure_audio_peak(path: &Path) -> Option<f64> {
         .args(["-v", "info", "-nostdin", "-hide_banner"])
         .arg("-i")
         .arg(path)
-        .args(["-map", "0:a:0", "-af", "volumedetect", "-f", "null", "-"])
+        .args(["-map", "0:a:0", "-af", "ebur128=peak=true:framelog=quiet"])
+        .args(["-f", "null", "-"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .creation_flags(engine_processes::CREATE_NO_WINDOW)
@@ -8193,35 +8241,57 @@ fn measure_audio_peak(path: &Path) -> Option<f64> {
     audio_gain_from_report(&report)
 }
 
-/// The gain a `volumedetect` report asks for: what brings a file's loudest sample to full scale.
+/// The gain an `ebur128` report asks for: what brings a file's measured loudness to the target,
+/// held short of its own true peak's ceiling.
 ///
-/// Nothing finite to read is nothing to apply. A file of silence reports a peak of `-inf` dB, and
-/// what it would ask for is every sample of it times an infinity — a file with nothing to hear is
-/// left as it is rather than lifted to whatever the format's noise floor happens to be.
+/// What is read is the `Summary` block rather than the first line that looks like it: a scanner
+/// told to log every frame writes `I:` and `TPK:` on each of them as it goes, and those are the
+/// momentary readings of a moment — the summary is the whole of the file.
+///
+/// Nothing finite to read is nothing to apply. A file of silence reports a true peak of `-inf` dB
+/// and an integrated loudness at the floor of the scale, and what either of those would ask for is
+/// every sample of it times an infinity — a file with nothing to hear is left as it is rather than
+/// lifted to whatever the format's noise floor happens to be.
 fn audio_gain_from_report(report: &str) -> Option<f64> {
-    let peak = report
-        .lines()
-        .find_map(|line| line.split_once("max_volume:"))
-        .and_then(|(_, value)| value.split_whitespace().next())
-        .and_then(|value| value.parse::<f64>().ok())?;
+    let summary = report.split_once("Summary:")?.1;
 
-    if !peak.is_finite() {
+    let integrated = read_ebur128(summary, "I:")?;
+    let peak = read_ebur128(summary, "Peak:")?;
+
+    if !integrated.is_finite() || !peak.is_finite() {
         return None;
     }
 
-    let gain = 10f64.powf(-peak / 20.0);
+    let wanted = 10f64.powf((NORMALIZE_TARGET_LUFS - integrated) / 20.0);
+    // What the file's own headroom allows, and unity where it has none to give: a gain below one
+    // makes the file quieter and cannot clip it, so the ceiling does not bind on a reduction —
+    // which is what lets a file whose peaks already stand past it still be brought to the target
+    // rather than pushed further from it.
+    let ceiling = 10f64.powf((NORMALIZE_PEAK_CEILING_DBFS - peak) / 20.0);
+
+    let gain = wanted.min(ceiling.max(1.0));
 
     (gain.is_finite() && gain > 0.0).then_some(gain)
 }
 
-/// Which player is playing `path` now: the file's own answer, unless `Normalize` has put a gain on
-/// it, which is FFmpeg's to apply and not the engine's.
+/// One number out of an `ebur128` summary: the first line under the name, which is a field whose
+/// width moves with the number in it and so is read by whitespace rather than by column.
+fn read_ebur128(summary: &str, field: &str) -> Option<f64> {
+    summary
+        .lines()
+        .find_map(|line| line.split_once(field))
+        .and_then(|(_, value)| value.split_whitespace().next())
+        .and_then(|value| value.parse::<f64>().ok())
+}
+
+/// Which player is playing `path` now: the file's own answer, unless `Normalize` has measured a
+/// gain for it, which is FFmpeg's to apply and not the engine's.
 ///
 /// The probe's answer is the machine's own question — does this engine have a decoder for the
 /// file — and it is the right answer to *start* a sound in on its own. It is the wrong answer to
 /// every question asked while the sound plays, because `start_audio_playback` plays a file with a
 /// gain through FFmpeg whatever the probe said: a gain is a filter, and the engine Windows has
-/// cannot be handed one. So a quiet MP3 — anything `Normalize` measures as short of full scale —
+/// cannot be handed one. So a quiet MP3 — anything `Normalize` measures as short of the target —
 /// is probed `Native` and played by FFmpeg, and a site that branches on the probe alone then
 /// speaks to an engine with no session while the sound is being heard from a process.
 ///
@@ -8234,10 +8304,11 @@ fn playing_player(path: &Path, track: &audio_track::Track) -> Player {
 /// The same answer with the three facts it is made of handed in rather than asked for, which is
 /// what makes it testable on a machine with no FFmpeg in it — the whole question is whether a gain
 /// is in play, and where the gain came from is the caller's business.
+///
+/// A gain of one is not the absence of one: it is what a file already standing at the target
+/// measures as, and it is a filter like any other, so it goes to FFmpeg the same way.
 fn player_for_gain(probed: Player, normalizing: bool, gain: Option<f64>) -> Player {
-    // A gain of one is not a gain: it is the answer for a file whose loudest sample already stands
-    // at full scale, and such a file is played by whichever engine its own probe named.
-    if normalizing && gain.is_some_and(|gain| gain != 1.0) {
+    if normalizing && gain.is_some() {
         return Player::Ffmpeg;
     }
 
@@ -8256,11 +8327,11 @@ fn player_for_gain(probed: Player, normalizing: bool, gain: Option<f64>) -> Play
 /// question about the file's length and the tray's `Volume → Audio Seek`, both of which are
 /// read where the hover is answered (see `audio_seek::start_position`).
 ///
-/// Which player a sound is started in is settled here too, and the peak of the file is the whole of
-/// that question: where the tray's `Normalize` is on and a gain has been measured for the file,
-/// FFmpeg's player is the one it is started in — a gain is a filter there, and the engine Windows
-/// has cannot be handed one — while every other file is played by whichever engine its own probe
-/// answered for.
+/// Which player a sound is started in is settled here too, and the gain measured for the file is
+/// the whole of that question: where the tray's `Normalize` is on and a gain has been measured for
+/// the file, FFmpeg's player is the one it is started in — a gain is a filter there, and the engine
+/// Windows has cannot be handed one — while every other file is played by whichever engine its own
+/// probe answered for.
 fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool {
     let Some(track) = audio_track::playable(path) else {
         return false;
@@ -8281,20 +8352,20 @@ fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool 
 
     if normalizing_audio() {
         match audio_track::gain(path) {
-            Some(gain) if gain != 1.0 => {
+            // A gain of one is a gain: a file measured as already standing at the target is played
+            // through the filter like every other measured file, rather than being read as a file
+            // that has nothing to apply.
+            Some(gain) => {
                 // The engine's own session is let go first, which is what a file that has just been
                 // handed to the other player needs: a sound already playing natively — the hover
-                // that started before this file's peak was measured — must not go on playing over
-                // the gain it asked for (see `video_player::stop`).
+                // that started before this file's loudness was measured — must not go on playing
+                // over the gain it asked for (see `video_player::stop`).
                 video_player::stop();
 
                 media.video_process = start_audio_player(path, volume, start, Some(gain));
 
                 return media.video_process.is_some();
             }
-            // Nothing to apply: the file's loudest sample already stands at full scale, or the file
-            // is silence rather than sound, and both are played the way they always were.
-            Some(_) => {}
             // Nothing has measured the file, so this hover is played as the file holds it: a decode
             // of every sample is not work for the tick, and what the scan is started for is the
             // hover after this one (see `spawn_gain_scan`).
@@ -8326,8 +8397,8 @@ fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool 
 
 /// Start FFmpeg's player on a sound: no window at all, which is the whole of what this side asks
 /// of it, and the level the sound is played at — the player's own scale, `0` to `100`, where the
-/// file is played as it holds it, and the filter that can carry more than full scale where a peak
-/// has been measured for it (see `Normalize`).
+/// file is played as it holds it, and the filter that carries the gain the tray's `Normalize`
+/// measured for it (see `Normalize`).
 ///
 /// A sound is looped while it is hovered, as a video is: what a hover is for is the file, and a
 /// sound that stopped under a pointer that had not moved would be a preview that ended on its
@@ -8355,10 +8426,10 @@ fn start_audio_player(path: &Path, volume: u32, start: f64, gain: Option<f64>) -
     let mut command = Command::new("ffplay");
     command.args(["-nodisp", "-autoexit", "-loglevel", "quiet"]);
 
-    // The level the sound is played at, with the file's own peak folded into it where one was
-    // measured: FFmpeg's player has a scale of its own for a level and a filter for a gain, and the
+    // The level the sound is played at, with the file's own measured gain folded into it where
+    // one was: FFmpeg's player has a scale of its own for a level and a filter for a gain, and the
     // two multiply — what is handed to the filter is the whole of what the file is scaled by, so a
-    // normalized file at `Volume → Audio` 10% is heard at a tenth of full scale rather than at ten
+    // normalized file at `Volume → Audio` 10% is heard at a tenth of the level rather than at ten
     // times it.
     match gain {
         Some(gain) => {
@@ -8537,7 +8608,7 @@ fn audio_clock(
 
     // The engine's own clock is what a sound the engine plays is measured by, and a sound this side
     // started a player for is measured by the clock over that player's start — whichever engine the
-    // machine's own decoders would have made of the file: a peak puts a file the engine could have
+    // machine's own decoders would have made of the file: a gain puts a file the engine could have
     // played into FFmpeg's hands, and a player of this side's reports nothing at all (see
     // `start_audio_playback` and `audio_started`).
     if started.is_none() && playing_player(path, &track) == Player::Native {
@@ -29142,19 +29213,125 @@ mod tests {
         );
     }
 
+    /// Two files of the *same* loudness were played two decibels apart, because the meter was
+    /// reading a peak and not the loudness: one file's loudest sample happened to sit at `0 dBFS`
+    /// and the other's at `-2 dBFS`, and a gain that brings a peak to full scale is therefore a
+    /// gain that says how hard the file was limited rather than how loud it is. The two reports
+    /// below are the whole of that, verbatim: `Bayangan Di Cermin3.mp3` and `Bayangan Di Cermin3
+    /// (1).mp3`, which measure `-13.3 LUFS` each and whose loudest samples are 2 dB apart.
+    ///
+    /// What is read is the meter that measures loudness — FFmpeg's `ebur128`, whose `Summary` is
+    /// ITU-R BS.1770 integrated loudness — and what comes of it is the same gain for both.
+    #[test]
+    fn a_files_loudness_and_not_its_peak_is_what_normalize_measures() {
+        const LIMITED_MASTER: &str = "\
+[Parsed_ebur128_0 @ 00000204639ecd80] t: 183.499979 TARGET:-23 LUFS    M:-94.7 S:-94.6     I: -13.3 LUFS       LRA:   4.6 LU  FTPK: -87.9 -87.6 dBFS  TPK:   0.0   0.0 dBFS
+[Parsed_ebur128_0 @ 00000204639ecd80] Summary:
+
+  Integrated loudness:
+    I:         -13.3 LUFS
+    Threshold: -23.4 LUFS
+
+  Loudness range:
+    LRA:         4.6 LU
+    Threshold: -33.4 LUFS
+    LRA low:   -16.4 LUFS
+    LRA high:  -11.8 LUFS
+
+  True peak:
+    Peak:        0.0 dBFS
+";
+        const LESS_LIMITED_MASTER: &str = "\
+[Parsed_ebur128_0 @ 00000193854524c0] Summary:
+
+  Integrated loudness:
+    I:         -13.3 LUFS
+    Threshold: -23.4 LUFS
+
+  Loudness range:
+    LRA:         4.3 LU
+    Threshold: -33.4 LUFS
+    LRA low:   -16.2 LUFS
+    LRA high:  -11.9 LUFS
+
+  True peak:
+    Peak:       -1.9 dBFS
+";
+
+        let limited =
+            audio_gain_from_report(LIMITED_MASTER).expect("a loudness report is a gain to apply");
+        let less_limited = audio_gain_from_report(LESS_LIMITED_MASTER)
+            .expect("a loudness report is a gain to apply");
+
+        // `-13.3 LUFS` against a target of `-14` is `-0.7 dB` for both files and the same
+        // `-0.7 dB` for the pair, which is the whole of what went wrong: two files within a tenth
+        // of a dB of each other are now within a tenth of a dB of each other.
+        assert!(
+            (limited - less_limited).abs() < 0.01,
+            "two files of the same loudness were played {} dB apart",
+            20.0 * (limited / less_limited).abs().log10()
+        );
+        assert!(
+            (limited - 0.9226).abs() < 0.001,
+            "a file at -13.3 LUFS is played at the target, not at its own peak: {} is not -0.7 dB",
+            limited
+        );
+
+        // The whole of what the toggle is for: the file that is quiet by a *measurement* rather
+        // than by a limitation is brought up to the target, and where that much gain would carry
+        // the file's own peaks past the ceiling it is held there instead — `-6 dBFS` of true peak
+        // has 5 dB of room under `-1 dBFS`, and 5 dB is what it is given of the 16 it asks for.
+        let quiet = audio_gain_from_report(
+            "\
+[Parsed_ebur128_0 @ 00000193854524c0] Summary:
+
+  Integrated loudness:
+    I:         -30.0 LUFS
+
+  True peak:
+    Peak:       -6.0 dBFS
+",
+        )
+        .expect("a quiet file is measured all the same");
+        assert!(
+            (quiet - 1.7783).abs() < 0.001,
+            "a quiet file is lifted as far as its own headroom allows, not clipped past it: {}",
+            quiet
+        );
+
+        // And a file of silence has nothing to measure and nothing to clip: its true peak is
+        // `-inf`, which is the same answer a meter that failed gives, and it is played as it holds.
+        assert_eq!(
+            audio_gain_from_report(
+                "\
+[Parsed_ebur128_0 @ 0000010db76efe00] Summary:
+
+  Integrated loudness:
+    I:         -70.0 LUFS
+
+  True peak:
+    Peak:       -inf dBFS
+"
+            ),
+            None,
+            "a file with nothing to hear is left as it is rather than lifted off its floor"
+        );
+    }
+
     /// A file the probe says the engine can decode is not necessarily played by it: `Normalize`
-    /// puts a gain on a file whose peak is short of full scale, and a gain is an FFmpeg filter the
-    /// engine cannot be handed — so such a file is played by FFmpeg while every question asked
-    /// while it plays used to branch on the probe and speak to an engine with no session. That is
-    /// a bar press that seeks nothing, on exactly the quiet files a machine full of them has.
+    /// puts a gain on a file, and a gain is an FFmpeg filter the engine cannot be handed — so such
+    /// a file is played by FFmpeg while every question asked while it plays used to branch on the
+    /// probe and speak to an engine with no session. That is a bar press that seeks nothing, on
+    /// exactly the quiet files a machine full of them has.
     #[test]
     fn a_gain_puts_a_probed_native_sound_on_ffmpegs_player() {
-        // A file whose loudest sample already stands at full scale: a gain of one is the answer
-        // for "nothing to apply", so the probe's own answer stands and the engine plays it.
+        // A gain of one is a gain like any other: it is the answer for a file that measures at the
+        // target already, and it is played through the same filter as every other gain rather than
+        // being read as a stand-in for "nothing was measured".
         assert_eq!(
             player_for_gain(Player::Native, true, Some(1.0)),
-            Player::Native,
-            "a gain of one is not a gain, so the probed engine still plays the file"
+            Player::Ffmpeg,
+            "a measured gain of one is still FFmpeg's filter, so FFmpeg is what plays the file"
         );
 
         // And one nothing has measured, which is the hover before the scan answers.

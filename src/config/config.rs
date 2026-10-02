@@ -27,16 +27,16 @@ pub const DEFAULT_VIDEO_VOLUME: u32 = 0;
 /// rather than loud, so a pointer crossing a folder of music is a few seconds of something
 /// half-heard rather than a jukebox.
 pub const DEFAULT_AUDIO_VOLUME: u32 = 10;
-/// Whether a sound's loudest sample is brought to the full scale of the format before it is
-/// played, so that a folder of files is heard at one level rather than at each file's own.
+/// Whether a sound's measured loudness is brought to one level before it is played, so that a
+/// folder of files is heard at one level rather than at each file's own.
 ///
-/// It is on where the app starts, and FFmpeg is what makes it possible at all: the peak is
-/// measured by FFmpeg's own meter and the gain is applied by FFmpeg's own player, where the
+/// It is on where the app starts, and FFmpeg is what makes it possible at all: the loudness is
+/// measured by FFmpeg's own scanner and the gain is applied by FFmpeg's own player, where the
 /// engine Windows has can only quieten a file — a level is attenuation there, and full volume
 /// is as loud as it goes (see `codecs::normalize_available`).
 pub const DEFAULT_NORMALIZE_VOLUME: bool = true;
-/// Whether a video's soundtrack is brought to full scale before it is played, on the same terms
-/// and by the same measurement as a sound file's own (see above).
+/// Whether a video's soundtrack is brought to the same level before it is played, on the same
+/// terms and by the same measurement as a sound file's own (see above).
 ///
 /// It is off where the app starts, and for the reason the video's own level starts at silence: a
 /// video is looked at, and its soundtrack is as likely to be a distraction as anything — where a
@@ -1470,19 +1470,19 @@ pub struct AppConfig {
     /// worth depends on how much of it is heard, and a file being listened to again is
     /// usually wanted from where it was left rather than from the top (see `AudioSeek`).
     pub audio_seek: AudioSeek,
-    /// Whether a sound's loudest sample is measured and brought to the full scale of the format
-    /// before it is played — the one thing that asks a file to be as loud as the next rather
-    /// than as loud as it was recorded.
+    /// Whether a sound's loudness is measured and brought to one level before it is played —
+    /// the one thing that asks a file to be as loud as the next rather than as loud as it was
+    /// recorded.
     ///
     /// A setting of its own rather than a level among the ones above it, because it is a
     /// question about the file rather than about the hover: a level says how loud this app
-    /// should be, and this says where a file's own peak is counted from. It is on where the app
-    /// starts, and on a machine without FFmpeg it does nothing at all — what measures the peak
+    /// should be, and this says where a file's own loudness is counted from. It is on where the app
+    /// starts, and on a machine without FFmpeg it does nothing at all — what measures the loudness
     /// and what applies the gain are both FFmpeg's (see `codecs::normalize_available`), which is
     /// also why the tray greys the row where FFmpeg is not installed.
     pub normalize_volume: bool,
-    /// Whether a video's soundtrack is measured and brought to full scale before it is played, on
-    /// the same terms as the sound above it and by the same measurement.
+    /// Whether a video's soundtrack is measured and brought to the same level before it is played,
+    /// on the same terms as the sound above it and by the same measurement.
     ///
     /// It is a setting of its own rather than one shared with the sound's, because the two are
     /// hovered for different things: a sound file is the sound, and a film's soundtrack is heard
@@ -2991,9 +2991,9 @@ impl AppConfig {
                 self.audio_seek = seek;
             }
         }
-        // Whether a sound's peak is measured and brought to full scale, which a file written
-        // before the setting existed has no key for: a fresh installation normalizes, and a file
-        // that says nothing about it is left where it starts.
+        // Whether a sound's loudness is measured and brought to one level, which a file
+        // written before the setting existed has no key for: a fresh installation normalizes, and a
+        // file that says nothing about it is left where it starts.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "normalize_volume") {
             self.normalize_volume = value;
         }

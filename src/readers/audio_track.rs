@@ -18,8 +18,9 @@
 //! the preview thread and a process may be started; this module keeps the answer.
 //!
 //! What a file asks for in the way it is played is here as well — the gain that brings its
-//! loudest sample to full scale, where the tray's `Normalize` asked for it to be measured (see
-//! [`gain`]) — because that is a fact about the file too, and one a hover must not measure twice.
+//! measured loudness to the level the tray's `Normalize` plays files at, where that measurement
+//! was asked for (see [`gain`]) — because that is a fact about the file too, and one a hover
+//! must not measure twice.
 //!
 //! What is deliberately *not* here is the position of the playback: that is the session's
 //! (see `video_player`) and the FFmpeg player's own wall clock, and neither is a fact about
@@ -207,13 +208,13 @@ pub fn remember(path: &Path, probed: Probed) {
     }
 }
 
-/// The gain that brings a file's loudest sample to full scale, where one has been measured for it:
-/// the number the tray's `Normalize` is played at, on top of the level the sound is played at.
+/// The gain that brings a file's measured loudness to the level files are normalized to, where
+/// one has been measured for it: the number the tray's `Normalize` is played at, on top of the
+/// level the sound is played at.
 ///
 /// It is held per file and version like the track above it, and the two are measured at different
 /// moments and by different questions: a track is what the machine has for the file, and this is
-/// what the file asks for — which is why a file can have one and no other, and why a gain of one
-/// is an answer rather than a lack of one (see [`gain`]).
+/// what the file asks for — which is why a file can have one and no other (see [`gain`]).
 static GAINS: Lazy<Mutex<HashMap<head::Key, Held<f64>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// How many files are held. The same bound and the same reasoning as every other memo of this
@@ -221,12 +222,13 @@ static GAINS: Lazy<Mutex<HashMap<head::Key, Held<f64>>>> = Lazy::new(|| Mutex::n
 /// that sweep left behind last (see [`make_room`]).
 const GAINS_MAX_ENTRIES: usize = 512;
 
-/// The gain this file's peak was measured to ask for, where one has been measured.
+/// The gain this file's loudness was measured to ask for, where one has been measured.
 ///
 /// Nothing is an answer this tells apart from a gain of one: a file nothing has measured is one a
-/// hover would have to wait for a decode of, while a measured file whose loudest sample already
-/// stands at full scale — or one that is silence rather than sound — is played as it holds. Which
-/// of the two a caller is asking about is the caller's own question (see `start_audio_playback`).
+/// hover would have to wait for a decode of, while a measured file that already stands at the
+/// target — or one that is silence rather than sound, which measures as nothing at all — is played
+/// as it holds. Both are played through the filter rather than around it, so which of the two a
+/// caller is asking about does not change what is heard (see `start_audio_playback`).
 pub fn gain(path: &Path) -> Option<f64> {
     let key = head::key(path);
 
@@ -240,7 +242,7 @@ pub fn gain(path: &Path) -> Option<f64> {
     Some(found.answer)
 }
 
-/// Hold the gain a file's peak asked for.
+/// Hold the gain a file's measured loudness asked for.
 pub fn remember_gain(path: &Path, gain: f64) {
     let key = head::key(path);
 

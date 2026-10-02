@@ -48,7 +48,7 @@ use windows::Win32::System::Registry::{
 /// video preview has to answer for.
 const FFPLAY_NAME: &str = "ffplay.exe";
 
-/// And the program a sound's peak is measured by: the other name normalization asks for, since
+/// And the program a sound's loudness is measured by: the other name normalization asks for, since
 /// the install the player comes from is the install the meter comes from (see
 /// `normalize_available`).
 const FFMPEG_NAME: &str = "ffmpeg.exe";
@@ -362,7 +362,7 @@ pub fn engines() -> Vec<Row> {
 ///
 /// Every other probe is asked on demand and answers from the machine at that moment. The
 /// answers that are kept are FFmpeg's own — the player a video is played by, and the meter and
-/// the player a sound's peak is measured and applied with — because they are asked on every
+/// the player a sound's loudness is measured and applied with — because they are asked on every
 /// video hover and every sound hover, and a hover must not go looking through the `PATH` for
 /// them: opening the menu is what lets a machine that has just been given FFmpeg start using
 /// it, rather than a restart.
@@ -398,7 +398,7 @@ pub fn ffplay_available() -> bool {
     answer
 }
 
-/// Whether a sound's peak can be measured and applied on this machine: the meter that measures
+/// Whether a sound's loudness can be measured and applied on this machine: the meter that measures
 /// it and the player that applies the gain to it are one install, and both of them have to be
 /// here for the tray's `Normalize` row to be anything but a switch that cannot act.
 ///
@@ -725,7 +725,7 @@ static MEDIA_FOUNDATION: OnceLock<bool> = OnceLock::new();
 /// Whether FFmpeg is installed, kept between hovers and cleared by [`refresh`].
 static FFPLAY: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
 
-/// Whether both of FFmpeg's programs a sound's peak needs are here — the meter that measures it
+/// Whether both of FFmpeg's programs a sound's loudness needs are here — the meter that measures it
 /// and the player that applies it — kept the way the player's own answer is and cleared by the
 /// same [`refresh`].
 static NORMALIZE: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
