@@ -21,6 +21,15 @@
 //!     (`TransferVideoFrame`) into a bitmap of its own, from the crop the probe settled on
 //!     where it settled on one (see [`Crop`]).
 //!
+//! A tick is not a frame. The clock this side ticks on is a vertical blank, sixty times a
+//! second whatever the file runs at, so most ticks of a film find the engine offering the
+//! picture it offered the last four of them, and a tick that finds one is answered without
+//! taking it at all (see [`is_a_new_frame`]). That is most of the difference between a video
+//! previewed on the engine and a video previewed by FFmpeg's player: the same file is
+//! decoded, copied and handed to the compositor as many times as it has frames rather than
+//! as many times as the display refreshes, and a 4K one is four times the frame of a
+//! 1080p one throughout.
+//!
 //! Who *scales* the picture is settled by the two sizes alone: a box larger than the picture is
 //! one this side scales into it ([`scale_rows`]), because which filter the engine reads a
 //! picture at is not a question this app can ask it, let alone choose. What each side of that
@@ -186,6 +195,12 @@ struct Session {
     /// a picture will come of it, since the engine accepts a file whose decoder and converter
     /// are both there and whose *pipeline* is not (see [`failing_path`]).
     drew: bool,
+    /// The time of the frame the caller is holding, in the hundred-nanosecond units the engine
+    /// ticks in, and `None` where the next frame is owed whatever the engine says about it — a
+    /// session that has just been begun, resized or sought somewhere has a picture the caller
+    /// has not seen, and a seek in particular can land on the very time it has just drawn
+    /// (see [`is_a_new_frame`]).
+    drawn: Option<i64>,
     /// Where the sound was asked to start, while the engine has not taken it there yet: `Load`
     /// answers before the header is there, so the position is kept and made on the first tick
     /// that finds the engine loaded (see `apply_seek`).
@@ -376,6 +391,14 @@ pub fn set_paused(paused: bool) {
                 engine.Play()
             }
         };
+
+        // The picture the caller is holding is not known to be the picture the engine is
+        // holding: a file asked to pause with a frame queued up hands that frame over on
+        // the way, and whether the next tick reports it as a new one is the engine's
+        // business rather than a question this app can answer from here. What a pause or
+        // an unpause costs is one frame drawn that may have been drawn already, which is
+        // nothing beside the frame that is not drawn because a hold was mistaken for one.
+        session.drawn = None;
     });
 }
 
@@ -474,6 +497,13 @@ pub fn resize(width: u32, height: u32) {
         session.scaled = scaled;
         session.width = width;
         session.height = height;
+
+        // A box is not a picture, and the frame the caller is holding was drawn at the size
+        // the last box was: the next frame is owed to it whatever the engine makes of the
+        // time, because the time has not changed at all. This is where the frame is first
+        // asked for again, so it is also where the tick has to be believed for the first
+        // time after it.
+        session.drawn = None;
     });
 }
 
@@ -895,6 +925,12 @@ fn codec_name(subtype: &GUID) -> Option<String> {
 /// to the pixel, at the size the surface is. It is handed to the caller's buffer rather
 /// than returned in one of its own, because this runs for every frame of a video that is
 /// playing and a fresh megabyte a frame is a megabyte a frame.
+///
+/// `None` is the whole of "there is nothing to repaint for", and a caller is to read it that
+/// way and leave both its buffer and the compositor alone. It is a deliberately wider answer
+/// than it was: a tick that finds the engine still holding the picture already on the screen
+/// is a tick with no work in it, and the buffer is left as it was rather than filled again
+/// with the picture the caller already has (see [`is_a_new_frame`]).
 pub fn copy_frame_into(pixels: &mut Vec<u8>) -> Option<(u32, u32)> {
     SESSION.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -1032,6 +1068,10 @@ impl Session {
             path: path.to_path_buf(),
             failed,
             drew: false,
+            // The first frame of a session is the first picture the caller has of the file,
+            // so it is owed one whatever the engine makes of a tick that finds its own
+            // first frame already on its clock.
+            drawn: None,
             pending_seek: None,
             began: Instant::now(),
         };
@@ -1094,6 +1134,13 @@ impl Session {
 
         let _ = unsafe { self.engine.SetCurrentTime(target) };
         self.pending_seek = None;
+
+        // A seek is not told apart from playing by the picture: the engine moves its own
+        // clock and the next tick can hand over a frame whose time is the one the caller
+        // is already holding, and on a video cut at a whole second — or on a bar dragged
+        // back to where it was — that is not a corner case but the ordinary one. So a
+        // position change is a new picture owed, whatever its time turns out to say.
+        self.drawn = None;
     }
 
     fn copy_into(&mut self, pixels: &mut Vec<u8>) -> Option<(u32, u32)> {
@@ -1114,7 +1161,26 @@ impl Session {
             return None;
         }
 
-        unsafe { self.engine.OnVideoStreamTick() }.ok()?;
+        // The tick is where the engine says whether there is a *new* frame, and answers
+        // with the presentation time of the one there is. `S_FALSE` — which arrives as
+        // anything but `S_OK` here — is the engine saying there is not, and is the
+        // ordinary answer on two ticks in three of a file that runs at half the tick: a
+        // tick that finds no new frame is no frame, and the caller is told so rather than
+        // shown the picture it already has.
+        let pts = match unsafe { self.engine.OnVideoStreamTick() } {
+            Ok(pts) => pts,
+            Err(_) => return None,
+        };
+
+        // And the engine saying there is one is not the same question as whether it is a
+        // different one: while a film plays, the same picture is offered on every tick
+        // until the next one is ready, and copying one out of the engine and into the
+        // compositor again is thirty megabytes of memory traffic at the size of a 4K
+        // display for a picture nobody is waiting for. The time is the identity, and a
+        // frame at a time already drawn is left in the engine's own surface where it is.
+        if !is_a_new_frame(self.drawn, pts) {
+            return None;
+        }
 
         // The rectangle the engine is asked to write: the box, where it is the one scaling, and the
         // picture's own size where this side is — where what comes back is the picture as the file
@@ -1151,8 +1217,12 @@ impl Session {
         .ok()?;
 
         // A frame of the file has been drawn: whatever becomes of this session later, it is not
-        // a session that never had one (see `failing_path`).
+        // a session that never had one (see `failing_path`). What is drawn is what the
+        // caller is holding from here on, and it is held only once the engine has written
+        // it: a transfer that failed leaves the surface as it was, so recording the frame
+        // as taken would be a picture the caller never saw remembered as one it has.
         self.drew = true;
+        self.drawn = Some(pts);
 
         let copied = if self.scaled {
             resample_locked(
@@ -1168,6 +1238,29 @@ impl Session {
 
         copied.then_some((self.width, self.height))
     }
+}
+
+/// Whether the frame the engine says is ready at `pts` is one the caller has not been given.
+///
+/// The tick carries the presentation time of the picture it is offering, and a picture is not
+/// new because a tick happened: the clock this side ticks on is a vertical blank and runs at
+/// whatever refresh the display is set to, so between one frame of a film and the next the
+/// engine offers that same frame three or four times over. Every one of those offers costs a
+/// transfer out of the engine, a copy into the caller and a hand of the whole frame to the
+/// compositor, and none of them is a picture anybody is waiting for — which is why this is the
+/// difference between a preview on the engine and a preview of a film at four times its own
+/// size, since the frame is the largest thing in the loop and it is proportional to the square
+/// of the file.
+///
+/// `drawn` is `None` wherever the next frame is owed rather than merely new, and each of the
+/// places that leaves it `None` is a place where the caller's picture and the engine's have no
+/// reason to agree: a session has drawn nothing yet, a box has changed size under a frame
+/// drawn at the old one, and a seek has moved a clock a transport bar is drawn from. A seek is
+/// the one that earns the distinction outright — a bar dragged back to where it was asks for
+/// the very time just drawn, and a picture that genuinely changed hands back a time the caller
+/// is already holding.
+fn is_a_new_frame(drawn: Option<i64>, pts: i64) -> bool {
+    drawn != Some(pts)
 }
 
 /// A surface for the engine to deliver into: a bitmap in the format a frame is composed
@@ -1663,6 +1756,40 @@ mod tests {
         assert!(
             out.iter().all(|byte| *byte == 9),
             "and what was there is left as it was"
+        );
+    }
+
+    /// The engine offering the frame it offered last is not a frame, and a session that has
+    /// drawn nothing is owed the first picture whatever the engine has to say about it. This is
+    /// the whole of the question, and it is asked in hundred-nanosecond units because that is
+    /// what the tick is answered in.
+    #[test]
+    fn a_frame_the_engine_is_still_holding_is_not_drawn_again() {
+        assert!(
+            is_a_new_frame(None, 0),
+            "the first frame of a session is new however the engine times it"
+        );
+
+        assert!(
+            is_a_new_frame(Some(0), 333_333),
+            "and so is the frame that follows the one drawn, a hundredth of a second later"
+        );
+
+        assert!(
+            !is_a_new_frame(Some(333_333), 333_333),
+            "while the same time is the same picture however many ticks it is offered over"
+        );
+
+        // What a file that loops hands back, and what a seek hands back that a bar was
+        // dragged to: the beginning of the file arriving again, and the time of a frame
+        // that did change arriving as the time of one that did not.
+        assert!(
+            is_a_new_frame(Some(12_000_000), 0),
+            "the loop of a file starts its times over without starting its frames"
+        );
+        assert!(
+            is_a_new_frame(None, 12_000_000),
+            "and a seek leaves the caller owed the time it lands on, exactly as it was"
         );
     }
 }
