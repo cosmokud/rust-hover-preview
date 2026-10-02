@@ -106,7 +106,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
     TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
-    GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+    GW_OWNER, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
     IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
     PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
@@ -15424,35 +15424,73 @@ fn pin_restore_after(carried: Option<ScreenRegion>, card: bool) -> Option<Screen
     carried
 }
 
-/// Show a pinned window another file: what is on screen is taken down — the frame this app holds,
-/// the player it started, the browser another engine draws in — and the file that replaces it is
-/// put up in the box the pin's media occupies.
+/// What a swap of a pinned window's file has come to, in whichever of the three shapes it can
+/// take: the file the window is shown next, a video the pin is held for until the engine has
+/// drawn a frame of it, or a file there is nothing to show.
 ///
-/// What this is handed is the frame itself, already loaded (`pin_media_load`): what is left here
-/// is everything that has to be asked of this thread, which is the browser a document is handed
-/// to, the media engine a video is played through and FFmpeg's player a sound and a film are
-/// played by. A load that has run for `spinner_delay_ms` puts an arc in the middle of the pin's
-/// media while it runs, so a file whose read or decode is slow is a wait the pin is painted for
-/// rather than a window frozen for as long as the disk takes (see `PinLoad` and
-/// `paint_pin_spinner`).
-///
-/// What is installed is put up by the take-up that follows, so a swap reaches the window by the
-/// same path a first pin does. Nothing is answered where the file cannot be shown: the pin keeps
-/// the file it is showing, which is the only other thing a window that is already up can do for a
-/// file that has no preview — and a step of the pin's own walk that lands on one is stepped over
-/// rather than stopped at (see `PinStep`).
-fn swap_pinned_media(
-    path: &PathBuf,
-    content: ScreenRegion,
-    volume: u32,
-    mut media: MediaData,
-) -> Option<(MediaData, Option<SwappedAudio>)> {
-    let width = (content.2 - content.0).max(1);
-    let height = (content.3 - content.1).max(1);
+/// The three are an enum rather than an `Option` because the middle one is the whole of what
+/// this arm is for, and an `Option` cannot say it. `None` written as "not yet" would be the same
+/// answer for a file a player would not start — where the walk is asked for the next file and
+/// the window keeps what it has — and for a file that is about to be shown and is not yet, and
+/// those two want opposite things done to the walk: one steps off it, the other carries it onto
+/// whatever the pin is shown next (see `refuse_pinned_media` and `install_pinned_media`).
+enum PinSwap {
+    /// The file is ready to go into the window now: everything the install is made with, and
+    /// nothing left to wait for. This is what every kind but a video the media engine plays
+    /// comes to, and what a video comes to once the engine has drawn a frame of it (see
+    /// `PinSwapHold`).
+    Ready(PinInstallable),
+    /// A video the media engine has been started for, whose first frame is not in hand: the pin
+    /// keeps showing the file it was showing, at the frame it had stopped on, and the swap goes
+    /// on being waited for by the loop's own tick rather than by anything in this call.
+    Holding(PinSwapHold),
+    /// Nothing of this file to show: a player that would not start, or a file nothing could read
+    /// at all. The file and the walk it was a step of are carried rather than dropped, because
+    /// both are what the refusal is answered from (see `refuse_pinned_media`).
+    Refused { path: PathBuf, walk: Option<PinStep> },
+}
 
-    // What was showing goes before what replaces it: the player a video of this app's was started
-    // in, and the frame this side holds. A browser is left to the branch below, because whether it
-    // goes or is pointed at another document is a question about the *new* file's kind.
+/// A file a pinned window is to be shown, and the whole of what putting it there is made of.
+///
+/// It is one struct rather than the four or five things a swap hands back because a swap can be
+/// answered now or a tick or several later — the second is a video held for its first frame — and
+/// an answer that has to be taken apart into the loop's locals and put back together a tick later
+/// is a chance for the two to disagree about which file is being shown, which is exactly the
+/// class of bug a walk's own `from` exists to refuse (see `PinStep`).
+struct PinInstallable {
+    /// The file, which is what the take-up below is asked for by name: the pin's window is
+    /// re-taken-up on this path, and it is the only place a swap's own file is named.
+    path: PathBuf,
+    /// The plan the load was made with — the box the media was laid out for and the level the
+    /// pin plays at — kept rather than asked of the pin again, so that the media and the box it
+    /// was loaded for can never come from two different plans (see `PinUpdate`).
+    update: PinUpdate,
+    /// The frame. For a video the media engine plays this is the placeholder the load landed
+    /// with until the wait has handed the engine's first frame to it, and the buffer the engine
+    /// draws every frame after that into (see `take_native_video_frame`).
+    media: MediaData,
+    /// The clock a sound's card is drawn against, which belongs to the loop rather than to the
+    /// media and is `None` for every kind that is not a sound.
+    audio: Option<SwappedAudio>,
+    /// The walk this file is a step of, kept rather than spent with the load: an engine that
+    /// takes the file and then never draws a frame of it says so a tick or three from here, with
+    /// nothing left to step on (see `pin_step_off`).
+    walk: Option<PinStep>,
+}
+
+/// Take the file a pinned window is showing down out of the way of the one replacing it: the
+/// player behind it is ended and the frame this side holds of it is let go of.
+///
+/// It is one call rather than the three it is made of at each road into a swap because the order
+/// is the whole of it — the player is ended before the frame it was playing into is dropped, so
+/// nothing can hand a frame to a media that is no longer on screen — and because a swap that
+/// defers its own take-down has to be able to leave the standing file exactly where it is for
+/// as long as it is held (see `PinSwapHold`).
+///
+/// A browser is not touched here: whether the engine a document is drawn in goes or is pointed
+/// at another document is a question about the *new* file's kind, and is asked where that kind
+/// is known.
+fn take_down_pinned_media() {
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(ref mut existing) = *current {
             existing.cancel_background_work();
@@ -15460,21 +15498,89 @@ fn swap_pinned_media(
         }
         *current = None;
     }
+}
 
-    if media.media_type.is_engine() {
+/// Show a pinned window another file: what is on screen is taken down — the frame this app holds,
+/// the player it started, the browser another engine draws in — and the file that replaces it is
+/// put up in the box the pin's media occupies.
+///
+/// What this is handed is the whole of a load's answer, already loaded (`pin_media_load`): what is
+/// left here is everything that has to be asked of this thread, which is the browser a document is
+/// handed to, the media engine a video is played through and FFmpeg's player a sound and a film
+/// are played by. A load that has run for `spinner_delay_ms` puts an arc in the middle of the
+/// pin's media while it runs, so a file whose read or decode is slow is a wait the pin is painted
+/// for rather than a window frozen for as long as the disk takes (see `PinLoad` and
+/// `paint_pin_spinner`).
+///
+/// What is installed is put up by the take-up that follows, so a swap reaches the window by the
+/// same path a first pin does. Nothing is answered where the file cannot be shown: the pin keeps
+/// the file it is showing, which is the only other thing a window that is already up can do for a
+/// file that has no preview — and a step of the pin's own walk that lands on one is stepped over
+/// rather than stopped at (see `PinStep`).
+///
+/// A video the media engine plays is the one kind this does not finish: the engine's first frame
+/// is a tick of its own away, and installing the placeholder in the meantime is a flash of the
+/// backdrop the tray keeps for pictures every time a caption's **Next** steps onto a film. So
+/// that one is started here and held, and the file the pin is already showing keeps drawing
+/// until the engine has actually drawn something (see `PinSwapHold`).
+fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
+    let PinAnswer {
+        path,
+        update,
+        media,
+        walk,
+        arc,
+    } = answer;
+
+    let content = update.content;
+    let volume = update.volume;
+    let width = (content.2 - content.0).max(1);
+    let height = (content.3 - content.1).max(1);
+
+    // A file nothing could read — not there, still in the cloud, a decode that came back with
+    // nothing at all — is a file the walk steps over, and there is no frame of it for any of
+    // what follows to be asked about (see `refuse_pinned_media`).
+    let Some(media) = media else {
+        return PinSwap::Refused { path, walk };
+    };
+
+    let mut file = PinInstallable {
+        path,
+        update,
+        media,
+        audio: None,
+        walk,
+    };
+
+    // What was showing goes before what replaces it: the player a video of this app's was started
+    // in, and the frame this side holds.
+    //
+    // A video the media engine plays is the exception, and the exception is the whole of what
+    // the hold below is for. This take-down is what takes the pin's frame off the screen, and the
+    // engine's first frame is a tick or more away — so a swap that did it here would leave the
+    // window standing on nothing for the length of that wait, compositing the placeholder over
+    // the backdrop, which is the flash the hold exists to answer. Every other kind still goes
+    // first, because for those the frame in hand is the frame the pin is shown the moment this
+    // returns, and a player that would still be running behind it is a player playing over the
+    // file that replaced it.
+    if !file.media.media_type.is_native_video() {
+        take_down_pinned_media();
+    }
+
+    if file.media.media_type.is_engine() {
         // A document or a specimen is drawn by the browser in a window of its own, and the engine
         // the old document was in is the same engine: what it is told is another file and the box
         // it goes in, which is a navigation rather than a browser started again (see
         // `webview_preview` and `restore_pin`, which asks it the same way).
         webview_preview::show(
-            path,
+            &file.path,
             webview_preview::Area {
                 x: content.0,
                 y: content.1,
                 width,
                 height,
             },
-            engine_background(path),
+            engine_background(&file.path),
         );
     } else {
         // Every other kind is drawn here, so a browser still up — a document the pin was showing
@@ -15482,29 +15588,53 @@ fn swap_pinned_media(
         webview_preview::hide();
     }
 
-    if media.media_type.is_native_video() {
+    if file.media.media_type.is_native_video() {
         // A video the media engine plays is started before it is shown, for the reason a hover
         // starts one before its preview goes up: an engine that will not play the file is a file
         // with no preview rather than a box of the placeholder pixels a video is loaded with.
-        let (video_width, video_height) = (media.current_width(), media.current_height());
+        let (video_width, video_height) = (file.media.current_width(), file.media.current_height());
         video_player::play(
-            path,
+            &file.path,
             video_width,
             video_height,
             volume,
-            probed_picture(path, video_width, video_height),
+            probed_picture(&file.path, video_width, video_height),
         );
 
         if !video_player::is_playing() {
-            return None;
+            // A refusal rather than a wait, and it is the refusal this has always given: the
+            // engine would not take the file at all, which is a file the walk steps over rather
+            // than one a frame is waited for. The standing file is still taken down first, exactly
+            // as it was before the hold existed — nothing was drawn in the meantime, so there is
+            // nothing to keep (see `refuse_pinned_media`).
+            take_down_pinned_media();
+            return PinSwap::Refused {
+                path: file.path,
+                walk: file.walk,
+            };
         }
 
-        media.take_native_video_frame();
-
-        return Some((media, None));
+        // And the file is not installed. What the load came back with is the placeholder frame a
+        // video is always loaded with — a mostly transparent buffer of the right size that every
+        // frame the engine draws afterwards is written into (see `take_native_video_frame`) —
+        // and the first of those arrives on a tick of its own. So the pin keeps the file it is
+        // showing, at the frame it had stopped on, and the loop's own per-tick take is kept off
+        // the standing file until the wait is over: a frame pulled into the media the pin is
+        // still showing is a frame of the *new* film in the *old* file's buffer at the old
+        // file's size, which is a worse thing to see than the flash this answers (see
+        // `PinSwapHold`).
+        //
+        // The arc is the load's own, carried into the hold rather than dropped with the load: the
+        // pin is still waiting for a file, and what the user is shown while it does is the file
+        // it already had with the arc turning over it.
+        return PinSwap::Holding(PinSwapHold {
+            file,
+            arc,
+            started: Instant::now(),
+        });
     }
 
-    if media.media_type == MediaType::Video && codecs::ffplay_available() {
+    if file.media.media_type == MediaType::Video && codecs::ffplay_available() {
         // FFmpeg's player draws it in a window of its own, which the take-up puts in the pin's
         // media band — and a player that would not start is the same answer an engine that will not
         // play gets: there is nothing of the file to show, so the pin keeps the file it has. The
@@ -15513,11 +15643,18 @@ fn swap_pinned_media(
         // the sweep before every other player start is for (see `start_audio_playback`).
         kill_stray_video_process();
 
-        let process = start_video_playback(path, content.0, content.1, width, height, 0.0, volume)?;
+        let Some(process) =
+            start_video_playback(&file.path, content.0, content.1, width, height, 0.0, volume)
+        else {
+            return PinSwap::Refused {
+                path: file.path,
+                walk: file.walk,
+            };
+        };
 
-        media.video_process = Some(process);
+        file.media.video_process = Some(process);
 
-        return Some((media, None));
+        return PinSwap::Ready(file);
     }
 
     // A sound is started here, the way it is started for a hover, and where it is started *from* is
@@ -15525,35 +15662,37 @@ fn swap_pinned_media(
     // length nothing has read yet is kept for the tick that can ask for it (see
     // `audio_seek::start_position`). A sound no player will take is a card with no clock behind it,
     // which is the same answer the load path gives one.
-    if media.media_type.is_audio() {
+    if file.media.media_type.is_audio() {
         let seek = current_audio_seek();
-        let length = audio_track::playable(path).and_then(|track| track.duration);
-        let start = audio_seek::start_position(path, seek, length);
+        let length = audio_track::playable(&file.path).and_then(|track| track.duration);
+        let start = audio_seek::start_position(&file.path, seek, length);
 
-        if !start_audio_playback(path, &mut media, start) {
-            return None;
+        if !start_audio_playback(&file.path, &mut file.media, start) {
+            return PinSwap::Refused {
+                path: file.path,
+                walk: file.walk,
+            };
         }
 
         // What the loop's clock is written down from, read before the media is handed on: a sound
         // is timed from the player this app started, and there is one to time from exactly where
         // one was started — at `Volume → Audio` 0% nothing was, and a card whose clock ran anyway
         // would be a sound it says is playing that is not.
-        let started = media.video_process.is_some().then(Instant::now);
+        let started = file.media.video_process.is_some().then(Instant::now);
 
-        return Some((
-            media,
-            Some(SwappedAudio {
-                started,
-                from: start,
-                share: (start == 0.0
-                    && matches!(seek, AudioSeek::Middle | AudioSeek::Random)
-                    && length.is_none())
-                .then_some(seek),
-            }),
-        ));
+        file.audio = Some(SwappedAudio {
+            started,
+            from: start,
+            share: (start == 0.0
+                && matches!(seek, AudioSeek::Middle | AudioSeek::Random)
+                && length.is_none())
+            .then_some(seek),
+        });
+
+        return PinSwap::Ready(file);
     }
 
-    Some((media, None))
+    PinSwap::Ready(file)
 }
 
 /// Where the player a sound's card is drawn against was started, read by the caller into the clock
@@ -15564,6 +15703,395 @@ struct SwappedAudio {
     started: Option<Instant>,
     from: f64,
     share: Option<AudioSeek>,
+}
+
+/// The loop's own bookkeeping about what a pinned window is showing, borrowed for the one tick
+/// that changes it.
+///
+/// It is a struct of borrows rather than a list of `&mut` parameters because there are fifteen of
+/// them and a call that lists fifteen arguments is a call nobody can read. What an install writes
+/// is scattered across the loop's locals because each of them is a fact some *other* part of the
+/// tick reads — where a player's window belongs, the hover a take-down ends, the clock a sound's
+/// card is drawn against, the request that puts the window up — and none of them belongs to the
+/// swap. Bundling the borrows names the whole of what a swap reaches out of the loop, which is
+/// the one thing a reader of `install_pinned_media` cannot see from its own arguments and wants
+/// to know: a swap that looks like it returns a frame and nothing else is in fact rewriting a
+/// good deal of the loop.
+///
+/// It is put together by `pin_install` rather than written out as a literal at either call site,
+/// so that the list of what a swap touches is one list and not one per caller. There are two
+/// callers, and they are two because of the only interesting thing about a swap: one of them
+/// runs the tick a load answers on and the other runs the tick a held video's first frame lands
+/// on, and the install has to be the *same* install both times or a film reached by pressing
+/// **Next** is not the film a listing pick would have shown (see `PinSwapHold`).
+struct PinInstall<'a> {
+    /// The walk a file that cannot be shown is stepped on from, and the walk the file being
+    /// installed came from is put back into as the walk behind what is on screen (see
+    /// `pin_step_off`).
+    walk: &'a mut Option<PinStep>,
+    /// The walk that made the file now on screen, kept rather than spent with the load: an engine
+    /// that takes a file and then never draws a frame of it says so a tick or three later, long
+    /// after the walk that reached it is gone, and without this a corrupted film ends the walk
+    /// rather than the walk stepping past it.
+    walk_of_current: &'a mut Option<PinStep>,
+    /// The load the mark for a file that could not be shown is queued as, which a refusal queues
+    /// one of where the walk has nothing left to offer (see `show_pin_failure`).
+    load: &'a mut Option<PinLoad>,
+    /// When the player behind what is on screen now was started, which is what tells a player
+    /// that is gone from a file that refused it rather than from a film that ended or a window
+    /// the user closed — and is `None` for every kind this app's own player does not draw (see
+    /// `pin_media_failed_before_a_frame`).
+    player_started: &'a mut Option<Instant>,
+    /// Where the player a sound's card is drawn against was started.
+    audio_started: &'a mut Option<Instant>,
+    /// The second of the file that player was begun at.
+    audio_start_offset: &'a mut f64,
+    /// A seek asked for at a share of a length nothing has read yet, kept for the tick that can
+    /// ask for it (see `audio_seek::start_position`).
+    audio_share_seek: &'a mut Option<AudioSeek>,
+    /// Where a sound the user held was let go of, and for how long: a file swapped into the
+    /// window is not held, whatever the file it replaced was doing.
+    audio_paused: &'a mut Option<f64>,
+    /// When the card was last repainted, which a swap restarts so that the new card is drawn at
+    /// once rather than at the end of the old one's cadence.
+    audio_repaint_at: &'a mut Instant,
+    /// The display the card is laid out for.
+    audio_card_dpi: &'a mut u32,
+    /// The marquee a name too long for its card scrolls across, which is the card's own box —
+    /// the frame that has just been loaded, rather than the one it replaced.
+    audio_name_scroll: &'a mut Option<audio_preview::NameScroll>,
+    /// Where a player's window belongs while a pin is up: the pin's media band, which is what the
+    /// tick's own re-assertion of the order reads.
+    video_pos: &'a mut (i32, i32, i32, i32),
+    /// The file a player this app started is playing, which is the one whose window is put on top
+    /// again every tick.
+    current_video_path: &'a mut Option<PathBuf>,
+    /// The hover the media behind the pin is the answer to, which a take-down ends and a walk is
+    /// matched against.
+    current_show: &'a mut Option<PreviewMessage>,
+    /// The pin's own request for the next tick, which is the take-up of what is installed here.
+    request: &'a mut Option<PreviewMessage>,
+}
+
+/// Borrow the loop's own bookkeeping about what the pin is showing, for one install or one
+/// refusal.
+///
+/// The fifteen arguments are the fifteen the struct carries and the order is the struct's, so
+/// that reading the two side by side is reading one list rather than two that have to be matched
+/// up by hand — which is the only way a list this long can be kept right when a swap grows
+/// another thing to write. Nothing is copied and nothing is read: every one of them is a mutable
+/// borrow of a local that outlives the call, and the borrow ends with it (see `PinInstall`).
+#[allow(clippy::too_many_arguments)]
+fn pin_install<'a>(
+    walk: &'a mut Option<PinStep>,
+    walk_of_current: &'a mut Option<PinStep>,
+    load: &'a mut Option<PinLoad>,
+    player_started: &'a mut Option<Instant>,
+    audio_started: &'a mut Option<Instant>,
+    audio_start_offset: &'a mut f64,
+    audio_share_seek: &'a mut Option<AudioSeek>,
+    audio_paused: &'a mut Option<f64>,
+    audio_repaint_at: &'a mut Instant,
+    audio_card_dpi: &'a mut u32,
+    audio_name_scroll: &'a mut Option<audio_preview::NameScroll>,
+    video_pos: &'a mut (i32, i32, i32, i32),
+    current_video_path: &'a mut Option<PathBuf>,
+    current_show: &'a mut Option<PreviewMessage>,
+    request: &'a mut Option<PreviewMessage>,
+) -> PinInstall<'a> {
+    PinInstall {
+        walk,
+        walk_of_current,
+        load,
+        player_started,
+        audio_started,
+        audio_start_offset,
+        audio_share_seek,
+        audio_paused,
+        audio_repaint_at,
+        audio_card_dpi,
+        audio_name_scroll,
+        video_pos,
+        current_video_path,
+        current_show,
+        request,
+    }
+}
+
+/// Put a file a pinned window is being shown another one into the window.
+///
+/// It is the one install there is, and both roads a swap can take run through it: the tick a load
+/// answers on for every kind but a video the media engine plays, and the tick that video's first
+/// frame lands on (see `PinSwapHold`). Anything the swap did to what it is not itself is done
+/// here — the arc comes down, the walk behind what is on screen is rewritten, a sound's card
+/// gets its clock — because the whole of what "the pin is showing this file now" means to the
+/// rest of the loop is written here and nowhere else, and two copies of it would be two files
+/// that drift apart over a run (see `PinInstall`).
+///
+/// The media is installed last of the loop's own facts and before the request, so that the tick
+/// which takes the request up reads a loop that already agrees with the window: the request
+/// carries only the file and the box, and everything else about the file being on screen is
+/// state the take-up reads rather than state it is handed.
+fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable) {
+    let PinInstallable {
+        path,
+        update,
+        media,
+        audio,
+        walk,
+    } = file;
+    let PinUpdate { content, dpi, .. } = update;
+
+    // The pin is not waiting for a file any more, whatever the file it was waiting for turned
+    // out to be: an arc left up over a window showing a video is a spinner for a question nobody
+    // is asking, and one of them is on screen for as long as it is left there (see `pin_arc_set`).
+    pin_arc_set(None);
+
+    // The walk that made the file now on screen is kept rather than spent with the load: an
+    // engine that takes this file and then never draws a frame of it says so a tick or three
+    // from here, with nothing left to step on. A pick that was not a walk's arms no walk, which
+    // is the same answer (see `pin_step_off`).
+    *install.walk_of_current = walk;
+
+    // A volume popup floating over the media belongs to the box it was opened over, and that box
+    // has just been given another file: it is put away rather than left where the hand left it
+    // (see the box change below, which does the same).
+    close_pin_volume();
+
+    // A sound's card is drawn against the clock of the player this app started, and the clock is
+    // the loop's rather than the media's: where that player was started and from which second is
+    // read here the way the load path reads it, so a card swapped into a pin ticks like a card a
+    // hover put up (see `audio_clock`). The marquee its name needs is the card's own box, which
+    // is the frame that has just been loaded.
+    if let Some(start) = audio {
+        let card_width = media.current_width();
+
+        *install.audio_started = start.started;
+        *install.audio_start_offset = start.from;
+        *install.audio_share_seek = start.share;
+        // A file swapped into the window is not held, whatever the file it replaced was doing:
+        // the sound a card is drawn at belongs to the sound behind it.
+        *install.audio_paused = None;
+        *install.audio_repaint_at = Instant::now();
+        *install.audio_card_dpi = dpi;
+        *install.audio_name_scroll = Some(audio_preview::NameScroll::of(
+            &audio_preview::name_of(&path),
+            card_width,
+            dpi,
+            current_audio_options(),
+        ));
+    }
+
+    // Where a player's window belongs while a pin is up is the pin's media band, which is what
+    // the tick's own re-assertion reads.
+    *install.video_pos = (content.0, content.1, content.2 - content.0, content.3 - content.1);
+    *install.current_video_path = match media.media_type {
+        MediaType::Video => Some(path.clone()),
+        _ => None,
+    };
+    // When the player behind what is on screen now was started, which is what tells a player
+    // that is gone from a file that refused it rather than from a film that ended or a window
+    // the user closed (see `pin_media_failed_before_a_frame`).
+    *install.player_started = (media.media_type == MediaType::Video).then(Instant::now);
+
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    // What the loop's own bookkeeping is about is the file on screen, and the pin is showing
+    // another one now: the card a sound is drawn from, the render tier's own record, and the
+    // hover a take-down ends are all read of this.
+    *install.current_show = Some(PreviewMessage::Show(
+        path.clone(),
+        content.0,
+        content.1,
+        None,
+    ));
+
+    *install.request = Some(PreviewMessage::Pin {
+        path,
+        rect: content,
+    });
+}
+
+/// The answer a swap of a pinned window's file gives where there is nothing to show for it: the
+/// walk is asked for the next file rather than left standing on one that cannot be shown, and
+/// where the walk has nothing left to ask for, the mark for the file is what the window is left
+/// over.
+///
+/// It is a function rather than an `if let` at the call site for the same reason the install is
+/// one: a swap can be refused on the tick its load answers *or* on the tick a held video's wait
+/// is given up on, and the second is a road that did not exist before the hold did. A refusal on
+/// it is not a new answer — the file is installed the way it would have been, and the machinery
+/// that watches a video for a player that never drew a frame runs on afterwards exactly as it
+/// does for a swap that was never held (see `pin_media_failed_before_a_frame`).
+///
+/// The mark is not queued where something else is already on its way, which is the one
+/// condition: a load in hand is a read and a decode that have not been paid for yet, and putting
+/// the mark over it would throw that work away for a window that is about to be shown the file it
+/// was for (see `show_pin_failure`).
+fn refuse_pinned_media(install: PinInstall<'_>, path: PathBuf, walk: Option<PinStep>) {
+    pin_arc_set(None);
+
+    pin_step_off(walk, install.walk);
+
+    if install.walk.is_none() && install.load.is_none() {
+        show_pin_failure(&path, install.load);
+    }
+}
+
+/// How long a swap of a pinned window's file is held for the media engine's first frame before
+/// the hold is given up on and the file is installed as it would have been without one.
+///
+/// It is a give-up rather than a wait anything is expected to reach, and it is deliberately well
+/// under the two bounds this file already keeps for the same subject: `FIRST_FRAME_GIVE_UP`, the
+/// three seconds the engine's own watch runs to before a file is written down as one the engine
+/// cannot draw, and `PIN_PLAYER_GIVE_UP`, the three seconds a player behind a pinned file is given
+/// before a player that is gone is read as one that died. Neither of those is being bought here.
+/// Both are decisions about the *file* — whether it belongs to this app's player or to FFmpeg's —
+/// and both are taken again by the standing machinery a couple of seconds after the hold has
+/// already given up and installed the file. What is being bought is the screen.
+///
+/// A pin frozen on the previous film reads as a window this app has stopped answering in, and
+/// three seconds of that is a worse thing to look at than the flash of the backdrop the hold
+/// exists to remove: the hold is a refinement, and a refinement that costs the user three seconds
+/// of a dead window is not one. A first frame lands in tens of milliseconds, because the file has
+/// already been read, probed and laid out by the load that got here and all the engine has left
+/// to do is decode one of them. A second is tens of times over that, which is as much as a
+/// genuinely slow engine is given before the answer falls back to what a pin has always shown
+/// for a video it had just started — and a fallback that is wrong costs a backdrop flash, which
+/// is what this is protecting against in the first place.
+const PIN_SWAP_FIRST_FRAME_GIVE_UP: Duration = Duration::from_secs(1);
+
+/// How the wait for a swap's first frame stands: whether the video is on screen now, whether the
+/// wait is over some other way, or whether the engine is still starting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PinSwapWait {
+    /// The engine has handed a frame of the file over: what the pin is showing from here is the
+    /// video, and the file it was held on can be taken down.
+    Arrived,
+    /// The swap is not going to be waited for. What the pin is shown is what it would have been
+    /// shown without the hold, and what happens to that afterwards is the standing machinery's
+    /// (see `install_pinned_media`).
+    Abandoned,
+}
+
+/// How the wait for a swap's first frame stands. `None` is an engine that has not handed one over
+/// yet, which is a wait that goes on.
+///
+/// A frame in hand arrives whatever the engine's own state says, and that is the one place this
+/// parts company with `player_wait`, where a window with no player behind it is not a preview.
+/// The reasoning is the difference between the two questions: a player process is the *only* thing
+/// a FFmpeg video exists as, so a window with none behind it is a window onto nothing, whereas a
+/// session that has drawn a frame has shown the file. `failing_before_a_frame` is careful to leave
+/// a session that has drawn one out of its own answer for the same reason, and a film that played
+/// and then met a bad sector is a film the pin was legitimately shown — taking the window down
+/// over it is `pin_media_is_alive`'s question a tick later and not this one's.
+///
+/// What is read before that is an engine that is gone, an engine that has said outright that it
+/// cannot play the file, and a wait that has run past `PIN_SWAP_FIRST_FRAME_GIVE_UP`. None of the
+/// three is worth going on for: a frame that is not coming is a file to install the way a swap
+/// with no hold at all would have installed it, and the machinery that watches a pinned video for
+/// an engine that never drew (`pin_media_failed_before_a_frame`) is already standing behind that
+/// answer and runs to a bound of its own.
+fn pin_swap_wait(
+    frame_in_hand: bool,
+    playing: bool,
+    failing: bool,
+    waited: Duration,
+) -> Option<PinSwapWait> {
+    if frame_in_hand {
+        return Some(PinSwapWait::Arrived);
+    }
+
+    if !playing || failing || waited >= PIN_SWAP_FIRST_FRAME_GIVE_UP {
+        return Some(PinSwapWait::Abandoned);
+    }
+
+    None
+}
+
+/// A swap of a pinned window's file that is waiting for the media engine's first frame, and what
+/// is to be installed when it comes.
+///
+/// It is the hover's own `FirstFrameWait` in the shape a *swap* needs rather than a hover's. That
+/// one holds back a window that has not been put up yet, and so has to know the hover it was for
+/// is still wanted — which is what its generation and its hide count are. None of that is in
+/// question here: the window is up, it belongs to the user rather than to the pointer, and the
+/// file the swap is for is the file the walk landed on. What is in question is only whether the
+/// engine has drawn anything yet, which is why this is an ordinary tick's question answered in
+/// one place rather than a wait matched against anything.
+///
+/// The file being installed is carried whole rather than a name to be looked up. It is the frame
+/// the engine plays into, and it is the whole of what the loop's own per-tick take must not be
+/// pointed at while the wait is out: the engine's frames are pulled into *this* buffer, at this
+/// file's size, and the file standing on screen is left exactly as it was. That is the whole
+/// difference between a pin frozen on the last frame of the previous film and a pin showing the
+/// next one drawn into the previous one's box (see `take_native_video_frame`, and the gate on
+/// the loop's own take).
+struct PinSwapHold {
+    /// The file to be installed once the wait is over, held in hand rather than asked of the pin
+    /// again: the answer a load came back with is what the install is made of, and taking it to
+    /// pieces to be carried in the loop and putting it back together a tick later is a chance for
+    /// the two to disagree about which file the window is being shown (see `PinInstallable`).
+    file: PinInstallable,
+    /// The arc the load was painted with, carried on rather than taken down when the load answered.
+    /// The pin is still waiting for a file, and the whole of what the user is shown while it does
+    /// is the file it already had with the arc turning over it — so the arc stays up across the
+    /// hold, and comes down with the install (see `pin_arc_set`).
+    arc: PinArc,
+    /// When the engine was started for the file, which is what the give-up is measured from. It is
+    /// the engine's own start rather than the load's, because the load's clock has already been
+    /// spent on a read and a decode and says nothing about how long the engine is taking.
+    started: Instant,
+}
+
+impl PinSwapHold {
+    /// Take whatever frame the engine has ready into the held file's own buffer, answering
+    /// whether the wait is over either way.
+    ///
+    /// The take is this file's, and never the standing one's: a frame pulled into the media the
+    /// pin is still showing is a frame of the new film in the old file's buffer at the old file's
+    /// size, which is what the loop's own per-tick take would be doing if this were not here to
+    /// do it first. What it hands the decision is the one question the wait is about — has the
+    /// engine drawn anything — and it is asked of this file's engine and no other, so the standing
+    /// file's player is not consulted about a session that has nothing to do with it (see
+    /// `video_player::failing_before_a_frame`).
+    fn settle(&mut self) -> Option<PinSwapWait> {
+        let frame_in_hand = self.file.media.take_native_video_frame();
+
+        pin_swap_wait(
+            frame_in_hand,
+            video_player::is_playing(),
+            video_player::failing_before_a_frame().is_some(),
+            self.started.elapsed(),
+        )
+    }
+
+    /// The file to install, for a wait that has come to either of its ends.
+    ///
+    /// Consuming rather than borrowing is what lets the buffer the engine has been drawing into be
+    /// moved into the window rather than copied: that buffer is the frame the pin is about to be
+    /// showing, and a copy of it would be a second megabyte a frame for a video that is running.
+    fn into_installable(self) -> PinInstallable {
+        let PinSwapHold { file, .. } = self;
+        file
+    }
+}
+
+/// Give a held swap up, ending the engine it was started for and letting the frame go.
+///
+/// A hold is given up on rather than installed when a pick supersedes it or the pin has closed,
+/// and in both of those the engine behind it is this app's own and nobody is going to take the
+/// frame it has been drawing into: an engine left running would go on decoding a file into a
+/// buffer nothing reads, for as long as the app runs. The take-down is the one any road out of a
+/// video uses, called on the hold's own media rather than on the standing file's — the standing
+/// file may well be a film FFmpeg's player is drawing, and that player is not what this session
+/// is (see `stop_video_playback`).
+fn abandon_pin_swap(hold: &mut Option<PinSwapHold>) {
+    if let Some(mut held) = hold.take() {
+        stop_video_playback(&mut held.file.media);
+    }
 }
 
 /// A file a pinned window is loading, and the wait it is.
@@ -15732,6 +16260,12 @@ struct PinAnswer {
     /// (see `PinStep`).
     media: Option<MediaData>,
     walk: Option<PinStep>,
+    /// The arc the load painted while it ran, carried out of the load with the answer rather than
+    /// dropped with it. It is the one part of the wait that is not over when the answer is: a
+    /// swap that is then held for a video's first frame is still a wait to the person looking at
+    /// the pin, and taking the arc down the moment the load answered is what left a frozen file
+    /// with nothing over it saying the window was still asking (see `PinSwapHold`).
+    arc: PinArc,
 }
 
 /// What a decode thread has answered, or `None` where it has not answered yet — which is the
@@ -15761,6 +16295,7 @@ fn take_pin_load(pin_load: &mut Option<PinLoad>) -> Option<PinAnswer> {
         update: load.update,
         media,
         walk: load.walk,
+        arc: load.arc,
     })
 }
 
@@ -19351,7 +19886,9 @@ fn resize_pinned_content(
 /// Nothing is asked of the file here and nothing is waited for: the Shell hands the file to
 /// the program and returns, and what that program does with it is the program's own business
 /// and never the pin's — a pin that came back up afterwards would be a second window of a
-/// file this app is already showing.
+/// file this app is already showing. The caller asks for the pin's end as it returns, so that
+/// the program it starts is not opening behind a topmost window of the same file (see
+/// `pinned_release`).
 ///
 /// # Safety
 ///
@@ -19385,18 +19922,6 @@ unsafe fn open_path_with_default_app(path: &Path) {
     let _ = launched.0 as usize > 32;
 }
 
-/// Whether the Open With dialog is up, which is held here only so that the tick has
-/// something to answer before it bothers the process: most ticks of most pins have no dialog
-/// to think about, and asking a `Child` about its exit state is a syscall for nothing.
-///
-/// The answer itself is the child's, not this flag's — see `settle_open_with_dialog`.
-static OPEN_WITH_UP: AtomicBool = AtomicBool::new(false);
-
-/// The `rundll32` the dialog is running in, kept in hand for as long as it is up and dropped
-/// as soon as it has gone: a `Child` left behind is a handle this process has no further use
-/// for and has not been given back.
-static OPEN_WITH_CHILD: Mutex<Option<Child>> = Mutex::new(None);
-
 /// Show the Shell's own "How do you want to open this?" dialog for a file: the list of
 /// programs installed on this machine that could open it, which is the only way into a second
 /// program when the default is the wrong one. The button beside this one can only ever reach
@@ -19417,13 +19942,24 @@ static OPEN_WITH_CHILD: Mutex<Option<Child>> = Mutex::new(None);
 /// the list cannot be built on an entry point that has stopped offering it, so this is the
 /// other way in and not a preference between two that both work.
 ///
+/// The pin is not up while this is: the caller asks for its end as the dialog is put up, so
+/// that the list is not behind a topmost window of the file it is listing ways to open, and
+/// so that the program the user goes on to choose is not opening behind that window too. A
+/// pin that waited for the dialog to go instead would be a pin that has to be right about
+/// when the dialog has gone — a question this app cannot answer, because the dialog is not
+/// its window, its class, or on any thread it owns, and on Windows 11 the entry point above
+/// may hand the list to a process that has already exited by the time anyone looks. Asking
+/// nothing and closing is the one answer that cannot be wrong, and the cost of being wrong
+/// the other way is the whole of it: a cancelled dialog costs the user a hover to get the
+/// pin back.
+///
 /// # Safety
 ///
 /// Nothing here is a borrowed pointer: the command line is a `String` this function owns,
-/// handed to the standard library as one argument, and the only handle involved is this
-/// app's own window, passed to Windows calls that do not retain it. The file belongs to
-/// whichever program the user goes on to pick, and this side has no handle on it to release.
-unsafe fn show_open_with_dialog(hwnd: HWND, path: &Path) {
+/// handed to the standard library as one argument, and no handle is involved at all. The
+/// file belongs to whichever program the user goes on to pick, and this side has no handle
+/// on it to release.
+fn show_open_with_dialog(path: &Path) {
     // The one argument `rundll32` is given, in the spelling it wants.
     //
     // `rundll32` does not read its command line as a list of arguments. It takes everything up
@@ -19445,123 +19981,14 @@ unsafe fn show_open_with_dialog(hwnd: HWND, path: &Path) {
     let mut command = Command::new("rundll32.exe");
     command.raw_arg(&tail);
 
-    // The dialog is a window of its own with no owner to keep it in front of anything, and
-    // this pin is topmost: left as it is, the pin would sit over the very list it just asked
-    // for. Dropping the topmost band for as long as the dialog is up is what lets the user
-    // reach it — the pin is a preview of a file, and it is still one when this is over, but
-    // it is a picture of a file with a modal list in front of it otherwise.
-    let _ = SetWindowPos(
-        hwnd,
-        HWND_NOTOPMOST,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-    );
-    OPEN_WITH_UP.store(true, Ordering::Release);
-
-    // The child is deliberately not waited for. `rundll32` holds itself open for as long as
-    // its dialog is, and the pin's own loop keeps running underneath it, so waiting here
-    // would be waiting on this thread's message loop from inside itself.
-    match command
+    // The child is dropped on the floor rather than kept: nothing here is waiting on it and
+    // nothing comes after it, since the pin this was raised from is on its way down. Waiting
+    // for it would be waiting on this thread's message loop from inside itself.
+    let _ = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => {
-            if let Ok(mut slot) = OPEN_WITH_CHILD.lock() {
-                *slot = Some(child);
-            }
-        }
-        // A `rundll32` that would not start is a question this button has nowhere to put an
-        // answer: a machine that refuses the entry point is the user's machine rather than a
-        // fault in this one. What is not left undone is the topmost band, which goes straight
-        // back on — a pin stuck behind every other window is a pin the user cannot get to.
-        Err(_) => restore_pin_topmost(hwnd),
-    }
-}
-
-/// Put the pin's window back in front of everything, after the Open With dialog has gone.
-///
-/// The band is the pin's to have whenever the user is looking at the pin and not at something
-/// that has to be reached through it, and the dialog is the one thing this app puts up that is
-/// not part of the pin and is not its own window. So the tick that watches for the dialog to
-/// end is also what puts the pin back on top, and the same is true of a child that never
-/// started: the answer to "is the dialog up?" has to be a question asked of the process
-/// rather than of a flag this side set on the way past.
-///
-/// # Safety
-///
-/// `raise_pinned_window` is reached only with this app's own window, which the caller holds,
-/// and the call reads the pin's box and puts the window in the z-order without retaining
-/// either.
-unsafe fn restore_pin_topmost(hwnd: HWND) {
-    OPEN_WITH_UP.store(false, Ordering::Release);
-    if !pinned() {
-        return;
-    }
-    raise_pinned_window(hwnd);
-}
-
-/// Notice that the Open With dialog has gone: the pin's topmost band is held down for as long
-/// as one is up, and put back the moment it is not.
-///
-/// The question is asked of the child rather than of a flag, because a dialog that failed to
-/// come up looks exactly like one that is up if the only record of it is that something was
-/// started. `rundll32` is running for exactly as long as its dialog is, so its handle is the
-/// whole of the answer.
-///
-/// # Safety
-///
-/// See `restore_pin_topmost`: this reads a process's exit state and, on the strength of that
-/// reading alone, puts this app's own window back in the z-order.
-unsafe fn settle_open_with_dialog(hwnd: HWND) {
-    if !OPEN_WITH_UP.load(Ordering::Acquire) {
-        return;
-    }
-
-    let finished = match OPEN_WITH_CHILD.lock() {
-        Ok(mut child) => match child.as_mut() {
-            // A wait that could not be answered has not shown the dialog to be gone, and a
-            // dialog still up behind an unanswerable wait is a pin the user cannot reach. The
-            // band is left down for another tick rather than raised over a dialog that is in
-            // fact still there.
-            Some(process) => !matches!(process.try_wait(), Ok(None)),
-            // The slot is empty and the flag says otherwise, which is only reachable if the
-            // tick that cleared it has not run yet.
-            None => true,
-        },
-        // The lock is the only state this asks about, and a thread holding it is a thread
-        // between the spawn and the store. Nothing is decided until it is let go of.
-        Err(_) => false,
-    };
-
-    if !finished {
-        return;
-    }
-
-    if let Ok(mut child) = OPEN_WITH_CHILD.lock() {
-        *child = None;
-    }
-    restore_pin_topmost(hwnd);
-}
-
-/// Put away whatever name the caption is currently saying, whether or not it has been long
-/// enough to be showing one.
-///
-/// It is a button being *pressed*, and the thing it is about to open is going to take the
-/// pointer away from this window for as long as the user takes to answer it. The name is put
-/// away rather than left for the tick to notice, because a tick that comes round while the
-/// dialog is up is a tick that finds the pointer somewhere the button is not, and the name
-/// would outlive the hover that earned it by however long the dialog is left standing.
-fn put_pin_tooltip_away() {
-    if let Some(mut pinned) = pin_state() {
-        if let Some(pin) = pinned.pin_mut() {
-            pin.tooltip.shown = None;
-        }
-    }
+        .spawn();
 }
 
 /// A release on a pinned window, answering whether it was the pin's to act on: the button a press
@@ -19621,24 +20048,25 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
                 // The file is in hand here and the Shell takes it as it stands, so this one
                 // is asked for where it was pressed rather than written down for the loop
                 // to pick up: nothing about opening a file is the loop's business.
+                //
+                // Except the pin's end, which is the loop's own: a preview window left on
+                // screen is a window over the program the button was pressed to start, and
+                // nothing the program does afterwards is any of this app's business. So both
+                // buttons that open something hand the file over and then ask for the end,
+                // with no question asked of when the opened thing is finished with (see
+                // `show_open_with_dialog`).
                 pin_chrome::CaptionButton::OpenWith => {
                     if let Some(path) = pinned_path() {
                         open_path_with_default_app(&path);
+                        request_pin_end();
                     }
                 }
-                // The Shell's own list, the same way round: the file is in hand and the dialog
-                // is the system's, so the only thing asked of the loop here is the window the
-                // dialog is put up behind, which this function already has.
-                //
-                // The name goes away first, and the window is repainted without it, because the
-                // pointer leaves the button as the dialog is put up and stays away for as long
-                // as the user takes to choose: a name left on the caption naming a button the
-                // hand is no longer on would be read off as a label for the dialog.
+                // The Shell's own list, the same way round: the file is in hand, the dialog
+                // is the system's, and the pin comes down as the dialog goes up.
                 pin_chrome::CaptionButton::OpenWithList => {
                     if let Some(path) = pinned_path() {
-                        put_pin_tooltip_away();
-                        render_layered_preview(hwnd);
-                        show_open_with_dialog(hwnd, &path);
+                        show_open_with_dialog(&path);
+                        request_pin_end();
                     }
                 }
             }
@@ -19912,6 +20340,11 @@ pub fn run_preview_window() {
         // run for `spinner_delay_ms` puts an arc in the middle of the pin's media (see
         // `PinLoad` and `paint_pin_spinner`).
         let mut pin_load: Option<PinLoad> = None;
+        // A swap of the pin's file that has been started and is being held until the media
+        // engine hands over its first frame: the file the pin is showing stays on screen at the
+        // frame it had stopped on, with the arc still turning over it, rather than being taken
+        // down for a placeholder that is not a picture of anything (see `PinSwapHold`).
+        let mut pin_swap_hold: Option<PinSwapHold> = None;
         // A pinned window's own media being decoded again at a box it has been given, and the
         // wait for it. Held here rather than inside a tick for the reason a load is: the read
         // and the decode are a thread's work, so a window dragged to a new size keeps drawing
@@ -20129,13 +20562,6 @@ pub fn run_preview_window() {
             }
 
             if pinned() {
-                // Whether the Shell's own list of programs is still on screen, and so whether
-                // the pin's own topmost band is owed back. The dialog is a window of its own
-                // with nothing in this app owning it, so the pin is held below it for as long
-                // as it is up and put back on top the tick after it goes (see
-                // `settle_open_with_dialog`).
-                settle_open_with_dialog(hwnd);
-
                 // A press that landed on the window the engine draws a document in, which is the
                 // one thing on a pinned window the window procedure cannot be told about: the
                 // band is a browser's window over this one, so the press is read here and the
@@ -20217,6 +20643,7 @@ pub fn run_preview_window() {
                     &mut audio_paused,
                     pin_walk.is_some()
                         || pin_load.is_some()
+                        || pin_swap_hold.is_some()
                         || pin_awaiting_box.is_some()
                         || pin_held_pick.is_some(),
                 ) {
@@ -20353,6 +20780,22 @@ pub fn run_preview_window() {
                     pin_arc_set(Some(wait.started.elapsed()));
                     wait.spun();
                     pin_walk_wait_seen = true;
+
+                    last_pin_repaint = Instant::now();
+
+                    render_layered_preview(hwnd);
+                }
+
+                // A swap the pin is being held for is the same wait, painted the same way and on
+                // the same arc: the file on screen is the one the pin already had, and what the
+                // user is shown while the engine takes its first frame is that file with the
+                // arc turning over it. It is the load's own arc carried across the hold rather
+                // than a second one, so a swap that is held does not restart the spinner's
+                // phase and the arc does not appear to stall where the hold began (see
+                // `PinSwapHold`).
+                if let Some(hold) = pin_swap_hold.as_mut().filter(|hold| hold.arc.due()) {
+                    pin_arc_set(Some(hold.arc.started.elapsed()));
+                    hold.arc.spun();
 
                     last_pin_repaint = Instant::now();
 
@@ -20509,7 +20952,16 @@ pub fn run_preview_window() {
                     // taken here — once a tick, which is as often as one can be shown.
                     // The kind is asked first so that a preview of any other kind pays
                     // for this with one comparison.
-                    if media.media_type.is_native_video() {
+                    //
+                    // And not while a swap is being held for a video's first frame. What is
+                    // in `CURRENT_MEDIA` then is the file the pin is *still* showing, and
+                    // the engine is drawing the other one: taking here would pull the new
+                    // film's frames into the old file's buffer at the old file's size, which
+                    // the window would then draw — a mis-scaled new video inside the old
+                    // one, over the frame the hold exists to keep. The held file's own take
+                    // is where those frames are wanted, and it is asked once a tick whether
+                    // or not this one is (see `PinSwapHold`).
+                    if media.media_type.is_native_video() && pin_swap_hold.is_none() {
                         if media.take_native_video_frame() {
                             needs_repaint = true;
                         } else if let Some(failing) = video_player::failing_path() {
@@ -21833,6 +22285,10 @@ pub fn run_preview_window() {
                 // being shown in has gone, and the answer landing for it would be installed
                 // into a pin that is not there (see `PinLoad`).
                 pin_load = None;
+                // And neither is a swap it was being held for: the engine behind that one is
+                // decoding a file for a window that has closed, and the file it is held over
+                // is going with the window, so there is nothing left to wait for it with.
+                abandon_pin_swap(&mut pin_swap_hold);
                 pin_arc_set(None);
                 // A walk a pin that is over was stepping is not stepped on: a caption's next
                 // belongs to the window it was pressed on, and the pin that follows is shown
@@ -21880,6 +22336,14 @@ pub fn run_preview_window() {
                 // planned here, for this file, and taking up an answer for another one would
                 // install a frame the take-up below was not asked for.
                 pin_load = None;
+                // And so is a swap being held for a video's first frame, which is the same
+                // answer to the same question one step later: this pick is what the pin is
+                // being shown next, the engine behind the held one is started for a file
+                // nobody is going to look at, and the frame it has been drawing into goes
+                // with it. The second load this pick starts plans the engine again from
+                // nothing, which is what `video_player::play` does to whatever was playing
+                // (see `abandon_pin_swap`).
+                abandon_pin_swap(&mut pin_swap_hold);
                 pin_arc_set(None);
                 // A pin that is a bubble has no window to show this in, so the file is held for
                 // the key rather than swapped in: what the user is doing behind a bubble is
@@ -22009,114 +22473,98 @@ pub fn run_preview_window() {
             // before it would put a frame of the file just left behind over the file just
             // arrived — which the path check in `take_pin_relayout` refuses, but which is
             // better not to be asked about at all.
-            take_pin_relayout(&mut pin_relayout);
+            //
+            // And it is not asked of at all while a swap is being held. The path check in there
+            // is what keeps a relayout from installing over a file the pin has left, and it asks
+            // whether the pin is still standing on the file the relayout was for — which during
+            // a hold it is, and which is no longer the answer worth acting on: the engine behind
+            // the pin is already playing the *next* file, so what a relayout would install is a
+            // decode of the file being held over, for a window that is about to be shown
+            // something else. The answer waits in the slot until the hold is over and the path
+            // check has an honest question to refuse it with (see `PinSwapHold`).
+            if pin_swap_hold.is_none() {
+                take_pin_relayout(&mut pin_relayout);
+            }
 
-            // A load a pinned window is waiting for has answered. What came back is installed
-            // here, on this thread, and the take-up below is the pin's own: the box is the one
-            // the plan was made with, and what comes of it is the same window showing
-            // something else (see `PreviewMessage::Pin`).
-            if let Some(answer) = take_pin_load(&mut pin_load) {
-                pin_arc_set(None);
+            // A swap the pin was being held for is settled first, because it is the older of
+            // the two waits a pin can be in and a load in hand and a hold outstanding cannot
+            // both exist: a pick gives the hold up before it starts the load that would answer
+            // here. What has come to one of the hold's two ends — a frame in hand, or a wait
+            // with nothing left to wait for — is answered by the same install a swap answered
+            // at once goes through, and which of the two it was makes no difference: a wait
+            // given up on is a file installed the way it would have been without a hold, and
+            // the machinery that watches a pinned video for an engine that never drew stands
+            // behind that answer exactly as it does for a swap that was never held (see
+            // `pin_swap_wait`).
+            let mut swap: Option<PinSwap> = None;
 
-                let PinAnswer {
-                    path,
-                    update,
-                    media,
-                    walk,
-                } = answer;
-
-                let swapped = media.and_then(|media| {
-                    swap_pinned_media(&path, update.content, update.volume, media)
-                });
-
-                if let Some((media, audio)) = swapped {
-                    // The walk that made the file now on screen is kept rather than spent
-                    // with the load: `PinLoad` hands it over for a swap that fails at the
-                    // plan, and an engine that takes this file and then never draws a frame
-                    // of it says so a tick or three from here, with nothing left to step on.
-                    // A pick that was not a walk's arms no walk, which is the same answer
-                    // (see `pin_step_off`).
-                    pin_walk_of_current = walk;
-
-                    // A volume popup floating over the media belongs to the box it was
-                    // opened over, and that box has just been given another file: it is put
-                    // away rather than left where the hand left it (see the box change
-                    // below, which does the same).
-                    close_pin_volume();
-
-                    // A sound's card is drawn against the clock of the player this app
-                    // started, and the clock is the loop's rather than the media's: where
-                    // that player was started and from which second is read here the way
-                    // the load path reads it, so a card swapped into a pin ticks like a
-                    // card a hover put up (see `audio_clock`). The marquee its name needs is
-                    // the card's own box, which is the frame that has just been loaded.
-                    if let Some(start) = audio {
-                        let card_width = media.current_width();
-
-                        audio_started = start.started;
-                        audio_start_offset = start.from;
-                        audio_share_seek = start.share;
-                        // A file swapped into the window is not held, whatever the file it
-                        // replaced was doing: the sound a card is drawn at belongs to the
-                        // sound behind it.
-                        audio_paused = None;
-                        audio_repaint_at = Instant::now();
-                        audio_card_dpi = update.dpi;
-                        audio_name_scroll = Some(audio_preview::NameScroll::of(
-                            &audio_preview::name_of(&path),
-                            card_width,
-                            audio_card_dpi,
-                            current_audio_options(),
-                        ));
-                    }
-
-                    // Where a player's window belongs while a pin is up is the pin's media
-                    // band, which is what the tick's own re-assertion reads.
-                    video_pos = (
-                        update.content.0,
-                        update.content.1,
-                        update.content.2 - update.content.0,
-                        update.content.3 - update.content.1,
-                    );
-                    current_video_path = match media.media_type {
-                        MediaType::Video => Some(path.clone()),
-                        _ => None,
-                    };
-                    // When the player behind what is on screen now was started, which is what
-                    // tells a player that is gone from a file that refused it rather than from
-                    // a film that ended or a window the user closed (see
-                    // `pin_media_failed_before_a_frame`).
-                    pin_player_started = (media.media_type == MediaType::Video).then(Instant::now);
-
-                    if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                        *current = Some(media);
-                    }
-
-                    // What the loop's own bookkeeping is about is the file on screen, and
-                    // the pin is showing another one now: the card a sound is drawn from,
-                    // the render tier's own record, and the hover a take-down ends are all
-                    // read of this.
-                    current_show = Some(PreviewMessage::Show(
-                        path.clone(),
-                        update.content.0,
-                        update.content.1,
-                        None,
-                    ));
-
-                    pin_request = Some(PreviewMessage::Pin {
-                        path,
-                        rect: update.content,
-                    });
+            if let Some(mut hold) = pin_swap_hold.take() {
+                swap = if hold.settle().is_some() {
+                    Some(PinSwap::Ready(hold.into_installable()))
                 } else {
+                    // An engine that has not drawn anything yet. The wait goes on, and the pin
+                    // keeps showing the file it was frozen on with the arc still turning over
+                    // it — which is the whole of what the user sees, and the whole of what
+                    // makes the swap worth holding for.
+                    pin_swap_hold = Some(hold);
+                    None
+                };
+            }
+
+            // A load a pinned window is waiting for has answered, and what came back is put to
+            // the swap here, on this thread: the take-up is the pin's own, the box is the one
+            // the plan was made with, and what comes of it is the same window showing something
+            // else (see `PreviewMessage::Pin`). It does not always finish in this call — a video
+            // the media engine plays is started and then held, and what is installed for it is
+            // the same file on a later tick (see `PinSwapHold`) — so what this produces is a
+            // question with three answers rather than a media or nothing.
+            //
+            // Asked only where no hold is outstanding, and asked first before anything started
+            // for a new file, because `swap_pinned_media` starts an engine and the hold's own
+            // take-down ends whichever engine is running (see `abandon_pin_swap`). A load that
+            // somehow arrived into one waits in its slot for the hold to finish, which is the
+            // answer that is right rather than the one that is fast.
+            if pin_swap_hold.is_none() {
+                swap = take_pin_load(&mut pin_load).map(swap_pinned_media);
+            }
+
+            if let Some(swap) = swap {
+                // The loop's own record of what the pin is showing, borrowed for whichever of
+                // the two things below is about to rewrite it. It is borrowed here rather than
+                // inside the arms because there is one list of what a swap touches and it is
+                // `pin_install`'s (see `PinInstall`).
+                let install = pin_install(
+                    &mut pin_walk,
+                    &mut pin_walk_of_current,
+                    &mut pin_load,
+                    &mut pin_player_started,
+                    &mut audio_started,
+                    &mut audio_start_offset,
+                    &mut audio_share_seek,
+                    &mut audio_paused,
+                    &mut audio_repaint_at,
+                    &mut audio_card_dpi,
+                    &mut audio_name_scroll,
+                    &mut video_pos,
+                    &mut current_video_path,
+                    &mut current_show,
+                    &mut pin_request,
+                );
+
+                match swap {
+                    // The engine is started and its first frame is not in yet. Nothing of the
+                    // window changes: the file on screen is the one it had, the arc the load
+                    // put up is left turning over it, and the loop's own per-tick take is kept
+                    // off the standing file until the frame lands (see `PinSwapHold`).
+                    PinSwap::Holding(hold) => pin_swap_hold = Some(hold),
                     // A file this app cannot read, a file still in the cloud, a player that
-                    // would not start: nothing of it to show, so the walk is asked for the
-                    // next file rather than left on one that cannot be shown — and where the
-                    // walk has nothing left to ask for, the mark for the file is what the pin
-                    // is left standing over (see `pin_step_off` and `show_pin_failure`).
-                    pin_step_off(walk, &mut pin_walk);
-                    if pin_walk.is_none() && pin_load.is_none() {
-                        show_pin_failure(&path, &mut pin_load);
-                    }
+                    // would not start, or a wait that has run out of reasons to go on: nothing
+                    // of it to show, so the walk is asked for the next file rather than left on
+                    // one that cannot be shown — and where the walk has nothing left to ask
+                    // for, the mark for the file is what the pin is left standing over (see
+                    // `pin_step_off` and `show_pin_failure`).
+                    PinSwap::Refused { path, walk } => refuse_pinned_media(install, path, walk),
+                    PinSwap::Ready(file) => install_pinned_media(install, file),
                 }
             }
 
@@ -27405,6 +27853,51 @@ mod tests {
             player_wait(true, true, cap),
             Some(PlayerWait::Arrived),
             "and a window that is up has arrived, cap or no cap"
+        );
+    }
+
+    /// A swap of the pin's file ends one of two ways and never by itself: a frame the engine
+    /// has drawn is the video, an engine that is gone, an engine that has said the file is one
+    /// it cannot play, and a wait that has run past the cap are all the end of it — while an
+    /// engine that is playing and has drawn nothing yet is a wait that goes on.
+    ///
+    /// Both ends install the same file, so what the test is really pinning down is which of
+    /// them the pin is left frozen on the previous film for: an engine that is merely slow
+    /// costs a moment on the old picture, and each of the other three costs a backdrop flash
+    /// the hold was written to remove.
+    #[test]
+    fn a_swap_is_held_for_a_first_frame_only_until_it_arrives_or_runs_out() {
+        let cap = PIN_SWAP_FIRST_FRAME_GIVE_UP;
+
+        assert_eq!(
+            pin_swap_wait(true, true, false, Duration::ZERO),
+            Some(PinSwapWait::Arrived),
+            "a frame of the file in hand is the video, engine or no engine"
+        );
+        assert_eq!(
+            pin_swap_wait(false, true, false, Duration::from_millis(1)),
+            None,
+            "an engine that has drawn nothing yet is a wait that goes on"
+        );
+        assert_eq!(
+            pin_swap_wait(false, false, false, Duration::ZERO),
+            Some(PinSwapWait::Abandoned),
+            "an engine that is gone is not going to draw a frame now"
+        );
+        assert_eq!(
+            pin_swap_wait(false, true, true, Duration::ZERO),
+            Some(PinSwapWait::Abandoned),
+            "an engine that has said it cannot play the file has said so on the first tick"
+        );
+        assert_eq!(
+            pin_swap_wait(false, true, false, cap),
+            Some(PinSwapWait::Abandoned),
+            "a wait past the cap is not watched any longer: a pin frozen for a second is its own bug"
+        );
+        assert_eq!(
+            pin_swap_wait(true, true, true, cap),
+            Some(PinSwapWait::Arrived),
+            "and a frame that did arrive has arrived, cap or no cap"
         );
     }
 
