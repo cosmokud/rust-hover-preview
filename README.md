@@ -235,6 +235,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
 - **Volume** — **Video** and **Audio**, each offering `100%`, `80%`, `65%`, `50%`, `35%`, `20%`, `10%`, `5%`, `1%` and `0%`, loudest first. A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `10%`: a video is looked at and a song is listened to, so the two are settings of their own. A sound at `0%` still shows its card, silently.
   - **Normalize** — The first row of each half, above the levels: a file's integrated loudness is measured (ITU-R BS.1770 LUFS, by FFmpeg's `ebur128`) and brought to `-14 LUFS` before it plays, so a folder of sounds — or a set of films — is heard at one level rather than at each file's own. A file is not lifted past its own true peak, so a quiet one is corrected as far as its headroom allows rather than clipped. On by default for **Audio** and off for **Video**, whose soundtrack is heard beside a picture that was asked for and whose measurement is a decode of the film. Both are greyed out unless FFmpeg is installed — FFmpeg is what measures the loudness and what applies the gain. The loudness is measured once per file and kept, so only a file's first hover waits for it.
+  - **Remember** — The row under **Normalize**, above the levels: whether a level moved with a pinned window's own volume knob is the level the next preview is played at. Off by default for both halves, so a knob belongs to the window it was turned on and the level in the list above it is what every preview starts from. With it on, letting go of the knob writes the level to `config.ini` and the next hover — or the next film — is played at it; nothing is rebuilt on screen and a preview already playing is left where it is.
   - **Audio Seek** — Where in a file a hovered sound starts playing: **Remember** (`default`) picks it up where the last hover left it, **From the Start** always begins at the beginning, **From the Middle** drops it half way in, and **Random** anywhere at all. The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen. Whatever a sound is started at, it goes back to the beginning of the file when it reaches the end of it and loops from there for as long as the hover lasts. A video is always played from its beginning.
 - **Performance**
   - **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files. **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
@@ -332,6 +333,8 @@ audio_seek=remember
 audio_volume=10
 normalize_video_volume=false
 normalize_volume=true
+remember_audio_volume=false
+remember_video_volume=false
 video_volume=0
 
 ; Performance

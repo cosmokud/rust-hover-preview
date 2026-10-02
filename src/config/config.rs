@@ -43,6 +43,19 @@ pub const DEFAULT_NORMALIZE_VOLUME: bool = true;
 /// sound file *is* the sound. What it costs is the reason it is worth the switch rather than a
 /// default too: a film's audio is a decode of the film, and a hover pays for one.
 pub const DEFAULT_NORMALIZE_VIDEO_VOLUME: bool = false;
+/// Whether a sound's previewed level is kept between hovers, or whether the level the setting
+/// names is the level every sound is previewed at.
+///
+/// It is off where the app starts, and the two readings are both defensible: a level that is kept
+/// is what a person who turned it up once meant for the rest of the folder, and a level that is not
+/// is a quiet app that plays every file the same way until it is asked otherwise (see
+/// `remember_audio_volume`).
+pub const DEFAULT_REMEMBER_AUDIO_VOLUME: bool = false;
+/// And the video's own, which is the same question asked about a soundtrack and is off for the same
+/// reason the video's level starts at silence: a film is looked at rather than listened to, so a
+/// soundtrack that remembers the last preview is as unwelcome as one that plays itself (see
+/// `remember_video_volume`).
+pub const DEFAULT_REMEMBER_VIDEO_VOLUME: bool = false;
 /// The levels either volume is offered at: silence, the one step above it, and the decades
 /// between — smallest first here, and listed the other way round in the tray, loudest first.
 ///
@@ -1490,6 +1503,18 @@ pub struct AppConfig {
     /// own level starts at silence — and like the sound's it does nothing without FFmpeg, which is
     /// why the tray greys the row where FFmpeg is not installed.
     pub normalize_video_volume: bool,
+    /// Whether a sound previewed from the pinned window's own knob is previewed at that level next
+    /// time as well, rather than at whatever `audio_volume` says.
+    ///
+    /// It is asked of the knob rather than of the menu, because that is where the level changes:
+    /// with it on, letting go of the knob writes the level to the file, and the next hover plays
+    /// at it (see `current_audio_volume`). With it off the knob is the pin's own — a window's level
+    /// rather than the app's, which is why nothing at all is written when it moves.
+    pub remember_audio_volume: bool,
+    /// And the same question asked about a video's soundtrack, on its own switch for its own
+    /// reasons: a film is looked at, and its level is more often a fault to get past than a
+    /// preference to keep (see `remember_video_volume`).
+    pub remember_video_volume: bool,
     /// How large a picture is drawn, as a share of its own size: `100%` is the size the
     /// file asks for, `50%` half of it, and `fit` the largest size the room the layout
     /// gives it allows.
@@ -1827,6 +1852,8 @@ impl Default for AppConfig {
             audio_seek: DEFAULT_AUDIO_SEEK,
             normalize_volume: DEFAULT_NORMALIZE_VOLUME,
             normalize_video_volume: DEFAULT_NORMALIZE_VIDEO_VOLUME,
+            remember_audio_volume: DEFAULT_REMEMBER_AUDIO_VOLUME,
+            remember_video_volume: DEFAULT_REMEMBER_VIDEO_VOLUME,
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
             animated_scale: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
@@ -2001,6 +2028,8 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "audio_volume",
             "normalize_video_volume",
             "normalize_volume",
+            "remember_audio_volume",
+            "remember_video_volume",
             "video_volume",
         ],
     ),
@@ -2589,6 +2618,16 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "remember_audio_volume",
+            Some(self.remember_audio_volume.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "remember_video_volume",
+            Some(self.remember_video_volume.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "preview_scale",
             Some(self.preview_scale.as_str()),
         );
@@ -3001,6 +3040,15 @@ impl AppConfig {
         // measured only where it was asked for (see `normalize_video_volume`).
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "normalize_video_volume") {
             self.normalize_video_volume = value;
+        }
+        // Whether a level turned on a pin is the level the next preview is played at. A file written
+        // before the setting existed has no key for it, so a fresh installation remembers nothing
+        // and a file that says nothing about it is left where it starts.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "remember_audio_volume") {
+            self.remember_audio_volume = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "remember_video_volume") {
+            self.remember_video_volume = value;
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "preview_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {

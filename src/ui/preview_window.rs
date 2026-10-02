@@ -14672,27 +14672,86 @@ fn settle_pinned_audio_seek(
 /// The media engine takes a level while it plays, which is what makes a knob dragged on the pin
 /// heard as it moves — and the engine plays sounds as well as videos, so a knob dragged on a
 /// sound's card is heard as it moves for exactly the same reason. FFmpeg's player takes one only by
-/// being started at it, so nothing is given here — what that player is owed is settled where the
-/// hand lets go of the knob (see `settle_pin_volume`), because a player restarted for every pixel
-/// of a drag is a picture that never settles. Nothing is written to the configuration either way:
-/// the level belongs to this window (see `PinVolume`).
+/// being started at it, so nothing is given there and nothing is marked as settled: a level marked
+/// as given to a player that was never told it is a level `settle_pin_volume` has nothing left to
+/// do about, which is what a sound normalized on FFmpeg used to get (see
+/// `audio_preview_level_is_owed_to_the_engine`). Where the level is remembered, the configuration
+/// is written as the knob moves rather than at the end of the drag, because the next sound's player
+/// is started from it and a drag is not over until the hand lets go (see
+/// `remember_pin_volume`).
 fn set_pin_volume(level: u32) {
     let level = level.min(100);
     with_pin(|pin| pin.volume.level = level);
 
-    if matches!(
-        current_media_type(),
-        Some(MediaType::NativeVideo) | Some(MediaType::Audio)
-    ) {
+    let immediate = match current_media_type() {
+        Some(MediaType::NativeVideo) => true,
+        Some(MediaType::Audio) => audio_preview_level_is_owed_to_the_engine(),
+        _ => false,
+    };
+    if immediate {
         video_player::set_volume(level);
         with_pin(|pin| pin.volume.playing_at = level);
     }
+
+    remember_pin_volume(level);
 
     // The speaker on a sound's card says what the level is, and the card is a media frame rather
     // than chrome: repainting the window alone would redraw the *old* card with the old speaker on
     // it. A video's level is drawn in the strip, which the repaint does reach (see
     // `pin_audio_hover_refresh`).
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+}
+
+/// Write a pin's level into the configuration where the setting beside it says the level is
+/// remembered, and only then: this is the configuration a *later* player is started from, so a
+/// knob that is not remembered leaves the next sound where this one is.
+///
+/// The file is written once and when the knob is let go of, not once per pixel of a drag (see
+/// `settle_pin_volume`).
+fn remember_pin_volume(level: u32) {
+    if let Ok(mut config) = CONFIG.lock() {
+        match current_media_type() {
+            Some(MediaType::Audio) if config.remember_audio_volume => {
+                config.audio_volume = level;
+            }
+            Some(MediaType::NativeVideo) | Some(MediaType::Video)
+                if config.remember_video_volume =>
+            {
+                config.video_volume = level;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Write the file a pin's level is remembered in once the knob is let go of, so that a drag is one
+/// write rather than the hundred the knob moved through.
+///
+/// The write happens where the level and what is written of it disagree, which is nowhere on a drag
+/// — every step of it already put the level into the configuration — and on the click that moved
+/// nothing before the release. It is asked for whether or not a player was owed a level: a knob
+/// turned on a paused pin settles nothing to a player but is still a level the next sound is wanted
+/// at (see `remember_pin_volume`).
+fn save_remembered_pin_volume(level: u32) {
+    let Ok(mut config) = CONFIG.lock() else {
+        return;
+    };
+    let written = match current_media_type() {
+        Some(MediaType::Audio) if config.remember_audio_volume && config.audio_volume != level => {
+            config.audio_volume = level;
+            true
+        }
+        Some(MediaType::NativeVideo) | Some(MediaType::Video)
+            if config.remember_video_volume && config.video_volume != level =>
+        {
+            config.video_volume = level;
+            true
+        }
+        _ => false,
+    };
+    if written {
+        config.save();
+    }
 }
 
 /// Give the pin's level to the player it is owed to, where giving it costs a player replaced.
@@ -14706,10 +14765,15 @@ fn set_pin_volume(level: u32) {
 /// A sound is the one kind whose settling is the loop's rather than this one's: the clock behind
 /// its card and the player a level is owed to are both the loop's, so the door is a flag rather
 /// than a call (see `settle_pinned_audio_volume`).
+///
+/// A level that is remembered is written to the file here, before anything is settled: this is
+/// where the knob is let go of, and it is the one moment a drag is over (see
+/// `save_remembered_pin_volume`).
 fn settle_pin_volume() {
     let Some((path, content, transport, volume)) = pinned_playback_state() else {
         return;
     };
+    save_remembered_pin_volume(volume.level);
     if volume.playing_at == volume.level {
         return;
     }
@@ -17188,20 +17252,16 @@ fn pin_shows_an_audio_card(pin: &PinnedPreview) -> bool {
     !pin.collapsed && !pin.transport_bar && !pin.overlay && pin.frame == PinFrame::None
 }
 
-/// The box a pin of a sound is given, which is not the box its hover was.
+/// The box a pin of a sound is given, which is the box its hover was.
 ///
-/// A hover's card carries no controls — a hover's own window is a window nobody is in — so it is
-/// laid out with a bar in a row no taller than the bar itself. A pinned card's row is as tall as
-/// the buttons standing in it, which is taller, and the card is drawn into the box it is given
-/// rather than outgrowing it: so a pin that took the hover's box would be a window with the bottom
-/// of the card — the bar row and the margin under it — cut off, and every press that lands there
-/// answered by the margin instead of by the bar (see `audio_preview::bar_row`).
-///
-/// The card is therefore measured again, with the controls it is going to carry on it and a clock
-/// at nothing — which button is lit is not part of the layout — and the hover's own top left
-/// corner is kept: where a window is put is the hover's place, and the clamp the take-up runs
-/// afterwards pulls a box the bigger card would not fit back onto the display (see
-/// `pinned_caption_height` for the kind that has no caption above this one at all).
+/// A pin's card carries its controls where a hover's does not, but it is not a different card:
+/// the buttons stand in the bar's own row and are carved out of the bar's width, so the card a pin
+/// measures is the card a hover measured and the window is the one the hover put up (see
+/// `audio_preview::bar_row`). The card is measured again all the same, with the controls it is
+/// going to carry on it and a clock at nothing — which button is lit is not part of the layout —
+/// and the hover's own top left corner is kept: where a window is put is the hover's place, and
+/// the clamp the take-up runs afterwards pulls a box the card would not fit back onto the display
+/// (see `pinned_caption_height` for the kind that has no caption above this one at all).
 fn pinned_audio_card_box(rect: ScreenRegion, path: &Path, dpi: u32) -> ScreenRegion {
     let chrome = Some(CardChrome {
         playing: false,
@@ -30610,11 +30670,11 @@ mod tests {
         stand_pin(previous_pin);
     }
 
-    /// A pin of a sound is measured again at the take-up, because the card a hover is measured with
-    /// is not the card a pin shows: a hover's card carries no controls and is shorter for it, and
-    /// a window given the hover's box is a window with the bottom of the card cut off.
+    /// A pin of a sound keeps the box its hover had: the card a hover is measured with and the card a
+    /// pin shows are the same size, because the row of buttons on the pinned one is the bar's own row
+    /// and the bar is what they are carved out of.
     #[test]
-    fn a_pin_of_a_sound_is_given_a_box_its_controls_fit_inside() {
+    fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-sound-box");
         std::fs::create_dir_all(&folder).expect("a test folder");
         let path = folder.join("song.mp3");
@@ -30651,15 +30711,17 @@ mod tests {
         let (pinned_width, pinned_height) =
             audio_preview::measure(&pinned, 4096, 2160, 96, options).expect("a measured card");
 
-        // The card a hover is shown is the shorter of the two, and it is shorter because of the
-        // row of buttons standing in for a bar that is three pixels tall.
-        assert!(
-            pinned_height > hover_height,
-            "a pinned card is taller than a hover's: {pinned_height} against {hover_height}"
+        // The card a hover is shown and the card a pin shows are the same card, and the controls are
+        // carved out of the bar rather than added to it — so the pin is the hover's box.
+        assert_eq!(
+            (pinned_width, pinned_height),
+            (hover_width, hover_height),
+            "a pinned card is the card a hover's is: {pinned_width}x{pinned_height} against \
+             {hover_width}x{hover_height}"
         );
 
-        // Which is the whole of what the take-up re-measures for: a pin standing on the hover's own
-        // box would be a window with the last row of the card's controls outside it.
+        // Which is the whole of what the take-up re-measures for: the box a pin is given holds
+        // every control its card carries.
         let hover_box = (
             100,
             100,
@@ -30667,22 +30729,17 @@ mod tests {
             100 + hover_height as i32,
         );
         let pin_box = pinned_audio_card_box(hover_box, &path, 96);
-        assert!(
-            (pin_box.2 - pin_box.0) as u32 >= pinned_width
-                && (pin_box.3 - pin_box.1) as u32 >= pinned_height,
-            "a pin is given a card it can draw all of: {pin_box:?} for {pinned_width}x{pinned_height}"
-        );
-        assert!(
-            pin_box.0 == hover_box.0 && pin_box.1 == hover_box.1,
-            "and it is put where the hover was: {pin_box:?}"
+        assert_eq!(
+            pin_box, hover_box,
+            "a pin is given the very box its hover was given: {pin_box:?}"
         );
 
         let _ = std::fs::remove_file(&path);
     }
 
     /// The card a take-up is measured for is drawn again at the box the measurement came to: a pin is
-    /// given a taller box than the hover it came from had, and a frame left at the hover's size is
-    /// a card drawn smaller than the window that is showing it.
+    /// given the box the hover it came from had, and a frame left at some other size is a card
+    /// drawn smaller than the window that is showing it.
     #[test]
     fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
@@ -30712,13 +30769,22 @@ mod tests {
             *slot = load_audio_card(&path, width, height, 96);
         }
 
-        // And the box a pin of it is measured for, which is taller than the hover's because the
-        // row of buttons on a pinned card is taller than a bar.
-        let content = sound_pin().content;
-        assert!(
-            (content.3 - content.1) as u32 > height,
-            "and the box a pin is given is taller than a hover's: {} against {height}",
+        // And the box a pin of it is measured for, which is the hover's own box: the card a pin shows is
+        // the card a hover drew, controls and all.
+        let mut pin = sound_pin();
+        pin.content = (100, 100, 100 + width as i32, 100 + height as i32);
+        let content = pin.content;
+        assert_eq!(
+            (content.3 - content.1) as u32,
+            height,
+            "and the box a pin is given is as tall as a hover's: {} against {height}",
             content.3 - content.1
+        );
+        assert_eq!(
+            (content.2 - content.0) as u32,
+            width,
+            "and as wide: {} against {width}",
+            content.2 - content.0
         );
 
         // The clock a take-up hands over: where the player is, how far a name has been scrolled,

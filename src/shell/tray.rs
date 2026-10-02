@@ -14,7 +14,8 @@ use crate::config::config::{
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
-    DEFAULT_PREVIEW_SCALE, DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+    DEFAULT_PREVIEW_SCALE, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
+    DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
     DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
     DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS, DEFAULT_AUDIO_VOLUME,
@@ -202,6 +203,16 @@ const ID_TRAY_NORMALIZE_VOLUME: u16 = 1525;
 /// `normalize_video_volume`). It carries the id beside its sound half's, so neither row is ever
 /// read as a level of a list under it.
 const ID_TRAY_NORMALIZE_VIDEO_VOLUME: u16 = 1526;
+/// The row under a sound's `Normalize`: whether a level turned on a pinned window's own knob is the
+/// level the next sound is previewed at, rather than the level the list above it names.
+///
+/// It is a switch about the level rather than a level itself, so it takes an id of its own — out
+/// past the normalize rows, beside its video half's, where no level can be read from it (see
+/// `remember_audio_volume`).
+const ID_TRAY_REMEMBER_VOLUME: u16 = 1527;
+/// And the video's own row of the same name, which is the same switch asked about a soundtrack and
+/// starts switched off along with it (see `remember_video_volume`).
+const ID_TRAY_REMEMBER_VIDEO_VOLUME: u16 = 1528;
 /// The ways a sound can be started, in the order the submenu lists them: where it was left the
 /// last time it was hovered, which is where the setting starts, then its beginning, its middle,
 /// and anywhere in it at all (see `AudioSeek`).
@@ -664,6 +675,11 @@ unsafe extern "system" fn tray_window_proc(
                     // rather than here.
                     ID_TRAY_NORMALIZE_VOLUME => toggle_normalize_volume(),
                     ID_TRAY_NORMALIZE_VIDEO_VOLUME => toggle_normalize_video_volume(),
+                    // And the row under each of those: whether a level turned on a pin is the level
+                    // the next preview is played at, which is the same bargain — read by the next
+                    // player rather than by anything on screen.
+                    ID_TRAY_REMEMBER_VOLUME => toggle_remember_audio_volume(),
+                    ID_TRAY_REMEMBER_VIDEO_VOLUME => toggle_remember_video_volume(),
                     // A level of either half of the `Volume` submenu, by the position it was
                     // listed at. The two halves offer the same levels, so one table answers for
                     // both and each range is what says which setting was meant.
@@ -1873,41 +1889,60 @@ unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|config| (config.normalize_volume, config.normalize_video_volume))
         .unwrap_or((DEFAULT_NORMALIZE_VOLUME, DEFAULT_NORMALIZE_VIDEO_VOLUME));
+    // Whether a level turned on a pin is kept, asked of the configuration rather than kept beside
+    // the switch that reads it: the two rows above the levels are one about the file and one about
+    // the level, and neither is a level (see `remember_audio_volume`).
+    let (remember_audio, remember_video) = CONFIG
+        .lock()
+        .map(|config| (config.remember_audio_volume, config.remember_video_volume))
+        .unwrap_or((DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME));
     // Asked again here for the reason the `Codecs` rows are asked again: a machine that has just
     // been given FFmpeg is answered from the machine rather than from the hover that cached it
     // (see `codecs::refresh`).
     refresh_codecs();
     let normalize_available = codecs::normalize_available();
 
-    let append_normalize = |levels: HMENU, wanted: bool, id: u16| {
-        let _ = AppendMenuW(
-            levels,
-            MF_STRING
-                | if wanted && normalize_available {
-                    MF_CHECKED
-                } else {
-                    MF_UNCHECKED
-                }
-                | if normalize_available {
-                    MF_UNCHECKED
-                } else {
-                    // A machine without FFmpeg has nothing that measures a loudness or applies
-                    // one: the
-                    // row is shown as what it is there — a switch that cannot act — rather than as a
-                    // click that would do nothing (see `codecs::normalize_available`).
-                    MF_GRAYED
-                },
-            id as usize,
-            w!("Normalize"),
-        );
-        let _ = AppendMenuW(levels, MF_SEPARATOR, 0, PCWSTR::null());
-    };
+    // The two rows the levels do not answer, above them: the loudness a file's playing is measured to,
+    // and whether a level turned on a pin is kept. The second is never greyed — it asks about this
+    // app's own knob rather than about FFmpeg, so it acts on a machine that has no FFmpeg at all.
+    let append_switches =
+        |levels: HMENU, normalize: bool, normalize_id: u16, remember: bool, remember_id: u16| {
+            let _ = AppendMenuW(
+                levels,
+                MF_STRING
+                    | if normalize && normalize_available {
+                        MF_CHECKED
+                    } else {
+                        MF_UNCHECKED
+                    }
+                    | if normalize_available {
+                        MF_UNCHECKED
+                    } else {
+                        // A machine without FFmpeg has nothing that measures a loudness or applies
+                        // one: the
+                        // row is shown as what it is there — a switch that cannot act — rather than as a
+                        // click that would do nothing (see `codecs::normalize_available`).
+                        MF_GRAYED
+                    },
+                normalize_id as usize,
+                w!("Normalize"),
+            );
+            let _ = AppendMenuW(
+                levels,
+                MF_STRING | if remember { MF_CHECKED } else { MF_UNCHECKED },
+                remember_id as usize,
+                w!("Remember"),
+            );
+            let _ = AppendMenuW(levels, MF_SEPARATOR, 0, PCWSTR::null());
+        };
 
     let video_levels = CreatePopupMenu().unwrap();
-    append_normalize(
+    append_switches(
         video_levels,
         normalize_video,
         ID_TRAY_NORMALIZE_VIDEO_VOLUME,
+        remember_video,
+        ID_TRAY_REMEMBER_VIDEO_VOLUME,
     );
     append_levels(
         video_levels,
@@ -1917,7 +1952,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     let audio_levels = CreatePopupMenu().unwrap();
-    append_normalize(audio_levels, normalize_audio, ID_TRAY_NORMALIZE_VOLUME);
+    append_switches(
+        audio_levels,
+        normalize_audio,
+        ID_TRAY_NORMALIZE_VOLUME,
+        remember_audio,
+        ID_TRAY_REMEMBER_VOLUME,
+    );
     append_levels(
         audio_levels,
         audio_volume,
@@ -3938,6 +3979,27 @@ fn toggle_normalize_volume() {
 fn toggle_normalize_video_volume() {
     if let Ok(mut config) = CONFIG.lock() {
         config.normalize_video_volume = !config.normalize_video_volume;
+        config.save();
+    }
+}
+
+/// The row under a sound's `Normalize`: whether a level turned on a pinned window's own knob is
+/// the level the next sound is previewed at.
+///
+/// Nothing on screen is rebuilt, and a sound already playing is left where it is: what the switch
+/// changes is where the *next* player starts, which is the same bargain the level beside it makes.
+fn toggle_remember_audio_volume() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.remember_audio_volume = !config.remember_audio_volume;
+        config.save();
+    }
+}
+
+/// And the video's own, which is the same switch asked about a soundtrack and off where the app
+/// starts, like the video's level it decides.
+fn toggle_remember_video_volume() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.remember_video_volume = !config.remember_video_volume;
         config.save();
     }
 }
