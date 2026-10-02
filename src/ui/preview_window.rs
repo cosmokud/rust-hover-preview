@@ -556,12 +556,13 @@ fn hover_still_wanted(hidden: &Option<MutexGuard<'static, u64>>, pl: &PendingLoa
 ///
 /// A video preview is loaded with a frame of the size the layout planned and nothing in it:
 /// what the engine decodes is written into that frame, one frame at a time, from the first
-/// one the engine hands over (see `take_native_video_frame`). The placeholder answers this
-/// with no — it is not a picture of anything, and what the whole of it is drawn as is the
-/// backdrop the tray keeps for pictures, seen through what its pixels are mostly transparent
-/// of — so this is what a preview held back for its first frame is revealed by (see
-/// `FirstFrameWait`), and what a preview already on screen is asked before it is painted
-/// again for one.
+/// one the engine hands over (see `take_native_video_frame`). Nothing is taken from it at
+/// all until the engine has reported that it has one — a surface the engine has not drawn
+/// into is not a transparent placeholder but a rectangle of zeros, and a frame taken from
+/// one is an opaque picture of nothing (see `video_player::Session::copy_into`) — so the
+/// placeholder never reaches a screen, and this is the question whose answer holds the reveal
+/// back instead (see `FirstFrameWait`), and what a preview already on screen is asked before
+/// it is painted again for one.
 fn media_holds_a_frame() -> bool {
     CURRENT_MEDIA
         .lock()
@@ -1826,7 +1827,10 @@ impl MediaData {
         // Every pixel the copy wrote was forced opaque, so the frame a video lands in is one
         // a repaint can copy rather than blend — which is the whole of what makes a video at
         // the size of the display affordable to draw sixty times a second (see
-        // `video_player::copy_locked`).
+        // `video_player::copy_locked`). It is also now the only way this flag is ever set:
+        // the copy above answers with nothing unless the engine has reported a frame of its
+        // own, so a surface it has not drawn into never reaches the answer, and there is no
+        // zeroed rectangle here for a painter to read as a picture.
         frame.opaque = true;
 
         true
@@ -6965,11 +6969,12 @@ struct VideoStart {
 /// been drawn into yet, and the first frame arrives on a tick of its own.
 ///
 /// Opening the window on that placeholder is what is seen as a flash of the backdrop at
-/// the start of a hover: the placeholder is not a picture of the file, and every pixel of
-/// it is mostly transparent — which, composed over the backdrop the tray keeps for
-/// pictures, is the backdrop itself for as long as the engine takes to start. So the
-/// install holds the window back, and this is what it held it with: the frame whose
-/// arrival is the reveal is the first one the engine hands over.
+/// the start of a hover, and it is not a transparency that could be drawn round: the frame
+/// the engine's frames land in is zeroed, and a frame read out of it and forced opaque is
+/// an opaque black rectangle — the backdrop flash in a harder form. So nothing is read from
+/// it until the engine reports a frame of its own (see `video_player::Session::copy_into`),
+/// and the install holds the window back for that report instead. What it is held with is
+/// the arrival of the first frame the engine hands over.
 #[derive(Clone, Copy)]
 struct FirstFrameWait {
     /// The hover that held the preview back. A newer hover installs its own media and puts
@@ -15811,10 +15816,11 @@ fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             };
         }
 
-        // And the file is not installed. What the load came back with is the placeholder frame a
-        // video is always loaded with — a mostly transparent buffer of the right size that every
-        // frame the engine draws afterwards is written into (see `take_native_video_frame`) —
-        // and the first of those arrives on a tick of its own. So the pin keeps the file it is
+        // And the file is not installed. What the load came back with is the buffer a video is
+        // always loaded with — of the right size, and holding nothing, which every frame the
+        // engine draws afterwards is written into, and out of which nothing is read until the
+        // engine has reported a frame of its own (see `take_native_video_frame`) — and the
+        // first of those arrives on a tick of its own. So the pin keeps the file it is
         // showing, at the frame it had stopped on, and the loop's own per-tick take is kept off
         // the standing file until the wait is over: a frame pulled into the media the pin is
         // still showing is a frame of the *new* film in the *old* file's buffer at the old
@@ -15824,11 +15830,7 @@ fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
         // The arc is the load's own, carried into the hold rather than dropped with the load: the
         // pin is still waiting for a file, and what the user is shown while it does is the file
         // it already had with the arc turning over it.
-        return PinSwap::Holding(PinSwapHold {
-            file,
-            arc,
-            started: Instant::now(),
-        });
+        return PinSwap::Holding(PinSwapHold { file, arc });
     }
 
     if file.media.media_type == MediaType::Video && codecs::ffplay_available() {
@@ -16137,29 +16139,6 @@ fn refuse_pinned_media(install: PinInstall<'_>, path: PathBuf, walk: Option<PinS
     }
 }
 
-/// How long a swap of a pinned window's file is held for the media engine's first frame before
-/// the hold is given up on and the file is installed as it would have been without one.
-///
-/// It is a give-up rather than a wait anything is expected to reach, and it is deliberately well
-/// under the two bounds this file already keeps for the same subject: `FIRST_FRAME_GIVE_UP`, the
-/// three seconds the engine's own watch runs to before a file is written down as one the engine
-/// cannot draw, and `PIN_PLAYER_GIVE_UP`, the three seconds a player behind a pinned file is given
-/// before a player that is gone is read as one that died. Neither of those is being bought here.
-/// Both are decisions about the *file* — whether it belongs to this app's player or to FFmpeg's —
-/// and both are taken again by the standing machinery a couple of seconds after the hold has
-/// already given up and installed the file. What is being bought is the screen.
-///
-/// A pin frozen on the previous film reads as a window this app has stopped answering in, and
-/// three seconds of that is a worse thing to look at than the flash of the backdrop the hold
-/// exists to remove: the hold is a refinement, and a refinement that costs the user three seconds
-/// of a dead window is not one. A first frame lands in tens of milliseconds, because the file has
-/// already been read, probed and laid out by the load that got here and all the engine has left
-/// to do is decode one of them. A second is tens of times over that, which is as much as a
-/// genuinely slow engine is given before the answer falls back to what a pin has always shown
-/// for a video it had just started — and a fallback that is wrong costs a backdrop flash, which
-/// is what this is protecting against in the first place.
-const PIN_SWAP_FIRST_FRAME_GIVE_UP: Duration = Duration::from_secs(1);
-
 /// How the wait for a swap's first frame stands: whether the video is on screen now, whether the
 /// wait is over some other way, or whether the engine is still starting.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -16185,23 +16164,31 @@ enum PinSwapWait {
 /// and then met a bad sector is a film the pin was legitimately shown — taking the window down
 /// over it is `pin_media_is_alive`'s question a tick later and not this one's.
 ///
-/// What is read before that is an engine that is gone, an engine that has said outright that it
-/// cannot play the file, and a wait that has run past `PIN_SWAP_FIRST_FRAME_GIVE_UP`. None of the
-/// three is worth going on for: a frame that is not coming is a file to install the way a swap
-/// with no hold at all would have installed it, and the machinery that watches a pinned video for
-/// an engine that never drew (`pin_media_failed_before_a_frame`) is already standing behind that
-/// answer and runs to a bound of its own.
+/// What is read before that is an engine that is gone and an engine that has said outright that
+/// it cannot play the file. Neither is worth going on for: a frame that is not coming is a file to
+/// install the way a swap with no hold at all would have installed it, and the machinery that
+/// watches a pinned video for an engine that never drew (`pin_media_failed_before_a_frame`) is
+/// already standing behind that answer and runs to a bound of its own.
+///
+/// Elapsed time is deliberately *not* one of the answers, and there is no bound on this wait. It
+/// used to be a second, on the reasoning that a pin frozen on the previous film reads as a window
+/// this app has stopped answering in, and that a refinement which costs the user a second of a
+/// dead window is not one. But a first frame lands in tens of milliseconds only for a file whose
+/// header is already read, and this is the swap of a 3.3 GB file on a cold read, where the bound
+/// was reached before the engine had finished opening it — and a give-up that fires installs the
+/// very placeholder the hold exists to remove, which is the backdrop flash this was written to
+/// delete. A wait that has not ended yet costs the old picture for as long as it takes, which is
+/// the honest picture of a window still loading; what ends it is the engine's word, either way.
 fn pin_swap_wait(
     frame_in_hand: bool,
     playing: bool,
     failing: bool,
-    waited: Duration,
 ) -> Option<PinSwapWait> {
     if frame_in_hand {
         return Some(PinSwapWait::Arrived);
     }
 
-    if !playing || failing || waited >= PIN_SWAP_FIRST_FRAME_GIVE_UP {
+    if !playing || failing {
         return Some(PinSwapWait::Abandoned);
     }
 
@@ -16237,10 +16224,6 @@ struct PinSwapHold {
     /// is the file it already had with the arc turning over it — so the arc stays up across the
     /// hold, and comes down with the install (see `pin_arc_set`).
     arc: PinArc,
-    /// When the engine was started for the file, which is what the give-up is measured from. It is
-    /// the engine's own start rather than the load's, because the load's clock has already been
-    /// spent on a read and a decode and says nothing about how long the engine is taking.
-    started: Instant,
 }
 
 impl PinSwapHold {
@@ -16256,13 +16239,10 @@ impl PinSwapHold {
     /// `video_player::failing_before_a_frame`).
     fn settle(&mut self) -> Option<PinSwapWait> {
         let frame_in_hand = self.file.media.take_native_video_frame();
+        let playing = video_player::is_playing();
+        let failing = video_player::failing_before_a_frame().is_some();
 
-        pin_swap_wait(
-            frame_in_hand,
-            video_player::is_playing(),
-            video_player::failing_before_a_frame().is_some(),
-            self.started.elapsed(),
-        )
+        pin_swap_wait(frame_in_hand, playing, failing)
     }
 
     /// The file to install, for a wait that has come to either of its ends.
@@ -28078,47 +28058,48 @@ mod tests {
     }
 
     /// A swap of the pin's file ends one of two ways and never by itself: a frame the engine
-    /// has drawn is the video, an engine that is gone, an engine that has said the file is one
-    /// it cannot play, and a wait that has run past the cap are all the end of it — while an
-    /// engine that is playing and has drawn nothing yet is a wait that goes on.
+    /// has drawn is the video, and an engine that is gone or that has said the file is one it
+    /// cannot play are the end of it — while an engine that is playing and has drawn nothing
+    /// yet is a wait that goes on, for as long as it takes.
     ///
     /// Both ends install the same file, so what the test is really pinning down is which of
     /// them the pin is left frozen on the previous film for: an engine that is merely slow
-    /// costs a moment on the old picture, and each of the other three costs a backdrop flash
-    /// the hold was written to remove.
+    /// costs as much time on the old picture as the engine takes, and each of the other two
+    /// costs a backdrop flash the hold was written to remove. Elapsed time is not an answer
+    /// and there is no longer any way to ask the question: the give-up it used to be measured
+    /// against fired on a cold read of a large file before the engine had opened it, and the
+    /// install it caused put the placeholder back on screen.
     #[test]
-    fn a_swap_is_held_for_a_first_frame_only_until_it_arrives_or_runs_out() {
-        let cap = PIN_SWAP_FIRST_FRAME_GIVE_UP;
-
+    fn a_swap_is_held_for_a_first_frame_until_it_arrives_or_the_engine_gives_it_up() {
         assert_eq!(
-            pin_swap_wait(true, true, false, Duration::ZERO),
+            pin_swap_wait(true, true, false),
             Some(PinSwapWait::Arrived),
             "a frame of the file in hand is the video, engine or no engine"
         );
         assert_eq!(
-            pin_swap_wait(false, true, false, Duration::from_millis(1)),
+            pin_swap_wait(false, true, false),
             None,
             "an engine that has drawn nothing yet is a wait that goes on"
         );
         assert_eq!(
-            pin_swap_wait(false, false, false, Duration::ZERO),
+            pin_swap_wait(false, false, false),
             Some(PinSwapWait::Abandoned),
             "an engine that is gone is not going to draw a frame now"
         );
         assert_eq!(
-            pin_swap_wait(false, true, true, Duration::ZERO),
+            pin_swap_wait(false, true, true),
             Some(PinSwapWait::Abandoned),
             "an engine that has said it cannot play the file has said so on the first tick"
         );
         assert_eq!(
-            pin_swap_wait(false, true, false, cap),
-            Some(PinSwapWait::Abandoned),
-            "a wait past the cap is not watched any longer: a pin frozen for a second is its own bug"
+            pin_swap_wait(true, true, true),
+            Some(PinSwapWait::Arrived),
+            "and a frame that did arrive has arrived, whatever else is true of the engine"
         );
         assert_eq!(
-            pin_swap_wait(true, true, true, cap),
-            Some(PinSwapWait::Arrived),
-            "and a frame that did arrive has arrived, cap or no cap"
+            pin_swap_wait(false, false, true),
+            Some(PinSwapWait::Abandoned),
+            "a gone engine that also gave up is still just one abandoned swap, not two answers"
         );
     }
 
@@ -28145,7 +28126,6 @@ mod tests {
                 walk: None,
             },
             arc: PinArc::new(),
-            started: Instant::now(),
         });
         let mut load = Some(PinLoad::answered(
             Path::new("later.png"),
