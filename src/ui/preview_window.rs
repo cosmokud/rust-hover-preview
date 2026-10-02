@@ -8344,10 +8344,10 @@ fn player_for_gain(probed: Player, normalizing: bool, gain: Option<f64>) -> Play
 /// Start the player a sound's card is drawn against, answering whether a player that was
 /// expected arrived.
 ///
-/// A card is drawn whether or not anything plays: at `Volume → Audio` 0% the answer is the card
-/// and nothing else, which is what silence looks like and is not a failure. What the caller is
-/// told is whether a player that *was* asked for came up — a sound no engine here will actually
-/// play is a hover answered with nothing rather than a card whose clock can never move.
+/// A card is drawn whether or not anything plays, and a level of nothing is a player like any other
+/// level: what the caller is told is whether the player that *was* asked for came up — a sound no
+/// engine here will actually play is a hover answered with nothing rather than a card whose clock
+/// can never move.
 ///
 /// `start` is where in the file the sound is dropped, and it is the caller's answer: it is a
 /// question about the file's length and the tray's `Volume → Audio Seek`, both of which are
@@ -8381,14 +8381,11 @@ fn start_audio_playback_at(path: &Path, media: &mut MediaData, start: f64, volum
     // took with it when it ended.
     kill_stray_video_process();
 
-    // A card at 0% is silence and not a failure: the caller's answer is still yes, and the caller
-    // that wanted a player is `restart_pinned_audio`, which reports a missing one by finding no
-    // process behind it — the same answer as a decoder that would not have the file, and the one
-    // `pinned_audio_after_seek` is written against.
-    if volume == 0 {
-        return true;
-    }
-
+    // A level of nothing is handed to the player like any other level rather than answered here:
+    // silence is what a player at zero is, not the absence of one, so the sound goes on playing and
+    // stays seekable with nothing to hear. Both players already read a zero as silence while they
+    // run — the engine as a mute (`video_player::Session::begin`) and FFmpeg as a level of its own
+    // scale, or a gain of nothing where a file has been measured (`start_audio_player`).
     if normalizing_audio() {
         match audio_track::gain(path) {
             // A gain of one is a gain: a file measured as already standing at the target is played
@@ -14370,7 +14367,7 @@ fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
 /// What this has in common with the bubble's is the mechanics and not the setting:
 /// `Pin Mode → Pause Preview` is about what a collapse does, and this is about a key pressed in
 /// a window the user is in. A sound with no player behind it is left alone on both counts — there
-/// is no playback to hold — which is the answer a card at `Volume → Audio` 0% gets.
+/// is no playback to hold — which is the answer a file nothing will play gives.
 fn toggle_pinned_audio(started: &mut Option<Instant>, offset: &mut f64, paused: &mut Option<f64>) {
     let Some((path, _)) = pinned_media_owner() else {
         return;
@@ -14385,8 +14382,8 @@ fn toggle_pinned_audio(started: &mut Option<Instant>, offset: &mut f64, paused: 
     match playing_player(&path, &track) {
         Player::Native => {
             // The engine is asked to hold, and to go on from where it is holding. A session that
-            // is not there — a sound at `Volume → Audio` 0%, a file already let go — is asked to
-            // play, which begins no session rather than starting a sound nobody asked for.
+            // is not there — a file already let go — is asked to play, which begins no session
+            // rather than starting a sound nobody asked for.
             video_player::set_paused(video_player::is_playing());
         }
         Player::Ffmpeg => {
@@ -14401,10 +14398,9 @@ fn toggle_pinned_audio(started: &mut Option<Instant>, offset: &mut f64, paused: 
                     *paused = None;
                 }
             } else if started.is_none() {
-                // A sound with no player behind it has no playback of ours to hold: a card at
-                // `Volume → Audio` 0% asked for no player at all, and a decoder that would not
-                // have the file never got one. The key is then a key that did nothing, which is
-                // what a sound nobody is hearing is.
+                // A sound with no player behind it has no playback of ours to hold: a decoder that
+                // would not have the file never got one. The key is then a key that did nothing,
+                // which is what a sound that is not playing is.
                 return;
             } else {
                 // And a key while it is playing is a sound held: the player is ended, and the
@@ -14506,10 +14502,9 @@ fn toggle_pinned_by_key(started: &mut Option<Instant>, offset: &mut f64, paused:
 /// is replaced, so a sound that is not ended here goes on playing over the one beginning at the
 /// second (see `restart_pinned_player`).
 ///
-/// The answer is when the player was started, and it is nothing where none came up — at
-/// `Volume → Audio` 0% no player is asked for at all, and a decoder that will not have the file
-/// is the same answer. Which is the answer a caller keeps a sound held on rather than one that
-/// begins counting a clock nothing is moving.
+/// The answer is when the player was started, and it is nothing where none came up — a decoder that
+/// will not have the file is the same answer. Which is the answer a caller keeps a sound held on
+/// rather than one that begins counting a clock nothing is moving.
 fn restart_pinned_audio(path: &Path, from: f64) -> Option<Instant> {
     // The level this player is started at is the pin's own rather than the tray's, because the
     // level belongs to the window it was moved on: a knob turned on a card and then a seek would
@@ -14809,9 +14804,9 @@ fn settle_pinned_audio_volume(
         .then(|| restart_pinned_audio(&path, seconds))
         .flatten();
 
-    // A level of nothing brings no player up, and `restart_pinned_audio` reports that as no player
-    // — which is exactly what `pinned_audio_after_seek` is written against: a card with no clock
-    // rather than a hold over a sound that is not playing (see `start_audio_playback_at`).
+    // A level of nothing is a player begun at nothing rather than no player at all, so this is
+    // `pinned_audio_after_seek` written as it is for every other level: a clock begun at the second
+    // the knob was let go at, and a sound going on in silence (see `start_audio_playback_at`).
     (*started, *offset, *paused) = pinned_audio_after_seek(was_playing, player.is_some(), seconds);
 
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
@@ -16188,8 +16183,8 @@ fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 
         // What the loop's clock is written down from, read before the media is handed on: a sound
         // is timed from the player this app started, and there is one to time from exactly where
-        // one was started — at `Volume → Audio` 0% nothing was, and a card whose clock ran anyway
-        // would be a sound it says is playing that is not.
+        // one was started — a file nothing would play, at any level, gets none, and a card whose
+        // clock ran anyway would be a sound it says is playing that is not.
         let started = file.media.video_process.is_some().then(Instant::now);
 
         file.audio = Some(SwappedAudio {
@@ -21914,8 +21909,8 @@ pub fn run_preview_window() {
                     // is not, so a card with a name to move is painted at the cadence the
                     // spinner's overlay uses and one whose whole name fits keeps the slower one
                     // (see `AUDIO_CARD_REPAINT` and `AUDIO_NAME_REPAINT`). What a card with no
-                    // player behind it — `Volume → Audio` at 0% — costs is its scroll and
-                    // nothing else.
+                    // player behind it — a file nothing will play, at any level — costs is its scroll
+                    // and nothing else.
                     if media.media_type.is_audio() {
                         // A sound that was asked to start somewhere other than the beginning
                         // and has not been taken there yet is taken there here, on the first
@@ -22251,9 +22246,7 @@ pub fn run_preview_window() {
                             // a video's engine is: what the card draws is the clock of a player
                             // that is running. A player that was asked for and did not come up is
                             // a sound with nothing behind it, which is the answer a video's engine
-                            // that will not start gets — while a card at `Volume → Audio` 0% asks
-                            // for no player at all and is left standing, with its clock still and
-                            // its bar empty.
+                            // that will not start gets.
                             if media_data.media_type.is_audio() {
                                 // Where the sound is dropped in: a question about the file's
                                 // own length and the tray's `Volume → Audio Seek`, and one that
@@ -22289,9 +22282,9 @@ pub fn run_preview_window() {
 
                                 // The clock a sound FFmpeg plays is this app's own over the
                                 // moment the player was started, and there is a player to
-                                // measure from exactly where one was started: at
-                                // `Volume → Audio` 0% nothing was, and a card whose clock ran
-                                // anyway would be a sound it says is playing that is not — and
+                                // measure from exactly where one was started: a decoder that
+                                // would not have the file never got one, and a card whose clock
+                                // ran anyway would be a sound it says is playing that is not — and
                                 // a position this side would write down as one the file had
                                 // been left at (see `audio_seek::remember`). A file that has
                                 // just been started is not one a key has held, whatever the
@@ -29987,7 +29980,7 @@ mod tests {
         assert_eq!(held, None, "and still nothing held over it");
 
         // A player that did not come up is a card with no clock rather than a hold over a sound
-        // that is not playing: at `Volume → Audio` 0% there is no player to seek and none to hold.
+        // that is not playing: a decoder that would not have the file gives that answer at any level.
         assert_eq!(
             pinned_audio_after_seek(true, false, 90.0),
             (None, 90.0, None),
@@ -30203,7 +30196,7 @@ mod tests {
         );
 
         // While a card with no player behind it says nothing about where the sound is at all,
-        // which is the answer a sound at `Volume → Audio` 0% gives.
+        // which is the answer a file nothing will play gives.
         assert_eq!(
             audio_clock(&path, None, 0.0, None).0,
             None,
