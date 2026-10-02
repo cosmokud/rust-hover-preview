@@ -21,6 +21,46 @@
 //!     (`TransferVideoFrame`) into a bitmap of its own, from the crop the probe settled on
 //!     where it settled on one (see [`Crop`]).
 //!
+//! # Where the decoding happens, and why it is not where it should be
+//!
+//! Every video this app plays is decoded in software, and it does not have to be. A media engine
+//! handed a DXGI device manager through `MF_MEDIA_ENGINE_DXGI_MANAGER` uses the display's own
+//! hardware for the decoding instead, and the difference is not a matter of degrees: on a 144 fps
+//! 1440p HEVC file shown at a preview box of a display's own size, the engine with a manager
+//! spends 0.11 s of a core over eight seconds where the same engine without one spends 44.02 s
+//! (see `tests::video_take_cost`). Attaching one is four fields and a device creation away.
+//!
+//! It is not attached, because on this machine the media engine will not then hand a frame over
+//! at all. `TransferVideoFrame` accepts a DXGI surface *or* a WIC bitmap, a hardware-decoded frame
+//! lives in a texture on the GPU, and the obvious reading is that the destination has to become a
+//! texture too — a buffer made by `MFCreateDXGISurfaceBuffer` over a D3D11 texture, read back
+//! through a staging copy. That was built, and it is refused. Measured, on this machine, over a
+//! 1440p HEVC file and a 1920x800 H.264 one:
+//!
+//!   * a WIC bitmap destination — the one this app already uses — answers the *first* transfer
+//!     and every transfer after it with `E_NOINTERFACE` (`0x80004002`). The first frame is
+//!     decoded before the DXGI pipeline is up; every frame after it is decoded on the GPU, and
+//!     the engine will not render a GPU frame into a bitmap in system memory. That was true with
+//!     the output format set to `ARGB32`, to `RGB32`, to `NV12` and unset entirely.
+//!   * a `MFCreateDXGISurfaceBuffer` destination is refused on the first transfer as well as the
+//!     rest, over a plain `D3D11_USAGE_DEFAULT` texture, over the same texture bound as a render
+//!     target, over a surface from `IDXGIDevice::CreateSurface`, at the box's size and at the
+//!     picture's own size, and over all of those again with the same four output formats.
+//!
+//! So the engine will render into a bitmap only while it is decoding in software, and into
+//! nothing at all while it is decoding on the GPU. Attaching a manager therefore is not a slower
+//! preview: it is one frame, then three seconds of refusals, then the file handed to FFmpeg's
+//! player (see [`TRANSFER_FAILURES_GIVE_UP`]) — which is a working preview on a machine that has
+//! FFmpeg's player and no preview at all on a machine that does not.
+//!
+//! What is left of it, and the reason this paragraph is here rather than a branch somewhere, is
+//! that the failure above is precisely the one that used to be invisible. It was measured twice
+//! before: once as a frame pipeline that froze on the first frame and reported nothing, and once
+//! as a hundred and forty-four frames a second decoded in software for a box that could show
+//! sixty of them. Anyone reaching for this again should read this first, and should read
+//! [`failing_path`] second, because that is the thing standing between the attempt and a preview
+//! that hangs.
+//!
 //! A tick is not a frame. The clock this side ticks on is a vertical blank, sixty times a
 //! second whatever the file runs at, so most ticks of a film find the engine offering the
 //! picture it offered the last four of them, and a tick that finds one is answered without
@@ -28,7 +68,10 @@
 //! previewed on the engine and a video previewed by FFmpeg's player: the same file is
 //! decoded, copied and handed to the compositor as many times as it has frames rather than
 //! as many times as the display refreshes, and a 4K one is four times the frame of a
-//! 1080p one throughout.
+//! 1080p one throughout. It is also why the two ends of it have to be read together: a 144 fps
+//! file is decoded at 144 fps and drawn at sixty, so most of what the engine decodes is never
+//! shown — nearly free on a GPU, and on a preview box of a display's own size it is the largest
+//! single cost there is (see `tests::video_take_cost`).
 //!
 //! Who *scales* the picture is settled by the two sizes alone: a box meaningfully larger than
 //! the picture is one this side scales into it ([`scale_rows`]), because which filter the
@@ -148,9 +191,9 @@ const FIRST_FRAME_GIVE_UP: Duration = Duration::from_secs(3);
 /// What this is for is the fault that has no symptom at all. A session that has drawn a frame
 /// and cannot draw another keeps the frame it had and reports nothing: the picture on screen is
 /// the picture from a second ago and every question the app asks it is answered well. That is
-/// what a hardware frame path which cannot take a frame out of the engine looks like from here,
-/// because the whole of its difference from the software path is that the engine will not give
-/// the frame up at all (see [`Session::copy_into`]).
+/// exactly what the DXGI device manager does to a preview on this machine — one frame off the
+/// software path, then nothing but refusals off the hardware one (see this module's own note on
+/// where the decoding happens).
 const TRANSFER_FAILURES_GIVE_UP: u32 = 188;
 
 /// Whether a run of transfers that all failed is a session that has failed, which is the whole
@@ -627,7 +670,6 @@ pub fn is_playing() -> bool {
 /// The file the engine is failing at, if it is failing at one: a session with a surface that has
 /// been up a while and has not handed over a single frame of it, or one whose transfers have been
 /// refused for long enough to be a fault rather than a hiccup.
-///
 /// It is how the app finds out that a question a probe answered yes to was still the wrong
 /// question. A probe asks the engine's *parts* — a decoder for the stream and a converter to the
 /// format this app composes in — and the engine plays through a pipeline of its own, which can
