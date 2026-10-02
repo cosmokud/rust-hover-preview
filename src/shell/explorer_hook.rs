@@ -5717,9 +5717,19 @@ pub fn run_explorer_hook() {
 
         // Nothing is hovered, so any ffplay still alive is a leftover from a
         // stop that did not take effect: kill it before it lingers on screen.
+        //
+        // A pin is not that. Nothing is hovered while one is up for most of its life, so this
+        // sweep came round once a second and ended the sound a pinned window was playing — the
+        // player is one process record (`VIDEO_PID`) and the pin's is whichever was started
+        // last, so a safety net for a hover's leftovers killed the pin's own playback instead:
+        // a sound that played about a second and stopped, a card whose clock went with it, and a
+        // seek that began a player the next sweep ended. `pinned()` is the whole of the guard,
+        // because a pin's player is taken down with the pin (see `preview_window::pinned`), and
+        // the tick after that one this sweep is answering again.
         if last_file.is_none()
             && keyboard_file.is_none()
             && !is_keyboard_hover
+            && !pinned()
             && last_video_process_sweep.elapsed() >= Duration::from_millis(VIDEO_PROCESS_SWEEP_MS)
         {
             last_video_process_sweep = Instant::now();
