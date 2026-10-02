@@ -2129,4 +2129,250 @@ mod tests {
             "and a seek leaves the caller owed the time it lands on, exactly as it was"
         );
     }
+
+    /// What this side costs to take a frame of a video: frames actually drawn, wall time, and
+    /// the CPU the process burned while it did — against a real file, played at the box the
+    /// layout would have placed it at.
+    ///
+    /// It is the measurement this module's own numbers are argued from, and it is here rather
+    /// than in a harness of its own because the thing being measured is a thread-local session
+    /// and a static this module owns; nothing outside can reach them. Three things are
+    /// measured because a change to this path moves them independently: how many frames the
+    /// caller was actually handed, how long the window took, and what the process's own clock
+    /// says it spent. The first says whether the picture moved at all, the second whether the
+    /// loop kept up with the file, and the third is the whole of the question this module
+    /// exists to answer — a preview that costs a core of the CPU is a preview that makes every
+    /// other hover on the desktop stutter.
+    ///
+    /// The box matters as much as the file. A 320 x 240 box measures the *engine* and nothing
+    /// this side does: the copies, the resample and the hand to the compositor are all
+    /// proportional to the number of pixels, so a small box hides the entire cost. The default
+    /// is a 2560 x 1440 file at `fit` on this machine's display, which is a little over
+    /// 2493 x 1400 — a box this side does *not* scale into (see `ENLARGEMENT_WORTH_RESAMPLING`),
+    /// so what it measures is the copy and not the resampler. `RHP_VIDEO_PERF_BOX` overwrites it
+    /// as `WIDTHxHEIGHT` for a machine whose display is another size.
+    ///
+    /// The window is eight seconds with the first one spent settling, which is where a first
+    /// frame's decoder comes up and where a hardware pipeline's device is made; a run that
+    /// started its clock at `Play` would be measuring setup rather than a preview. The tick is
+    /// sixteen milliseconds, which is `preview_window::FRAME_WAIT_MS` — that constant belongs to
+    /// the loop and is not this file's to read, and a measurement taken at any other cadence is
+    /// not the loop being measured.
+    ///
+    /// The CPU is the process's own, read from `GetProcessTimes` on this process: kernel and
+    /// user together, in 100-nanosecond units, over the same window. Shelling out to an external
+    /// timer would be a second program and its own precision to measure a first.
+    ///
+    /// Run it by hand:
+    ///
+    /// ```text
+    /// cargo test video_take_cost -- --ignored --nocapture
+    /// ```
+    ///
+    /// The file it is most worth running on is one that decodes as a rate the display cannot
+    /// show — a 144 fps file of near-duplicate frames — because that is where the difference
+    /// between decoding on the GPU and decoding in software is the largest thing in the
+    /// measurement, and where the waste of decoding frames nobody is shown is at its height.
+    #[test]
+    #[ignore = "plays the file named in RHP_VIDEO_PERF at the size of the display"]
+    fn video_take_cost() {
+        let Ok(path) = std::env::var("RHP_VIDEO_PERF") else {
+            println!("set RHP_VIDEO_PERF to the path of a video to play");
+            return;
+        };
+
+        let path = PathBuf::from(path);
+        let (width, height) = box_from_env((2493, 1400));
+        let picture = dimensions(&path).expect("the file's own frame size");
+
+        println!("\n--- {} ---", path.display());
+        println!(
+            "the picture is {}x{}, shown in a box of {width}x{height}",
+            picture.0, picture.1
+        );
+
+        // The crop the geometry probe would have settled on is not asked for: this is a
+        // measurement of the frame pipeline and the file's own bars are its own business. A
+        // file with a crop is measured a few thousand pixels narrower than this box, which is
+        // what it is played at in the app too.
+        play(
+            &path,
+            width,
+            height,
+            0,
+            Picture {
+                width: picture.0,
+                height: picture.1,
+                crop: None,
+            },
+        );
+
+        assert!(is_playing(), "the engine took the file at all");
+        println!(
+            "this side is the one that scales into the box: {}",
+            scales_here(picture, width, height)
+        );
+
+        // The first frame is waited for rather than assumed, because a file the engine cannot
+        // draw has none to arrive and a window measured over a session that never drew is a
+        // measurement of nothing (see `failing_path`).
+        let mut pixels = Vec::new();
+        let ticks = Duration::from_millis(TICK_MS);
+        let waiting = Instant::now();
+        let mut drew = false;
+
+        while waiting.elapsed() < FIRST_FRAME_GIVE_UP {
+            if copy_frame_into(&mut pixels).is_some() {
+                drew = true;
+                break;
+            }
+
+            std::thread::sleep(ticks);
+        }
+
+        if !drew {
+            println!(
+                "no frame in {} ms — nothing to measure",
+                waiting.elapsed().as_millis()
+            );
+            stop();
+            return;
+        }
+
+        // A second of the file is played before the clock is read, so that what is measured is
+        // a preview and not a pipeline coming up: a first frame's decoder, and a device that
+        // has not been made yet if there is a GPU path to make one.
+        let settling = Instant::now();
+        let mut settling_frames = 0;
+        while settling.elapsed() < Duration::from_secs(1) {
+            if copy_frame_into(&mut pixels).is_some() {
+                settling_frames += 1;
+            }
+
+            std::thread::sleep(ticks);
+        }
+
+        // And what the process's own clock says before and after: the kernel's and the user's
+        // together, since a decode that is handed to a driver runs partly in one and partly in
+        // the other and neither on its own is the cost. A process whose own CPU time cannot be
+        // read has no measurement to make, and says so rather than reporting a zero.
+        let Some(before) = cpu_hundred_nanoseconds() else {
+            println!("this process's own CPU time cannot be read — nothing to measure");
+            stop();
+            return;
+        };
+
+        let started = Instant::now();
+        let mut frames = 0;
+        let mut refused = 0;
+
+        while started.elapsed() < WINDOW {
+            if copy_frame_into(&mut pixels).is_some() {
+                frames += 1;
+            } else if failing_path().is_some() || !is_playing() {
+                refused += 1;
+            }
+
+            std::thread::sleep(ticks);
+        }
+
+        let wall = started.elapsed();
+        let cpu = cpu_hundred_nanoseconds().map_or(0, |now| now.saturating_sub(before));
+        let seconds = wall.as_secs_f64();
+
+        println!(
+            "\n{frames} frames drawn in {:.2} s ({:.1} a second, over {settling_frames} more \
+             while it settled)",
+            seconds,
+            frames as f64 / seconds,
+        );
+        println!(
+            "process CPU {:.2} s over {:.2} s — {:.1}% of one core",
+            cpu as f64 / 10_000_000.0,
+            seconds,
+            cpu as f64 / 10_000_000.0 / seconds * 100.0,
+        );
+        println!(
+            "each frame cost {:.2} ms of CPU to hand over",
+            if frames > 0 {
+                cpu as f64 / 10_000_000.0 / frames as f64 * 1000.0
+            } else {
+                f64::NAN
+            }
+        );
+        println!("{refused} ticks came back with nothing to draw");
+        println!(
+            "the session is still playing: {}",
+            is_playing(),
+        );
+
+        stop();
+    }
+
+    /// How long the preview loop waits between its ticks, which is the cadence the measurement
+    /// above is taken at: `preview_window::FRAME_WAIT_MS`, written out here because that
+    /// constant belongs to the loop and this module does not read it.
+    const TICK_MS: u64 = 16;
+
+    /// How long `video_take_cost` measures a preview for, once it has settled: long enough that
+    /// the answer is a number rather than a rounding, and short enough to run before a film is
+    /// over — which matters, because a 144 fps file of eight seconds is over a thousand frames
+    /// of decode and the file the measurement is most worth running on is twelve minutes long.
+    const WINDOW: Duration = Duration::from_secs(8);
+
+    /// The box a preview is played at, from `RHP_VIDEO_PERF_BOX` as `WIDTHxHEIGHT` or the
+    /// default this module's own measurements have been taken at: a 1440p file at `fit` on a
+    /// 2560-wide display, which is the box the layout hands `play` and therefore the size at
+    /// which every copy and every hand to the compositor is paid for.
+    fn box_from_env(default: (u32, u32)) -> (u32, u32) {
+        let Ok(setting) = std::env::var("RHP_VIDEO_PERF_BOX") else {
+            return default;
+        };
+
+        let Some((width, height)) = setting.split_once('x') else {
+            println!("RHP_VIDEO_PERF_BOX is not WIDTHxHEIGHT — using {default:?}");
+            return default;
+        };
+
+        match (width.trim().parse(), height.trim().parse()) {
+            (Ok(width), Ok(height)) if width > 0 && height > 0 => (width, height),
+            _ => {
+                println!("RHP_VIDEO_PERF_BOX is not two whole numbers — using {default:?}");
+                default
+            }
+        }
+    }
+
+    /// What this process has spent on the CPU, in 100-nanosecond units: kernel and user
+    /// together, since a preview that hands its decoding to a driver spends the time in
+    /// whichever of the two the driver spends it in.
+    fn cpu_hundred_nanoseconds() -> Option<u64> {
+        use windows::Win32::Foundation::FILETIME;
+        use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+
+        let mut created = FILETIME::default();
+        let mut exited = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+
+        // SAFETY: all four out-parameters are the caller's own, initialised, and live for the
+        // duration of the call; `GetCurrentProcess` is a pseudo-handle that is always valid and
+        // is what the process's own times are read from. A refusal reads as no measurement
+        // rather than as a zero, which would flatter everything this is used for.
+        unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(),
+                &mut created,
+                &mut exited,
+                &mut kernel,
+                &mut user,
+            )
+        }
+        .ok()?;
+
+        let as_units =
+            |time: FILETIME| ((time.dwHighDateTime as u64) << 32) | time.dwLowDateTime as u64;
+
+        Some(as_units(kernel) + as_units(user))
+    }
 }
