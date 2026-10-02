@@ -128,6 +128,42 @@ const SEEK_GIVE_UP: Duration = Duration::from_secs(3);
 /// start would be a preview taken away from the engine that could have drawn it.
 const FIRST_FRAME_GIVE_UP: Duration = Duration::from_secs(3);
 
+/// How many transfers in a row have to fail before a session is a session that has failed.
+///
+/// A transfer that fails is not a video that has stopped: it is a video the engine is offering
+/// a frame of and will not give over. One of those is ordinary — a seek asks the engine for a
+/// frame it has not decoded yet, a loop lands on the time it started from, a gap in a file is a
+/// gap — and a run of them is what is not ordinary. What this bounds is therefore a *run*, and
+/// it is counted in ticks rather than seconds for the reason [`FIRST_FRAME_GIVE_UP`] is counted
+/// in seconds: the two are the same length of time measured two ways, the preview loop turning
+/// sixty times a second, and a bound in seconds would have to assume that sixty itself.
+///
+/// One hundred and eighty-eight is three seconds of those ticks — the nearest whole tick at or
+/// above [`FIRST_FRAME_GIVE_UP`], which is the resolution a count of ticks has — and deliberately
+/// so: the answer to "this engine cannot draw this file" should arrive in about as long as the
+/// answer to "this engine has not drawn this file", whatever order the two mistakes arrive in. A
+/// bound a great deal shorter would hand a perfectly good film over to FFmpeg's player every time
+/// a network drive hiccuped for a quarter of a second.
+///
+/// What this is for is the fault that has no symptom at all. A session that has drawn a frame
+/// and cannot draw another keeps the frame it had and reports nothing: the picture on screen is
+/// the picture from a second ago and every question the app asks it is answered well. That is
+/// what a hardware frame path which cannot take a frame out of the engine looks like from here,
+/// because the whole of its difference from the software path is that the engine will not give
+/// the frame up at all (see [`Session::copy_into`]).
+const TRANSFER_FAILURES_GIVE_UP: u32 = 188;
+
+/// Whether a run of transfers that all failed is a session that has failed, which is the whole
+/// of what the count above is for.
+///
+/// A function of one number rather than of a session and a clock because the question has to be
+/// answerable without one: the run *is* the evidence, and what it has to be judged against is a
+/// count rather than a moment, since a session that took a seek to get here has no useful moment
+/// to measure a gap against.
+fn a_run_of_refusals_is_a_failure(run: u32) -> bool {
+    run >= TRANSFER_FAILURES_GIVE_UP
+}
+
 /// How much bigger than the picture a box has to be before this side is the one that scales into
 /// it, as a share of the picture's own size: one part in fifty.
 ///
@@ -218,7 +254,21 @@ struct Session {
     /// Whether a frame of the file has been handed over at all: a session is not a promise that
     /// a picture will come of it, since the engine accepts a file whose decoder and converter
     /// are both there and whose *pipeline* is not (see [`failing_path`]).
+    ///
+    /// It says whether a frame has *ever* been handed over and is not cleared by a transfer that
+    /// fails after one, because that is a different fault: a file that played and then met a bad
+    /// sector is not a file the engine cannot draw, and handing it to FFmpeg's player over one
+    /// costs the engine its decoder for the rest of a film it was getting on with (see
+    /// [`transfer_failures`] and [`failing_before_a_frame`]).
     drew: bool,
+    /// How many transfers in a row the engine has refused, reset by the one that succeeds.
+    ///
+    /// This is what distinguishes a video that is not moving from a video this side cannot get
+    /// frames out of, and the distinction is invisible from outside: both answer the loop's tick
+    /// with no frame and neither reports anything wrong. The run is bounded and reaching
+    /// [`TRANSFER_FAILURES_GIVE_UP`] of it is the session failing, which is what makes this
+    /// something the app can be told about rather than a picture that freezes.
+    transfer_failures: u32,
     /// The time of the frame the caller is holding, in the hundred-nanosecond units the engine
     /// ticks in, and `None` where the next frame is owed whatever the engine says about it — a
     /// session that has just been begun, resized or sought somewhere has a picture the caller
@@ -575,7 +625,8 @@ pub fn is_playing() -> bool {
 }
 
 /// The file the engine is failing at, if it is failing at one: a session with a surface that has
-/// been up a while and has not handed over a single frame of it.
+/// been up a while and has not handed over a single frame of it, or one whose transfers have been
+/// refused for long enough to be a fault rather than a hiccup.
 ///
 /// It is how the app finds out that a question a probe answered yes to was still the wrong
 /// question. A probe asks the engine's *parts* — a decoder for the stream and a converter to the
@@ -600,11 +651,35 @@ pub fn failing_path() -> Option<PathBuf> {
             return None;
         }
 
-        (session.bitmap.is_some()
-            && !session.drew
-            && session.began.elapsed() >= FIRST_FRAME_GIVE_UP)
-            .then(|| session.path.clone())
+        (engine_is_failing(
+            session.bitmap.is_some(),
+            session.drew,
+            session.transfer_failures,
+            session.began.elapsed(),
+        ))
+        .then(|| session.path.clone())
     })
+}
+
+/// Whether the file behind a running session is one the engine is failing at, in the sense
+/// [`failing_path`] uses the words: a session with a surface to draw into that is either not
+/// getting frames or cannot take the ones it is offered.
+///
+/// It is two faults in one condition because they are the same fault arrived at by two roads,
+/// and what they have in common is the length of time: three seconds of an engine that will not
+/// draw this file and three seconds of an engine that will not give this one a frame are both a
+/// file FFmpeg's player has to be handed. What they are *not* is one thing about `drew`, and
+/// that is the half of the condition with the reasoning on it: `drew` says a frame has been
+/// handed over at all, so it is asked about a session that has not, and a session that has drawn
+/// is asked about the run of refusals alone — the frame it saw being exactly what makes a run of
+/// refusals worth reporting rather than merely embarrassing.
+///
+/// The four arguments rather than a `&Session` because the third is a number this does not own
+/// — it belongs to a tick — and a question that has to be asked with a borrow of a session on
+/// the preview thread is a question that cannot be asked in a test at all.
+fn engine_is_failing(surface: bool, drew: bool, refusals: u32, age: Duration) -> bool {
+    surface
+        && (a_run_of_refusals_is_a_failure(refusals) || (!drew && age >= FIRST_FRAME_GIVE_UP))
 }
 
 /// The file the engine is failing at before it has drawn a frame of it, if it is failing at one
@@ -970,13 +1045,21 @@ fn codec_name(subtype: &GUID) -> Option<String> {
 /// way and leave both its buffer and the compositor alone. It is a deliberately wider answer
 /// than it was: a tick that finds the engine still holding the picture already on the screen
 /// is a tick with no work in it, and the buffer is left as it was rather than filled again
-/// with the picture the caller already has (see [`is_a_new_frame`]).
+/// with the picture the caller already has (see [`is_a_new_frame`]). It is also wider than the
+/// failure it stands for, which is deliberate and is where the narrower question is asked
+/// instead: of the four answers [`Take`] has, only one is a frame, and the three that are not
+/// are all a tick with nothing to paint — including the one that is a fault, which the session
+/// keeps to itself and which [`failing_path`] is the question to ask about (see
+/// [`Session::refused`]).
 pub fn copy_frame_into(pixels: &mut Vec<u8>) -> Option<(u32, u32)> {
     SESSION.with(|slot| {
         let mut slot = slot.borrow_mut();
         let session = slot.as_mut()?;
 
-        session.copy_into(pixels)
+        match session.copy_into(pixels) {
+            Take::Drawn(size) => Some(size),
+            Take::Nothing | Take::Refused | Take::Failed => None,
+        }
     })
 }
 
@@ -1108,6 +1191,7 @@ impl Session {
             path: path.to_path_buf(),
             failed,
             drew: false,
+            transfer_failures: 0,
             // The first frame of a session is the first picture the caller has of the file,
             // so it is owed one whatever the engine makes of a tick that finds its own
             // first frame already on its clock.
@@ -1183,13 +1267,24 @@ impl Session {
         self.drawn = None;
     }
 
-    fn copy_into(&mut self, pixels: &mut Vec<u8>) -> Option<(u32, u32)> {
+    /// The one place a frame is asked for, and the only place a session is found to be failing
+    /// at its file.
+    ///
+    /// It is a tick of the preview loop: the engine's own ready state, its own offer of a frame,
+    /// its own identity for that frame, the transfer, and then the copy out of the surface the
+    /// transfer wrote into. Each of those can end the tick with nothing to paint, and each says
+    /// something different about why — which is what [`Take`] is for, since only one of them is
+    /// a fault and a fault flattened into the other two is a fault nothing is done about.
+    fn copy_into(&mut self, pixels: &mut Vec<u8>) -> Take {
         // A sound has no frames to take, and the session that plays one is never asked for
-        // any: what the card beside it is drawn from is the engine's clock and not its output.
-        let bitmap = self.bitmap.as_ref()?;
+        // any: what the card beside it is drawn from is the engine's clock and not its
+        // output. It is the one of the three answers below that is not about a tick at all.
+        let Some(bitmap) = self.bitmap.as_ref() else {
+            return Take::Nothing;
+        };
 
         if self.failed.load(Ordering::Acquire) {
-            return None;
+            return Take::Failed;
         }
 
         // A frame is only there to be taken once the engine has current data.
@@ -1198,7 +1293,7 @@ impl Session {
         // which is a video that never starts, an `.mp4` being the format that shows it.
         if unsafe { self.engine.GetReadyState() } < MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA.0 as u16
         {
-            return None;
+            return Take::Nothing;
         }
 
         // The tick is where the engine says whether there is a *new* frame, and answers
@@ -1209,7 +1304,7 @@ impl Session {
         // shown the picture it already has.
         let pts = match unsafe { self.engine.OnVideoStreamTick() } {
             Ok(pts) => pts,
-            Err(_) => return None,
+            Err(_) => return Take::Nothing,
         };
 
         // And the engine saying there is one is not the same question as whether it is a
@@ -1219,7 +1314,7 @@ impl Session {
         // display for a picture nobody is waiting for. The time is the identity, and a
         // frame at a time already drawn is left in the engine's own surface where it is.
         if !is_a_new_frame(self.drawn, pts) {
-            return None;
+            return Take::Nothing;
         }
 
         // The rectangle the engine is asked to write: the box, where it is the one scaling, and the
@@ -1237,7 +1332,16 @@ impl Session {
             right: delivered_width as i32,
             bottom: delivered_height as i32,
         };
-        let destination: IUnknown = bitmap.cast().ok()?;
+        // A surface that cannot be asked to be a destination is a surface frames cannot be taken out
+        // of, which is the fault rather than the ordinary answer: a tick that said otherwise
+        // would be a tick that froze the preview without ever reporting anything wrong, which is
+        // the whole thing this side is here to stop. It cannot actually happen — the cast is a
+        // COM identity query and the bitmap is a COM object — and it is counted rather than
+        // swallowed anyway, since the cost of being wrong here is a frozen preview and the cost
+        // of counting it is three seconds of a session that was never going to work.
+        let Ok(destination) = bitmap.cast::<IUnknown>() else {
+            return self.refused();
+        };
 
         // The picture drawn into the whole surface: the engine is asked for the box the layout
         // planned and for the part of the frame that goes into it — the crop the probe settled
@@ -1246,7 +1350,7 @@ impl Session {
         // asked for the whole frame while the box is the shape of a crop inside it, the engine
         // is left with the difference to pad, and the preview grows black bars down the sides
         // the file's own bars do not cover.
-        unsafe {
+        if unsafe {
             self.engine.TransferVideoFrame(
                 &destination,
                 self.source.as_ref().map(std::ptr::from_ref),
@@ -1254,7 +1358,15 @@ impl Session {
                 Some(&BORDER),
             )
         }
-        .ok()?;
+        .is_err()
+        {
+            return self.refused();
+        }
+
+        // One that got through is a run of nothing, whatever the run was: a file that hiccuped
+        // and came back is a file that is playing, and a counter that survived it would be
+        // counting two sessions' faults as one.
+        self.transfer_failures = 0;
 
         // A frame of the file has been drawn: whatever becomes of this session later, it is not
         // a session that never had one (see `failing_path`). What is drawn is what the
@@ -1276,8 +1388,61 @@ impl Session {
             copy_locked(bitmap, pixels, self.width, self.height)
         };
 
-        copied.then_some((self.width, self.height))
+        // A surface that would not open is not the engine failing at the file and is not a run
+        // of anything: the frame was written, the caller was not shown it, and the next tick
+        // finds the same time and leaves it where the engine has it. What is reported to the
+        // caller is the one answer it has always been given for that, which is no frame.
+        if copied {
+            Take::Drawn((self.width, self.height))
+        } else {
+            Take::Nothing
+        }
     }
+
+    /// A frame was offered and could not be taken out of the engine: counted into the run, and
+    /// the session failed once the run is long enough to be a fault rather than a hiccup.
+    ///
+    /// It sets the *engine's own* failure flag rather than one of its own, and that is the whole
+    /// of what makes the fault visible outside: the flag is what [`is_playing`] and both of the
+    /// failing paths read, so a session whose transfers keep being refused is answered exactly
+    /// as one whose engine gave an error event — which is the truth, and the reason the three
+    /// seconds after which the app hands the file to FFmpeg's player arrives on a schedule
+    /// rather than never.
+    fn refused(&mut self) -> Take {
+        self.transfer_failures = self.transfer_failures.saturating_add(1);
+
+        if a_run_of_refusals_is_a_failure(self.transfer_failures) {
+            self.failed.store(true, Ordering::Release);
+
+            return Take::Failed;
+        }
+
+        Take::Refused
+    }
+}
+
+/// What a tick of the preview loop was answered with, which is a question the caller cannot ask
+/// and the session has to keep the answer to.
+///
+/// Three of these are no frame at all and the caller is given one answer for all of them, which
+/// is right — a tick with nothing in it is a tick with nothing to paint and nothing to say about
+/// it. What they are not is the same *fact*, and keeping them apart here is the only place they
+/// can be kept apart: one of the three is a fault, and a fault that cannot be told from the
+/// ordinary answer is a fault nothing is ever done about.
+enum Take {
+    /// A frame, at the size it was written for the caller to compose.
+    Drawn((u32, u32)),
+    /// The engine was not offering a frame this tick: it has none new, or not one yet, or the
+    /// session has been asked for nothing at all. This is the ordinary answer on two ticks in
+    /// three of any film, and the one [`is_a_new_frame`]'s dedup rests on being able to tell
+    /// apart from the next.
+    Nothing,
+    /// The engine had a frame this tick and would not give it over, which is this side's fault
+    /// and not the file's, and which is counted into a run so that enough of them is not one.
+    Refused,
+    /// The session has failed, by an error event out of the engine or by a run of refusals this
+    /// side reached the bound of, and is handing over nothing at all from here on.
+    Failed,
 }
 
 /// Whether the frame the engine says is ready at `pts` is one the caller has not been given.
@@ -2127,6 +2292,107 @@ mod tests {
         assert!(
             is_a_new_frame(None, 12_000_000),
             "and a seek leaves the caller owed the time it lands on, exactly as it was"
+        );
+    }
+
+    /// A run of transfers that all failed is a session that has failed, and a run that does not
+    /// is not: which is the whole of what the bound is for, and the only thing standing between
+    /// a video that is not moving and a video this side has stopped being able to ask for.
+    ///
+    /// The two ends are what a file on a network drive is and what this module's own frame path
+    /// was: a gap, a seek and a loop are a tick or two of this, while a pipeline that cannot give
+    /// a frame up at all is three seconds of it and never anything else. A bound anywhere near
+    /// the first number would hand a film over to another engine every time the network hiccuped,
+    /// and a bound nowhere near the second would leave a preview frozen on a frame from a second
+    /// ago reporting nothing whatever was wrong.
+    #[test]
+    fn a_transfer_that_keeps_failing_is_a_session_that_has_failed() {
+        assert!(
+            !a_run_of_refusals_is_a_failure(0),
+            "a session that has transferred every frame is not failing"
+        );
+
+        assert!(
+            !a_run_of_refusals_is_a_failure(1),
+            "one refused transfer is a seek, a loop landing on its own first time, or a gap"
+        );
+        assert!(
+            !a_run_of_refusals_is_a_failure(TRANSFER_FAILURES_GIVE_UP - 1),
+            "and so is a run a tick short of the bound, however long the film has been playing"
+        );
+
+        assert!(
+            a_run_of_refusals_is_a_failure(TRANSFER_FAILURES_GIVE_UP),
+            "while a run of the whole bound is a pipeline that will not give a frame up"
+        );
+        assert!(
+            a_run_of_refusals_is_a_failure(TRANSFER_FAILURES_GIVE_UP * 2),
+            "and a longer one is the same fault rather than a worse one"
+        );
+
+        // The bound is three seconds of the preview loop's own ticks, which is the same length of
+        // time as the wait a session gets for its first frame. A file this side cannot take
+        // frames out of is a file another engine has to take over, and the two answers ought to
+        // arrive in about the same time whichever order the two mistakes happen in — within a
+        // tick, which is the resolution a count of ticks has.
+        let bound = Duration::from_millis(TRANSFER_FAILURES_GIVE_UP as u64 * 16);
+        assert!(
+            bound >= FIRST_FRAME_GIVE_UP && bound < FIRST_FRAME_GIVE_UP + Duration::from_millis(16),
+            "the bound is FIRST_FRAME_GIVE_UP counted in the loop's ticks: {bound:?}"
+        );
+    }
+
+    /// The four answers a tick can have are four different facts and the caller is given one
+    /// answer for three of them, which is right — a tick with nothing to paint is a tick with
+    /// nothing to say — but only because the session keeps them apart for itself. The two
+    /// faults this module now has to tell apart are a session that never drew and a session
+    /// that cannot take a frame out of the one it has, and the difference between reporting the
+    /// second and not the first is this condition.
+    #[test]
+    fn a_file_whose_frames_cannot_be_taken_out_is_a_failure_after_the_first_frame_too() {
+        let give_up = FIRST_FRAME_GIVE_UP;
+        let fresh = FIRST_FRAME_GIVE_UP * 2;
+        let short = TRANSFER_FAILURES_GIVE_UP - 1;
+        let long = TRANSFER_FAILURES_GIVE_UP;
+
+        assert!(
+            engine_is_failing(true, false, 0, give_up),
+            "an engine that has been up long enough with nothing on the screen is failing at the \
+             file, which is what it was always asked about"
+        );
+        assert!(
+            !engine_is_failing(true, false, 0, Duration::ZERO),
+            "while one that has only just started is a file that is merely slow, and taking it \
+             away would be a real loss"
+        );
+
+        // The case this is for. A session that has drawn a frame and cannot draw another keeps
+        // the frame it had, and every question the app asks about it is answered well: the
+        // picture on screen is the picture from three seconds ago and nothing is wrong with the
+        // preview as far as anything outside can see.
+        assert!(
+            engine_is_failing(true, true, long, Duration::ZERO),
+            "a session whose transfers keep being refused is failing whatever it has drawn"
+        );
+
+        // And what must not move with it. `drew` means a frame has been handed over, and the
+        // reason is written on `failing_before_a_frame`: a film that played and then met a bad
+        // sector is a film the probe got right about, and handing it to another engine over a
+        // fault that has nothing to do with what plays it costs the engine its decoder for the
+        // rest of a file it was getting on with.
+        assert!(
+            !engine_is_failing(true, true, short, fresh),
+            "a run of refusals short of the bound is a hiccup, and a session that has drawn a \
+             frame is not a session that cannot draw"
+        );
+        assert!(
+            !engine_is_failing(true, true, 0, fresh),
+            "and a session that is playing normally is not one no matter how long it has been up"
+        );
+
+        assert!(
+            !engine_is_failing(false, false, long, fresh),
+            "a sound has no frames to hand over and is never waiting for one, however it is asked"
         );
     }
 
