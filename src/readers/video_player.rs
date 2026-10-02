@@ -30,10 +30,10 @@
 //! as many times as the display refreshes, and a 4K one is four times the frame of a
 //! 1080p one throughout.
 //!
-//! Who *scales* the picture is settled by the two sizes alone: a box larger than the picture is
-//! one this side scales into it ([`scale_rows`]), because which filter the engine reads a
-//! picture at is not a question this app can ask it, let alone choose. What each side of that
-//! choice costs is written where it is made (see [`play`]).
+//! Who *scales* the picture is settled by the two sizes alone: a box meaningfully larger than
+//! the picture is one this side scales into it ([`scale_rows`]), because which filter the
+//! engine reads a picture at is not a question this app can ask it, let alone choose. What each
+//! side of that choice costs is written where it is made (see [`play`]).
 //!
 //! What that buys over the ffplay path is the whole of the window machinery a player's
 //! own window needs — the style monitor, the topmost re-assertion, the PID record, the
@@ -127,6 +127,30 @@ const SEEK_GIVE_UP: Duration = Duration::from_secs(3);
 /// what the answer does is hand the file to FFmpeg's player, and a file that was merely slow to
 /// start would be a preview taken away from the engine that could have drawn it.
 const FIRST_FRAME_GIVE_UP: Duration = Duration::from_secs(3);
+
+/// How much bigger than the picture a box has to be before this side is the one that scales into
+/// it, as a share of the picture's own size: one part in fifty.
+///
+/// The choice is between the two engines, and they cost very different amounts. The engine
+/// scales on the GPU as part of the frame it is already writing, so its share of the work is
+/// nothing this app can measure; this side's share is a scalar bilinear over every pixel of
+/// every frame, on the preview thread (see [`scale_rows`]). So the answer to "who is bigger" has
+/// to be a threshold and not a comparison, and what it is worth is a trade between a picture
+/// very slightly too small for its box — where the engine scales and the difference is a
+/// hundredth of a pixel per pixel, and nobody would ever have known — against the alternative,
+/// where a box one pixel wider than the picture sends a whole film down the scalar path and
+/// pays for it on every frame.
+///
+/// What makes this the number rather than anything near it is that the two sizes do not move
+/// together. A box is the picture at the scale setting times the share of the work area it was
+/// given, and the layout computes both in integers: a 1920-wide picture at 50% is 960 and
+/// nothing is round, so the smallest enlargement a box of a whole size can arrive at is a
+/// fraction of a percent, and a threshold of a hair would fire on nearly every file at every
+/// setting but 100%. Two per cent is above every one of those and far below the enlargements
+/// worth resampling for, and the largest share that is not worth it — a 4K file shown on a
+/// 4K display by `fit`, where the two sizes are within a pixel of one another — is exactly the
+/// case this is here for.
+const ENLARGEMENT_WORTH_RESAMPLING: f64 = 1.02;
 
 /// The engine's event sink, which is what the engine needs before it will run at all —
 /// `MF_MEDIA_ENGINE_CALLBACK` is required in every mode.
@@ -321,12 +345,15 @@ fn source_rect(crop: Crop) -> Option<MFVideoNormalizedRect> {
 /// Start playing `path` into a surface of `width` by `height`, at `volume` per cent, from the
 /// picture `picture` names.
 ///
-/// The two sizes are what settles who scales the picture into that box: a box larger than the
-/// picture is a file being shown above its own size, and one the engine is asked for at the
-/// picture's own size and this side scales (see [`scale_rows`]), while a box that is not larger
-/// is the engine's to fill as it always was (see `scales_here`). What the first costs is a
-/// resample of every frame and what the second costs is nothing beyond the copy every frame paid
-/// before it — a preview drawn at or below the picture's own size is the copy it always was.
+/// The two sizes are what settles who scales the picture into that box: a box meaningfully
+/// larger than the picture is a file being shown above its own size, and one the engine is
+/// asked for at the picture's own size and this side scales (see [`scale_rows`]), while a box
+/// that is not larger is the engine's to fill as it always was (see `scales_here`). What the
+/// first costs is a resample of every frame and what the second costs is nothing beyond the
+/// copy every frame paid before it — a preview drawn at or below the picture's own size is the
+/// copy it always was, and a preview drawn a per cent above it is deliberately left there too,
+/// since the difference between the two engines' scaling and this one's is not worth a whole
+/// film at a hundredth of a pixel (see [`ENLARGEMENT_WORTH_RESAMPLING`]).
 ///
 /// Anything already playing is stopped first, so a video is never two videos. A call that
 /// could not start one leaves nothing behind rather than a session that will never produce
@@ -452,12 +479,12 @@ pub fn seek(seconds: f64) {
 /// into.
 ///
 /// Which rectangle that is depends on the box the new size makes, and the two sides of the
-/// picture's own size cost different things. A box larger than the picture is this side's to
-/// scale, and the surface it reads is the picture's own — the same surface whatever the box is,
-/// so a window dragged about up there is dragged about without a bitmap being made. A box at or
-/// below the picture's size is the engine's to scale into, and the surface has to *be* that box:
-/// the engine writes where it is told to, so a box that changed is a bitmap that is made again
-/// (see `scales_here`).
+/// picture's own size cost different things. A box meaningfully larger than the picture is
+/// this side's to scale, and the surface it reads is the picture's own — the same surface
+/// whatever the box is, so a window dragged about up there is dragged about without a bitmap
+/// being made. A box at or below the picture's size is the engine's to scale into, and the
+/// surface has to *be* that box: the engine writes where it is told to, so a box that changed
+/// is a bitmap that is made again (see `scales_here`).
 pub fn resize(width: u32, height: u32) {
     SESSION.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -508,15 +535,28 @@ pub fn resize(width: u32, height: u32) {
 }
 
 /// Whether this side scales the picture into the box rather than asking the engine to: a box
-/// larger than the picture on either axis is a file shown above its own size, which is the one
-/// case the engine's own scaling is not asked for.
+/// meaningfully larger than the picture on either axis is a file shown above its own size,
+/// which is the one case the engine's own scaling is not asked for.
+///
+/// "Meaningfully" is [`ENLARGEMENT_WORTH_RESAMPLING`] and the difference matters because of
+/// what the two sides cost, which is written on [`play`]: this side's share is a scalar
+/// bilinear over every pixel of every frame and the engine's is a share of a frame it is
+/// writing anyway, so a box one pixel wider than the picture is a whole film resampled on the
+/// preview thread to correct for a hundredth of a pixel. A preview at 100% is the picture
+/// itself and is not scaled by anybody, and that is where a hover leaves a video most of the
+/// time — the resampler is for a file deliberately shown larger than it is, not for the
+/// rounding of a box that was meant to be its own size.
 ///
 /// Either axis rather than both, because the two are not always scaled alike — a file whose
 /// pixels are not square is stretched along one of them at every size — and a picture already
-/// being asked for at its own size may as well be scaled by the one sampler for both directions.
-/// A picture with no size at all is a sound, which has nothing to scale and nothing to ask for.
+/// being asked for at its own size may as well be scaled by the one sampler for both
+/// directions. A picture with no size at all is a sound, which has nothing to scale and
+/// nothing to ask for.
 fn scales_here(picture: (u32, u32), width: u32, height: u32) -> bool {
-    picture.0 > 0 && picture.1 > 0 && (width > picture.0 || height > picture.1)
+    picture.0 > 0
+        && picture.1 > 0
+        && (f64::from(width) > f64::from(picture.0) * ENLARGEMENT_WORTH_RESAMPLING
+            || f64::from(height) > f64::from(picture.1) * ENLARGEMENT_WORTH_RESAMPLING)
 }
 
 /// The file being played, which is what a hover that lands on the same file again compares
@@ -1773,16 +1813,16 @@ mod tests {
         assert_eq!(out, [128, 0, 0, 255], "the pixel standing between them");
     }
 
-    /// Who scales the picture is one question and these are its two sizes: a box larger than the
-    /// picture on either axis is a file shown above its own size and is this side's to scale, and
-    /// everything at or below the picture's own size is the engine's, as it always was.
+    /// Who scales the picture is one question and these are its two sizes: a box meaningfully larger
+    /// than the picture on either axis is a file shown above its own size and is this side's to
+    /// scale, and everything at or below the picture's own size is the engine's, as it always
+    /// was.
     #[test]
     fn a_box_larger_than_the_picture_is_the_one_this_side_scales() {
         assert!(
             scales_here((640, 480), 1280, 960),
             "shown at twice its size"
         );
-        assert!(scales_here((640, 480), 641, 480), "over by a pixel");
 
         assert!(
             !scales_here((640, 480), 640, 480),
@@ -1797,6 +1837,49 @@ mod tests {
         assert!(
             !scales_here((0, 0), 320, 240),
             "a sound has no picture to scale, and a box of nothing is not one either"
+        );
+    }
+
+    /// A box a hair bigger than the picture is not a file shown above its own size, and the
+    /// difference is the whole of this side's argument: the two sizes do not come out of the
+    /// layout equal even at 100%, and a comparison rather than a share resamples a whole film
+    /// for a hundredth of a pixel. So the three cases are the three answers, and the middle one
+    /// is the one that used to be the first.
+    #[test]
+    fn only_an_enlargement_worth_the_resampler_comes_to_this_side() {
+        assert!(
+            !scales_here((1920, 1080), 1920, 1080),
+            "an exact match is the picture itself, and is what a preview at 100% is"
+        );
+
+        // One per cent: a 4K file on a 4K display, which is what `fit` places, and the largest
+        // enlargement that is not worth resampling for by any distance.
+        assert!(
+            !scales_here((3840, 2160), 3878, 2182),
+            "a box a per cent bigger than a 4K picture is left to the engine"
+        );
+        assert!(
+            !scales_here((1920, 1080), 1939, 1094),
+            "and the same a per cent on either axis, however the rounding fell"
+        );
+
+        assert!(
+            !scales_here((640, 480), 641, 480),
+            "nor is one pixel, which is what the rounding of a box that was meant to be the picture gives"
+        );
+        assert!(!scales_here((640, 480), 640, 481), "on either axis alone");
+
+        assert!(
+            scales_here((640, 480), 960, 720),
+            "while one and a half times is a file deliberately shown larger than it is"
+        );
+        assert!(
+            scales_here((1920, 1080), 2560, 1440),
+            "and a 1080p file enlarged onto a 4K display, which is the case the resampler exists for"
+        );
+        assert!(
+            scales_here((1920, 1080), 1920, 2200),
+            "along one axis only, which is what a picture of non-square pixels asks of at every size"
         );
     }
 
