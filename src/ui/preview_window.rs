@@ -6984,6 +6984,43 @@ struct FirstFrameWait {
     pos: (i32, i32),
 }
 
+/// Where this tick puts a held-back preview's first frame up, when this tick is the one it
+/// comes up on — and `None` for every tick that is not, including a tick with no wait at all.
+///
+/// The tick a video's first frame lands on is the only tick with two painters pointed at it.
+/// The tick's own answers `needs_repaint`, because a frame was taken; the reveal's answers
+/// because the frame is the thing the window was being held back for. They compose the same
+/// frame into the same surface, so one of them is a whole frame of copying and a whole hand-off
+/// to the compositor for a window nobody can tell the difference of — and at the size of a 4K
+/// display that is thirty megabytes copied twice, once a hover.
+///
+/// The reveal's is the one kept, and not for the saving. It paints at the box this hover was
+/// laid out at, and for as long as the wait was outstanding the window was the wait's own: the
+/// spinner's box at the pointer, or whatever the hover before this one left on screen. A paint
+/// at the window's own rectangle would be at neither place, and the reveal would correct it —
+/// which is what a duplicate paint costs besides the copying.
+///
+/// Everything that can mean *not this tick* is asked here rather than left to the arm that
+/// acts on the answer, and the four are the whole of it. A newer generation is a hover that
+/// installed its own media since, which this one does not reveal. A hide count that has moved
+/// is the pointer having left the file, and no window is put up for a hover that has gone (see
+/// `HIDDEN_EPOCH`). A pin up is a window that is the pin's window now, painted by the pin's
+/// own painter, which is what the tick's paint will have done. And no frame in hand is a wait
+/// that simply goes on. Anything else that can change what a paint would put on screen — the
+/// window being moved or resized, another preview installed over it, the surface being rebuilt
+/// at a new size — reaches a paint through a tick that sets `needs_repaint` or through the arm
+/// that reveals, and neither is answered by this question.
+fn first_frame_lands(
+    wait: &FirstFrameWait,
+    generation: u64,
+    epoch: u64,
+    pinned: bool,
+    frame_in_hand: bool,
+) -> Option<(i32, i32)> {
+    (wait.generation == generation && wait.epoch == epoch && !pinned && frame_in_hand)
+        .then_some(wait.pos)
+}
+
 /// How long a player is given to put its window up before the wait for it is given up
 /// on: a player that has not by then is one that will not, and a spinner that never ends
 /// is worse than the desktop it leaves behind.
@@ -21356,23 +21393,47 @@ pub fn run_preview_window() {
                     || video_start.is_some()
                     || first_frame_wait.is_some();
             }
-            if needs_repaint {
+            // Whether a video's first frame comes up on this tick, and where: the question is
+            // asked before the paint rather than inside the arm that acts on it, because it is
+            // what decides whether the paint happens at all. A tick whose repaint is the reveal's
+            // own is not painted twice — same frame, same surface, and thirty megabytes of it at
+            // the size of a 4K display (see `first_frame_lands`).
+            //
+            // The hide count is read once for both this and the arm below, so the two cannot be
+            // answering about different hovers because a hide landed between them.
+            let epoch = hidden_epoch();
+            let first_frame_landed = first_frame_wait.as_ref().and_then(|wait| {
+                first_frame_lands(
+                    wait,
+                    current_generation,
+                    epoch,
+                    pinned(),
+                    media_holds_a_frame(),
+                )
+            });
+
+            if needs_repaint && first_frame_landed.is_none() {
                 render_layered_preview(hwnd);
             }
 
             // A video the engine plays whose preview was held back for its first frame: the
-            // engine has handed one over — the repaint above is of it — and what is left of
-            // the wait is the window, which is put up here if it is not up already. A window
-            // that is on screen needs nothing of this: what it was holding was a wait's
-            // frame or another preview's, and the frame that landed is drawn at the place
-            // this hover was laid out at rather than at that window's own (see `FirstFrameWait`).
+            // engine has handed one over — the repaint above is of it, or the one below is — and
+            // what is left of the wait is the window, which is put up here if it is not up
+            // already. A window that is on screen needs nothing of this: what it was holding was
+            // a wait's frame or another preview's, and the frame that landed is drawn at the
+            // place this hover was laid out at rather than at that window's own (see
+            // `FirstFrameWait`).
             if let Some(wait) = first_frame_wait {
-                if wait.generation != current_generation || wait.epoch != hidden_epoch() {
+                if wait.generation != current_generation || wait.epoch != epoch {
                     first_frame_wait = None;
                 } else if media_holds_a_frame() {
                     first_frame_wait = None;
 
-                    if !pinned() {
+                    // The paint the question above already accounted for: this arm's own paint
+                    // is at the box this hover was laid out at, and the tick's was at the window's,
+                    // so where the two differ it is this one that has to be the last (see
+                    // `first_frame_lands`).
+                    if !pinned() && first_frame_landed.is_none() {
                         render_layered_preview_at(hwnd, wait.pos.0, wait.pos.1);
                     }
 
@@ -28074,6 +28135,55 @@ mod tests {
             player_wait(true, true, cap),
             Some(PlayerWait::Arrived),
             "and a window that is up has arrived, cap or no cap"
+        );
+    }
+
+    /// A held-back video's first frame comes up on one tick, and on that tick exactly one
+    /// painter is pointed at it: the reveal's, at the box the hover was laid out at. The tick
+    /// that would paint the same frame into the same surface at the window's own rectangle
+    /// stands down, which at the size of a 4K display is thirty megabytes of copying and a
+    /// hand-off to the compositor once a hover.
+    ///
+    /// Every way of not being that tick is named on both sides, because the cost of getting it
+    /// wrong is a window put up with nothing in it rather than a wasted copy: a newer hover, a
+    /// hide since, a pin that has taken the window over, and a frame that has not landed are
+    /// four different reasons to leave the tick's own repaint standing.
+    #[test]
+    fn a_held_back_first_frame_is_painted_once_and_by_the_reveal() {
+        let wait = FirstFrameWait {
+            generation: 7,
+            epoch: 3,
+            pos: (120, 240),
+        };
+
+        assert_eq!(
+            first_frame_lands(&wait, 7, 3, false, true),
+            Some((120, 240)),
+            "a frame that landed on this hover's own wait comes up at the box the hover laid \
+             the preview out at"
+        );
+
+        assert_eq!(
+            first_frame_lands(&wait, 8, 3, false, true),
+            None,
+            "a newer hover installed its own media, and this tick's repaint is what draws it"
+        );
+        assert_eq!(
+            first_frame_lands(&wait, 7, 4, false, true),
+            None,
+            "a hide since is the pointer having left the file, so the frame is not put up at all \
+             — but the tick's repaint is not stood down for a frame nobody is going to be shown"
+        );
+        assert_eq!(
+            first_frame_lands(&wait, 7, 3, true, true),
+            None,
+            "a pin up owns the window, and its own painter is the tick's repaint"
+        );
+        assert_eq!(
+            first_frame_lands(&wait, 7, 3, false, false),
+            None,
+            "a wait whose frame has not landed is a wait that goes on, and nothing is painted for \
+             it by either painter"
         );
     }
 
