@@ -8218,6 +8218,36 @@ fn audio_gain_from_report(report: &str) -> Option<f64> {
     (gain.is_finite() && gain > 0.0).then_some(gain)
 }
 
+/// Which player is playing `path` now: the file's own answer, unless `Normalize` has put a gain on
+/// it, which is FFmpeg's to apply and not the engine's.
+///
+/// The probe's answer is the machine's own question — does this engine have a decoder for the
+/// file — and it is the right answer to *start* a sound in on its own. It is the wrong answer to
+/// every question asked while the sound plays, because `start_audio_playback` plays a file with a
+/// gain through FFmpeg whatever the probe said: a gain is a filter, and the engine Windows has
+/// cannot be handed one. So a quiet MP3 — anything `Normalize` measures as short of full scale —
+/// is probed `Native` and played by FFmpeg, and a site that branches on the probe alone then
+/// speaks to an engine with no session while the sound is being heard from a process.
+///
+/// Every question about a playing sound therefore asks this rather than `track.player`: the pause
+/// a key asks for, the seek a press on the bar asks for, and the clock a card is drawn from.
+fn playing_player(path: &Path, track: &audio_track::Track) -> Player {
+    player_for_gain(track.player, normalizing_audio(), audio_track::gain(path))
+}
+
+/// The same answer with the three facts it is made of handed in rather than asked for, which is
+/// what makes it testable on a machine with no FFmpeg in it — the whole question is whether a gain
+/// is in play, and where the gain came from is the caller's business.
+fn player_for_gain(probed: Player, normalizing: bool, gain: Option<f64>) -> Player {
+    // A gain of one is not a gain: it is the answer for a file whose loudest sample already stands
+    // at full scale, and such a file is played by whichever engine its own probe named.
+    if normalizing && gain.is_some_and(|gain| gain != 1.0) {
+        return Player::Ffmpeg;
+    }
+
+    probed
+}
+
 /// Start the player a sound's card is drawn against, answering whether a player that was
 /// expected arrived.
 ///
@@ -8276,7 +8306,9 @@ fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool 
         }
     }
 
-    match track.player {
+    // Which player this file is played by, which is the answer the rest of the app asks
+    // `playing_player` for while the sound is up (see it).
+    match playing_player(path, &track) {
         Player::Native => {
             // A hover that lands on the file already playing leaves it playing, the same way
             // the FFmpeg path compares the file it last started.
@@ -8288,6 +8320,8 @@ fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool 
             video_player::is_playing()
         }
         Player::Ffmpeg => {
+            // A gain measured for the file is FFmpeg's filter and goes with it; the branch above
+            // is where a file with one was already taken, so this is a player started with no gain.
             media.video_process = start_audio_player(path, volume, start, None);
             media.video_process.is_some()
         }
@@ -8510,7 +8544,7 @@ fn audio_clock(
     // machine's own decoders would have made of the file: a peak puts a file the engine could have
     // played into FFmpeg's hands, and a player of this side's reports nothing at all (see
     // `start_audio_playback` and `audio_started`).
-    if started.is_none() && matches!(track.player, Player::Native) {
+    if started.is_none() && playing_player(path, &track) == Player::Native {
         // The engine's own clock has the seek in it — it is the engine that was taken to where
         // the sound starts — so what it reports is the position with nothing added to it.
         return (
@@ -14121,13 +14155,13 @@ fn toggle_pinned_audio(started: &mut Option<Instant>, offset: &mut f64, paused: 
         return;
     };
 
-    // Which player plays the file is the file's own answer, and it is the answer the card's
-    // clock is measured against as well (see `audio_clock`).
+    // Which player is playing the file is the answer of the player itself, and it is the answer the
+    // card's clock is measured against as well (see `playing_player` and `audio_clock`).
     let Some(track) = audio_track::playable(&path) else {
         return;
     };
 
-    match track.player {
+    match playing_player(&path, &track) {
         Player::Native => {
             // The engine is asked to hold, and to go on from where it is holding. A session that
             // is not there — a sound at `Volume → Audio` 0%, a file already let go — is asked to
@@ -14343,12 +14377,13 @@ fn settle_pinned_audio_seek(
         return;
     };
 
-    // Which player plays the file is the file's own answer (see `audio_clock`).
+    // Which player is playing the file is the answer of the player itself, not the probe's (see
+    // `playing_player`).
     let Some(track) = audio_track::playable(&path) else {
         return;
     };
 
-    match track.player {
+    match playing_player(&path, &track) {
         Player::Native => video_player::seek(seconds),
         Player::Ffmpeg => {
             let was_playing = paused.is_none();
@@ -28856,6 +28891,53 @@ mod tests {
             pinned_audio_after_seek(false, false, 90.0),
             (None, 90.0, Some(90.0)),
             "a seek of a held sound moves the hold rather than starting it"
+        );
+    }
+
+    /// A file the probe says the engine can decode is not necessarily played by it: `Normalize`
+    /// puts a gain on a file whose peak is short of full scale, and a gain is an FFmpeg filter the
+    /// engine cannot be handed — so such a file is played by FFmpeg while every question asked
+    /// while it plays used to branch on the probe and speak to an engine with no session. That is
+    /// a bar press that seeks nothing, on exactly the quiet files a machine full of them has.
+    #[test]
+    fn a_gain_puts_a_probed_native_sound_on_ffmpegs_player() {
+        // A file whose loudest sample already stands at full scale: a gain of one is the answer
+        // for "nothing to apply", so the probe's own answer stands and the engine plays it.
+        assert_eq!(
+            player_for_gain(Player::Native, true, Some(1.0)),
+            Player::Native,
+            "a gain of one is not a gain, so the probed engine still plays the file"
+        );
+
+        // And one nothing has measured, which is the hover before the scan answers.
+        assert_eq!(
+            player_for_gain(Player::Native, true, None),
+            Player::Native,
+            "a file nothing has measured is played by the engine that was probed for it"
+        );
+
+        // And the case that broke: the engine has a decoder for the file, and a gain sends the
+        // sound to FFmpeg regardless.
+        assert_eq!(
+            player_for_gain(Player::Native, true, Some(1.38)),
+            Player::Ffmpeg,
+            "a measured gain is FFmpeg's filter, so FFmpeg is what plays the file"
+        );
+
+        // With `Normalize` off there is no gain to apply whatever was measured, so the probe is
+        // the whole of the answer again.
+        assert_eq!(
+            player_for_gain(Player::Native, false, Some(1.38)),
+            Player::Native,
+            "a gain measured while Normalize was off is not applied, so nothing moves the file"
+        );
+
+        // And a file the engine cannot play is FFmpeg's whatever its gain is — the answer is only
+        // ever moved towards FFmpeg, never away from it.
+        assert_eq!(
+            player_for_gain(Player::Ffmpeg, true, Some(1.0)),
+            Player::Ffmpeg,
+            "a file the engine cannot decode stays with FFmpeg"
         );
     }
 
