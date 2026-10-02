@@ -49,7 +49,7 @@ use crate::readers::wic_image;
 use crate::shell::pin_navigation;
 use crate::shell::wheel_input;
 use crate::text::archive_preview::{self, ArchivePreviewOptions};
-use crate::text::audio_preview::{self, AudioPreviewOptions, Card};
+use crate::text::audio_preview::{self, AudioPreviewOptions, Card, CardChrome, CardControl};
 use crate::text::pin_chrome;
 use crate::text::text_paint::DibSurface;
 use crate::text::text_preview::{self, TextPreviewOptions};
@@ -106,15 +106,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
     TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
-    GW_OWNER, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
-    IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GW_OWNER, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
+    IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
+    PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
+    ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 mod displays;
@@ -307,6 +307,12 @@ const VIDEO_PROCESS_IMAGE_NAME: &str = "ffplay.exe";
 /// this app's placement is written in and multiplied by the display's scale: the caption
 /// above the media, the transport bar below it, and the round bubble the pin collapses into.
 const PIN_CAPTION_PIXELS: f32 = 30.0;
+/// The room kept between a caption and the media below it, for a kind whose media opens with a
+/// title of its own: a sound's card does, and a caption flush against the card's name is two
+/// titles in a row with nothing saying they are two. Nothing at all for every other kind, whose
+/// media does not have a name of its own in it — a picture's first rows are picture, and a page's
+/// are the head of the page.
+const PIN_CAPTION_GAP_PIXELS: f32 = 8.0;
 const PIN_TRANSPORT_PIXELS: f32 = 30.0;
 const PIN_BUBBLE_PIXELS: f32 = 44.0;
 /// How far from the strip it is drawn in the pointer asks for a pinned window's chrome, and how
@@ -1517,7 +1523,13 @@ impl MediaData {
     /// drawn by asking for the page again — the same arrangement a text preview's scrolling has
     /// (see `repaint_text_preview`), and what keeps the card's own layout in one place: the box
     /// it was painted in is the box it is painted in again, and only the clock, the bar under
-    /// it and the scroll of a name the card has no room for differ.
+    /// it, the scroll of a name the card has no room for and what the card's own controls are
+    /// saying differ.
+    ///
+    /// `chrome` carries the whole of that last one, the loop's `playing` included — it is read in
+    /// one look by `pinned_audio_chrome` rather than handed over beside itself, because both
+    /// callers of this are reached with the media's own lock held and a pin's lock asked from
+    /// under it is the re-entrancy `toggle_pinned_playback` is written down for.
     fn refresh_audio_card(
         &mut self,
         path: &Path,
@@ -1525,13 +1537,14 @@ impl MediaData {
         duration: Option<f64>,
         dpi: u32,
         name_offset: i32,
+        chrome: Option<CardChrome>,
     ) -> bool {
         let Some(frame) = self.frames.first() else {
             return false;
         };
         let (width, height) = (frame.width, frame.height);
 
-        let Some(card) = audio_card(path, elapsed, duration, name_offset) else {
+        let Some(card) = audio_card(path, elapsed, duration, name_offset, chrome) else {
             return false;
         };
         let Some((pixels, width, height)) =
@@ -1546,24 +1559,26 @@ impl MediaData {
 
     /// Paint the card again at a box of a different size: what a pinned preview of a sound
     /// costs when its window is maximized or resized. It is the question `refresh_audio_card`
-    /// answers asked of the box the card is being given rather than of the one it already has.
+    /// answers asked of the box the card is being given rather than of the one it already has —
+    /// and it is handed the loop's own clock whole (`AudioCardClock`), which is the same thing a
+    /// repaint reads out of it (see `relayout_pinned_media`).
     fn relayout_audio_card(
         &mut self,
         path: &Path,
+        clock: AudioCardClock,
         elapsed: Option<f64>,
         duration: Option<f64>,
-        name_offset: i32,
-        dpi: u32,
         size: (u32, u32),
     ) -> bool {
-        let Some(card) = audio_card(path, elapsed, duration, name_offset) else {
+        let Some(card) = audio_card(path, elapsed, duration, clock.name_offset, clock.chrome)
+        else {
             return false;
         };
         let Some((pixels, width, height)) = audio_preview::render(
             &card,
             size.0.max(1),
             size.1.max(1),
-            dpi,
+            clock.dpi,
             current_audio_options(),
         ) else {
             return false;
@@ -7828,7 +7843,9 @@ fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> 
                 );
             }
 
-            let card = audio_card(&source, None, None, 0)?;
+            // Nothing: this is the card a *hover* is measured with, and a hover's own window is a window
+            // nobody is in (see `audio_card`).
+            let card = audio_card(&source, None, None, 0, None)?;
             audio_preview::measure(&card, cap_width, cap_height, dpi, options)
         },
     )
@@ -7852,11 +7869,18 @@ fn drawn_as_audio(path: &Path) -> bool {
 /// `name_offset` is how far a name the card has no room for has been scrolled: it is nothing
 /// for the card a hover is measured with and for the first frame of one, and what the repaints
 /// of a moving card hand over (see `audio_preview::NameScroll`).
+///
+/// `chrome` is what the card's own controls are saying, and nothing at all for a card a hover
+/// shows — a hover's own window is a window nobody is in, so a click on one of its buttons would
+/// land on the file behind it (see `audio_preview::Card::controls`). It is handed over rather than
+/// asked for under the media's own lock, which is what `refresh_audio_card` and
+/// `relayout_audio_card` are both reached holding (see `pinned_audio_chrome`).
 fn audio_card(
     path: &Path,
     elapsed: Option<f64>,
     duration: Option<f64>,
     name_offset: i32,
+    chrome: Option<CardChrome>,
 ) -> Option<Card> {
     let Probed::Track(track) = audio_track::probed(path) else {
         return None;
@@ -7868,12 +7892,15 @@ fn audio_card(
         duration: duration.or(track.duration),
         elapsed,
         name_offset,
+        controls: chrome,
     })
 }
 
 /// The card a sound is previewed as, painted into the box the layout settled on.
 fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) -> Option<MediaData> {
-    let card = audio_card(path, None, None, 0)?;
+    // No controls: this is the card a *hover* shows, whose own window is a window nobody is in
+    // (see `audio_card`).
+    let card = audio_card(path, None, None, 0, None)?;
     let (pixels, width, height) =
         audio_preview::render(&card, width, height, dpi, current_audio_options())?;
 
@@ -8333,6 +8360,16 @@ fn player_for_gain(probed: Player, normalizing: bool, gain: Option<f64>) -> Play
 /// Windows has cannot be handed one — while every other file is played by whichever engine its own
 /// probe answered for.
 fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool {
+    start_audio_playback_at(path, media, start, current_audio_volume())
+}
+
+/// The same, at a level the caller names rather than the one the tray names: what a pin's own
+/// player is begun at, where the level belongs to the window it was moved on and not to the setting
+/// a hover reads (see `PinVolume`).
+///
+/// `volume` is a parameter for that reason alone — the rest of this is one function either way, and
+/// two copies of it would be two answers to one question about which player a file is started in.
+fn start_audio_playback_at(path: &Path, media: &mut MediaData, start: f64, volume: u32) -> bool {
     let Some(track) = audio_track::playable(path) else {
         return false;
     };
@@ -8345,7 +8382,10 @@ fn start_audio_playback(path: &Path, media: &mut MediaData, start: f64) -> bool 
     // took with it when it ended.
     kill_stray_video_process();
 
-    let volume = current_audio_volume();
+    // A card at 0% is silence and not a failure: the caller's answer is still yes, and the caller
+    // that wanted a player is `restart_pinned_audio`, which reports a missing one by finding no
+    // process behind it — the same answer as a decoder that would not have the file, and the one
+    // `pinned_audio_after_seek` is written against.
     if volume == 0 {
         return true;
     }
@@ -10248,6 +10288,7 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         caption_height,
         paint.transport_height,
         paint.overlay,
+        paint.caption_gap,
     );
     let band_height = band_height.max(1) as u32;
 
@@ -10357,23 +10398,21 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         }
     }
 
-    // The volume popup, over the media above the bar it came out of: it is drawn last of
+    // The volume popup, over the media above the button it came out of: it is drawn last of
     // everything because it is over everything, and the band it floats over is the media's own —
-    // this app's pixels for a picture the media engine draws, and the hole the player's window
-    // stands in for a video FFmpeg plays (see `pin_volume_open`).
-    if paint.volume.open && paint.transport_height > 0 {
+    // this app's pixels for a picture the media engine draws, this app's own card for a sound, and
+    // the hole the player's window stands in for a video FFmpeg plays (see `pin_volume_open`).
+    //
+    // Which of the three it hangs off is the pin's own question and not this one's: a video's
+    // button is on the transport strip and a sound's is on its card, and both open the same panel
+    // from the button's own box (see `pinned_volume_geometry`).
+    if let (true, Some(popup)) = (paint.volume.open, paint.volume_popup.as_ref()) {
         if let Some(palette) = pin_chrome::ChromePalette::current() {
-            let popup = pin_chrome::volume_popup_layout(
-                width,
-                (height - paint.transport_height).max(0),
-                paint.transport_height,
-                paint.dpi,
-            );
             pin_chrome::paint_volume_popup(
                 out,
                 width,
                 &palette,
-                &popup,
+                popup,
                 paint.volume.level,
                 paint.volume.dragging,
             );
@@ -10428,6 +10467,9 @@ struct PinnedPaint {
     width: i32,
     height: i32,
     caption_height: i32,
+    /// The room kept under the caption, which the media band begins below and which a point is
+    /// taken above before it is asked anything of the media (see `pinned_caption_gap`).
+    caption_gap: i32,
     transport_height: i32,
     /// Whether the chrome is drawn over the media rather than in bands around it, which is what
     /// says where the media's band of the window is and even whether there is one.
@@ -10453,6 +10495,10 @@ struct PinnedPaint {
     transport: PinTransport,
     /// The level this pin plays at, and whether its popup is open (see `PinVolume`).
     volume: PinVolume,
+    /// Where the volume popup goes, or nothing while it is closed. It is asked of the pin rather
+    /// than recomputed at the paint, so that the panel drawn is the panel a press is answered
+    /// against (see `pinned_volume_geometry`).
+    volume_popup: Option<pin_chrome::VolumePopup>,
     /// Whether the bar's controls do anything for the engine playing this file (see
     /// `PinnedPreview::transport_live`).
     transport_live: bool,
@@ -10484,6 +10530,7 @@ fn pinned_paint() -> Option<PinnedPaint> {
             width,
             height,
             caption_height: pinned_caption_height(pin.dpi),
+            caption_gap: pin.caption_gap,
             transport_height: pinned_transport_height(pin.dpi, pin.transport_bar),
             overlay: pin.overlay,
             caption: pin.chrome.caption,
@@ -10508,9 +10555,16 @@ fn pinned_paint() -> Option<PinnedPaint> {
             playing: false,
             transport: pin.transport,
             volume: pin.volume,
+            volume_popup: None,
             transport_live: pin.transport_live,
         }
     };
+
+    // The panel, asked for after the pin's lock is let go of rather than read out of it, because
+    // where it goes is a question about the geometry of a window this one only holds a lock for
+    // while it is up — and because a panel placed from the pin's own numbers is the same panel
+    // every press and every drag is answered against (see `pinned_volume_geometry`).
+    paint.volume_popup = pinned_volume_geometry();
 
     // Where the bar is drawn: where the pointer has dragged it while a drag is going, and
     // where the file really is otherwise (see `PinTransport`).
@@ -12013,13 +12067,17 @@ fn media_point(x: i32, y: i32) -> (i32, i32) {
         return (x, y);
     }
 
-    let caption = pin_state().and_then(|pinned| {
+    // The whole band: the caption *and* the gap kept under it. A point in the gap belongs to no
+    // control at all — it is inside the window and on nothing — so it has to be moved up the whole
+    // band to reach the card, or a press in the gap would be answered as a press on the card's
+    // first row (see `pinned_caption_gap`).
+    let band = pin_state().and_then(|pinned| {
         let pin = pinned.pin()?;
-        (!pin.collapsed && !pin.overlay).then(|| pinned_caption_height(pin.dpi))
+        (!pin.collapsed && !pin.overlay).then(|| pinned_caption_height(pin.dpi) + pin.caption_gap)
     });
 
-    match caption {
-        Some(caption) => (x, y - caption),
+    match band {
+        Some(band) => (x, y - band),
         None => (x, y),
     }
 }
@@ -13212,6 +13270,17 @@ fn pinned_caption_height(dpi: u32) -> i32 {
     logical_px(dpi, PIN_CAPTION_PIXELS).max(1)
 }
 
+/// The room kept between a caption and the media below it, which is nothing at all for every kind
+/// but a sound's. It is asked of the kind rather than carried as a number because the question is
+/// about what the media looks like at its top, and it is settled once at the take-up for the same
+/// reason the transport bar's own answer is (see `PinnedPreview::caption_gap`).
+fn pinned_caption_gap(dpi: u32, kind: Option<MediaType>) -> i32 {
+    match kind {
+        Some(MediaType::Audio) => logical_px(dpi, PIN_CAPTION_GAP_PIXELS).max(0),
+        _ => 0,
+    }
+}
+
 /// The height of the transport bar a pinned preview of a kind that plays is given, and none
 /// at all for a kind that has nothing to play.
 fn pinned_transport_height(dpi: u32, transport: bool) -> i32 {
@@ -13223,30 +13292,37 @@ fn pinned_transport_height(dpi: u32, transport: bool) -> i32 {
 }
 
 /// The room a pinned window leaves its media on the display it is on: the display's work area
-/// with the caption taken off the top and the transport bar off the bottom — or the work area
-/// itself for a kind whose chrome is drawn over the media, which has no bands to leave room for
-/// (see `pin_overlay_chrome`).
-fn pinned_room(bounds: ScreenBounds, dpi: u32, transport: bool, overlay: bool) -> ScreenBounds {
+/// with the caption and the gap under it taken off the top and the transport bar off the bottom —
+/// or the work area itself for a kind whose chrome is drawn over the media, which has no bands to
+/// leave room for (see `pin_overlay_chrome`).
+fn pinned_room(
+    bounds: ScreenBounds,
+    dpi: u32,
+    transport: bool,
+    overlay: bool,
+    gap: i32,
+) -> ScreenBounds {
     if overlay {
         return bounds;
     }
 
     ScreenBounds {
         left: bounds.left,
-        top: bounds.top + pinned_caption_height(dpi),
+        top: bounds.top + pinned_caption_height(dpi) + gap,
         right: bounds.right,
         bottom: bounds.bottom - pinned_transport_height(dpi, transport),
     }
 }
 
-/// The box a pinned window occupies: the media's own box with the caption above it and the
-/// transport bar below it — or the media's box itself for a kind whose chrome is drawn over the
-/// media, since the strips the caption and the bar are drawn in are inside it.
+/// The box a pinned window occupies: the media's own box with the caption and the gap under it
+/// above it and the transport bar below it — or the media's box itself for a kind whose chrome is
+/// drawn over the media, since the strips the caption and the bar are drawn in are inside it.
 fn pinned_window_box_of(
     content: ScreenRegion,
     dpi: u32,
     transport: bool,
     overlay: bool,
+    gap: i32,
 ) -> ScreenRegion {
     if overlay {
         return content;
@@ -13254,7 +13330,7 @@ fn pinned_window_box_of(
 
     (
         content.0,
-        content.1 - pinned_caption_height(dpi),
+        content.1 - pinned_caption_height(dpi) - gap,
         content.2,
         content.3 + pinned_transport_height(dpi, transport),
     )
@@ -13262,13 +13338,22 @@ fn pinned_window_box_of(
 
 /// The rows of a pinned window the media is drawn in, and how many of them there are: the whole
 /// window for a kind whose chrome is drawn over the media, and the rows between the two bands
-/// otherwise. What the chrome is drawn *over* is what this answers — a caption over a picture, or
-/// a caption sharing the window's first rows with nothing else.
-fn pinned_band_rows(height: i32, caption: i32, transport: i32, overlay: bool) -> (i32, i32) {
+/// otherwise — the top band being the caption *and* the gap kept under it, because the gap belongs
+/// to the band and not to the media (see `pinned_caption_gap`). What the chrome is drawn *over* is
+/// what this answers — a caption over a picture, or a caption sharing the window's first rows with
+/// nothing else.
+fn pinned_band_rows(
+    height: i32,
+    caption: i32,
+    transport: i32,
+    overlay: bool,
+    gap: i32,
+) -> (i32, i32) {
     if overlay {
         (0, height.max(1))
     } else {
-        (caption, (height - caption - transport).max(1))
+        let top = caption + gap;
+        (top, (height - top - transport).max(1))
     }
 }
 
@@ -13377,6 +13462,19 @@ struct PinnedPreview {
     /// when the pin was taken up for the same reason the two lines above are: it is a question about
     /// the kind, and the window's own box is measured from the answer (see `pin_overlay_chrome`).
     overlay: bool,
+    /// Whether the pointer can ask for this pin's chrome to come and go. It is true of the kinds
+    /// whose chrome is drawn *over* their media, where a strip is in the way of the thing the
+    /// window is for — and of a sound, whose caption is a band of its own above the card: the band
+    /// is not the card, so hiding it costs the card nothing and leaves the window's box alone.
+    ///
+    /// The arrival window is the same one every other kind gets, a sound included: a pin brought
+    /// up by a key has no pointer anywhere near it, and a caption that never appeared would be a
+    /// window whose close button has not been drawn yet (see `PinChrome::on_arrival`).
+    hides_chrome: bool,
+    /// The room kept between the caption and the media below it, settled once at the take-up so
+    /// that every question about where a point is on this window reads one number (see
+    /// `pinned_caption_gap`).
+    caption_gap: i32,
     /// How much of that chrome is showing. A title bar painted over a picture is a strip of the
     /// picture nobody can see, so it is there when the hand is near it and gone a moment after the
     /// pin comes up otherwise — and a pin whose chrome is *not* drawn over its media has nothing to
@@ -13404,6 +13502,11 @@ struct PinnedPreview {
     /// The level this pin plays at, which belongs to this window rather than to the setting it was
     /// read from (see `PinVolume`).
     volume: PinVolume,
+    /// The card's own control the pointer is over, and the one it has pressed: what the card is
+    /// painted from, and what a release acts on. Nothing while the window is not showing a sound's
+    /// card, and nothing at all while the card carries no controls (see `pinned_audio_chrome`).
+    audio_hovered: Option<CardControl>,
+    audio_pressed: Option<CardControl>,
 }
 
 #[cfg(test)]
@@ -13424,6 +13527,8 @@ impl PinnedPreview {
             transport_live: false,
             frame: PinFrame::Shaped,
             overlay: true,
+            hides_chrome: true,
+            caption_gap: 0,
             chrome: PinChrome::always(),
             collapsed: false,
             bubble_pause: None,
@@ -13433,6 +13538,8 @@ impl PinnedPreview {
             dragging: None,
             transport: PinTransport::default(),
             volume: PinVolume::default(),
+            audio_hovered: None,
+            audio_pressed: None,
         }
     }
 }
@@ -13478,6 +13585,18 @@ struct PinTransport {
 /// Whether a kind is one the transport bar is drawn for.
 fn pin_transport_kind(kind: Option<MediaType>) -> bool {
     matches!(kind, Some(MediaType::Video) | Some(MediaType::NativeVideo))
+}
+
+/// Whether a pinned window's chrome comes and goes with the pointer, which is true of two kinds
+/// for two different reasons and false of every other.
+///
+/// A kind whose chrome is drawn *over* its media has strips in the way of the thing the window is
+/// for, so the pointer asks for them and nothing else does. A sound is the exception to that: its
+/// caption is a band of its own above the card rather than a strip over it, so the band is not the
+/// card, hiding it costs the card nothing, and the window's box is the same either way — which is
+/// what lets the one question answer both (see `PinnedPreview::hides_chrome`).
+fn pin_hides_chrome(kind: Option<MediaType>) -> bool {
+    pin_overlay_chrome(kind) || kind == Some(MediaType::Audio)
 }
 
 /// The name a pinned window's caption button is saying out loud, and the button it belongs to.
@@ -13848,12 +13967,14 @@ fn refresh_pin_chrome(pin: &mut PinnedPreview, now: Instant, cursor: Option<(i32
         return closed || pin.tooltip.refresh(None, now);
     }
 
-    // A kind whose chrome is drawn *over* its media has strips the pointer asks for, and this is
-    // the question about them. A kind whose chrome is in bands around its media has a caption
-    // that is always there instead, and so has nothing to be asked: `PinChrome::always` already
-    // carries that answer in the pin (see `pin_overlay_chrome`).
+    // A kind whose chrome the pointer can ask for has strips the pointer asks for, and this is
+    // the question about them. A kind whose chrome is in bands around its media and is never
+    // hidden — a page of text, an archive listing — has a caption that is always there instead,
+    // and so has nothing to be asked: `PinChrome::always` already carries that answer in the pin
+    // (see `pin_hides_chrome`).
     let mut shown = false;
-    if pin.overlay {
+    let mut card = false;
+    if pin.hides_chrome {
         // The arrival window is spent the moment it closes, and there is no bringing it back:
         // what asks for a strip after it is the pointer and nothing else.
         if pin.chrome.until.is_some_and(|until| now >= until) {
@@ -13867,12 +13988,23 @@ fn refresh_pin_chrome(pin: &mut PinnedPreview, now: Instant, cursor: Option<(i32
 
         // The strip the popup came out of stays showing while it is open, whatever the pointer
         // is doing: the popup is drawn in this window's own rows above that strip, and a bar
-        // that went away underneath it would take the button that opened it with it.
-        let bar = bar || pin.volume.open;
+        // that went away underneath it would take the button that opened it with it. Only a kind
+        // that draws one is held up by it, though — a sound's popup hangs off a button on the
+        // card rather than off a strip, and `bar` for a kind with no strip would otherwise be
+        // stuck true for as long as the popup is open.
+        let bar = pin.transport_bar && (bar || pin.volume.open);
 
         shown = (pin.chrome.caption, pin.chrome.bar) != (caption, bar);
         pin.chrome.caption = caption;
         pin.chrome.bar = bar;
+
+        // A sound's card carries its own buttons, and what the pointer is on one of them is a
+        // question asked on this clock as well as on the pointer's, for the same reason the strips
+        // are: a button lit under a pointer that has walked away from the window is exactly what
+        // `CaptionStrip::painted_from` refuses to let a caption do. It is asked here and not only
+        // in `pinned_mouse_move` because a pointer that leaves the window sends no more moves —
+        // the lit button would simply stay lit.
+        card = pin_audio_hover_refresh(pin, cursor);
     }
 
     // A name belongs to a button, and a button belongs to a pointer that is still on it. The
@@ -13895,13 +14027,41 @@ fn refresh_pin_chrome(pin: &mut PinnedPreview, now: Instant, cursor: Option<(i32
     let spoken = cursor
         .filter(|(x, y)| {
             let window = pin.window_box();
-            let height = pinned_caption_height(pin.dpi);
-            *x >= window.0 && *x < window.2 && *y >= window.1 && *y < window.1 + height
+            let band = pinned_caption_height(pin.dpi) + pin.caption_gap;
+            *x >= window.0 && *x < window.2 && *y >= window.1 && *y < window.1 + band
         })
         .and(pin.hovered);
     let spoken = pin.tooltip.refresh(spoken, now);
 
-    spoken || shown || closed
+    spoken || shown || closed || card
+}
+
+/// The card's own control the pointer is on, asked of the cursor's place on the screen rather than
+/// of anything the window was sent, and answered whether it changed — which is whether the card
+/// owes itself a repaint.
+///
+/// A pointer resting in the gap under a sound's caption is not on a button and is answered as
+/// such, which the tooltip's own filter above it is not asked about: a name belongs to a button,
+/// and there is no button under that pointer to belong to.
+fn pin_audio_hover_refresh(pin: &mut PinnedPreview, cursor: Option<(i32, i32)>) -> bool {
+    let window = pin.window_box();
+    let hovered = cursor.and_then(|(x, y)| {
+        (x >= window.0 && x < window.2 && y >= window.1 && y < window.3)
+            .then(|| pin_audio_control_at(pin, x - window.0, y - window.1))
+            .flatten()
+    });
+
+    let changed = pin.audio_hovered != hovered;
+    pin.audio_hovered = hovered;
+
+    // The card is a media frame and not chrome, so repainting the window alone would redraw the
+    // *old* card with the old button still lit under it: what shows the wash is the card's own
+    // paint, and this is the one place in the pin that has to know that.
+    if changed {
+        AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+    }
+
+    changed
 }
 
 /// Whether the volume popup is still wanted, answering whether it has been put away — which is
@@ -13917,9 +14077,13 @@ fn refresh_pin_volume(pin: &mut PinnedPreview, cursor: Option<(i32, i32)>) -> bo
         return false;
     }
 
-    let (width, height) = pin.window_size();
-    let strip = pinned_transport_height(pin.dpi, pin.transport_bar);
-    let popup = pin_chrome::volume_popup_layout(width, (height - strip).max(0), strip, pin.dpi);
+    // Asked of the pin this function is handed rather than of whichever pin is installed, because
+    // this is the tick's reader and it must be talking about the window under the hand: a panel
+    // answered against another window is a panel that closes while the pointer is still on it (see
+    // `pinned_volume_panel`).
+    let Some(popup) = pinned_volume_panel(pin) else {
+        return false;
+    };
 
     let margin = logical_px(pin.dpi, PIN_CHROME_NEAR_PIXELS).max(1);
     let window = pin.window_box();
@@ -13963,7 +14127,19 @@ fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -> (bool, bo
     let caption = pinned_caption_height(pin.dpi);
     let transport = pinned_transport_height(pin.dpi, pin.transport_bar);
 
-    let at_the_top = y >= window.1 - margin && y <= window.1 + caption + margin;
+    // A caption drawn *over* its media comes out when the pointer is near it and nowhere else,
+    // because it is in the way of the picture the window is for. A caption in a band of its own
+    // above the media is in the way of nothing, and once it has gone the band is not even this
+    // window's — those rows are transparent, so a pointer up there is not on this window at all
+    // and no mouse message says it arrived. So a band's caption is asked for by the pointer being
+    // anywhere over the window, which is what "hover the preview and the title comes back" means
+    // for the one kind whose caption can come and go without costing it anything (see
+    // `pin_hides_chrome`).
+    let at_the_top = if pin.hides_chrome && !pin.overlay {
+        y >= window.1 - margin && y <= window.3 + margin
+    } else {
+        y >= window.1 - margin && y <= window.1 + caption + margin
+    };
     let at_the_bottom =
         transport > 0 && y >= window.3 - transport - margin && y <= window.3 + margin;
 
@@ -14357,16 +14533,32 @@ fn toggle_pinned_by_key(started: &mut Option<Instant>, offset: &mut f64, paused:
 /// is the same answer. Which is the answer a caller keeps a sound held on rather than one that
 /// begins counting a clock nothing is moving.
 fn restart_pinned_audio(path: &Path, from: f64) -> Option<Instant> {
+    // The level this player is started at is the pin's own rather than the tray's, because the
+    // level belongs to the window it was moved on: a knob turned on a card and then a seek would
+    // otherwise restart the sound at `Volume → Audio` and undo what the hand asked for. It is read
+    // before the media's lock below, because the loop's audio block reaches this with that lock
+    // already held (see `pinned_audio_chrome`).
+    let volume = pinned_audio_level();
+
     let mut current = CURRENT_MEDIA.lock().ok()?;
     let media = current.as_mut()?;
 
     kill_player_process(media);
 
-    if !start_audio_playback(path, media, from) || media.video_process.is_none() {
+    if !start_audio_playback_at(path, media, from, volume) || media.video_process.is_none() {
         return None;
     }
 
     Some(Instant::now())
+}
+
+/// The level a sound this app starts is played at: the pin's own where a pin is showing the
+/// sound, and `Volume → Audio` otherwise — the setting a hover's player is started at, read the
+/// way it is read everywhere else (see `current_audio_volume`).
+fn pinned_audio_level() -> u32 {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.level))
+        .unwrap_or_else(current_audio_volume)
 }
 
 /// The length a pinned sound's card is drawn with, which is the length its bar is a share of: the
@@ -14386,6 +14578,35 @@ fn pinned_audio_duration(path: &Path) -> Option<f64> {
 /// loop all the same, so that a press has one door and the card is asked for again in the same
 /// tick the file was taken (see `settle_pinned_audio_seek`).
 static PIN_AUDIO_SEEK: Lazy<Mutex<Option<f64>>> = Lazy::new(|| Mutex::new(None));
+
+/// That a play/pause pressed on a pinned sound's card has been asked for, which the loop
+/// answers on its next tick for the same reason a seek is left for it (see
+/// `settle_pinned_audio_seek`): the clock a card is drawn from and the player behind a sound this
+/// app plays are both the preview loop's, and the window procedure cannot touch either.
+static PIN_AUDIO_TOGGLE: AtomicBool = AtomicBool::new(false);
+
+/// Ask for a pinned sound to be held or set going again, from a play/pause button on its card.
+fn ask_pin_audio_toggle() {
+    PIN_AUDIO_TOGGLE.store(true, Ordering::Release);
+}
+
+/// Hold a pinned sound where it stands, or set it going again, on the loop's tick — the whole of
+/// what a click on the card's own play button asks for (see `toggle_pinned_audio`).
+///
+/// It is asked here rather than acted on in the window procedure because the three things it acts
+/// on — the clock, the player and whether either is running — are the loop's own, and a pin's
+/// button that reached for them directly would be reaching under a lock this thread holds.
+fn settle_pinned_audio_toggle(
+    started: &mut Option<Instant>,
+    offset: &mut f64,
+    paused: &mut Option<f64>,
+) {
+    if !PIN_AUDIO_TOGGLE.swap(false, Ordering::AcqRel) {
+        return;
+    }
+
+    toggle_pinned_audio(started, offset, paused);
+}
 
 /// Where a pinned sound's clock stands after a seek has been answered, and whether the sound is
 /// left being held: the player's start, the second it was started at, and the second it is held at.
@@ -14471,19 +14692,29 @@ fn settle_pinned_audio_seek(
 /// Move the pin's level to `level`, giving it to a player that can be told one while it runs.
 ///
 /// The media engine takes a level while it plays, which is what makes a knob dragged on the pin
-/// heard as it moves. FFmpeg's player takes one only by being started at it, so nothing is given
-/// here — what that player is owed is settled where the hand lets go of the knob (see
-/// `settle_pin_volume`), because a player restarted for every pixel of a drag is a picture that
-/// never settles. Nothing is written to the configuration either way: the level belongs to this
-/// window (see `PinVolume`).
+/// heard as it moves — and the engine plays sounds as well as videos, so a knob dragged on a
+/// sound's card is heard as it moves for exactly the same reason. FFmpeg's player takes one only by
+/// being started at it, so nothing is given here — what that player is owed is settled where the
+/// hand lets go of the knob (see `settle_pin_volume`), because a player restarted for every pixel
+/// of a drag is a picture that never settles. Nothing is written to the configuration either way:
+/// the level belongs to this window (see `PinVolume`).
 fn set_pin_volume(level: u32) {
     let level = level.min(100);
     with_pin(|pin| pin.volume.level = level);
 
-    if current_media_type() == Some(MediaType::NativeVideo) {
+    if matches!(
+        current_media_type(),
+        Some(MediaType::NativeVideo) | Some(MediaType::Audio)
+    ) {
         video_player::set_volume(level);
         with_pin(|pin| pin.volume.playing_at = level);
     }
+
+    // The speaker on a sound's card says what the level is, and the card is a media frame rather
+    // than chrome: repainting the window alone would redraw the *old* card with the old speaker on
+    // it. A video's level is drawn in the strip, which the repaint does reach (see
+    // `pin_audio_hover_refresh`).
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
 }
 
 /// Give the pin's level to the player it is owed to, where giving it costs a player replaced.
@@ -14493,6 +14724,10 @@ fn set_pin_volume(level: u32) {
 /// go of the knob at rather than back to the beginning (see `pin_playhead`). A pin that is paused
 /// owes nothing now: the player that is begun when it resumes is begun at the level
 /// `restart_pinned_player` reads, so the two are written down as settled here.
+///
+/// A sound is the one kind whose settling is the loop's rather than this one's: the clock behind
+/// its card and the player a level is owed to are both the loop's, so the door is a flag rather
+/// than a call (see `settle_pinned_audio_volume`).
 fn settle_pin_volume() {
     let Some((path, content, transport, volume)) = pinned_playback_state() else {
         return;
@@ -14514,16 +14749,108 @@ fn settle_pin_volume() {
                 with_pin(|pin| pin.volume.playing_at = pin.volume.level);
             }
         }
+        Some(MediaType::Audio) => {
+            let playing = audio_preview_level_is_owed_to_the_engine();
+            if playing {
+                // The live path already gave it to the engine, so this arm is normally a no-op —
+                // and it is kept for the case where the knob was turned before a session was
+                // there to take it (see `set_pin_volume`).
+                video_player::set_volume(volume.level);
+                with_pin(|pin| pin.volume.playing_at = pin.volume.level);
+            } else {
+                // Otherwise the player that takes a level only by being started at one is owed it,
+                // and the clock behind a sound's card is the loop's: so the flag, and the loop
+                // starts the player at the pin's level on its next tick (see
+                // `settle_pinned_audio_volume`).
+                PIN_AUDIO_VOLUME.store(true, Ordering::Release);
+            }
+        }
         _ => {}
     }
 }
 
+/// That a pin's level has been settled for a sound, which the loop answers on its next tick
+/// because the clock behind a sound's card and the player that takes a level are both its own
+/// (see `settle_pin_volume`).
+static PIN_AUDIO_VOLUME: AtomicBool = AtomicBool::new(false);
+
+/// Whether the sound on screen is played by the media engine, which is the one player of the two
+/// that can be told a level while it is running. It is asked of the player and not of the probe,
+/// for the same reason the clock is (see `playing_player`).
+fn audio_preview_level_is_owed_to_the_engine() -> bool {
+    let Some((path, _)) = pinned_media_owner() else {
+        return false;
+    };
+    let Some(track) = audio_track::playable(&path) else {
+        return false;
+    };
+
+    playing_player(&path, &track) == Player::Native
+}
+
+/// Restart the player behind a pinned sound at the pin's level, from the second the hand let go of
+/// the knob at.
+///
+/// The player is the loop's and the clock is the loop's, which is why this is the loop's tick and
+/// not the release: a knob dragged across a card is a hundred releases a second, and a player
+/// begun for each of them is a sound that never settles. What is settled at the end of the drag is
+/// one player at one level from one second, which is the whole of what the transport bar's own
+/// knob does for a video (see `settle_pin_volume`).
+fn settle_pinned_audio_volume(
+    started: &mut Option<Instant>,
+    offset: &mut f64,
+    paused: &mut Option<f64>,
+) {
+    if !PIN_AUDIO_VOLUME.swap(false, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some((path, _)) = pinned_media_owner() else {
+        return;
+    };
+
+    // Only the player of this app's is owed anything, and only while it is the one playing: the
+    // engine was given the level as the knob moved, and there is nothing left to settle.
+    let Some(track) = audio_track::playable(&path) else {
+        return;
+    };
+    if playing_player(&path, &track) == Player::Native {
+        return;
+    }
+
+    // A sound that was playing goes on playing from the second the knob was let go at, and a
+    // sound that was held stays held there — the same two answers a seek gives, because a level
+    // moved is a player begun and a player begun at a second is a seek (see
+    // `pinned_audio_after_seek`).
+    let seconds = match paused {
+        Some(at) => *at,
+        None => audio_clock(&path, *started, *offset, None).0.unwrap_or(0.0),
+    };
+    let was_playing = paused.is_none();
+    let player = was_playing
+        .then(|| restart_pinned_audio(&path, seconds))
+        .flatten();
+
+    // A level of nothing brings no player up, and `restart_pinned_audio` reports that as no player
+    // — which is exactly what `pinned_audio_after_seek` is written against: a card with no clock
+    // rather than a hold over a sound that is not playing (see `start_audio_playback_at`).
+    (*started, *offset, *paused) = pinned_audio_after_seek(was_playing, player.is_some(), seconds);
+
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+}
+
 impl PinnedPreview {
-    /// The box the window occupies: the media's own box with the caption above it and the
-    /// transport bar below it — or the media's box itself, for a kind whose chrome is drawn over
-    /// it, since a strip of chrome over a picture needs no room beside it.
+    /// The box the window occupies: the media's own box with the caption and the gap under it above
+    /// it and the transport bar below it — or the media's box itself, for a kind whose chrome is
+    /// drawn over it, since a strip of chrome over a picture needs no room beside it.
     fn window_box(&self) -> ScreenRegion {
-        pinned_window_box_of(self.content, self.dpi, self.transport_bar, self.overlay)
+        pinned_window_box_of(
+            self.content,
+            self.dpi,
+            self.transport_bar,
+            self.overlay,
+            self.caption_gap,
+        )
     }
 
     /// The size of the window, as the renderer and the hit tests want it.
@@ -15181,6 +15508,9 @@ struct PinSwapSpace {
     transport_bar: bool,
     /// Whether its chrome is drawn over its media (see `pin_overlay_chrome`).
     overlay: bool,
+    /// The room its caption keeps under itself, which the display's room has to lose as well as
+    /// the caption itself (see `pinned_caption_gap`).
+    caption_gap: i32,
     /// Whether the window is maximized, where the display's room is the box and the bound is left
     /// for the restore that follows.
     maximized: bool,
@@ -15200,8 +15530,15 @@ fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
         bound: pin.bound,
         transport_bar: pin.transport_bar,
         overlay: pin.overlay,
+        caption_gap: pin.caption_gap,
         maximized: pin.restore.is_some(),
-        room: pinned_room(bounds, pin.dpi, pin.transport_bar, pin.overlay),
+        room: pinned_room(
+            bounds,
+            pin.dpi,
+            pin.transport_bar,
+            pin.overlay,
+            pin.caption_gap,
+        ),
     }
 }
 
@@ -15494,8 +15831,14 @@ fn box_is_the_wait(shape: (u32, u32)) -> bool {
 /// to fit anything inside, and the box a page of text or a sound's card came out at is a size the
 /// file was drawn to rather than one the user gave the pin (see `PinnedPreview::bound`).
 fn pin_swap_room(space: PinSwapSpace, bounds: ScreenBounds, dpi: u32) -> ScreenRegion {
-    let (room_width, room_height) =
-        pinned_room(bounds, dpi, space.transport_bar, space.overlay).room();
+    let (room_width, room_height) = pinned_room(
+        bounds,
+        dpi,
+        space.transport_bar,
+        space.overlay,
+        space.caption_gap,
+    )
+    .room();
     let (room_width, room_height) = (room_width.max(1) as i32, room_height.max(1) as i32);
 
     // The bound is the room's own ceiling, and a pin without one is left the whole of it — which
@@ -15644,7 +15987,10 @@ enum PinSwap {
     /// Nothing of this file to show: a player that would not start, or a file nothing could read
     /// at all. The file and the walk it was a step of are carried rather than dropped, because
     /// both are what the refusal is answered from (see `refuse_pinned_media`).
-    Refused { path: PathBuf, walk: Option<PinStep> },
+    Refused {
+        path: PathBuf,
+        walk: Option<PinStep>,
+    },
 }
 
 /// A file a pinned window is to be shown, and the whole of what putting it there is made of.
@@ -16081,7 +16427,12 @@ fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable) {
 
     // Where a player's window belongs while a pin is up is the pin's media band, which is what
     // the tick's own re-assertion reads.
-    *install.video_pos = (content.0, content.1, content.2 - content.0, content.3 - content.1);
+    *install.video_pos = (
+        content.0,
+        content.1,
+        content.2 - content.0,
+        content.3 - content.1,
+    );
     *install.current_video_path = match media.media_type {
         MediaType::Video => Some(path.clone()),
         _ => None,
@@ -16625,14 +16976,7 @@ fn relayout_pinned_media(
 
             if let Ok(mut media) = CURRENT_MEDIA.lock() {
                 if let Some(media) = media.as_mut() {
-                    media.relayout_audio_card(
-                        path,
-                        elapsed,
-                        duration,
-                        clock.name_offset,
-                        clock.dpi,
-                        (width, height),
-                    );
+                    media.relayout_audio_card(path, clock, elapsed, duration, (width, height));
                 }
             }
             None
@@ -16742,8 +17086,8 @@ fn keep_text_place(media: MediaData) -> MediaData {
 
 /// The clock a sound's card is drawn from, which belongs to the preview loop and not to the
 /// media: when the player this app started was started, the second of the file it was started
-/// at, where a key has held it, and how far a name the card has no room for has been scrolled
-/// (see `audio_clock`).
+/// at, where a key has held it, how far a name the card has no room for has been scrolled, and
+/// what the card's own controls are saying (see `audio_clock`).
 #[derive(Clone, Copy)]
 struct AudioCardClock {
     started: Option<Instant>,
@@ -16754,6 +17098,9 @@ struct AudioCardClock {
     paused: Option<f64>,
     name_offset: i32,
     dpi: u32,
+    /// What the card's own row of buttons is saying, read in one look before the media's own lock
+    /// is taken rather than from under it (see `pinned_audio_chrome`).
+    chrome: Option<CardChrome>,
 }
 
 /// The file and the display scale a pin is showing, for the work that has to lay its media out
@@ -16850,6 +17197,78 @@ fn pinned_content() -> Option<ScreenRegion> {
     (!pin.collapsed).then_some(pin.content)
 }
 
+/// The card's own controls as they stand, read in one look and handed over rather than asked for
+/// under the media's own lock — see `MediaData::refresh_audio_card`.
+///
+/// It is a function rather than a read of the pin inside that paint because both the paint and the
+/// relayout are reached with `CURRENT_MEDIA` already held, and a pin's lock asked from under it is
+/// a lock this thread may already own: `toggle_pinned_playback` reaches `CURRENT_MEDIA.lock()`
+/// from paths that have been near the pin's, so the two are taken in this order everywhere and
+/// never the other way round.
+fn pinned_audio_chrome(playing: bool) -> Option<CardChrome> {
+    // The published flag rather than the state: this is asked on every tick that does a full
+    // media look, and a run with nothing pinned pays one atomic read for it.
+    if !pinned() {
+        return None;
+    }
+
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
+    // A collapsed pin has no card on screen, and a card with no window to press is a card with no
+    // controls — the same answer `audio_preview::Card::controls` gives a hover.
+    if pin.collapsed {
+        return None;
+    }
+
+    Some(CardChrome {
+        playing,
+        volume: pin.volume.level,
+        hovered: pin.audio_hovered,
+        pressed: pin.audio_pressed,
+    })
+}
+
+/// Whether this pin is showing a sound's card, which is the one kind whose card carries its own
+/// controls — and the answer every question about one of them is gated on.
+///
+/// It is asked of the pin's own three facts rather than of the media's kind, and that is the whole
+/// of why it is a function at all: a window procedure that had to take the media's lock to know
+/// what it was showing would be one that could be asked while that lock is held (see
+/// `MediaData::refresh_audio_card`), and the three facts are all settled at the take-up from the
+/// kind anyway. A sound is the only kind with no transport strip, no overlay chrome and no frame
+/// of its own to be resized within.
+fn pin_shows_an_audio_card(pin: &PinnedPreview) -> bool {
+    !pin.collapsed && !pin.transport_bar && !pin.overlay && pin.frame == PinFrame::None
+}
+
+/// The card's own control the pointer is over, asked of the card's own layout and answered in the
+/// window's own coordinates: the card fills the pin's media box and is drawn at the media band's
+/// own row, so the point is taken to the card the way a press on it is (see `media_point` and
+/// `pinned_band_rows`).
+fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Option<CardControl> {
+    if !pin_shows_an_audio_card(pin) {
+        return None;
+    }
+
+    let (_, height) = pin.window_size();
+    let (top, _) = pinned_band_rows(
+        height,
+        pinned_caption_height(pin.dpi),
+        pinned_transport_height(pin.dpi, pin.transport_bar),
+        pin.overlay,
+        pin.caption_gap,
+    );
+
+    audio_preview::control_at(
+        x,
+        y - top,
+        (pin.content.2 - pin.content.0).max(1) as u32,
+        pin.dpi,
+        current_audio_options(),
+        true,
+    )
+}
+
 /// Put a window of somebody else's — the player's — where a pinned window's media band is.
 fn ensure_pinned_sibling_box(content: ScreenRegion) {
     let _ = ensure_video_window_topmost(
@@ -16870,7 +17289,13 @@ fn replace_pinned_window() -> Option<PreviewMessage> {
 
     pin.dpi = dpi_at(pin.content.0, pin.content.1);
     let bounds = work_area_at(pin.content.0, pin.content.1);
-    let room = pinned_room(bounds, pin.dpi, pin.transport_bar, pin.overlay);
+    let room = pinned_room(
+        bounds,
+        pin.dpi,
+        pin.transport_bar,
+        pin.overlay,
+        pin.caption_gap,
+    );
     let shape = (
         (pin.content.2 - pin.content.0).max(1) as u32,
         (pin.content.3 - pin.content.1).max(1) as u32,
@@ -16920,6 +17345,7 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
         frame,
         overlay,
         transport_bar,
+        caption_gap,
         content,
         restore,
     }) = pin_maximize_inputs()
@@ -16928,7 +17354,7 @@ fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     };
 
     let bounds = work_area_at(content.0, content.1);
-    let room = pinned_room(bounds, dpi, transport_bar, overlay);
+    let room = pinned_room(bounds, dpi, transport_bar, overlay, caption_gap);
     let shape = media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape));
 
     // The maximize as the pin stood when it was read, kept for the write below: the two are
@@ -17051,6 +17477,9 @@ struct PinMaximizeInputs {
     frame: PinFrame,
     overlay: bool,
     transport_bar: bool,
+    /// The room the caption keeps under itself, which the display's room has to lose beside the
+    /// caption itself (see `pinned_caption_gap`).
+    caption_gap: i32,
     content: ScreenRegion,
     restore: Option<ScreenRegion>,
 }
@@ -17065,6 +17494,7 @@ fn pin_maximize_inputs() -> Option<PinMaximizeInputs> {
         frame: pin.frame,
         overlay: pin.overlay,
         transport_bar: pin.transport_bar,
+        caption_gap: pin.caption_gap,
         content: pin.content,
         restore: pin.restore,
     })
@@ -17807,7 +18237,13 @@ fn restore_pin() {
         // the bit of the pin the hand is on, and what the hand gets back is a window placed beside
         // it the way this app places everything else (see `placed_pin_box`).
         if let Some(window) = placed_pin_box(pin, &DESKTOPS) {
-            pin.content = content_box_of(window, pin.dpi, pin.transport_bar, pin.overlay);
+            pin.content = content_box_of(
+                window,
+                pin.dpi,
+                pin.transport_bar,
+                pin.overlay,
+                pin.caption_gap,
+            );
         }
     }
 
@@ -18577,17 +19013,23 @@ fn cursor_screen_point() -> Option<(i32, i32)> {
     Some((point.x, point.y))
 }
 
-/// The media box a window box implies: the window less the caption above it and the transport
-/// bar below it — or the window itself, for a kind whose chrome is drawn over its media and whose
-/// two boxes are therefore one box (see `pin_overlay_chrome`).
-fn content_box_of(window: ScreenRegion, dpi: u32, transport: bool, overlay: bool) -> ScreenRegion {
+/// The media box a window box implies: the window less the caption and the gap under it above it
+/// and the transport bar below it — or the window itself, for a kind whose chrome is drawn over its
+/// media and whose two boxes are therefore one box (see `pin_overlay_chrome`).
+fn content_box_of(
+    window: ScreenRegion,
+    dpi: u32,
+    transport: bool,
+    overlay: bool,
+    gap: i32,
+) -> ScreenRegion {
     if overlay {
         return window;
     }
 
     (
         window.0,
-        window.1 + pinned_caption_height(dpi),
+        window.1 + pinned_caption_height(dpi) + gap,
         window.2,
         window.3 - pinned_transport_height(dpi, transport),
     )
@@ -18625,7 +19067,7 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         return;
     }
 
-    let hovered = (caption.wanted && y < caption.height)
+    let hovered = (caption.wanted && y < caption.band)
         .then(|| {
             pin_chrome::button_at(
                 x,
@@ -18652,7 +19094,7 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         // way the tick asks it: it is the strip the pointer is in, not the window it is over.
         let (_, height) = pin.window_size();
         let bar_top = height - pinned_transport_height(pin.dpi, pin.transport_bar);
-        if y < caption.height {
+        if y < caption.band {
             pin.chrome.caption = true;
         }
         if pin.transport_bar && y >= bar_top {
@@ -18688,7 +19130,29 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         })
         .unwrap_or(false);
 
-    if changed || transport_changed {
+    // And the sound's card's own row of buttons, which is the other strip a pointer lights up —
+    // and the only one a sound has (see `pin_transport_kind`). Asked here as well as on the loop's
+    // tick so that a press arriving in the same handful of messages as the move that brought the
+    // pointer over a button finds it already lit.
+    let audio_changed = pin_state()
+        .and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            let hovered = pin_audio_control_at(pin, x, y);
+            let changed = pin.audio_hovered != hovered;
+            pin.audio_hovered = hovered;
+
+            // The card's own paint is what shows the wash, and a card is a media frame rather than
+            // chrome: repainting the window alone would redraw the *old* card with the old button
+            // still lit under it (see `pin_audio_hover_refresh`, which is the same question asked
+            // on the tick).
+            if changed {
+                AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+            }
+            Some(changed)
+        })
+        .unwrap_or(false);
+
+    if changed || transport_changed || audio_changed {
         render_layered_preview(hwnd);
     }
 }
@@ -18696,7 +19160,12 @@ unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
 /// What the pointer's questions about a pinned window's caption need: how tall the strip is, the
 /// scale it is drawn at, the window's own width, and what this pin's edges and buttons do.
 struct PinnedCaption {
+    /// The strip itself, which is where the buttons are and what `button_at` is asked with.
     height: i32,
+    /// The whole band above the media — the strip and the gap kept under it — which is what a point
+    /// is inside or outside of. The gap belongs to no control: a press in it is a press on the
+    /// band, which is a handle for carrying the window.
+    band: i32,
     dpi: u32,
     width: i32,
     frame: PinFrame,
@@ -18713,6 +19182,7 @@ fn pinned_caption_geometry() -> Option<PinnedCaption> {
         let (width, _) = pin.window_size();
         PinnedCaption {
             height: pinned_caption_height(pin.dpi),
+            band: pinned_caption_height(pin.dpi) + pin.caption_gap,
             dpi: pin.dpi,
             width,
             frame: pin.frame,
@@ -18903,17 +19373,89 @@ unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
 /// The popup a pin's volume button opens, as the pointer's questions about it need it: where it
 /// is, or nothing when it is not up.
 ///
-/// The popup hangs off the transport bar, so its room is what is above the bar rather than the
-/// whole window: the width and the strip height are the bar's own (see
-/// `pinned_transport_geometry`).
+/// It is one question answered for two kinds, and it is asked of the pin rather than recomputed at
+/// each of the four places that want the panel — which is what keeps the panel a press is answered
+/// against the panel that is drawn. A kind with a transport bar hangs it off that bar's own volume
+/// button, and a sound hangs the very same panel off the button on its card instead (see
+/// `pinned_audio_volume_popup` and `pin_chrome::volume_popup_from_button`).
 fn pinned_volume_geometry() -> Option<pin_chrome::VolumePopup> {
-    let bar = pinned_transport_geometry()?;
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
 
-    pin_state()?
-        .pin()?
-        .volume
-        .open
-        .then(|| pin_chrome::volume_popup_layout(bar.width, bar.top.max(0), bar.height, bar.dpi))
+    pin.volume.open.then(|| pinned_volume_panel(pin)).flatten()
+}
+
+/// Where *this* pin's volume button opens its panel from, whichever of the two buttons it is: the
+/// transport strip's own where the pin has a strip, and a sound's card for a pin whose controls are
+/// the card's — one panel, hung from a button either way (see `pin_chrome::
+/// volume_popup_from_button`).
+///
+/// It takes the pin rather than asking for the one that is installed, because two of its four
+/// callers are handed a pin they are already holding and one of them is a tick: a popup answered
+/// against a window other than the one under the hand is a panel that closes when it should not
+/// (see `refresh_pin_volume`).
+fn pinned_volume_panel(pin: &PinnedPreview) -> Option<pin_chrome::VolumePopup> {
+    if pin.collapsed {
+        return None;
+    }
+
+    let strip = if pin.transport_bar {
+        let (width, height) = pin.window_size();
+        let band = pinned_transport_height(pin.dpi, true);
+        Some(pin_chrome::volume_popup_layout(
+            width,
+            (height - band).max(0),
+            band,
+            pin.dpi,
+        ))
+    } else {
+        None
+    };
+
+    strip.or_else(|| pinned_audio_volume_popup(pin))
+}
+
+/// Where a pinned sound's card's volume button opens its panel from, in the window's own
+/// coordinates: the card fills the pin's media box and is drawn in the band between the chrome's
+/// (see `pinned_band_rows`), so the box the card lays its row out in is the box the window draws
+/// it at, moved down by the band's own row.
+///
+/// Nothing about the two windows standing in each other's place applies to it — the panel floats
+/// over this app's own card rather than over a player's window, so there is no window to put in
+/// front and no tick to hold off (see `pin_volume_open`).
+fn pinned_audio_volume_popup(pin: &PinnedPreview) -> Option<pin_chrome::VolumePopup> {
+    if !pin_shows_an_audio_card(pin) {
+        return None;
+    }
+
+    let (width, height) = pin.window_size();
+    let (top, _) = pinned_band_rows(
+        height,
+        pinned_caption_height(pin.dpi),
+        pinned_transport_height(pin.dpi, pin.transport_bar),
+        pin.overlay,
+        pin.caption_gap,
+    );
+
+    // The button's own box, from the card's own arithmetic rather than from anything kept beside
+    // it: a popup hung off a button that has moved is a popup that is not where its button is
+    // (see `audio_preview::control_box`).
+    let button = audio_preview::control_box(
+        CardControl::Volume,
+        (pin.content.2 - pin.content.0).max(1) as u32,
+        pin.dpi,
+        current_audio_options(),
+        true,
+    )?;
+
+    Some(pin_chrome::volume_popup_from_button(
+        RECT {
+            top: button.top + top,
+            ..button
+        },
+        width,
+        pin.dpi,
+    ))
 }
 
 /// Whether the popup's knob is being held.
@@ -18926,8 +19468,12 @@ fn pin_volume_dragging() -> bool {
 /// Whether a point on a pinned window is the volume button: what a press on the popup's own button
 /// has to be told apart from a press anywhere else, since the one keeps the popup and the other
 /// puts it away (see `pinned_press`).
+///
+/// A sound's own button is asked about too, and for the same reason: it is the same control drawn
+/// in a different place, and a press on it that closed the popup would have the release open it
+/// straight back up.
 fn pin_point_is_volume_button(x: i32, y: i32) -> bool {
-    pinned_transport_geometry().is_some_and(|bar| {
+    let on_the_bar = pinned_transport_geometry().is_some_and(|bar| {
         y >= bar.top
             && pin_chrome::transport_part_at(
                 x,
@@ -18937,7 +19483,15 @@ fn pin_point_is_volume_button(x: i32, y: i32) -> bool {
                 bar.dpi,
                 bar.live,
             ) == Some(pin_chrome::TransportPart::Volume)
-    })
+    });
+
+    on_the_bar
+        || pin_state()
+            .and_then(|pinned| {
+                let pin = pinned.pin()?;
+                Some(pin_audio_control_at(pin, x, y) == Some(CardControl::Volume))
+            })
+            .unwrap_or(false)
 }
 
 /// A press on a pinned window's volume popup, answering whether it was the popup's: the knob is
@@ -19016,6 +19570,10 @@ unsafe fn pinned_volume_release(hwnd: HWND) -> bool {
 /// while the popup is open (`pin_volume_open`), which is the whole of what the two windows owe each
 /// other; nothing has to be done when it closes, since the pin's window is transparent wherever it
 /// is not painting and the player is in front of it again on the tick.
+///
+/// For a sound the panel floats over this app's own card instead, so raising the window is
+/// harmless rather than necessary — which is why this function asks nothing about the kind (see
+/// `pinned_audio_volume_popup`).
 unsafe fn toggle_pin_volume(hwnd: HWND) {
     let opened = {
         let Some(mut pinned) = pin_state() else {
@@ -19036,6 +19594,11 @@ unsafe fn toggle_pin_volume(hwnd: HWND) {
     if opened {
         raise_pinned_window(hwnd);
     }
+
+    // A sound's card is a media frame and its volume button is one of the card's own pixels: the
+    // card has to be painted again for a popup opening or closing to be seen at all, and
+    // repainting the window alone would redraw the old card (see `set_pin_volume`).
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
     render_layered_preview(hwnd);
 }
 
@@ -19098,10 +19661,11 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         }
     }
 
-    if y < caption.height {
+    if y < caption.band {
         // The buttons are drawn over the picture only while the chrome is there to be used: with
         // it gone, the strip across the top of a pinned picture is the picture, and a press on it
-        // is the handle every other part of the media is (see `PinChrome`).
+        // is the handle every other part of the media is (see `PinChrome`). The gap under the strip
+        // is not in either: a press there is a press on the band, which is a handle too.
         if caption.wanted {
             let button =
                 pin_chrome::button_at(x, y, caption.width, caption.height, caption.dpi, framed);
@@ -19126,10 +19690,11 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
-    // And then the one control a sound's card has, which is drawn on the card rather than in a
-    // strip of its own, and so is asked of before the media becomes a handle for moving the
-    // window (see `pinned_audio_bar_press`).
-    if pinned_audio_bar_press(x, y) {
+    // And then the four controls a sound's card carries, which are drawn on the card rather than in
+    // a strip of their own, and so are asked of before the media becomes a handle for moving the
+    // window: a button is a button, and a hand on the rest of the card is still a hand carrying the
+    // window (see `pinned_audio_control_press`).
+    if pinned_audio_control_press(hwnd, x, y) {
         return true;
     }
 
@@ -19141,28 +19706,37 @@ unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     false
 }
 
-/// A press on the bar a pinned sound's card is drawn with: take the file to the second under the
-/// hand, which is the one control a card carries and the only way of moving a pinned sound within
-/// its own file.
+/// A press on one of the controls a pinned sound's card carries: the walk either side of the
+/// play/pause button, the bar itself, and the button that opens the volume popup — the four
+/// controls drawn on the card's own row rather than in a strip of the window, and the only way of
+/// moving a pinned sound within its own file or between files.
 ///
-/// The bar is asked of the card's own layout rather than of a bar this app draws, because the
-/// line being pressed is one the card's painter drew (see `audio_preview::bar_share_at`). The
-/// press is taken where it landed: nothing is captured and no drag follows, since a bar on a card
-/// is a place to press rather than a thing to be carried — the whole of the window is already
-/// the thing to be carried, and a press on the rest of the card does that instead.
+/// The controls are asked of the card's own layout rather than of anything this app draws here,
+/// because the marks being pressed are ones the card's painter drew (see
+/// `audio_preview::control_at`). The seek is the odd one out: it is taken where it landed, with
+/// nothing captured and no drag following, since a bar on a card is a place to press rather than a
+/// thing to be carried — the whole of the window is already the thing to be carried, and a press on
+/// the rest of the card does that instead. The other three are held and clicked on the release, the
+/// rule every caption button of this app's follows (see `pinned_audio_control_release`).
 ///
-/// Nothing is played here either: the clock a card is drawn from and the player behind a sound
-/// this app plays are the preview loop's, so the second is left for it (see
-/// `settle_pinned_audio_seek`).
-fn pinned_audio_bar_press(x: i32, y: i32) -> bool {
-    if current_media_type() != Some(MediaType::Audio) {
+/// Nothing is *played* from here: the clock a card is drawn from and the player behind a sound this
+/// app plays are the preview loop's, so the play/pause is left for it and the seek with it (see
+/// `settle_pinned_audio_toggle` and `settle_pinned_audio_seek`).
+unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> bool {
+    // Asked of the pin's own three facts rather than of the media's kind, so that this procedure —
+    // which the media's own lock can be held while, since the loop's audio block repaints the card
+    // under it — never has to take that lock to know what the window is showing (see
+    // `pin_shows_an_audio_card`).
+    let shows = pin_state()
+        .and_then(|pinned| pinned.pin().map(pin_shows_an_audio_card))
+        .unwrap_or(false);
+    if !shows {
         return false;
     }
 
-    // The card fills the pin's media box, because a card is its own size and is not framed into
-    // one (see `PinFrame`), so the box is the width the bar is drawn across. The point is taken
-    // in the media's own coordinates, which is the frame the card is painted in (see
-    // `media_point`).
+    // The card fills the pin's media box, because a card is its own size and is not framed into one
+    // (see `PinFrame`), so the box is the width the row is laid out across. The point is taken in
+    // the media's own coordinates, which is the frame the card is painted in (see `media_point`).
     let Some(content) = pinned_content() else {
         return false;
     };
@@ -19171,25 +19745,89 @@ fn pinned_audio_bar_press(x: i32, y: i32) -> bool {
     };
     let width = (content.2 - content.0).max(1) as u32;
 
-    // A file that does not say how long it is is drawn with a block crossing its track rather
-    // than a played part of it, and there is no second of such a file for a press to mean: the
-    // press is the card's own, and a hand on a card is a window being carried.
-    let Some(duration) = pinned_audio_duration(&path).filter(|length| *length > 0.0) else {
-        return false;
-    };
+    // A file that does not say how long it is is drawn with a block crossing its track rather than
+    // a played part of it, and there is no second of such a file for a press to mean — so the *seek*
+    // is refused and nothing else is. That is a change from what this used to do, and it is the
+    // difference between a card whose whole row is dead and a card whose one dead control is the
+    // seek: the buttons either side of it are the caption's own walk and the level this window is
+    // playing at, and neither of them is a question about the length of a file.
+    let duration = pinned_audio_duration(&path).filter(|length| *length > 0.0);
 
     let (media_x, media_y) = media_point(x, y);
-    let Some(share) =
-        audio_preview::bar_share_at(media_x, media_y, width, dpi, current_audio_options())
+    let Some(control) =
+        audio_preview::control_at(media_x, media_y, width, dpi, current_audio_options(), true)
     else {
         return false;
     };
 
-    if let Ok(mut request) = PIN_AUDIO_SEEK.lock() {
-        *request = Some((duration * share).clamp(0.0, duration));
-    }
-    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+    match control {
+        CardControl::Seek => {
+            let Some(share) = audio_preview::bar_share_at(
+                media_x,
+                media_y,
+                width,
+                dpi,
+                current_audio_options(),
+                true,
+            ) else {
+                return false;
+            };
+            let Some(duration) = duration else {
+                return false;
+            };
 
+            if let Ok(mut request) = PIN_AUDIO_SEEK.lock() {
+                *request = Some((duration * share).clamp(0.0, duration));
+            }
+            AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+        }
+        _ => {
+            with_pin(|pin| pin.audio_pressed = Some(control));
+            let _ = SetCapture(hwnd);
+            render_layered_preview(hwnd);
+        }
+    }
+
+    true
+}
+
+/// What a release on a pinned sound's card's own controls does: a button is clicked where the
+/// pointer is still on it, the same rule every caption button of this app's follows — and the seek
+/// does nothing at all, because a seek was already taken where it was pressed.
+///
+/// The two ends of the walk are the caption's own walk rather than this card's: `PinCommand::
+/// Previous` and `PinCommand::Next` are what the caption's arrows ask for, so a step from a button
+/// on the card and a step from a button on the caption are one walk and not two.
+unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) -> bool {
+    let Some(pressed) = pin_state().and_then(|mut pinned| pinned.pin_mut()?.audio_pressed.take())
+    else {
+        return false;
+    };
+
+    let _ = ReleaseCapture();
+
+    let still_on_it = pin_state()
+        .and_then(|pinned| {
+            let pin = pinned.pin()?;
+            Some(pin_audio_control_at(pin, x, y) == Some(pressed))
+        })
+        .unwrap_or(false);
+
+    if still_on_it {
+        match pressed {
+            // The player's own state — whether it is going — is the loop's, so this is a door
+            // rather than a call (see `settle_pinned_audio_toggle`).
+            CardControl::Play => ask_pin_audio_toggle(),
+            CardControl::Previous => ask_pin(PinCommand::Previous),
+            CardControl::Next => ask_pin(PinCommand::Next),
+            // The panel is over this app's own card rather than over a player's window, so raising
+            // the pin's window for it is harmless rather than necessary (see `toggle_pin_volume`).
+            CardControl::Volume => toggle_pin_volume(hwnd),
+            CardControl::Seek => {}
+        }
+    }
+
+    render_layered_preview(hwnd);
     true
 }
 
@@ -19778,7 +20416,7 @@ unsafe fn release_pin_capture(hwnd: HWND) {
 /// Carry a pinned window's drag on: the pointer has moved, and what the press began is applied to
 /// the box the window had when it began.
 unsafe fn apply_pin_drag(hwnd: HWND) {
-    let (drag, dpi, transport, overlay, frame) = {
+    let (drag, dpi, transport, overlay, frame, caption_gap) = {
         let Some(pinned) = pin_state() else {
             return;
         };
@@ -19789,7 +20427,14 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             return;
         };
 
-        (drag, pin.dpi, pin.transport_bar, pin.overlay, pin.frame)
+        (
+            drag,
+            pin.dpi,
+            pin.transport_bar,
+            pin.overlay,
+            pin.frame,
+            pin.caption_gap,
+        )
     };
 
     let Some(point) = cursor_screen_point() else {
@@ -19811,12 +20456,20 @@ unsafe fn apply_pin_drag(hwnd: HWND) {
             drag.window.2 + dx,
             drag.window.3 + dy,
         ),
-        PinDragAction::Resize(edge) => {
-            resize_pinned_window(drag.window, edge, dx, dy, dpi, transport, overlay, frame)
-        }
+        PinDragAction::Resize(edge) => resize_pinned_window(
+            drag.window,
+            edge,
+            dx,
+            dy,
+            dpi,
+            transport,
+            overlay,
+            frame,
+            caption_gap,
+        ),
     };
     let window = clamp_pinned_box(window, dpi, &DESKTOPS);
-    let content = content_box_of(window, dpi, transport, overlay);
+    let content = content_box_of(window, dpi, transport, overlay, caption_gap);
 
     {
         let Some(mut pinned) = pin_state() else {
@@ -19911,8 +20564,9 @@ fn resize_pinned_window(
     transport: bool,
     overlay: bool,
     frame: PinFrame,
+    caption_gap: i32,
 ) -> ScreenRegion {
-    let content = content_box_of(window, dpi, transport, overlay);
+    let content = content_box_of(window, dpi, transport, overlay, caption_gap);
     let bounds = work_area_at(
         content.0 + (content.2 - content.0) / 2,
         content.1 + (content.3 - content.1) / 2,
@@ -19921,14 +20575,15 @@ fn resize_pinned_window(
     resize_pinned_content(
         PinSpace {
             content,
-            room: pinned_room(bounds, dpi, transport, overlay),
+            room: pinned_room(bounds, dpi, transport, overlay, caption_gap),
             overlay,
+            transport,
+            caption_gap,
         },
         edge,
         dx,
         dy,
         dpi,
-        transport,
         frame,
     )
 }
@@ -19944,6 +20599,11 @@ struct PinSpace {
     /// the window's for such a kind and has a caption and a bar to be given room around it
     /// otherwise (see `pinned_window_box_of`).
     overlay: bool,
+    /// Whether a transport strip is taken off the bottom, and the room kept under the caption:
+    /// the other two band facts, which travel with the overlay flag because the box a drag comes
+    /// out with is the window's and the window's is all three of them.
+    transport: bool,
+    caption_gap: i32,
 }
 
 /// The same drag, against a room to keep the box inside rather than against the display the box is
@@ -19975,13 +20635,14 @@ fn resize_pinned_content(
     dx: i32,
     dy: i32,
     dpi: u32,
-    transport: bool,
     frame: PinFrame,
 ) -> ScreenRegion {
     let PinSpace {
         content,
         room,
         overlay,
+        transport,
+        caption_gap,
     } = space;
     let start_width = (content.2 - content.0).max(1);
     let start_height = (content.3 - content.1).max(1);
@@ -20116,6 +20777,7 @@ fn resize_pinned_content(
         dpi,
         transport,
         overlay,
+        caption_gap,
     )
 }
 
@@ -20255,12 +20917,18 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
+    // And then the four buttons a sound's card carries, which are the same rule and the same
+    // order: a press that has taken hold of one is that button's until it lets go.
+    if pinned_audio_control_release(hwnd, x, y) {
+        return true;
+    }
+
     // Only the button is taken here. The drag is not, because letting go of one is the same work
     // whichever end it is asked from, and `finish_pin_drag` is that work: a press that arrived as
     // a message ends here, and one read off the hook's published button state is ended by the
     // tick instead (see `settle_pinned_engine_drag`). A window's own press does not press a
     // caption button and drag the window at once, so the two are not in competition.
-    let (pressed, caption_height, dpi, width, framed) = {
+    let (pressed, caption_height, caption_band, dpi, width, framed) = {
         let Some(mut pinned) = pin_state() else {
             return false;
         };
@@ -20273,6 +20941,7 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
         (
             pressed,
             pinned_caption_height(pin.dpi),
+            pinned_caption_height(pin.dpi) + pin.caption_gap,
             pin.dpi,
             width,
             pin.frame != PinFrame::None,
@@ -20282,7 +20951,10 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
     if let Some(button) = pressed {
         let _ = ReleaseCapture();
 
-        let still_on_it = y < caption_height
+        // The band, not the strip: `button_at` is still asked with the strip's own height — a
+        // button is drawn in the strip and nowhere else — but a pointer that has come to rest in
+        // the gap under it is not on it.
+        let still_on_it = y < caption_band
             && pin_chrome::button_at(x, y, width, caption_height, dpi, framed) == Some(button);
 
         if still_on_it {
@@ -20955,6 +21627,22 @@ pub fn run_preview_window() {
                     &mut audio_paused,
                 );
 
+                // The other two doors a card's own buttons open, answered in the same tick and for
+                // the same reason: whether a player is going and what second it has got to are
+                // this thread's, and so is the player a level is owed to. The play/pause is a
+                // click on the card rather than a key, and the level is a knob let go of (see
+                // `settle_pinned_audio_toggle` and `settle_pinned_audio_volume`).
+                settle_pinned_audio_toggle(
+                    &mut audio_started,
+                    &mut audio_start_offset,
+                    &mut audio_paused,
+                );
+                settle_pinned_audio_volume(
+                    &mut audio_started,
+                    &mut audio_start_offset,
+                    &mut audio_paused,
+                );
+
                 // What a collapse into the bubble holds back and what a restore puts back,
                 // read from the two `Pin Mode → Pause Preview` switches every tick: a switch
                 // thrown while the pin is a bubble is answered on the next one (see
@@ -21193,6 +21881,14 @@ pub fn run_preview_window() {
             // A static tick skips the lock entirely (see `need_media_check`): the
             // guard is only taken when the tick is owed a full look, so a static
             // picture or page of text pays no mutex here at all.
+            // A sound's card is painted from the loop's own clock and from the pin's own state, and the
+            // pin's half is read here — before the media's lock is taken below rather than inside
+            // it, because every repaint below runs with that lock held and a pin's lock asked from
+            // under it is the re-entrancy `toggle_pinned_playback` is written down for (see
+            // `pinned_audio_chrome`). Nothing at all is asked of a tick with nothing pinned: the
+            // published flag answers that in one atomic read.
+            let audio_chrome = pinned_audio_chrome(audio_paused.is_none());
+
             let media_lock = need_media_check.then(|| CURRENT_MEDIA.lock());
             if let Some(Ok(mut media_guard)) = media_lock {
                 if let Some(ref mut media) = *media_guard {
@@ -21331,6 +22027,7 @@ pub fn run_preview_window() {
                                     duration,
                                     audio_card_dpi,
                                     name_offset,
+                                    audio_chrome,
                                 ) {
                                     needs_repaint = true;
                                 }
@@ -23139,6 +23836,8 @@ pub fn run_preview_window() {
                         let dpi = dpi_at(rect.0, rect.1);
                         let transport_bar = pin_transport_kind(kind);
                         let overlay = pin_overlay_chrome(kind);
+                        let hides_chrome = pin_hides_chrome(kind);
+                        let caption_gap = pinned_caption_gap(dpi, kind);
 
                         // The window is the media's box with the chrome around it, and it is the
                         // *window* that is held to the display rather than the media: a hover can
@@ -23148,18 +23847,23 @@ pub fn run_preview_window() {
                         // So the box the media is given is the media's box shifted back into the
                         // display by however much of the chrome fell off it.
                         let window = clamp_pinned_box(
-                            pinned_window_box_of(rect, dpi, transport_bar, overlay),
+                            pinned_window_box_of(rect, dpi, transport_bar, overlay, caption_gap),
                             dpi,
                             &DESKTOPS,
                         );
-                        let content = content_box_of(window, dpi, transport_bar, overlay);
+                        let content =
+                            content_box_of(window, dpi, transport_bar, overlay, caption_gap);
 
                         // The level the pin plays at is the one the tray names now — which is the
                         // level the preview it came from is already playing at, both engines being
                         // started at `Volume → Video` — and from the moment the pin is up the level
                         // is this window's own: a knob moved on its bar moves nothing else (see
-                        // `PinVolume`).
-                        let volume = current_video_volume();
+                        // `PinVolume`). A sound's is `Volume → Audio`, for the same reason and
+                        // because it is the setting that preview was playing at.
+                        let volume = match kind {
+                            Some(MediaType::Audio) => current_audio_volume(),
+                            _ => current_video_volume(),
+                        };
 
                         // A pin taken up over another one — the file it was showing was picked by
                         // the pointer or the keyboard while it was up (see `PinUpdate`) — is the
@@ -23180,7 +23884,14 @@ pub fn run_preview_window() {
 
                         let carried = pin_state().and_then(|pinned| {
                             pinned.pin().map(|pin| {
-                                (pin.restore, pin.chrome, pin.volume, pin.overlay, pin.bound)
+                                (
+                                    pin.restore,
+                                    pin.chrome,
+                                    pin.volume,
+                                    pin.overlay,
+                                    pin.hides_chrome,
+                                    pin.bound,
+                                )
                             })
                         });
 
@@ -23248,17 +23959,23 @@ pub fn run_preview_window() {
                                 transport_live: kind == Some(MediaType::NativeVideo),
                                 frame: pin_frame(kind),
                                 overlay,
+                                hides_chrome,
+                                caption_gap,
                                 chrome: match carried {
                                     // Chrome belongs to the kind it was drawn over: one kind's
                                     // strip has nothing to say about another's, so a swap that
-                                    // changes it arrives as the new kind's own does.
-                                    Some((_, chrome, _, was_overlay, _))
-                                        if was_overlay == overlay =>
+                                    // changes it arrives as the new kind's own does. What is
+                                    // compared is whether the kind can hide its chrome at all —
+                                    // a sound swapped in from a picture would otherwise inherit a
+                                    // picture's arrived-and-gone title bar, which is a band the sound
+                                    // had never shown (see `pin_hides_chrome`).
+                                    Some((_, chrome, _, was_overlay, was_hiding, _))
+                                        if was_overlay == overlay && was_hiding == hides_chrome =>
                                     {
                                         chrome
                                     }
                                     _ => {
-                                        if overlay {
+                                        if hides_chrome {
                                             PinChrome::on_arrival(now)
                                         } else {
                                             PinChrome::always()
@@ -23289,13 +24006,15 @@ pub fn run_preview_window() {
                                     ..Default::default()
                                 },
                                 volume: match carried {
-                                    Some((_, _, volume, _, _)) => volume,
+                                    Some((_, _, volume, ..)) => volume,
                                     None => PinVolume {
                                         level: volume,
                                         playing_at: volume,
                                         ..Default::default()
                                     },
                                 },
+                                audio_hovered: None,
+                                audio_pressed: None,
                             };
 
                             // The pin is published as up inside this, after the state it publishes
@@ -23346,6 +24065,7 @@ pub fn run_preview_window() {
                                 .map(|scroll| scroll.offset())
                                 .unwrap_or(0),
                             dpi: audio_card_dpi,
+                            chrome: pinned_audio_chrome(audio_paused.is_none()),
                         };
 
                         if let Some((path, dpi)) = pinned_media_owner() {
@@ -27752,7 +28472,7 @@ mod tests {
                 (Some(67.0), track.duration),
                 (Some(0.5), None),
             ] {
-                let Some(card) = audio_card(&path, elapsed, duration, 0) else {
+                let Some(card) = audio_card(&path, elapsed, duration, 0, None) else {
                     continue;
                 };
                 let options = current_audio_options();
@@ -29082,18 +29802,18 @@ mod tests {
         // carries the bar as well, which is a band the media gives up at the bottom.
         let window = (100, 100, 500, 600);
         assert_eq!(
-            content_box_of(window, 96, false, false),
+            content_box_of(window, 96, false, false, 0),
             (100, 130, 500, 600)
         );
         assert_eq!(
-            content_box_of(window, 96, true, false),
+            content_box_of(window, 96, true, false, 0),
             (100, 130, 500, 570)
         );
 
         // And a kind whose chrome is drawn over its media has no bands at all: its window is its
         // media, and the caption and the bar are strips *of* it rather than room beside it.
-        assert_eq!(content_box_of(window, 96, false, true), window);
-        assert_eq!(content_box_of(window, 96, true, true), window);
+        assert_eq!(content_box_of(window, 96, false, true, 0), window);
+        assert_eq!(content_box_of(window, 96, true, true, 0), window);
     }
 
     /// A key pressed on a pin that is the window the user is in walks the pin's own folder, and a
@@ -29657,31 +30377,32 @@ mod tests {
         // kind that plays, a transport bar below it — and the same box read back the other way
         // round is the media again.
         assert_eq!(
-            pinned_window_box_of(content, 96, false, false),
+            pinned_window_box_of(content, 96, false, false, 0),
             (100, 100, 500, 600)
         );
         assert_eq!(
-            pinned_window_box_of(content, 96, true, false),
+            pinned_window_box_of(content, 96, true, false, 0),
             (100, 100, 500, 630)
         );
         assert_eq!(
             content_box_of(
-                pinned_window_box_of(content, 96, true, false),
+                pinned_window_box_of(content, 96, true, false, 0),
                 96,
                 true,
-                false
+                false,
+                0
             ),
             content
         );
 
         // A kind whose chrome is drawn over its media is its own box: there is no room to take
         // beside a picture for something painted on top of it.
-        assert_eq!(pinned_window_box_of(content, 96, true, true), content);
+        assert_eq!(pinned_window_box_of(content, 96, true, true, 0), content);
 
         // And where each part of the window is drawn: the media between the two bands, or under
         // the chrome the whole of the window down, with the strips over its first and last rows.
-        assert_eq!(pinned_band_rows(500, 30, 30, false), (30, 440));
-        assert_eq!(pinned_band_rows(500, 30, 30, true), (0, 500));
+        assert_eq!(pinned_band_rows(500, 30, 30, false, 0), (30, 440));
+        assert_eq!(pinned_band_rows(500, 30, 30, true, 0), (0, 500));
 
         // What the room of a display is follows from the same answer: a pin that keeps its chrome
         // inside its own box has the whole work area to be placed in.
@@ -29692,10 +30413,312 @@ mod tests {
             bottom: 800,
         };
         assert_eq!(
-            pinned_room(bounds, 96, true, false).room(),
+            pinned_room(bounds, 96, true, false, 0).room(),
             (1000, 800 - 30 - 30)
         );
-        assert_eq!(pinned_room(bounds, 96, true, true).room(), (1000, 800));
+        assert_eq!(pinned_room(bounds, 96, true, true, 0).room(), (1000, 800));
+    }
+
+    /// A sound's caption comes and goes like a picture's, and stands a little away from the card
+    /// whether it is showing or not.
+    ///
+    /// The two are separate decisions and both are needed: the gap is there because a sound's card
+    /// opens with the file's own name and a caption flush against it is two titles in a row with
+    /// nothing saying they are two, and the hiding is there because the caption is a band of the
+    /// window rather than a strip over the card — so a pointer that has walked away from a sound
+    /// leaves nothing behind but the card, which is the thing the window is for.
+    #[test]
+    fn a_sounds_caption_hides_and_leaves_the_cards_title_alone() {
+        let sound = Some(MediaType::Audio);
+        assert!(
+            pin_hides_chrome(sound),
+            "a sound's caption is a band of its own, so hiding it costs the card nothing"
+        );
+        assert!(
+            pinned_caption_gap(96, sound) > 0,
+            "and it stands away from the card's own name rather than flush against it"
+        );
+
+        // Every other kind, and nothing pinned, keep the caption where it has always been and
+        // showing the whole time.
+        for kind in [
+            Some(MediaType::StaticImage),
+            Some(MediaType::Text),
+            Some(MediaType::Archive),
+            Some(MediaType::NativeVideo),
+            Some(MediaType::Video),
+            None,
+        ] {
+            assert_eq!(
+                pinned_caption_gap(96, kind),
+                0,
+                "{kind:?} keeps its caption where it was"
+            );
+        }
+
+        // And the gap is a gap in the bands rather than a change of the caption's height: the
+        // media begins below both, and the window is that much taller than the media it holds.
+        let caption = pinned_caption_height(96);
+        let gap = pinned_caption_gap(96, sound);
+        let window = pinned_window_box_of((100, 100, 500, 600), 96, false, false, gap);
+        assert_eq!(window.1, 100 - caption - gap);
+        assert_eq!(
+            content_box_of(window, 96, false, false, gap),
+            (100, 100, 500, 600),
+            "and read back the other way round the media is the media again"
+        );
+        let (top, height) = pinned_band_rows(600, caption, 0, false, gap);
+        assert_eq!(
+            (top, height),
+            (caption + gap, 600 - caption - gap),
+            "while the band the card is drawn in begins below the whole of it"
+        );
+
+        // A picture's band begins below the caption alone, which is the band it has always had.
+        assert_eq!(
+            pinned_band_rows(600, caption, 0, false, 0),
+            (caption, 600 - caption)
+        );
+    }
+
+    /// A gap in the chrome belongs to no control at all: a press in it is a press on the band,
+    /// which is a handle for carrying the window, and not a press on the caption's close button.
+    #[test]
+    fn a_pin_with_a_gap_in_its_chrome_presses_the_window_in_the_gap() {
+        let previous_pin = take_pin_for_a_test();
+
+        let gap = pinned_caption_gap(96, Some(MediaType::Audio));
+        let mut pin = PinnedPreview {
+            overlay: false,
+            hides_chrome: true,
+            caption_gap: gap,
+            content: (100, 100, 500, 300),
+            ..PinnedPreview::for_test()
+        };
+        pin.chrome = PinChrome::always();
+        stand_pin(Some(pin));
+
+        let caption = pinned_caption_geometry().expect("a caption for a pin that is up");
+        assert!(
+            caption.band > caption.height,
+            "the band is the strip and the gap under it: {} against {}",
+            caption.band,
+            caption.height
+        );
+
+        let width = caption.width;
+        let in_the_strip = caption.height - 1;
+        let in_the_gap = caption.height;
+
+        // No button of the caption's own answers for a point in the gap: `button_at` is asked
+        // with the strip's height and never was in the gap, and the window procedure now tests the
+        // band rather than the strip before it asks at all (see `pinned_press`).
+        assert_eq!(
+            pin_chrome::button_at(width - 10, in_the_gap, width, caption.height, 96, false),
+            None,
+            "a point in the gap is on no button"
+        );
+        assert!(
+            in_the_gap > in_the_strip,
+            "and the strip above it is where the buttons are"
+        );
+
+        stand_pin(previous_pin);
+    }
+
+    /// A pin standing a sound's card: the three facts its controls are gated on, read from the pin's
+    /// own fields rather than from the media's kind, which is why a test of them needs no media at
+    /// all (see `pin_shows_an_audio_card`).
+    fn sound_pin() -> PinnedPreview {
+        let mut pin = PinnedPreview {
+            overlay: false,
+            hides_chrome: true,
+            caption_gap: pinned_caption_gap(96, Some(MediaType::Audio)),
+            content: (100, 100, 500, 300),
+            ..PinnedPreview::for_test()
+        };
+        pin.chrome = PinChrome::always();
+        pin.transport_bar = false;
+        pin.frame = PinFrame::None;
+
+        pin
+    }
+
+    /// The middle of the card's volume button, in *screen* coordinates: what the cursor has to be
+    /// at for the card to answer with that button, and it is read of the card's own arithmetic
+    /// rather than counted out here — which is the whole of what the two tests below are about.
+    fn sound_pin_volume_button(pin: &PinnedPreview) -> (i32, i32) {
+        let button = audio_preview::control_box(
+            CardControl::Volume,
+            (pin.content.2 - pin.content.0) as u32,
+            pin.dpi,
+            current_audio_options(),
+            true,
+        )
+        .expect("a box on a card that carries its controls");
+        let window = pin.window_box();
+        let (_, height) = pin.window_size();
+        let (top, _) = pinned_band_rows(
+            height,
+            pinned_caption_height(pin.dpi),
+            0,
+            pin.overlay,
+            pin.caption_gap,
+        );
+
+        (
+            window.0 + (button.left + button.right) / 2,
+            window.1 + button.top + top,
+        )
+    }
+
+    /// A pointer that has walked off a sound's card leaves no button lit: the card is a media
+    /// frame rather than chrome, so what shows the wash is the card's own paint, and the tick that
+    /// notices the pointer has gone has to ask for that card rather than for the window.
+    #[test]
+    fn a_hover_off_the_card_leaves_its_buttons_unlit() {
+        let previous_pin = take_pin_for_a_test();
+        let pin = sound_pin();
+        let (x, y) = sound_pin_volume_button(&pin);
+        stand_pin(Some(pin));
+        AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+
+        let now = Instant::now();
+
+        // A pointer on the button lights it, and the caption stays up: for a banded kind the band
+        // is the whole of the window, so a hand anywhere on it has asked for the caption (see
+        // `pin_chrome_near`).
+        assert!(
+            pin_state().and_then(|mut pinned| {
+                let pin = pinned.pin_mut()?;
+                Some(refresh_pin_chrome(pin, now, Some((x, y))))
+            }) == Some(true),
+            "a pointer arriving on a button is a change worth a repaint"
+        );
+        assert_eq!(
+            pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_hovered)),
+            Some(Some(CardControl::Volume)),
+            "and the button it is on is what the card is painted from"
+        );
+
+        // And away from the whole of it, which is where the question is actually answered: the
+        // button is put out, and the card is asked to be painted again.
+        AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+        assert!(
+            pin_state().and_then(|mut pinned| {
+                let pin = pinned.pin_mut()?;
+                Some(refresh_pin_chrome(pin, now, Some((-1000, -1000))))
+            }) == Some(true),
+            "which is a change worth a repaint"
+        );
+        assert!(
+            AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+            "and the card's own paint is what has to be redone: it is a media frame, not chrome, so \
+             `render_layered_preview` alone would redraw the old card"
+        );
+        assert_eq!(
+            pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_hovered)),
+            Some(None),
+            "and the button is left unlit under a pointer that has walked away"
+        );
+
+        stand_pin(previous_pin);
+    }
+
+    /// The card's own paint is what shows the wash under a pointer, and the hover path is where
+    /// that is asked for — `AUDIO_CARD_DIRTY` is set rather than the window merely repainted, and
+    /// the distinction is the whole of why a sound's buttons light up at all.
+    #[test]
+    fn the_card_asks_to_be_repainted_when_its_hover_changes() {
+        let previous_pin = take_pin_for_a_test();
+        let pin = sound_pin();
+        let (x, y) = sound_pin_volume_button(&pin);
+        stand_pin(Some(pin));
+
+        let now = Instant::now();
+
+        AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+        let changed = pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            Some(pin_audio_hover_refresh(pin, Some((x, y))))
+        });
+        assert!(
+            AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+            "a change of the card's hover is a change of the card"
+        );
+        assert_eq!(
+            changed,
+            Some(true),
+            "and the tick owes the window a repaint as well"
+        );
+
+        // Nothing changed, nothing is asked for: a pointer resting on the same button is not a
+        // repaint a quarter of a second.
+        AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+        let changed = pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            Some(pin_audio_hover_refresh(pin, Some((x, y))))
+        });
+        assert_eq!(
+            changed,
+            Some(false),
+            "the same answer twice is not a change"
+        );
+        assert!(
+            !AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+            "and nothing is asked of the card"
+        );
+
+        // And a pin brought up by a key has no pointer anywhere near it, which is why the arrival
+        // window is the one every other kind gets (see `pin_hides_chrome`).
+        let mut arrived = PinnedPreview::for_test();
+        arrived.chrome = PinChrome::on_arrival(now);
+        arrived.hides_chrome = true;
+        arrived.overlay = false;
+        assert!(!pin_audio_hover_refresh(&mut arrived, None));
+
+        stand_pin(previous_pin);
+    }
+
+    /// A sound has no transport strip, and that is the whole of the design in one line: its
+    /// controls are the card's own, drawn on the card's own row, which is why the caption above it
+    /// can come and go without taking the controls with it.
+    ///
+    /// These two answers are a pair, and the pair is what keeps a sound from growing a second set
+    /// of controls on a strip of its own — which would be a caption that hides taking a player's
+    /// buttons with it.
+    #[test]
+    fn a_sound_has_no_transport_strip_and_a_caption_that_hides() {
+        // The video the media engine plays: a strip of chrome over a picture, both of which the
+        // pointer asks for. A video FFmpeg plays keeps its bands and shows them always, because the
+        // band is where the player's own window stands.
+        assert!(pin_transport_kind(Some(MediaType::NativeVideo)));
+        assert!(pin_hides_chrome(Some(MediaType::NativeVideo)));
+        assert!(pin_transport_kind(Some(MediaType::Video)));
+        assert!(!pin_hides_chrome(Some(MediaType::Video)));
+        assert!(!pin_hides_chrome(None));
+
+        assert!(
+            !pin_transport_kind(Some(MediaType::Audio)),
+            "a sound's controls are the card's, drawn on the card's own row"
+        );
+        assert!(
+            pin_hides_chrome(Some(MediaType::Audio)),
+            "and its caption is a band of its own, so it can come and go without costing anything"
+        );
+
+        // The card is its own size and is not framed into one either way (see `pin_frame`).
+        assert_eq!(pin_frame(Some(MediaType::Audio)), PinFrame::None);
+        assert!(!pin_overlay_chrome(Some(MediaType::Audio)));
+
+        // And those three facts together are what says "this pin is showing a sound's card",
+        // which is the gate every question about the card's controls is behind (see
+        // `pin_shows_an_audio_card`).
+        assert!(pin_shows_an_audio_card(&sound_pin()));
+        assert!(!pin_shows_an_audio_card(&overlay_pin(
+            (100, 100, 500, 300),
+            PinChrome::always()
+        )));
     }
 
     /// A pin of the kind the chrome's own questions are about: a picture, whose window is its
@@ -29882,6 +30905,7 @@ mod tests {
         // is asked: a text preview's caption and bar are where they have always been, always there.
         let mut text = overlay_pin(content, PinChrome::always());
         text.overlay = false;
+        text.hides_chrome = false;
         assert!(!refresh_pin_chrome(&mut text, now, far));
         assert!(text.chrome.caption && text.chrome.bar);
     }
@@ -30181,16 +31205,20 @@ mod tests {
                 content,
                 room: drag_room(),
                 overlay,
+                transport: false,
+                // No gap kept under the caption: this is a kind that is framed or laid out, and
+                // the only kind with a gap is a sound, which is neither (see
+                // `pinned_caption_gap`).
+                caption_gap: 0,
             },
             edge,
             dx,
             dy,
             96,
-            false,
             frame,
         );
 
-        content_box_of(window, 96, false, overlay)
+        content_box_of(window, 96, false, overlay, 0)
     }
 
     #[test]
@@ -30320,6 +31348,7 @@ mod tests {
                     bound: Some(bound),
                     transport_bar: false,
                     overlay: true,
+                    caption_gap: 0,
                     maximized: false,
                     room: bounds,
                 };
@@ -30376,7 +31405,7 @@ mod tests {
 
         // The room a maximized window's media is laid out in: the display's own, less the
         // caption above it (see `pinned_room`).
-        let room = pinned_room(bounds, 96, false, false);
+        let room = pinned_room(bounds, 96, false, false, 0);
 
         // Five files of real shapes, walked in an order that makes the ratchet visible: a wide
         // one, a tall one, a square, a strip, and the wide one again. What a user hammering
@@ -30429,11 +31458,12 @@ mod tests {
                     bound: None,
                     transport_bar: false,
                     overlay: false,
+                    caption_gap: 0,
                     maximized: true,
                     // The room the production reader builds, caption and all, and not the bare
                     // display: a test that laid its files out against a room nothing lays out
                     // against is a test of its own fixture.
-                    room: pinned_room(bounds, 96, false, false),
+                    room: pinned_room(bounds, 96, false, false, 0),
                 };
                 let Some(PinBox::Measured(laid_out)) = pin_update_content(space, path, bounds, 96)
                 else {
@@ -30683,6 +31713,7 @@ mod tests {
             bound: Some(2000),
             transport_bar: false,
             overlay: true,
+            caption_gap: 0,
             maximized: false,
             room: bounds,
         };
@@ -30719,6 +31750,7 @@ mod tests {
             bound: Some(800),
             transport_bar: false,
             overlay: true,
+            caption_gap: 0,
             maximized: false,
             room: bounds,
         };
@@ -30766,6 +31798,7 @@ mod tests {
             bound: Some(3000),
             transport_bar: true,
             overlay: false,
+            caption_gap: 0,
             maximized: false,
             room: bounds,
         };
@@ -30806,6 +31839,7 @@ mod tests {
             bound: None,
             transport_bar: false,
             overlay: true,
+            caption_gap: 0,
             maximized: false,
             room: bounds,
         };
@@ -30832,6 +31866,7 @@ mod tests {
             bound: None,
             transport_bar: true,
             overlay: false,
+            caption_gap: 0,
             maximized: false,
             room: bounds,
         };
@@ -30861,6 +31896,7 @@ mod tests {
             bound: None,
             transport_bar: false,
             overlay: false,
+            caption_gap: 0,
             maximized: false,
             room: bounds,
         };
@@ -30920,6 +31956,7 @@ mod tests {
             bound: Some(400),
             transport_bar: false,
             overlay: false,
+            caption_gap: 0,
             maximized: false,
             room: bounds,
         };
@@ -30938,6 +31975,7 @@ mod tests {
             bound: Some(1400),
             transport_bar: false,
             overlay: false,
+            caption_gap: 0,
             maximized: true,
             room: bounds,
         };
@@ -31001,6 +32039,7 @@ mod tests {
             bound,
             transport_bar: false,
             overlay: false,
+            caption_gap: 0,
             maximized: false,
             room: bounds,
         };
@@ -31118,6 +32157,7 @@ mod tests {
             bound: None,
             transport_bar: false,
             overlay: false,
+            caption_gap: 0,
             maximized: false,
             room: bounds,
         };
@@ -31138,6 +32178,7 @@ mod tests {
             bound: Some(1400),
             transport_bar: false,
             overlay: false,
+            caption_gap: 0,
             maximized: false,
             room: bounds,
         };
@@ -31433,6 +32474,8 @@ mod tests {
             transport_live: false,
             frame: PinFrame::Shaped,
             overlay: false,
+            hides_chrome: false,
+            caption_gap: 0,
             chrome: PinChrome::always(),
             collapsed: false,
             bubble_pause: None,
@@ -31442,6 +32485,8 @@ mod tests {
             dragging: None,
             transport: PinTransport::default(),
             volume: PinVolume::default(),
+            audio_hovered: None,
+            audio_pressed: None,
         };
         let (width, height) = pin.window_size();
 
@@ -31725,9 +32770,10 @@ mod tests {
             false,
             false,
             PinFrame::Free,
+            0,
         );
 
-        let content = content_box_of(resized, 96, false, false);
+        let content = content_box_of(resized, 96, false, false, 0);
         assert_eq!(content, (0, 30, 600, 330));
 
         // And its own floor holds: a page cannot be dragged to nothing.
@@ -31745,8 +32791,9 @@ mod tests {
             false,
             false,
             PinFrame::Free,
+            0,
         );
-        let content = content_box_of(resized, 96, false, false);
+        let content = content_box_of(resized, 96, false, false, 0);
         assert_eq!(content, (0, 30, 400, 30 + PIN_MIN_MEDIA_PIXELS as i32));
     }
 
@@ -32851,6 +33898,8 @@ mod tests {
                 transport_live: true,
                 frame: PinFrame::Shaped,
                 overlay: true,
+                hides_chrome: true,
+                caption_gap: 0,
                 chrome: PinChrome::on_arrival(Instant::now()),
                 collapsed: false,
                 bubble_pause: None,
@@ -32864,6 +33913,8 @@ mod tests {
                     ..Default::default()
                 },
                 volume: PinVolume::default(),
+                audio_hovered: None,
+                audio_pressed: None,
             }));
 
             seek_pinned_playback(&path, (0, 0, 320, 240), 90.0);
@@ -32887,5 +33938,4 @@ mod tests {
             *media = previous_media;
         }
     }
-
 }

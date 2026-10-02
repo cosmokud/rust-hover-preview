@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **A pinned sound now has controls on its card**: **Previous**, **Play/Pause** and **Next** at the left of the bar row, and a **Volume** button at its right which opens the same compact vertical level panel a pinned video's transport bar carries - over the card rather than over a player's window, and drawn by this app either way. They are drawn on the card itself rather than in a strip of the window, so the card's bar row is now as tall as a button rather than as tall as the three-pixel line, and the bar is centred in it. **Previous** and **Next** are the caption's own arrows - the same walk through the sibling files in the folder - and **Play/Pause** is the same hold-and-let-go a `Space` in the window does, from a click rather than a key. **Volume** belongs to the window the way a video's does: a pin showing a sound comes up at `Volume -> Audio` rather than `Volume -> Video`, and a knob dragged on the card is heard as it moves, with a level FFmpeg's player can only take by being started at one settled on the release rather than on every pixel of the drag. The card a *hover* shows is unchanged - no buttons, and a bar from margin to margin - because a hover's window is a window nobody is in.
+- **The bar under a pinned sound's card is easier to click below as well as above.** It was already answered for the row and the gap above it; the band now reaches eight scaled pixels *under* it as well, clamped at the card's own bottom edge so it cannot swallow the margin further down where a hand is carrying the window. And a file that does not say how long it is is no longer refused the whole row: only the seek is refused, because its buttons are the caption's own walk and this window's own level, and neither is a question about the length of a file.
+
+### Changed
+
+- **A pinned sound's title bar now appears only when the pointer is over the window**, the way a picture's does, and stands eight pixels clear of the card rather than flush against it. Two reasons, and they are different ones. The bar is shown when the pointer is near because a sound's caption is a *band of the window* rather than a strip painted over the card, so hiding it costs the card nothing and leaves the window's box alone - the same gate (`pin_hides_chrome`) a picture's chrome goes through, arrived at separately and now answering both. It is cleared of the card because a sound's card opens with the file's own name, and a caption flush against it is two titles in a row with nothing saying they are two; the gap belongs to the chrome band rather than to the media, so a press inside it is a press on the band - a handle for carrying the window - and not on any button. A pin still shows its whole of the chrome for a moment after it comes up, as every kind does, since a pin brought up by a key has no pointer near it.
+
 ## [0.4.0]
 
 ### Added
