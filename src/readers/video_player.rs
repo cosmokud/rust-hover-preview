@@ -1313,6 +1313,17 @@ pub(crate) fn open_stream(path: &Path) -> Option<IMFByteStream> {
     Some(stream)
 }
 
+/// The alpha byte a frame of this app's is composed with, which is what every frame is
+/// written with whether the codec behind it had an opinion or not.
+///
+/// It is a named constant rather than the literal at each of the four places that write one,
+/// because the four are the same decision: the samplers below write it because their
+/// arithmetic has no alpha channel to carry, the copy writes it because the converter that
+/// produced the frame has no reason to have written one either (see [`force_opaque`]), and
+/// `heif_sequence` writes it because the format it read the frame in does not have the byte
+/// at all.
+const OPAQUE: u8 = 255;
+
 /// A frame's alpha bytes forced opaque, which is what every frame of this app's is composed with
 /// and is shared with `heif_sequence`.
 ///
@@ -1321,13 +1332,29 @@ pub(crate) fn open_stream(path: &Path) -> Option<IMFByteStream> {
 /// frame that carried an alpha of nothing composites to a preview that fades out or opens blank.
 /// What the engine hands over in `RGB32` has no alpha written into it at all (see
 /// `heif_sequence::set_output_type`).
+///
+/// That last point was settled by measurement for `ARGB32` as well rather than assumed from the
+/// format's name, since the natural question is whether the colour converter writes `0xFF` into
+/// a destination that has an alpha channel and so makes all of this unnecessary. It does not: a
+/// 1920 x 800 frame read straight out of the engine's own surface after a transfer into
+/// `MFVideoFormat_ARGB32` carried a histogram of the fourth byte over the whole surface of
+/// `253`, `254` and `255` — which is not opaque, is not stable, and is not a value anybody
+/// could have drawn with — and the very first frame of a session, before the converter had
+/// written anything at all into the surface it had just been handed, was `0` throughout. So the
+/// byte is written here and this function is not merely a convenience for the one caller who
+/// needs a whole frame of it forced: it is the reason a video preview is opaque at all.
+///
+/// It is no longer on the video path itself, which sets the byte as it copies rather than
+/// walking the frame afterwards, because a pass of its own over thirty megabytes is a pass of
+/// its own over thirty megabytes (see [`copy_locked`]). What is left here is `heif_sequence`,
+/// which has no copy of its own to fold it into.
 pub(crate) fn force_opaque(pixels: &mut [u8]) {
     // `as_chunks_mut` rather than `chunks_exact_mut`: a frame is a few million bytes and this
     // is a per-pixel pass over every one of them, so the bounds check the other form carries is
     // worth taking out. A frame that is not a whole number of pixels is left alone rather than
     // shortened, since it is not a frame.
     for pixel in pixels.as_chunks_mut::<4>().0 {
-        pixel[3] = 255;
+        pixel[3] = OPAQUE;
     }
 }
 
@@ -1541,7 +1568,7 @@ fn interpolate_row(
             pixel[channel] = ((mixed + 128) >> 8) as u8;
         }
 
-        pixel[3] = 255;
+        pixel[3] = OPAQUE;
     }
 }
 
@@ -1564,12 +1591,21 @@ fn blend_rows(upper: &[u8], lower: &[u8], weight: u32, out: &mut [u8]) {
             pixel[channel] = ((mixed + 128) >> 8) as u8;
         }
 
-        pixel[3] = 255;
+        pixel[3] = OPAQUE;
     }
 }
 
 /// Copy a locked bitmap out as the preview's frame, which is the one place a video's pixels
 /// are touched where the engine is the one that scaled them.
+///
+/// The copy and the alpha are one pass, which is the whole of what this function is for: a
+/// frame at the size of a display is thirty megabytes, so a second pass over it is a second
+/// thirty megabytes read back out of main memory and thirty more written over the compositor's
+/// copy — a hundred megabytes of traffic for a byte in every fourth position, on the preview
+/// thread, once for each frame of the file. Written as two passes it was two traversals of a
+/// buffer that does not fit in a cache, and the second one paid for every byte of the first.
+/// Written as one there is nothing to pay for at all: the fourth byte is set as the pixel goes
+/// past rather than by walking over what was just written.
 fn copy_locked(bitmap: &IWICBitmap, pixels: &mut Vec<u8>, width: u32, height: u32) -> bool {
     let Some(stride) = (width as usize).checked_mul(4) else {
         return false;
@@ -1595,12 +1631,34 @@ fn copy_locked(bitmap: &IWICBitmap, pixels: &mut Vec<u8>, width: u32, height: u3
     for row in 0..height as usize {
         let from = row * source_stride;
         let to = row * stride;
-        pixels[to..to + stride].copy_from_slice(&source[from..from + stride]);
 
-        force_opaque(&mut pixels[to..to + stride]);
+        copy_row_opaque(&source[from..from + stride], &mut pixels[to..to + stride]);
     }
 
     true
+}
+
+/// One row of the engine's surface into one row of the box's, with every pixel of it opaque as
+/// it goes past rather than by a walk over the row afterwards.
+///
+/// The two are separate functions for the reason every other row-level step in this file is
+/// one: this is the whole of [`copy_locked`] that can be looked at without a bitmap to lock,
+/// and the alpha is the part of it that is easy to get wrong. A pixel past the end of the
+/// pair is left as it was, which is the same rule [`force_opaque`] keeps and for the same
+/// reason — the two slices are the same length here, so a byte over is a byte over rather than
+/// a frame.
+fn copy_row_opaque(from: &[u8], to: &mut [u8]) {
+    // `as_chunks` rather than `chunks_exact`: pairing the two by index costs a bounds check
+    // per pixel on the way round a whole frame, and the pairing is the guarantee that each
+    // pixel is copied with its own alpha written beside it.
+    for (pixel, from) in to
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(from.as_chunks::<4>().0)
+    {
+        pixel.copy_from_slice(&[from[0], from[1], from[2], OPAQUE]);
+    }
 }
 
 #[cfg(test)]
@@ -1740,6 +1798,38 @@ mod tests {
             !scales_here((0, 0), 320, 240),
             "a sound has no picture to scale, and a box of nothing is not one either"
         );
+    }
+
+    /// The alpha byte the colour converter writes into `ARGB32` is not one anybody could draw
+    /// with, so the copy writes it rather than reading it: which is what a row of the engine's
+    /// surface has to be for the preview to be opaque at all.
+    #[test]
+    fn a_copied_row_is_opaque_whatever_the_converter_wrote_in_it() {
+        // Three pixels carrying the three alpha values a transfer into `MFVideoFormat_ARGB32`
+        // has been seen to leave behind, plus the all-zero alpha of a frame nothing has been
+        // written into yet.
+        let source = [
+            10u8, 20, 30, 0, //
+            40, 50, 60, 253, 70, 80, 90, 254, 100, 110, 120, 255,
+        ];
+        let mut row = [0u8; 16];
+
+        copy_row_opaque(&source, &mut row);
+
+        let expected = [
+            [10u8, 20, 30, 255],
+            [40, 50, 60, 255],
+            [70, 80, 90, 255],
+            [100, 110, 120, 255],
+        ];
+
+        for (column, pixel) in expected.iter().enumerate() {
+            assert_eq!(
+                pixel_at(&row, 4, 0, column),
+                *pixel,
+                "pixel {column} keeps the colour it arrived with and is handed an alpha that can be composited"
+            );
+        }
     }
 
     /// A picture the engine wrote less of than it said it would is answered with no frame rather
