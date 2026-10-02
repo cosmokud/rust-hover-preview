@@ -73,7 +73,8 @@ use windows::Win32::Media::MediaFoundation::{
     MFCreateMFByteStreamOnStream, MFCreateMediaType, MFCreateSourceReaderFromByteStream,
     MFMediaType_Audio, MFMediaType_Video, MFVideoFormat_ARGB32, MFVideoFormat_RGB32,
     MFVideoNormalizedRect, MFARGB, MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK,
-    MF_MEDIA_ENGINE_EVENT_ERROR, MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA,
+    MF_MEDIA_ENGINE_EVENT_ERROR, MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY,
+    MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA,
     MF_MEDIA_ENGINE_READY_HAVE_METADATA, MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
     MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE, MF_MT_FRAME_SIZE,
     MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_PD_DURATION,
@@ -122,20 +123,33 @@ const FIRST_FRAME_GIVE_UP: Duration = Duration::from_secs(3);
 /// The engine's event sink, which is what the engine needs before it will run at all —
 /// `MF_MEDIA_ENGINE_CALLBACK` is required in every mode.
 ///
-/// One event is acted on and the rest are counted: an engine that reports an error has
+/// Two events are acted on and the rest are thrown away: an engine that reports an error has
 /// nothing left to hand over, and what this side does about that is stop asking it for
-/// frames. The callback arrives on a thread of the engine's own, so what it touches is an
-/// atomic and nothing else.
+/// frames; an engine that reports its first frame has a picture to give, which is the only
+/// thing that makes a frame transfer worth asking for. The callback arrives on a thread of the
+/// engine's own, so what it touches is an atomic and nothing else.
 #[implement(IMFMediaEngineNotify)]
 struct Notify {
     failed: Arc<AtomicBool>,
+    /// That the engine has decoded a frame of the file and handed it over, which is its own word
+    /// about the file and the one thing here that means a picture exists to be taken.
+    first_frame: Arc<AtomicBool>,
 }
 
 impl IMFMediaEngineNotify_Impl for Notify_Impl {
     fn EventNotify(&self, event: u32, param1: usize, param2: u32) -> windows::core::Result<()> {
+        // The failure the app acts on first: an error is the flag being set, and there is
+        // nothing for this engine to hand over after that.
         if event == MF_MEDIA_ENGINE_EVENT_ERROR.0 as u32 {
             let _ = (param1, param2);
             self.failed.store(true, Ordering::Release);
+        }
+
+        // The engine saying it has decoded a frame of the file and handed it over, which is the
+        // only answer that means there is a picture here to take. Everything above this line is
+        // about a file the engine cannot play; this is about one it can.
+        if event == MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY.0 as u32 {
+            self.first_frame.store(true, Ordering::Release);
         }
 
         Ok(())
@@ -182,6 +196,11 @@ struct Session {
     source: Option<MFVideoNormalizedRect>,
     path: PathBuf,
     failed: Arc<AtomicBool>,
+    /// The engine's own word that it decoded a frame of the file and handed it over. It is a
+    /// different and a stronger statement than [`Self::drew`], which records only that a
+    /// transfer was *asked for*: a surface the engine has not drawn into is a bitmap of zeros,
+    /// and a frame taken from one is a picture of nothing (see `copy_into`).
+    first_frame: Arc<AtomicBool>,
     /// Whether a frame of the file has been handed over at all: a session is not a promise that
     /// a picture will come of it, since the engine accepts a file whose decoder and converter
     /// are both there and whose *pipeline* is not (see [`failing_path`]).
@@ -538,24 +557,24 @@ pub fn failing_path() -> Option<PathBuf> {
 }
 
 /// The file the engine is failing at before it has drawn a frame of it, if it is failing at one
-/// there: the union of the two ways a pinned window's session comes to have no picture in it,
-/// where [`failing_path`] waits out only the second of them.
+/// there: the engine saying so, on a window that has been put up for the file and is standing
+/// there until something else is put up instead.
 ///
-/// The first is the engine saying so: `MF_MEDIA_ENGINE_EVENT_ERROR` raised into [`Notify`], the
-/// engine admitting outright that it cannot play the file it was handed rather than taking its
-/// time over it, and worth acting on the tick it arrives rather than a second later. The second
-/// is [`FIRST_FRAME_GIVE_UP`] running out with still nothing drawn, which is the engine with
-/// nothing to report because it has no pipeline to report on (see [`failing_path`]) — the same
-/// failure arrived at by silence rather than by an error, and so only ever to be found by
-/// waiting.
+/// What it is read is the one thing the engine can be asked that means failure — an
+/// `MF_MEDIA_ENGINE_EVENT_ERROR` raised into [`Notify`], the engine admitting outright that it
+/// cannot play the file it was handed rather than taking its time over it, and worth acting on
+/// the tick it arrives rather than a second later.
 ///
-/// [`failing_path`] is not this and still is what it is, because a hover has shown nothing yet:
-/// it can leave a file that is merely slow to start on the engine another tick and be no worse
-/// off, while a preview taken away from the engine that could have drawn it is a real loss. A
-/// pinned window is in no such position, having been put up for this file and standing there
-/// until something else is put up instead — so the tick the engine gives up on the file is the
-/// tick the window is a box of placeholder pixels that nothing further is coming to replace, and
-/// that tick is the one this asks about.
+/// There is deliberately no time floor beside it. There was [`FIRST_FRAME_GIVE_UP`], and it was
+/// there for a silence: a session with a surface that had drawn nothing for three seconds was
+/// read as the engine with nothing to report because it has no pipeline to report on (see
+/// [`failing_path`]) — the same failure arrived at by not-arrival rather than by an error. But
+/// a file being slow to decode is not that, and a cold read of a large one can exceed three
+/// seconds of opening before there is a frame in it at all: on that file the floor fired, the
+/// engine was taken away over the disk's speed, and the pin was left with a preview of the
+/// placeholder — the very flash the frame gate exists to prevent. A wait this long is better
+/// ended by the engine's own word or by the user closing the pin or stepping to another file
+/// than by a clock that cannot tell a slow file from a broken one.
 ///
 /// A session that has drawn a frame is left out, which is the same distinction drawn the other
 /// way round: a file that played and then met a bad sector is not a file the engine cannot
@@ -584,10 +603,14 @@ pub fn failing_before_a_frame() -> Option<PathBuf> {
             return None;
         }
 
-        (session.bitmap.is_some()
-            && !session.drew
-            && (session.failed.load(Ordering::Acquire)
-                || session.began.elapsed() >= FIRST_FRAME_GIVE_UP))
+        // There is no time floor here, and the reason is the file rather than the engine: a
+        // pinned window is put up for this file and stands there until something else is put up
+        // instead, so a wait that ends by a clock is a file called unplayable because this machine
+        // read it slowly. A cold read of a large file is exactly that — seconds of opening it
+        // before there is a frame in it — and giving up on the clock hands it to FFmpeg's player
+        // over a fault that is the disk's and not the codec's. What ends the wait is the engine
+        // saying so, or the user closing the pin or stepping to another file.
+        (session.bitmap.is_some() && !session.drew && session.failed.load(Ordering::Acquire))
             .then(|| session.path.clone())
     })
 }
@@ -959,6 +982,7 @@ impl Session {
         let source = picture.crop.and_then(source_rect);
 
         let failed = Arc::new(AtomicBool::new(false));
+        let first_frame = Arc::new(AtomicBool::new(false));
 
         let mut attributes: Option<IMFAttributes> = None;
         unsafe { MFCreateAttributes(&mut attributes, 3) }.ok()?;
@@ -966,6 +990,7 @@ impl Session {
 
         let notify: IUnknown = Notify {
             failed: Arc::clone(&failed),
+            first_frame: Arc::clone(&first_frame),
         }
         .into();
         unsafe { attributes.SetUnknown(&MF_MEDIA_ENGINE_CALLBACK, &notify) }.ok()?;
@@ -1031,6 +1056,7 @@ impl Session {
             source,
             path: path.to_path_buf(),
             failed,
+            first_frame,
             drew: false,
             pending_seek: None,
             began: Instant::now(),
@@ -1111,6 +1137,18 @@ impl Session {
         // which is a video that never starts, an `.mp4` being the format that shows it.
         if unsafe { self.engine.GetReadyState() } < MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA.0 as u16
         {
+            return None;
+        }
+
+        // And ready is not the same as decoded. `HAVE_CURRENT_DATA` says a frame is queued for
+        // the *stream*, which on a cold read is true before the engine has drawn a single pixel
+        // of the file — and the surface it is delivered into is a bitmap of zeros until it does,
+        // so a transfer asked for in that window succeeds and hands over a rectangle of black.
+        // The engine's own report of a first frame is the only thing that says a picture exists,
+        // and until it is made there is nothing here to take: the engine is not ticked, no
+        // transfer is asked for, nothing is written to the caller's pixels and the session is not
+        // recorded as having drawn.
+        if !self.first_frame.load(Ordering::Acquire) {
             return None;
         }
 
@@ -1663,6 +1701,60 @@ mod tests {
         assert!(
             out.iter().all(|byte| *byte == 9),
             "and what was there is left as it was"
+        );
+    }
+
+    /// The engine's report of a first frame is the one thing a frame transfer may be asked for,
+    /// and it arrives as an event on the notify callback rather than as anything to be read off
+    /// the engine's own state.
+    ///
+    /// It is the gate `copy_into` waits on: until this flag is set the engine is not ticked, no
+    /// transfer is asked for, nothing is written to the caller's pixels and the session is not
+    /// recorded as having drawn. `GetReadyState` cannot stand in for it, because a cold read
+    /// reaches `HAVE_CURRENT_DATA` before the engine has drawn anything, and the surface a
+    /// transfer would read is a bitmap of zeros until it does.
+    #[test]
+    fn only_the_engines_own_report_of_a_first_frame_is_taken_as_one() {
+        let failed = Arc::new(AtomicBool::new(false));
+        let first_frame = Arc::new(AtomicBool::new(false));
+
+        // The callback as the engine reaches it: behind a COM object, called by the name the
+        // vtable calls it by.
+        let notify = windows::core::ComObject::new(Notify {
+            failed: Arc::clone(&failed),
+            first_frame: Arc::clone(&first_frame),
+        });
+
+        notify
+            .EventNotify(
+                windows::Win32::Media::MediaFoundation::MF_MEDIA_ENGINE_EVENT_PLAY.0 as u32,
+                0,
+                0,
+            )
+            .expect("a callback with nothing to record answers with S_OK");
+        assert!(
+            !first_frame.load(Ordering::Acquire),
+            "an engine that has begun to play has not said it has a frame to hand over"
+        );
+
+        notify
+            .EventNotify(MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY.0 as u32, 0, 0)
+            .expect("the callback");
+        assert!(
+            first_frame.load(Ordering::Acquire),
+            "a frame the engine decoded and handed over is the one thing the take waits for"
+        );
+        assert!(
+            !failed.load(Ordering::Acquire),
+            "and it is not a failure: the file is one the engine can play"
+        );
+
+        notify
+            .EventNotify(MF_MEDIA_ENGINE_EVENT_ERROR.0 as u32, 0, 0)
+            .expect("the callback");
+        assert!(
+            failed.load(Ordering::Acquire),
+            "an error is still an error, recorded on its own flag beside this one"
         );
     }
 }
