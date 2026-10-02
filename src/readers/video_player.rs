@@ -1469,6 +1469,49 @@ fn resample_locked(
     scale_rows(source, stride, picture, box_size, rows, pixels)
 }
 
+// How many rows of the picture the scaler has read on this thread since the last time it was
+// asked, which is the only question a cache of two rows can be judged by.
+//
+// It is counted rather than reasoned about because the whole of the cache is invisible from
+// the picture it draws: a resampler that reads every row twice and one that reads each once
+// draw exactly the same frame. It is thread-local because the tests that ask are run beside
+// one another and a counter they all wrote to would be counting every test's frame, and it is
+// compiled in only under `cfg(test)` because a number only a test reads is not worth an
+// increment on the preview thread.
+#[cfg(test)]
+thread_local! {
+    static ROWS_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+// How many source rows a resample read per destination row of the box: the number the cache
+// exists to keep at one per source row of the picture, and which no test can get at any other
+// way.
+#[cfg(test)]
+fn rows_read_per_destination_row(source: &[u8], picture: (u32, u32), box_size: (u32, u32)) -> f64 {
+    let mut out = vec![0u8; box_size.0 as usize * box_size.1 as usize * 4];
+    let mut rows = [Vec::new(), Vec::new()];
+    ROWS_READ.with(|read| read.set(0));
+
+    assert!(scale_rows(
+        source,
+        picture.0 as usize * 4,
+        picture,
+        box_size,
+        &mut rows,
+        &mut out
+    ));
+
+    ROWS_READ.with(|read| read.replace(0)) as f64 / f64::from(box_size.1)
+}
+
+/// One source pixel for one destination pixel, in the 16.16 the two axes are mapped in.
+///
+/// It is named because a step of exactly this is the one that says the axis needs nothing done
+/// to it, which is a different kind of fact from the mapping itself and is not obvious from the
+/// arithmetic: every column lands on the column it started on, so the whole of the horizontal
+/// half of the scaling is a copy.
+const A_WHOLE_PIXEL: u64 = 1 << 16;
+
 /// The scaling itself: the picture at its own size read into a buffer of the box's.
 ///
 /// Bilinear and separable — a row of the box is two rows of the picture read across to the box's
@@ -1481,9 +1524,13 @@ fn resample_locked(
 /// The row of the picture a row of the box takes its lower half from is the row the next one takes
 /// its upper half from wherever the box is the larger of the two, and reading it across twice is
 /// half the scaling's work done twice over, so the two rows a row of the box is mixed from are
-/// kept in `rows` between the rows that need them. Below the picture's own size the rows no longer
-/// come in pairs and every row is read for itself, which is `resample_into_band`'s arrangement for
-/// the same reason: a scale down is not what this is here for.
+/// kept in `rows` between the rows that need them. Both of them are looked for, and neither is
+/// read across twice while the buffer that has it is still holding it: at four times the
+/// picture's size a pair of rows is mixed into sixteen rows of the box, and the cache as it
+/// stood was reading the lower one on all sixteen of them, so it kept the row for the ticks
+/// that needed it and paid for the ones that did not. Below the picture's own size the rows no
+/// longer come in pairs and every row is read for itself, which is `resample_into_band`'s
+/// arrangement for the same reason: a scale down is not what this is here for.
 fn scale_rows(
     source: &[u8],
     stride: usize,
@@ -1558,17 +1605,35 @@ fn scale_rows(
                 0
             }
         };
-        let lower = 1 - upper;
 
-        interpolate_row(
-            source,
-            stride,
-            picture_width,
-            lower_row as usize,
-            step_x,
-            &mut rows[lower],
-        );
-        held[lower] = Some(lower_row);
+        // The lower half of the pair is asked for the same way and for the same reason, and this
+        // is where the cache was not doing its job: a pair of rows mixed into four of the box is
+        // read across five times, and one mixed into sixteen is read across seventeen, all of it
+        // into a buffer that has held the row since the first of them. Reading it again costs a
+        // pass over the whole picture for nothing, which at a large enlargement is most of what
+        // the scaling is.
+        let lower = if lower_row == upper_row {
+            // The last row of the picture is its own lower half — the mapping is clamped to the
+            // picture's own rows, and the row below the last one does not exist. It is mixed
+            // with itself, which is the row, so it is read once and read for both.
+            upper
+        } else if let Some(index) = held.iter().position(|row| *row == Some(lower_row)) {
+            index
+        } else {
+            let index = 1 - upper;
+
+            interpolate_row(
+                source,
+                stride,
+                picture_width,
+                lower_row as usize,
+                step_x,
+                &mut rows[index],
+            );
+            held[index] = Some(lower_row);
+
+            index
+        };
 
         let destination = &mut out[y * row_bytes..(y + 1) * row_bytes];
         blend_rows(&rows[upper], &rows[lower], weight, destination);
@@ -1582,6 +1647,15 @@ fn scale_rows(
 ///
 /// The alpha is not read at all — a picture is opaque here, so the fourth byte of every pixel
 /// written is 255 whatever the codec put beside it (see [`force_opaque`]).
+///
+/// A box exactly as wide as the picture is the one case where this is not a resample at all, and
+/// it is worth the branch because it is the case a box that enlarged one axis only arrives at: a
+/// file whose pixels are not square is stretched along one axis at every size, so the other
+/// comes out equal, and every row of every frame of it would be read by the loop below, two
+/// pixels at a time, mixed by nothing, to arrive at the row it was given. A step of
+/// [`A_WHOLE_PIXEL`] says exactly that — one pixel per pixel, with the half-pixel offset the
+/// mapping takes leaving every column standing on its own — and the whole of the row comes then
+/// from [`copy_row_opaque`], which is what copying a row here already is.
 fn interpolate_row(
     source: &[u8],
     stride: usize,
@@ -1590,8 +1664,17 @@ fn interpolate_row(
     step: u64,
     out: &mut [u8],
 ) {
+    #[cfg(test)]
+    ROWS_READ.with(|read| read.set(read.get() + 1));
+
     let start = picture_row * stride;
     let picture_row = &source[start..start + picture_width as usize * 4];
+
+    if step == A_WHOLE_PIXEL {
+        copy_row_opaque(picture_row, out);
+        return;
+    }
+
     let last = picture_width as usize - 1;
 
     for (x, pixel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
@@ -1881,6 +1964,87 @@ mod tests {
             scales_here((1920, 1080), 1920, 2200),
             "along one axis only, which is what a picture of non-square pixels asks of at every size"
         );
+    }
+
+    /// The two rows a row of the box is mixed from are kept between the rows that need them,
+    /// and the only way to see whether they are is to count what is read: a resampler that
+    /// reads each row twice and one that reads each once draw exactly the same frame. At twice
+    /// the picture's size each source row is wanted by two rows of the box and at four times by
+    /// four, so the two numbers are one half and one quarter — and a cache that keeps the upper
+    /// row but reads the lower one again on every tick comes to one and a bit either way.
+    #[test]
+    fn every_row_of_the_picture_is_read_once_however_far_it_is_stretched() {
+        // A picture big enough for the mapping's arithmetic to be the whole of the cost and
+        // small enough to be written out by hand.
+        let picture = (100u32, 100u32);
+        let source = vec![0u8; picture.0 as usize * picture.1 as usize * 4];
+
+        let doubled = rows_read_per_destination_row(&source, picture, (200, 200));
+        assert!(
+            doubled <= 0.5,
+            "a row of the picture is wanted by two of the box, so it is read once each: {doubled:.3}"
+        );
+
+        let quadrupled = rows_read_per_destination_row(&source, picture, (400, 400));
+        assert!(
+            quadrupled <= 0.25,
+            "and by four at four times the size, for the same reason: {quadrupled:.3}"
+        );
+
+        // A box the same size as the picture is the other end of it: one row wanted by one row,
+        // and one read for it. It is also the last row of the picture under every other box,
+        // where the pair is a row and the same row again and so is read once rather than twice.
+        let matched = rows_read_per_destination_row(&source, picture, (100, 100));
+        assert!(
+            matched <= 1.0,
+            "the last row of a picture is its own lower half, so a whole frame reads one row fewer than it has: {matched:.3}"
+        );
+
+        // One axis equal and the other stretched is what a file of non-square pixels asks for at
+        // every size, and it is asked along the height here: the row cache does not care which
+        // axis it is, and the horizontal half of this is a copy rather than a resample.
+        let stretched = rows_read_per_destination_row(&source, picture, (100, 200));
+        assert!(
+            stretched <= 0.5,
+            "and a box stretched on one axis only reads each row of the picture once for it as well: {stretched:.3}"
+        );
+
+        let stretched_across = rows_read_per_destination_row(&source, picture, (200, 100));
+        assert!(
+            stretched_across <= 1.0,
+            "and one row for one row is one read for one row, whatever the columns are doing: {stretched_across:.3}"
+        );
+    }
+
+    /// A box as wide as the picture needs no resampling across, and the row it is given is the row
+    /// it was handed rather than a mix of it with itself: which is the difference between reading
+    /// a row and copying it, and is what a picture of non-square pixels gets on the axis that is
+    /// not being stretched.
+    #[test]
+    fn a_box_as_wide_as_the_picture_is_given_the_row_unchanged() {
+        // One row of a picture, with the alpha bytes a converter chose rather than this app.
+        let source = [
+            10u8, 20, 30, 0, //
+            40, 50, 60, 253, 70, 80, 90, 254, 100, 110, 120, 255,
+        ];
+        let mut row = [0u8; 16];
+
+        interpolate_row(&source, 16, 4, 0, A_WHOLE_PIXEL, &mut row);
+
+        let expected = [
+            [10u8, 20, 30, 255],
+            [40, 50, 60, 255],
+            [70, 80, 90, 255],
+            [100, 110, 120, 255],
+        ];
+
+        for (column, pixel) in expected.iter().enumerate() {
+            assert_eq!(
+                pixel_at(&row, 4, 0, column),
+                *pixel,
+                "column {column} arrived at from the source pixel and no other, and is opaque"
+            );
+        }
     }
 
     /// The alpha byte the colour converter writes into `ARGB32` is not one anybody could draw
