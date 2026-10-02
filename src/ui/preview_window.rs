@@ -13830,6 +13830,14 @@ unsafe fn ask_association(path: &Path, what: ASSOCSTR) -> Option<String> {
 /// configuration where it is needed.
 #[derive(Clone, Copy, Default)]
 struct PinVolume {
+    /// Which of the tray's two level settings this level is: `Volume → Audio` where it is a sound's
+    /// card's, `Volume → Video` for every other kind.
+    ///
+    /// The two settings stay apart, and this is what says which one the level in hand belongs to —
+    /// so that a file of another kind is played at its own setting rather than at the level the pin
+    /// is holding. One knob and one bar serve both, and the bar a hand moved is a hand on the file
+    /// under it, not on the file that comes to it next (see `pinned_level`).
+    audio: bool,
     /// The level this pin is playing at, 0-100.
     level: u32,
     /// The level the player that is running now was started at. FFmpeg's player is told nothing
@@ -13852,12 +13860,30 @@ fn with_pin(change: impl FnOnce(&mut PinnedPreview)) {
     }
 }
 
-/// The level the pin that is up is playing at, and the setting where there is no pin: what a
+/// The level the pin that is up plays a film at, and the setting where there is no pin: what a
 /// player this app starts for a pinned file is given (see `restart_pinned_player`).
 fn pinned_volume_level() -> u32 {
-    pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.level))
-        .unwrap_or_else(current_video_volume)
+    pinned_level(false)
+}
+
+/// The level the pin that is up plays at, for a file of the kind named: the pin's own where the
+/// level it is holding belongs to that kind — a knob turned on the bar is a hand on the file the bar
+/// is under, and it is kept for the next file of that kind — and the tray's setting for the kind
+/// otherwise.
+///
+/// Reading the two apart is the whole of what a pin walking off a sound and onto a film needs: the
+/// level in hand is the sound's, so a film played at `Volume → Video` — 0% and silent, as the tray
+/// is set more often than not — is played at `Volume → Audio` if the sound's level is carried onto
+/// it, which is a film at full volume out of a tray that says it should make no noise at all.
+fn pinned_level(audio: bool) -> u32 {
+    let held =
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.volume.audio, pin.volume.level)));
+
+    match held {
+        Some((on_audio, level)) if on_audio == audio => level,
+        _ if audio => current_audio_volume(),
+        _ => current_video_volume(),
+    }
 }
 
 /// Whether the pin that is up has its volume popup open, which is what the tick's re-assertion of
@@ -14529,9 +14555,7 @@ fn restart_pinned_audio(path: &Path, from: f64) -> Option<Instant> {
 /// sound, and `Volume → Audio` otherwise — the setting a hover's player is started at, read the
 /// way it is read everywhere else (see `current_audio_volume`).
 fn pinned_audio_level() -> u32 {
-    pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| pin.volume.level))
-        .unwrap_or_else(current_audio_volume)
+    pinned_level(true)
 }
 
 /// The length a pinned sound's card is drawn with, which is the length its bar is a share of: the
@@ -14674,9 +14698,19 @@ fn settle_pinned_audio_seek(
 /// is written as the knob moves rather than at the end of the drag, because the next sound's player
 /// is started from it and a drag is not over until the hand lets go (see
 /// `remember_pin_volume`).
+///
+/// A level moved on a knob is recorded as the kind of the file under it as well, which is what makes
+/// it the pin's own: the pin keeps the level a hand moved on a bar for the next file *of that kind*
+/// and not for the next file whatever it is (see `pinned_level`). A walk off a sound and onto a film
+/// is answered by the tray, and a knob turned on the film's bar afterwards makes the level the
+/// film's, again.
 fn set_pin_volume(level: u32) {
     let level = level.min(100);
-    with_pin(|pin| pin.volume.level = level);
+    let audio = matches!(current_media_type(), Some(MediaType::Audio));
+    with_pin(|pin| {
+        pin.volume.level = level;
+        pin.volume.audio = audio;
+    });
 
     let immediate = match current_media_type() {
         Some(MediaType::NativeVideo) => true,
@@ -15589,15 +15623,10 @@ fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
 /// is every pin taken up on a file drawn to its own box that has not been shown a shape since (see
 /// `PinnedPreview::bound` and `pin_swap_room`).
 fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
-    let (space, volume, collapsed, showing) = {
+    let (space, collapsed, showing) = {
         let pinned = pin_state()?;
         let pin = pinned.pin()?;
-        (
-            pin_swap_space(pin),
-            pin.volume.level,
-            pin.collapsed,
-            pin.path.clone(),
-        )
+        (pin_swap_space(pin), pin.collapsed, pin.path.clone())
     };
 
     if collapsed || showing == *path {
@@ -15610,6 +15639,11 @@ fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
     // disagree about how large a pixel is.
     let dpi = dpi_at(space.current.0, space.current.1);
     let bounds = work_area_at(space.current.0, space.current.1);
+
+    // The level the file replacing the one on screen is played at is asked for by the kind of that
+    // file rather than read off the pin, for the reason `pinned_level` gives: the level the pin is
+    // holding is the kind it is showing, and a film is not played at the sound's.
+    let volume = pinned_level(drawn_as_audio(path));
 
     Some(match pin_update_content(space, path, bounds, dpi)? {
         PinBox::Measured(content) => PinPlan::Show(PinUpdate {
@@ -23922,9 +23956,11 @@ pub fn run_preview_window() {
                         // is this window's own: a knob moved on its bar moves nothing else (see
                         // `PinVolume`). A sound's is `Volume → Audio`, for the same reason and
                         // because it is the setting that preview was playing at.
-                        let volume = match kind {
-                            Some(MediaType::Audio) => current_audio_volume(),
-                            _ => current_video_volume(),
+                        let audio_kind = matches!(kind, Some(MediaType::Audio));
+                        let volume = if audio_kind {
+                            current_audio_volume()
+                        } else {
+                            current_video_volume()
                         };
 
                         // A pin taken up over another one — the file it was showing was picked by
@@ -24068,9 +24104,19 @@ pub fn run_preview_window() {
                                         .then_some((Instant::now(), 0.0)),
                                     ..Default::default()
                                 },
+                                // A level carried onto a file of the same kind is that file's
+                                // own and is carried; one carried onto a file of another kind
+                                // is that other kind's bar having been turned, and is not
+                                // carried — the file arrives at the level the tray names for
+                                // it above, which is the whole of a pin walking off a sound
+                                // at `Volume → Audio` and onto a film the tray has muted
+                                // (see `pinned_level`).
                                 volume: match carried {
-                                    Some((_, _, volume, ..)) => volume,
-                                    None => PinVolume {
+                                    Some((_, _, volume, ..)) if volume.audio == audio_kind => {
+                                        volume
+                                    }
+                                    _ => PinVolume {
+                                        audio: audio_kind,
                                         level: volume,
                                         playing_at: volume,
                                         ..Default::default()
@@ -31381,6 +31427,7 @@ mod tests {
             playing_at: 40,
             open: true,
             dragging: false,
+            ..Default::default()
         };
 
         let window = pin.window_box();
@@ -31449,6 +31496,133 @@ mod tests {
             current_video_volume(),
             setting,
             "`Volume → Video` is left exactly where the user put it"
+        );
+
+        stand_pin(previous_pin);
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
+    }
+
+    /// The tray's two levels, for a test that is about which of them a pin is holding. Put back when
+    /// the guard is dropped, so a test beside this one is answered with the machine's own.
+    struct PinLevels {
+        video: u32,
+        audio: u32,
+    }
+
+    impl PinLevels {
+        fn set(video: u32, audio: u32) -> Self {
+            let mut config = CONFIG.lock().expect("the configuration");
+            let was = PinLevels {
+                video: config.video_volume,
+                audio: config.audio_volume,
+            };
+            config.video_volume = video;
+            config.audio_volume = audio;
+
+            was
+        }
+    }
+
+    impl Drop for PinLevels {
+        fn drop(&mut self) {
+            if let Ok(mut config) = CONFIG.lock() {
+                config.video_volume = self.video;
+                config.audio_volume = self.audio;
+            }
+        }
+    }
+
+    /// A pin's level is the level of the kind it is playing: a sound's card at `Volume → Audio` is
+    /// not what a film stepped onto from it is played at, and the film the tray has muted is
+    /// played at `Volume → Video` — silent, whatever the sound it replaces was at.
+    #[test]
+    fn a_film_stepped_onto_from_a_sound_is_played_at_the_films_own_level() {
+        let _levels = PinLevels::set(0, 100);
+        let previous_pin = take_pin_for_a_test();
+
+        // The pin is up on a sound, which the tray has at 100%.
+        stand_pin(Some(PinnedPreview {
+            volume: PinVolume {
+                audio: true,
+                level: 100,
+                playing_at: 100,
+                ..Default::default()
+            },
+            ..sound_pin()
+        }));
+
+        assert_eq!(
+            pinned_audio_level(),
+            100,
+            "the sound is at `Volume → Audio`"
+        );
+        assert_eq!(
+            pinned_volume_level(),
+            0,
+            "the film that replaces it is at `Volume → Video`, so it is silent"
+        );
+
+        // A knob turned on a film's own bar is still that film's, and is kept for the next film —
+        // which is the half of this that is not about the two settings being one.
+        stand_pin(Some(PinnedPreview {
+            volume: PinVolume {
+                audio: false,
+                level: 12,
+                playing_at: 12,
+                ..Default::default()
+            },
+            ..overlay_pin((100, 100, 420, 340), PinChrome::always())
+        }));
+
+        assert_eq!(
+            pinned_volume_level(),
+            12,
+            "a level moved on a film's bar is the next film's too"
+        );
+
+        stand_pin(previous_pin);
+    }
+
+    /// The other half of the same thing, and the half a knob has to do for it: a pin that walked off
+    /// a sound is still holding the sound's level, and a knob turned on the film's bar makes that
+    /// level the film's own. Without this the level moved is read as the sound's and dropped, so the
+    /// film a hand set the knob on is the one film it is kept for (see `set_pin_volume`).
+    #[test]
+    fn a_level_moved_on_a_films_bar_is_the_films_and_not_the_sounds() {
+        let _levels = PinLevels::set(0, 100);
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = take_pin_for_a_test();
+
+        // A film the media engine is drawing, with the pin behind it still holding the sound's level.
+        let mut video = create_loading_media(320, 240);
+        video.media_type = MediaType::NativeVideo;
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = Some(video);
+        }
+        stand_pin(Some(PinnedPreview {
+            volume: PinVolume {
+                audio: true,
+                level: 100,
+                playing_at: 100,
+                ..Default::default()
+            },
+            ..overlay_pin((100, 100, 420, 340), PinChrome::always())
+        }));
+
+        // The knob is turned on the film's bar, so the level in hand is the film's.
+        set_pin_volume(30);
+
+        assert_eq!(
+            pinned_volume_level(),
+            30,
+            "a level moved on a film's bar is the pin's, and is kept for the next film"
+        );
+        assert_eq!(
+            pinned_audio_level(),
+            100,
+            "and the sound it walked off is still at `Volume → Audio`, which the knob was not on"
         );
 
         stand_pin(previous_pin);
