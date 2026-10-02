@@ -248,7 +248,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm. Off: let go by **AFK Timer**. Greyed out if WebView2 is missing.
   - No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
 - **Codecs** — What this machine has: Videos, Audio, Images, Engines. A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
-- **Run at Startup** — Add or remove the Windows startup entry.
+- **Run at Startup** — Add or remove the Windows startup entry. On every start, an entry that names another copy of the app — a portable copy, an older version, a path that has moved — is pointed back at the one you are running.
 - **Config.ini** — Open the configuration file; named for the running version.
 - **Exit** — Close the app.
 
