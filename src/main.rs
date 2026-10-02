@@ -117,7 +117,7 @@ fn main() {
     configure_dpi_awareness();
     trace.step("dpi awareness");
 
-    sync_startup_setting();
+    sync_startup_setting(&mut trace);
     trace.step("startup setting");
 
     // The Office engines and browsers earlier runs started are ended here, before
@@ -289,7 +289,7 @@ fn configure_dpi_awareness() {
     }
 }
 
-fn sync_startup_setting() {
+fn sync_startup_setting(trace: &mut StartupTrace) {
     let should_enable_startup = CONFIG
         .lock()
         .map(|config| config.is_first_run && config.run_at_startup)
@@ -297,6 +297,16 @@ fn sync_startup_setting() {
 
     if should_enable_startup {
         app::startup::enable_startup();
+    }
+
+    // And an entry that is there but names another copy of this app is put right, before
+    // anything reads it as settled: a portable copy run once from a folder of its own, an
+    // older version still installed where it put itself, an app moved since — each of them
+    // writes its own path into the one entry there is, and that path is what the next logon
+    // starts. The entry decides only *whether* this app starts, which is left to the user;
+    // what it points at is this app's own business, and this is the copy running now.
+    if app::startup::repair_startup_entry() {
+        trace.step("startup entry repaired");
     }
 
     // And the configuration is brought into step with what the registry holds, which is what
