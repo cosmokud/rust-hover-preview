@@ -61,6 +61,64 @@
 //! [`failing_path`] second, because that is the thing standing between the attempt and a preview
 //! that hangs.
 //!
+//! # The one other way a media engine is asked for frames, and why it is not this one
+//!
+//! There is a second way, and it was built and measured and thrown away, and what it found is
+//! worth more than the code was. `IMFMediaEngineEx::EnableWindowlessSwapchainMode` has the engine
+//! create a swap chain and present into it, and `GetVideoSwapchainHandle` hands that chain over
+//! as an opaque handle; the handle is wrapped with
+//! `IDXGIFactoryMedia::CreateSwapChainForCompositionSurfaceHandle`, `GetBuffer(0)` is the engine's
+//! own back buffer, and it is read through a staging copy. No `TransferVideoFrame` anywhere in
+//! it, so the refusal above is never asked — and the engine is still an `IMFMediaEngine`, which
+//! is what makes it look like the answer to everything in this file.
+//!
+//! It is not, and the reason is narrower and duller than "Media Foundation does not work":
+//!
+//!   * The mode itself is accepted. So is the handle, the chain, `GetBuffer(0)` and the
+//!     `CopyResource` out of it. Every step answers `S_OK`.
+//!   * What answers is empty. `Map` on the staging copy succeeds and hands back a row pitch of
+//!     *zero* and no address at all, over and over, for as long as the file plays. Nothing is
+//!     ever written into the engine's back buffer: zero frames, zero non-zero bytes, and the
+//!     clock standing still at zero while the engine believes it is playing.
+//!   * The engine will only render into the chain if something is *compositing* the chain. This
+//!     is the part that decides it, and it is not a bug in the probe: with no visual and no
+//!     window attached, the swap chain has no consumer, so the engine has nothing to present
+//!     into and writes nothing. Presenting the chain by hand — recycling a buffer and turning
+//!     the rotation on, which puts no pixels anywhere and is not "showing" anything — is what a
+//!     flip-model chain needs to advance at all, and it deadlocks the session on the second
+//!     read rather than producing a frame.
+//!
+//! So the path needs a DirectComposition visual to live inside, which means the app's own
+//! window and the compositor that draws it, which is a different and much larger project than
+//! the one this file is. Nothing about the decoding is unreachable: what is unreachable is
+//! *reading* a frame back out of a chain that nobody is displaying.
+//!
+//! Two of the things learned along the way are worth writing down because they cost the most and
+//! are the sort of thing that would be learned again from scratch:
+//!
+//!   * A `DXGI_SWAP_CHAIN_DESC1` written with `..Default::default()` carries a
+//!     `DXGI_SAMPLE_DESC` whose `Count` is **zero**, and every composition swap chain made over
+//!     one is refused `DXGI_ERROR_INVALID_CALL` on this machine — every swap effect, every buffer
+//!     count, every alpha mode, both formats, and with no media engine in the process at all.
+//!     `Count` of one is what makes it, and the same is true of a `D3D11_TEXTURE2D_DESC` for the
+//!     staging copy, which is refused `E_INVALIDARG` without it. C++ samples leave both at zero
+//!     and get away with it, which is exactly why this reads as a Media Foundation problem and
+//!     is not one.
+//!   * `IMFDXGIDeviceManager` has no `SetDevice`. The only call that binds a device to one is
+//!     `ResetDevice`, which is what Chromium's media foundation renderer does with the manager it
+//!     locks; and the device has to be the engine's device rather than merely this side's, since
+//!     a staging copy of a buffer on one device cannot be made with another's context.
+//!
+//! And the third, which is the one that cost the most time and is the reason this section
+//! exists at all: `EnableWindowlessSwapchainMode` and `GetVideoSwapchainHandle` have to be asked
+//! for *after* `Play`, not before `Load`, and the handle has to be polled rather than asked for
+//! once. Before the engine is running the first is accepted and never acted on and the second
+//! answers `S_OK` and a null handle. And `CreateSwapChainForCompositionSurfaceHandle` is a race:
+//! asked for promptly it answers `S_OK`, and asked for a few hundred milliseconds later — the
+//! engine having made its own chain over the same handle in the meantime — it answers
+//! `DXGI_ERROR_ALREADY_EXISTS`. Which is the same finding as the one above, wearing a different
+//! hat: there is always already a chain there, and it is not one anybody is showing.
+//!
 //! A tick is not a frame. The clock this side ticks on is a vertical blank, sixty times a
 //! second whatever the file runs at, so most ticks of a film find the engine offering the
 //! picture it offered the last four of them, and a tick that finds one is answered without
