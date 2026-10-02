@@ -5107,9 +5107,25 @@ impl PinUpdateWatch {
             return None;
         }
 
-        if selected != self.sel_selected {
-            self.sel_selected = selected.clone();
-            return selected;
+        let Some(path) = selected else {
+            // A poll that names no file in the listing already watched is a miss, not a
+            // deselection: keep the baseline standing so the next sighting of the same
+            // file is not read as a pick. A miss is what a pointer over a gap, a UIA
+            // element that names no item, or a transient shell failure answers with,
+            // and moving the mouse makes each of them likelier on every poll.
+            return None;
+        };
+
+        if self.sel_selected.is_none() {
+            // The baseline above was a miss (the first sighting named no file): the
+            // first file actually seen is the baseline, not a pick.
+            self.sel_selected = Some(path);
+            return None;
+        }
+
+        if Some(&path) != self.sel_selected.as_ref() {
+            self.sel_selected = Some(path.clone());
+            return Some(path);
         }
 
         None
@@ -8565,6 +8581,69 @@ mod tests {
             lagging.note_selection(watched.clone(), Some(two.clone()), false),
             Some(two.clone()),
             "which the change then offers"
+        );
+    }
+
+    /// A poll that names no file in the listing already watched is a miss rather than a
+    /// pick: the baseline is left standing so the next sighting of the same file is not
+    /// offered. This is the pin reverting to the Explorer selection after its own
+    /// Previous/Next walk: one transient `None` (a gap under the pointer, a UIA miss
+    /// while the mouse moves) cleared the baseline, and the recovery of the same file
+    /// read as a change.
+    #[test]
+    fn a_selection_miss_in_the_watched_listing_is_not_a_pick() {
+        let watched = HoverLocation {
+            folder: None,
+            search_root: None,
+            location_url: Some("file:///D:/Pictures".to_string()),
+            view_hwnd: Some(0x1234),
+        };
+        let one = std::path::PathBuf::from("D:/Pictures/one.png");
+        let two = std::path::PathBuf::from("D:/Pictures/two.png");
+
+        let mut watch = PinUpdateWatch::default();
+        assert_eq!(
+            watch.note_selection(watched.clone(), Some(one.clone()), false),
+            None
+        );
+
+        assert_eq!(
+            watch.note_selection(watched.clone(), None, false),
+            None,
+            "a miss names no file and offers none"
+        );
+        assert_eq!(
+            watch.sel_selected.as_deref(),
+            Some(one.as_path()),
+            "and the baseline is left standing"
+        );
+        assert_eq!(
+            watch.note_selection(watched.clone(), Some(one.clone()), false),
+            None,
+            "so recovering the same file is not a pick"
+        );
+
+        assert_eq!(
+            watch.note_selection(watched.clone(), Some(two.clone()), false),
+            Some(two.clone()),
+            "while a genuinely different file still is"
+        );
+
+        // A first sighting that is itself a miss leaves no baseline for the first file
+        // to be mistaken for a change.
+        let mut missed = PinUpdateWatch::default();
+        assert_eq!(
+            missed.note_selection(watched.clone(), None, false),
+            None
+        );
+        assert_eq!(
+            missed.note_selection(watched.clone(), Some(one.clone()), false),
+            None,
+            "the first file actually seen is the baseline, not a pick"
+        );
+        assert_eq!(
+            missed.note_selection(watched.clone(), Some(one.clone()), false),
+            None
         );
     }
 }
