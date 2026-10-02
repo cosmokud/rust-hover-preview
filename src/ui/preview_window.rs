@@ -3677,13 +3677,17 @@ fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
     effective_preview_scale_of(&HoverFacts::read(path), scales)
 }
 
-/// The share one hover of one file is placed at, asked of the answer that hover already has.
+/// The share one file is placed at, asked of the answer that hover already has.
 ///
 /// Everything this asks is a field of `hover` or something `hover` holds: the file's kind, the
 /// one probe that runs off the thread and is remembered per file and version, and whether the
-/// file's own head says it moves. That is the whole of what a hover's scale is — which is why
+/// file's own head says it moves. That is the whole of what a preview's scale is — which is why
 /// the path is not beside it, and why the scale and the box a preview is laid out at cannot
 /// disagree: they are asked of one answer.
+///
+/// A hover does not come here directly. It goes through `hover_preview_scale_of`, which is this
+/// answer with the bitmap rule applied to a video, because a fit enlarges a pinned window's
+/// media and must not enlarge a hover's.
 fn effective_preview_scale_of(hover: &HoverFacts, scales: HoverScales) -> PreviewScale {
     // What the file's own bytes say it is comes first, as it does for the loader that draws
     // it and for the box the layout places it at: a picture under a video's name is laid out
@@ -3721,6 +3725,46 @@ fn effective_preview_scale_of(hover: &HoverFacts, scales: HoverScales) -> Previe
         hover,
         scales,
     )
+}
+
+/// The share a *hover* of one file is placed at: the file's own share, with the one thing a
+/// video has and a pinned window does not taken back to its own size.
+///
+/// A hover is a bitmap. What a hover puts on screen is a picture with pixels of its own, and a
+/// `Fit to Screen` read for a bitmap is the picture at the size it is rather than the whole of
+/// the display — the rule every other picture in this app is laid out by, and the one
+/// `bitmap_at_display_scale` exists to state. A video is no different here: until the player's
+/// window is over it, what a video's preview *is* is its first frame, and that frame is
+/// decoded, stored and handed to the compositor at the box the layout chose, sixty times a
+/// second for a film that is playing. Enlarging a 1080p file to a 4K display's whole work area
+/// therefore costs a 3840x2160 surface — thirty-three megabytes copied into the layered DIB
+/// and thirty-three more handed to the compositor, every frame — to draw a picture that has
+/// 1920x1080 of detail in it. Nothing here is ever enlarged to fill the room.
+///
+/// A configured percentage is left exactly as it was configured, above `100%` included: a user
+/// who has asked for `150%` of a video is asking to watch it larger than it is, which is the
+/// one enlargement in this app that is a person saying so rather than a rule guessing.
+///
+/// It is here, and not in `scale_of_kind`'s own video arm, because a pinned window is the
+/// exception rather than an oversight: a pin is fitted to the media it shows, and at a fit the
+/// media is scaled up to the room as well as down to it — that is what makes a maximize a
+/// maximize (see `pinned_media_box`). Clamping in the table would take that away along with the
+/// hover's waste, so the two roads are kept apart here, at the two places a hover's scale is
+/// asked for.
+///
+/// And not in `scale_in_room`, which is the narrowest function of all and is the wrong one: it
+/// is one function for the hover's box and the pin's box both, so a rule written in it is a rule
+/// about both, and it cannot tell a video from the document beside it.
+fn hover_preview_scale_of(hover: &HoverFacts, scales: HoverScales) -> PreviewScale {
+    let share = effective_preview_scale_of(hover, scales);
+
+    // Asked of the answer rather than of the kind, so a video the bytes name under a name the
+    // video list does not carry is caught by the same predicate the loader plays it by.
+    if hover.is_video() {
+        bitmap_at_display_scale(share)
+    } else {
+        share
+    }
 }
 
 /// The share a preview of one kind is drawn at.
@@ -6982,6 +7026,43 @@ struct FirstFrameWait {
     /// the wait is outstanding the window is the wait's own — the spinner's box at the
     /// pointer, or whatever the hover before this one left on screen.
     pos: (i32, i32),
+}
+
+/// Where this tick puts a held-back preview's first frame up, when this tick is the one it
+/// comes up on — and `None` for every tick that is not, including a tick with no wait at all.
+///
+/// The tick a video's first frame lands on is the only tick with two painters pointed at it.
+/// The tick's own answers `needs_repaint`, because a frame was taken; the reveal's answers
+/// because the frame is the thing the window was being held back for. They compose the same
+/// frame into the same surface, so one of them is a whole frame of copying and a whole hand-off
+/// to the compositor for a window nobody can tell the difference of — and at the size of a 4K
+/// display that is thirty megabytes copied twice, once a hover.
+///
+/// The reveal's is the one kept, and not for the saving. It paints at the box this hover was
+/// laid out at, and for as long as the wait was outstanding the window was the wait's own: the
+/// spinner's box at the pointer, or whatever the hover before this one left on screen. A paint
+/// at the window's own rectangle would be at neither place, and the reveal would correct it —
+/// which is what a duplicate paint costs besides the copying.
+///
+/// Everything that can mean *not this tick* is asked here rather than left to the arm that
+/// acts on the answer, and the four are the whole of it. A newer generation is a hover that
+/// installed its own media since, which this one does not reveal. A hide count that has moved
+/// is the pointer having left the file, and no window is put up for a hover that has gone (see
+/// `HIDDEN_EPOCH`). A pin up is a window that is the pin's window now, painted by the pin's
+/// own painter, which is what the tick's paint will have done. And no frame in hand is a wait
+/// that simply goes on. Anything else that can change what a paint would put on screen — the
+/// window being moved or resized, another preview installed over it, the surface being rebuilt
+/// at a new size — reaches a paint through a tick that sets `needs_repaint` or through the arm
+/// that reveals, and neither is answered by this question.
+fn first_frame_lands(
+    wait: &FirstFrameWait,
+    generation: u64,
+    epoch: u64,
+    pinned: bool,
+    frame_in_hand: bool,
+) -> Option<(i32, i32)> {
+    (wait.generation == generation && wait.epoch == epoch && !pinned && frame_in_hand)
+        .then_some(wait.pos)
 }
 
 /// How long a player is given to put its window up before the wait for it is given up
@@ -21356,23 +21437,47 @@ pub fn run_preview_window() {
                     || video_start.is_some()
                     || first_frame_wait.is_some();
             }
-            if needs_repaint {
+            // Whether a video's first frame comes up on this tick, and where: the question is
+            // asked before the paint rather than inside the arm that acts on it, because it is
+            // what decides whether the paint happens at all. A tick whose repaint is the reveal's
+            // own is not painted twice — same frame, same surface, and thirty megabytes of it at
+            // the size of a 4K display (see `first_frame_lands`).
+            //
+            // The hide count is read once for both this and the arm below, so the two cannot be
+            // answering about different hovers because a hide landed between them.
+            let epoch = hidden_epoch();
+            let first_frame_landed = first_frame_wait.as_ref().and_then(|wait| {
+                first_frame_lands(
+                    wait,
+                    current_generation,
+                    epoch,
+                    pinned(),
+                    media_holds_a_frame(),
+                )
+            });
+
+            if needs_repaint && first_frame_landed.is_none() {
                 render_layered_preview(hwnd);
             }
 
             // A video the engine plays whose preview was held back for its first frame: the
-            // engine has handed one over — the repaint above is of it — and what is left of
-            // the wait is the window, which is put up here if it is not up already. A window
-            // that is on screen needs nothing of this: what it was holding was a wait's
-            // frame or another preview's, and the frame that landed is drawn at the place
-            // this hover was laid out at rather than at that window's own (see `FirstFrameWait`).
+            // engine has handed one over — the repaint above is of it, or the one below is — and
+            // what is left of the wait is the window, which is put up here if it is not up
+            // already. A window that is on screen needs nothing of this: what it was holding was
+            // a wait's frame or another preview's, and the frame that landed is drawn at the
+            // place this hover was laid out at rather than at that window's own (see
+            // `FirstFrameWait`).
             if let Some(wait) = first_frame_wait {
-                if wait.generation != current_generation || wait.epoch != hidden_epoch() {
+                if wait.generation != current_generation || wait.epoch != epoch {
                     first_frame_wait = None;
                 } else if media_holds_a_frame() {
                     first_frame_wait = None;
 
-                    if !pinned() {
+                    // The paint the question above already accounted for: this arm's own paint
+                    // is at the box this hover was laid out at, and the tick's was at the window's,
+                    // so where the two differ it is this one that has to be the last (see
+                    // `first_frame_lands`).
+                    if !pinned() && first_frame_landed.is_none() {
                         render_layered_preview_at(hwnd, wait.pos.0, wait.pos.1);
                     }
 
@@ -22855,7 +22960,7 @@ pub fn run_preview_window() {
                         // `fs::metadata` calls per hover down to one (see `HoverFacts`).
                         let hover = HoverFacts::read(&path);
                         let follow_cursor = hover.follow_cursor;
-                        preview_scale = effective_preview_scale_of(&hover, hover.scales);
+                        preview_scale = hover_preview_scale_of(&hover, hover.scales);
 
                         // A document with no page rendered for it yet has nothing to
                         // measure but the wait, so its preview is laid out as the
@@ -22955,7 +23060,7 @@ pub fn run_preview_window() {
                         // this arm, as the pointer's arm above does (see `HoverFacts`).
                         let hover = HoverFacts::read(&path);
                         let follow_cursor = hover.follow_cursor;
-                        preview_scale = effective_preview_scale_of(&hover, hover.scales);
+                        preview_scale = hover_preview_scale_of(&hover, hover.scales);
 
                         if let Some(orig_dims) = media_dimensions_of(&hover, &path, bounds, dpi) {
                             let is_video = hover.is_video();
@@ -25893,6 +25998,118 @@ mod tests {
         );
     }
 
+    /// A hovered video is a bitmap, and a fit is the bitmap at the size it is: a film smaller
+    /// than the work area is shown at its own dimensions rather than stretched over the display.
+    ///
+    /// This is a visible change for anyone who chose `Fit to Screen` for a video and did not
+    /// think to mean *bigger than the file*, and it is the same answer every other picture in
+    /// this app already gives (`bitmap_at_display_scale`). It is worth what it costs either way:
+    /// the frame a video's hover draws is the frame the engine delivered, at the box the layout
+    /// chose, copied into the layered window's DIB and handed to the compositor — so a 1080p
+    /// file fitted to a 4K display is a 3840x2160 surface, thirty-three megabytes each way, for
+    /// every frame of a film that is playing. A percentage above `100%` is untouched, because
+    /// that enlargement is the user saying so.
+    ///
+    /// And the pinned window keeps enlarging, which is the half of the fit that is deliberate:
+    /// a pin is fitted to its media, and scaling that media up to the room is what makes a
+    /// maximize a maximize (see `pinned_media_box`).
+    #[test]
+    fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
+        let small = PathBuf::from(r"C:\clips\holiday.mp4");
+        let large = PathBuf::from(r"C:\clips\concert-4k.mp4");
+        let room = (3840u32, 2160u32);
+
+        for (path, shape) in [(small.clone(), (1920u32, 1080u32)), (large, (7680, 4320))] {
+            video_geometry_cache().insert(
+                VideoGeometryKey {
+                    path: path.clone(),
+                    version: file_version(&path),
+                },
+                ProbedGeometry::Measured(VideoGeometry {
+                    width: shape.0,
+                    height: shape.1,
+                    frame_width: shape.0,
+                    frame_height: shape.1,
+                    crop: None,
+                    duration: None,
+                }),
+            );
+        }
+
+        let at_fit = HoverScales {
+            video: PreviewScale::FitToScreen,
+            ..hover_scales()
+        };
+        let hover = HoverFacts::read(&small);
+        let hover_large = HoverFacts::read(Path::new(r"C:\clips\concert-4k.mp4"));
+
+        // Smaller than the room: at its own size, which is what a fit means for a bitmap. The
+        // box is asked of `scale_in_room` rather than of the scale alone, because the scale is
+        // only half the claim — `100%` of a film is its own size only because nothing above it
+        // enlarges.
+        assert_eq!(
+            scale_dimensions(
+                1920,
+                1080,
+                room.0,
+                room.1,
+                hover_preview_scale_of(&hover, at_fit)
+            ),
+            (1920, 1080),
+            "a 1080p film fitted to a 4K display stays at 1920x1080 rather than being stretched \
+             over the whole work area"
+        );
+
+        // Larger than the room: still fitted down, because shrinking to fit is what a fit is
+        // for and `bitmap_at_display_scale` leaves that alone.
+        assert_eq!(
+            scale_dimensions(
+                7680,
+                4320,
+                room.0,
+                room.1,
+                hover_preview_scale_of(&hover_large, at_fit)
+            ),
+            (3840, 2160),
+            "a 8K film fitted to a 4K display is still fitted down to it"
+        );
+
+        assert_eq!(
+            hover_preview_scale_of(
+                &hover,
+                HoverScales {
+                    video: PreviewScale::Percent(150),
+                    ..hover_scales()
+                }
+            ),
+            PreviewScale::Percent(150),
+            "and a percentage above 100 enlarges, because that is the user asking for it rather \
+             than a fit guessing"
+        );
+
+        assert_eq!(
+            hover_preview_scale_of(&hover, hover_scales()),
+            PreviewScale::Percent(100),
+            "which is also what the app starts at, so a fresh install never enlarged a video and \
+             still does not"
+        );
+
+        // And the pin is not one of these hovers: the same file fitted for a pinned window is
+        // still stretched to the room, which is the answer `pinned_media_box` is written for.
+        assert_eq!(
+            scale_dimensions(
+                1920,
+                1080,
+                room.0,
+                room.1,
+                effective_preview_scale(&small, at_fit)
+            ),
+            (3840, 2160),
+            "a pinned window is fitted to its media at a fit, media and all, and a maximize is \
+             a maximize"
+        );
+    }
+
     /// A GIF that moves, a WebP that moves and a PNG that moves are one kind of preview —
     /// the kind whose size `animated_scale` names — while a GIF or a PNG that holds a
     /// single frame is a picture like any other and keeps the picture scale. What tells
@@ -28074,6 +28291,55 @@ mod tests {
             player_wait(true, true, cap),
             Some(PlayerWait::Arrived),
             "and a window that is up has arrived, cap or no cap"
+        );
+    }
+
+    /// A held-back video's first frame comes up on one tick, and on that tick exactly one
+    /// painter is pointed at it: the reveal's, at the box the hover was laid out at. The tick
+    /// that would paint the same frame into the same surface at the window's own rectangle
+    /// stands down, which at the size of a 4K display is thirty megabytes of copying and a
+    /// hand-off to the compositor once a hover.
+    ///
+    /// Every way of not being that tick is named on both sides, because the cost of getting it
+    /// wrong is a window put up with nothing in it rather than a wasted copy: a newer hover, a
+    /// hide since, a pin that has taken the window over, and a frame that has not landed are
+    /// four different reasons to leave the tick's own repaint standing.
+    #[test]
+    fn a_held_back_first_frame_is_painted_once_and_by_the_reveal() {
+        let wait = FirstFrameWait {
+            generation: 7,
+            epoch: 3,
+            pos: (120, 240),
+        };
+
+        assert_eq!(
+            first_frame_lands(&wait, 7, 3, false, true),
+            Some((120, 240)),
+            "a frame that landed on this hover's own wait comes up at the box the hover laid \
+             the preview out at"
+        );
+
+        assert_eq!(
+            first_frame_lands(&wait, 8, 3, false, true),
+            None,
+            "a newer hover installed its own media, and this tick's repaint is what draws it"
+        );
+        assert_eq!(
+            first_frame_lands(&wait, 7, 4, false, true),
+            None,
+            "a hide since is the pointer having left the file, so the frame is not put up at all \
+             — but the tick's repaint is not stood down for a frame nobody is going to be shown"
+        );
+        assert_eq!(
+            first_frame_lands(&wait, 7, 3, true, true),
+            None,
+            "a pin up owns the window, and its own painter is the tick's repaint"
+        );
+        assert_eq!(
+            first_frame_lands(&wait, 7, 3, false, false),
+            None,
+            "a wait whose frame has not landed is a wait that goes on, and nothing is painted for \
+             it by either painter"
         );
     }
 
