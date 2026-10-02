@@ -47,6 +47,13 @@ windows = { version = "0.58", features = [
     "Win32_Networking_WinHttp",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi_Common",
+    # `D3D11CreateDevice`'s driver type and `IDXGIDevice`/`IDXGIFactory2`/`IDXGISurface`, which
+    # are the three things a DXGI device manager is made out of. `Direct3D11` above already has
+    # the device, the context and every texture flag; it cannot name `D3D_DRIVER_TYPE` or reach
+    # a `DXGI` interface without these two, and they are two feature names rather than an ABI
+    # of this app's own against the SDK headers (see `video_player::video_surface`).
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Dxgi",
     "Foundation",
     "Data_Pdf",
     "Storage_Streams",
