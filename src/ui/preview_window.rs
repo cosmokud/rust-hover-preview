@@ -16291,6 +16291,49 @@ fn abandon_pin_swap(hold: &mut Option<PinSwapHold>) {
     }
 }
 
+/// The swap this tick installs, out of the two waits a pinned window can be in.
+///
+/// A hold is settled first, because it is the older of the two: what has come to one of the hold's
+/// two ends — a frame in hand, or a wait with nothing left to wait for — goes through the same
+/// install a swap answered at once goes through, and which of the two it was makes no difference.
+/// A load in hand and a hold outstanding cannot both exist anyway, because a pick gives the hold up
+/// before it starts the load that would answer here.
+///
+/// A load that has answered is put to the swap here, on this thread, and does not always finish in
+/// this call: a video the media engine plays is started and then held, and what is installed for it
+/// is the same file on a later tick (see `PinSwapHold`).
+fn settle_pin_swap(hold: &mut Option<PinSwapHold>, load: &mut Option<PinLoad>) -> Option<PinSwap> {
+    let mut swap: Option<PinSwap> = None;
+
+    if let Some(mut held) = hold.take() {
+        swap = if held.settle().is_some() {
+            Some(PinSwap::Ready(held.into_installable()))
+        } else {
+            // An engine that has not drawn anything yet. The wait goes on, and the pin keeps
+            // showing the file it was frozen on with the arc still turning over it — which is the
+            // whole of what the user sees, and the whole of what makes the swap worth holding for.
+            *hold = Some(held);
+            None
+        };
+    }
+
+    // Asked only where this tick has made no swap of its own, and asked before anything started
+    // for a new file, because `swap_pinned_media` starts an engine and the hold's own take-down
+    // ends whichever engine is running (see `abandon_pin_swap`).
+    //
+    // The gate is on the *answer*, not on the hold being spent. `hold.is_none()` is just as true
+    // on the tick a hold has just come to an end as it is on a tick that never had one, and the
+    // first of those is the one tick there is something to install: reading the load there writes
+    // its answer over an install that already holds the frame the engine drew, and the file is
+    // gone with it. A load that answered into such a tick waits in its slot for the next one, which
+    // is the answer that is right rather than the one that is fast.
+    if swap.is_none() && hold.is_none() {
+        swap = take_pin_load(load).map(swap_pinned_media);
+    }
+
+    swap
+}
+
 /// A file a pinned window is loading, and the wait it is.
 ///
 /// A load a hover waits for has a `PendingLoad`: the media is a thread's work, the window shows
@@ -22704,47 +22747,7 @@ pub fn run_preview_window() {
                 take_pin_relayout(&mut pin_relayout);
             }
 
-            // A swap the pin was being held for is settled first, because it is the older of
-            // the two waits a pin can be in and a load in hand and a hold outstanding cannot
-            // both exist: a pick gives the hold up before it starts the load that would answer
-            // here. What has come to one of the hold's two ends — a frame in hand, or a wait
-            // with nothing left to wait for — is answered by the same install a swap answered
-            // at once goes through, and which of the two it was makes no difference: a wait
-            // given up on is a file installed the way it would have been without a hold, and
-            // the machinery that watches a pinned video for an engine that never drew stands
-            // behind that answer exactly as it does for a swap that was never held (see
-            // `pin_swap_wait`).
-            let mut swap: Option<PinSwap> = None;
-
-            if let Some(mut hold) = pin_swap_hold.take() {
-                swap = if hold.settle().is_some() {
-                    Some(PinSwap::Ready(hold.into_installable()))
-                } else {
-                    // An engine that has not drawn anything yet. The wait goes on, and the pin
-                    // keeps showing the file it was frozen on with the arc still turning over
-                    // it — which is the whole of what the user sees, and the whole of what
-                    // makes the swap worth holding for.
-                    pin_swap_hold = Some(hold);
-                    None
-                };
-            }
-
-            // A load a pinned window is waiting for has answered, and what came back is put to
-            // the swap here, on this thread: the take-up is the pin's own, the box is the one
-            // the plan was made with, and what comes of it is the same window showing something
-            // else (see `PreviewMessage::Pin`). It does not always finish in this call — a video
-            // the media engine plays is started and then held, and what is installed for it is
-            // the same file on a later tick (see `PinSwapHold`) — so what this produces is a
-            // question with three answers rather than a media or nothing.
-            //
-            // Asked only where no hold is outstanding, and asked first before anything started
-            // for a new file, because `swap_pinned_media` starts an engine and the hold's own
-            // take-down ends whichever engine is running (see `abandon_pin_swap`). A load that
-            // somehow arrived into one waits in its slot for the hold to finish, which is the
-            // answer that is right rather than the one that is fast.
-            if pin_swap_hold.is_none() {
-                swap = take_pin_load(&mut pin_load).map(swap_pinned_media);
-            }
+            let swap = settle_pin_swap(&mut pin_swap_hold, &mut pin_load);
 
             if let Some(swap) = swap {
                 // The loop's own record of what the pin is showing, borrowed for whichever of
@@ -28116,6 +28119,54 @@ mod tests {
             pin_swap_wait(true, true, true, cap),
             Some(PinSwapWait::Arrived),
             "and a frame that did arrive has arrived, cap or no cap"
+        );
+    }
+
+    /// A hold that has come to one of its ends is the tick's answer, and it is the *only* answer
+    /// that tick gives: a load that answered into it waits in its slot for the next one, which is
+    /// a tick away and has cost nothing.
+    ///
+    /// Written over, the install is thrown away with the frame the engine had in hand — the film
+    /// is never installed, the pin stands on the file it was frozen on, and because the walk behind
+    /// what is on screen was never rewritten either, every caption step after it lands on the same
+    /// file. That is a pin whose **Next** and **Previous** do nothing at all.
+    #[test]
+    fn a_hold_that_has_come_to_its_end_is_the_answer_the_tick_gives() {
+        let mut hold = Some(PinSwapHold {
+            file: PinInstallable {
+                path: PathBuf::from("the-film-reached-by-pressing-next.mp4"),
+                update: PinUpdate {
+                    content: (10, 20, 210, 380),
+                    dpi: 96,
+                    volume: 100,
+                },
+                media: create_loading_media(200, 360),
+                audio: None,
+                walk: None,
+            },
+            arc: PinArc::new(),
+            started: Instant::now(),
+        });
+        let mut load = Some(PinLoad::answered(
+            Path::new("later.png"),
+            PinUpdate {
+                content: (10, 20, 210, 380),
+                dpi: 96,
+                volume: 100,
+            },
+        ));
+
+        // Nothing is playing behind this hold — a test has no engine — so the wait is given up on
+        // at once, which is one of the two ends and installs the same file the other one does.
+        let swap = settle_pin_swap(&mut hold, &mut load);
+
+        assert!(
+            matches!(swap, Some(PinSwap::Ready(_))),
+            "the tick a hold comes to an end on installs the file it was holding"
+        );
+        assert!(
+            load.is_some(),
+            "a load that answered into a tick already installing a hold waits for the next one"
         );
     }
 
