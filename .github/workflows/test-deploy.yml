@@ -301,6 +301,52 @@ jobs:
           fi
           echo "the app reads '${asset}', which is what the workflows publish"
 
+      # A path typed into a fixture is in every clone of the thing under test from the
+      # moment a release exists, and an immutable release is one that cannot be taken back.
+      # This is why the check is here, before a tag is pushed, rather than only in the
+      # deploy path after one has been: it is the last point at which a leak is still a
+      # failed run. It is a grep rather than `cargo test --test no_path_leaks` because this
+      # job runs on a runner with no toolchain and asks for nothing heavier than an answer.
+      # The four shapes are the same four the Rust test holds, and the two must stay the same.
+      - name: No path in the reference names an account's own directory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The default checkout is shallow and is not the reference, so the reference is
+          # fetched before it is read. A tag, a branch or a full commit all name a commit
+          # this can fetch. The depth is the whole history rather than one commit, because the
+          # second check below reads the messages of every commit behind the reference and a
+          # one-deep fetch gives it one message to read.
+          git fetch --depth=2147483647 origin "$REF"
+
+          # Each shape is written as two quoted halves, which bash joins, so that this
+          # workflow file does not match itself: a pattern is a literal string, and a
+          # literal string written whole is found in the very line that writes it.
+          SHAPES=$(printf '%s\n' \
+            '[:\\/]Users''[:\\/]' \
+            ':/Us''ers/' \
+            '/hom''e/' \
+            '/Us''ers/')
+
+          if git grep -nI -E "$SHAPES" FETCH_HEAD -- .; then
+            echo "::error::the tree at ${REF} names a profile directory, which is named after the account that owns it"
+            exit 1
+          fi
+
+          # A message is not a file, so the check above cannot see one, and a path in a commit
+          # message reaches every clone of the thing under test the same way a path in a
+          # fixture does. This says that something behind the reference names an account
+          # directory and stops; `cargo test --test no_path_leaks` names the commit, and is
+          # the place to look, since this job asks for nothing heavier than an answer.
+          if git log --format='%H%n%an%n%ae%n%cn%n%ce%n%B' FETCH_HEAD | grep -qE "$SHAPES"; then
+            echo "::error::a commit message behind ${REF} names a profile directory, which is named after the account that owns it"
+            echo "::error::cargo test --test no_path_leaks names the commit"
+            exit 1
+          fi
+
+          echo "nothing at ${REF} is named after an account's own directory"
+
       - name: Summary
         env:
           BUILD: ${{ inputs.build }}

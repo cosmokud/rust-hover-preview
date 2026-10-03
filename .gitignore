@@ -27,3 +27,7 @@ MEMORY.md
 /.spec/
 /.venv/
 /.commandcode/
+# A code-graph tool run over this checkout writes the absolute path of every file it
+# reads into its output, so committing it publishes where this repository lives. It was
+# in the tree once already and had to be rewritten out of seven published tags.
+/graphify-out/

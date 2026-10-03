@@ -47,6 +47,11 @@ jobs:
       # release it is, for the bump that moves it.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The guard reads the history of this branch, not only its tree: a path in a commit
+          # message reaches every clone the way a path in a fixture does, and the default
+          # checkout is one commit deep, which leaves it nothing to read.
+          fetch-depth: 0
 
       # The three things a release must not get wrong, checked before anything is built. A
       # release that fails any of them is one the app is never offered, or one with no notes,
@@ -100,6 +105,13 @@ jobs:
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (2.9.2)
+
+      # A path written into a fixture is in every clone of this tag from the moment the
+      # release exists, and an immutable release is one that cannot be taken back - so this
+      # runs before anything is built and before the release is created, which is the last
+      # point at which a leak is still a failed run rather than a permanent one.
+      - name: Path leaks
+        run: cargo test --test no_path_leaks
 
       - name: Install cargo-packager
         shell: pwsh

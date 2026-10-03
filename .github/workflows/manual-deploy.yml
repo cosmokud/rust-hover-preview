@@ -81,6 +81,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.tag_to_build }}
+          # The guard reads the history of the branch it is building, not only its tree: a path
+          # in a commit message reaches every clone the way a path in a fixture does, and the
+          # default checkout is one commit deep, which leaves it nothing to read.
+          fetch-depth: 0
 
       # The three things a release must not get wrong, checked before anything is built. A
       # release that fails any of them is one the app is never offered, or one with no notes,
@@ -134,6 +138,11 @@ jobs:
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (2.9.2)
+
+      # The same gate deploy.yml runs, for the same reason: this workflow publishes a release
+      # from a tag by hand, and an immutable release is one that cannot be taken back.
+      - name: Path leaks
+        run: cargo test --test no_path_leaks
 
       - name: Install cargo-packager
         shell: pwsh

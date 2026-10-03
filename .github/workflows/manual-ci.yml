@@ -25,6 +25,11 @@ jobs:
       # way both deploy workflows pin theirs.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The guard reads the history of this branch, not only its tree: a path in a commit
+          # message reaches every clone the way a path in a fixture does, and the default
+          # checkout is one commit deep, which leaves it nothing to read.
+          fetch-depth: 0
 
       # The release `rust-toolchain.toml` names, asked for by name so the version a run
       # formats and lints with is the one in its log rather than whichever stable the

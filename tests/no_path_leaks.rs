@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 /// A file this size is a build product or an asset, not source that was written by hand.
 const WORTH_READING: u64 = 2 << 20;
@@ -119,5 +120,62 @@ fn no_file_names_an_account_directory() {
          it:\n{}\nWrite the path with a made-up directory instead — `C:\\downloads\\`, \
          `D:/Pictures/`, `/srv/media/` — or ask for it from the environment.",
         hits.join("\n")
+    );
+}
+
+/// What a commit carries besides its files: the message, and the names it was written under.
+/// A path in any of those reaches every clone the way a path in a fixture does, and a walk of
+/// the tree cannot see one because a message is not a file.
+///
+/// This asks only about the checked-out branch. The commits that carried the paths are not its
+/// ancestors, so no depth of history makes them appear here, and the tags that do reach them
+/// are not walked at all — scanning every ref would be the stronger check and also the one
+/// that could never be made to pass, since an immutable tag is not a fix that is available.
+#[test]
+fn no_commit_message_names_an_account_directory() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let shapes = shapes();
+
+    let Ok(history) = Command::new("git")
+        .args([
+            "log",
+            "HEAD",
+            "--format=%h%x00%B%x00%an%x00%ae%x00%cn%x00%ce%x00",
+        ])
+        .current_dir(root)
+        .output()
+    else {
+        // Not a checkout: a source export, a tarball. There is no history to read.
+        return;
+    };
+    if !history.status.success() {
+        // No HEAD to walk. Nothing is being asserted about a history that is not there.
+        return;
+    }
+
+    let text = String::from_utf8_lossy(&history.stdout);
+    let fields: Vec<&str> = text.split('\0').collect();
+    let mut commits = Vec::new();
+
+    for commit in fields.chunks(7) {
+        if commit.len() < 7 {
+            continue;
+        }
+        let named = commit[1..]
+            .iter()
+            .flat_map(|field| field.lines())
+            .any(|line| is_a_leak(&collapse(line.as_bytes()), &shapes));
+        if named {
+            commits.push(commit[0]);
+        }
+    }
+
+    assert!(
+        commits.is_empty(),
+        "these commits carry a profile directory in their message or in a name they were \
+         written under, which every clone of this branch inherits:\n{}\n\
+         `git log -1 <commit>` to see the line. A message is not a file, so nothing else in \
+         this repository is watching it.",
+        commits.join("\n")
     );
 }
