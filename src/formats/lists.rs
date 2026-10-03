@@ -329,19 +329,22 @@ pub const DEFAULT_AUDIO_EXTENSIONS: &str = "aac,ac3,aif,aifc,aiff,amr,ape,au,awb
 /// two are meant to be read side by side: what is here is what a machine with no FFmpeg on it
 /// still plays.
 ///
-/// Which list a name is in is which engine a video is played by, and that is what decides what a
-/// pinned window of one can do: a file of these names is played by the media engine Windows has,
-/// in this app's own window, so its frames are this app's to draw — a pinned one is resized by its
-/// edges, maximized by its caption and dragged by its picture, and its transport bar is a real
-/// control. A name in `[ffmpeg]` beside it is played by FFmpeg's `ffplay` in a window of its own
-/// instead, which this app cannot resize, seek or pause.
+/// Which list a name is in decides which engine a video is played by, but only on a machine with
+/// no FFmpeg on it: where FFmpeg is installed its player plays every video there is, both lists or
+/// neither, and where it is not installed this list is the whole of the question. A file of these
+/// names is then played by the media engine Windows has, in this app's own window, so its frames
+/// are this app's to draw — a pinned one is resized by its edges, maximized by its caption and
+/// dragged by its picture, and its transport bar is a real control. A name in `[ffmpeg]` beside it
+/// has no player here at all, because there is nothing to fall back to and the engine is not asked
+/// about it; that is what the list has always meant, and it is a file with no preview rather than
+/// a broken one.
 ///
 /// What is *not* claimed here is that the machine in hand decodes every file of one of these
 /// names: a `.mkv` of HEVC on a machine with no HEVC codec, or a `.mp4` of ProRes, is a file the
 /// engine is asked about and turns down. That question is asked of the engine itself, once per
-/// file and version (`video_player::plays`), and a file it turns down is played by FFmpeg's player
-/// where one is installed — the list decides which engine is asked first, not which engine ends up
-/// playing (see `preview_window::media_engine_plays`).
+/// file and version (`video_player::plays`), and it is asked only where the engine can still be
+/// the answer — a file it turns down is one nothing plays here, and where FFmpeg is installed it
+/// was never going to be asked about at all (see `preview_window::route_video`).
 pub const DEFAULT_VIDEO_EXTENSIONS: &str = "3g2,3gp,3gpp,asf,avi,dvr-ms,m1v,m2t,m2ts,m2v,m4v,mkv,\
 mov,mp4,mpe,mpeg,mpg,mts,qt,ts,vob,webm,wmv";
 
@@ -351,12 +354,15 @@ mov,mp4,mpe,mpeg,mpg,mts,qt,ts,vob,webm,wmv";
 /// Windows does not ship (RealMedia, MXF, NUT, the game and camera formats), and the names the ISO
 /// base media family is shared with where what is inside is not what Windows decodes.
 ///
-/// It is the README's *Needs FFmpeg* list, and it is the rest of the one list the two were: a name
-/// here is played by FFmpeg's `ffplay`, which is the engine that plays everything. A machine with
-/// no FFmpeg installed shows nothing for one of these names rather than being asked about it — that
-/// is what the list is for. Moving a name from here to `[video]` is the whole of asking the media
-/// engine about it instead, and a name the engine cannot open costs one probe and falls back to
-/// the player anyway (see `DEFAULT_VIDEO_EXTENSIONS`).
+/// It is the README's *Needs FFmpeg* list, and it is the rest of the one list the two were. A name
+/// here is played by FFmpeg's `ffplay` wherever FFmpeg is installed, which is every machine that
+/// has it, and the two lists do not differ there at all — so this is what the list is for on the
+/// machines it is written for: a machine with no FFmpeg installed shows nothing for one of these
+/// names, rather than asking the engine about a format nothing here will play. Moving a name from
+/// here to `[video]` is the whole of asking the media engine about it instead, and there is one
+/// cost worth stating rather than discovering: a name the engine cannot open has no preview at all
+/// on such a machine, because the probe that decides it is the last thing standing between the
+/// file and a player (see `DEFAULT_VIDEO_EXTENSIONS` and `preview_window::route_video`).
 pub const DEFAULT_FFMPEG_EXTENSIONS: &str =
     "264,265,266,apv,av1,avc,avs,avs2,avs3,bik,bk2,c93,cavs,cdg,cdxl,cin,cpk,dav,\
 dif,divx,drc,dv,evc,f4v,flm,flv,gxf,h261,h263,h264,h265,h266,h26l,hevc,ifv,imx,ismv,ivf,ivr,\
@@ -913,8 +919,10 @@ pub(crate) const AUDIO: List = List {
     set: |config, list| config.audio_extensions = list,
 };
 
-/// The `[video]` list: the containers and streams the media engine Windows has is asked to play, so
-/// a pinned window of one is this app's own to draw.
+/// The `[video]` list: the containers and streams the media engine Windows has is asked to play,
+/// so a pinned window of one is this app's own to draw. It is read only on a machine with no
+/// FFmpeg on it; where FFmpeg is installed its player takes every video there is (see
+/// `DEFAULT_VIDEO_EXTENSIONS`).
 pub(crate) const VIDEO: List = List {
     section: "video",
     key: "extensions",
@@ -927,7 +935,10 @@ pub(crate) const VIDEO: List = List {
 };
 
 /// The `[ffmpeg]` list: the rest of the one list `[video]` was, which FFmpeg's player is asked about
-/// instead and this app's own window cannot touch.
+/// instead and this app's own window cannot touch. What it means depends on the machine rather
+/// than on the list: FFmpeg's player plays both lists wherever it is installed, and this one is
+/// the set of names that have nothing to play them at all on a machine where it is not (see
+/// `DEFAULT_FFMPEG_EXTENSIONS`).
 pub(crate) const FFMPEG: List = List {
     section: "ffmpeg",
     key: "extensions",

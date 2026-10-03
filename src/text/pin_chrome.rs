@@ -142,7 +142,8 @@ pub(crate) struct TransportLayout {
 ///
 /// A bar whose player cannot be told anything is laid out without the button: the two clocks and
 /// the track begin at the strip's own padding rather than after a control that is not there (see
-/// `TransportState::interactive`).
+/// `TransportState::interactive`, which is now `false` for no kind this app has — it is kept
+/// because the layout is the only thing that reads it).
 pub(crate) fn transport_layout(
     width: i32,
     height: i32,
@@ -356,11 +357,18 @@ pub(crate) fn transport_share_at(x: i32, width: i32, dpi: u32, interactive: bool
 pub(crate) struct TransportState {
     /// Whether the player behind the bar can be told anything at all.
     ///
-    /// FFmpeg's player cannot: it reports no position, takes no pause, and can only be taken to
-    /// another second by being ended and begun again — so a pinned video it plays carries a bar
-    /// with no button and nothing to drag, and what is left is a read-out drawn from this app's
-    /// own clock over the player's start (see `pin_playhead`). The media engine's bar is the one
-    /// with controls, because every one of them is a question it answers.
+    /// Every control on the bar is a question the player answers, and the two players here answer
+    /// them for different reasons rather than to different depths. The media engine is *asked* —
+    /// a pause is a pause and a position is reported — while FFmpeg's player is *posted to*: its
+    /// window takes a key pressed on it, which is how a hold and a track change both reach it, and
+    /// a drag of the bar still ends and begins a player because that is the only way to say
+    /// "this second" rather than one of the ten-second steps its own keys offer (see
+    /// `preview_window::seek_pinned_playback`).
+    ///
+    /// So a bar is drawn for a kind or not at all, and this says whether its parts are drawn —
+    /// because the one kind with a bar this app cannot drive would be a bar with a button on it
+    /// that does nothing, and a button that does nothing is a promise the app cannot keep (see
+    /// `pin_transport_live`).
     pub(crate) interactive: bool,
     /// Whether a player is running, which is what the button's glyph says.
     pub(crate) playing: bool,

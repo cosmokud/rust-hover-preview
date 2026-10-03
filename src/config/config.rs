@@ -56,6 +56,15 @@ pub const DEFAULT_REMEMBER_AUDIO_VOLUME: bool = false;
 /// soundtrack that remembers the last preview is as unwelcome as one that plays itself (see
 /// `remember_video_volume`).
 pub const DEFAULT_REMEMBER_VIDEO_VOLUME: bool = false;
+/// Whether a video is decoded on the graphics card, which is the `Video` toggle under
+/// `Performance → Hardware Acceleration` in the tray.
+///
+/// It is on where the app starts, because the answer is a machine's rather than a person's: a
+/// film previewed in software decoding costs a core for as long as the hover lasts, and every
+/// machine this app runs on has a Direct3D 11 device FFmpeg can decode on. It is a setting
+/// because the one machine that cannot is a machine where the fallback is the whole answer — and
+/// FFmpeg falls back by itself rather than being asked to (see `video_hw_accel_device`).
+pub const DEFAULT_VIDEO_HW_ACCEL: bool = true;
 /// The levels either volume is offered at: silence, the one step above it, and the decades
 /// between — smallest first here, and listed the other way round in the tray, loudest first.
 ///
@@ -1734,6 +1743,14 @@ pub struct AppConfig {
     /// handed it before it allocates, so a file larger than the budget is answered
     /// with no preview instead of with memory the app may not get.
     pub decode_budget_gb: f32,
+    /// Whether a video is decoded on the graphics card rather than on a core, which is the
+    /// `Video` toggle under `Performance → Hardware Acceleration` in the tray.
+    ///
+    /// It is a setting about *this build's* FFmpeg rather than about a kind of file, which is
+    /// why it is asked of the player that is launched and not of the route: a file this app
+    /// hands to FFmpeg is decoded by whatever FFmpeg is on the machine, and whether that is a
+    /// card or a core is the only thing this names (see `video_hw_accel_device`).
+    pub video_hw_accel: bool,
     /// The curve a picture whose samples are light is brought into eight bits with — an
     /// EXR, a Radiance HDR, a float texture — as `hdr_tone_map` names it.
     pub hdr_tone_map: Curve,
@@ -1888,6 +1905,7 @@ impl Default for AppConfig {
             webview_persistent: false,
             libreoffice_persistent: false,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
+            video_hw_accel: DEFAULT_VIDEO_HW_ACCEL,
             hdr_tone_map: DEFAULT_HDR_TONE_MAP,
             hdr_exposure: DEFAULT_HDR_EXPOSURE,
             text_font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
@@ -2041,6 +2059,7 @@ const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "image_cache_mb",
             "image_disk_cache_mb",
             "tick_ms",
+            "video_hw_accel",
         ],
     ),
     (
@@ -2786,6 +2805,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "video_hw_accel",
+            Some(self.video_hw_accel.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "hdr_tone_map",
             Some(self.hdr_tone_map.as_str().to_string()),
         );
@@ -3230,6 +3254,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "libreoffice_persistent") {
             self.libreoffice_persistent = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_hw_accel") {
+            self.video_hw_accel = value;
         }
         // A budget is written in gigabytes and may be fractional — `0.5` is a small
         // machine's ceiling — so it is read as the number it is rather than as a

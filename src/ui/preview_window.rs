@@ -10,7 +10,7 @@ use crate::config::config::{
     DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED,
     DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use crate::engines::calibre_render;
 use crate::engines::imagemagick_render;
@@ -112,13 +112,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
     SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_TOPALIGN,
     ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_POWERBROADCAST,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 mod displays;
 mod pin_window;
+mod video_launch;
 
 #[cfg(test)]
 use displays::RecordedDisplays;
@@ -1497,6 +1498,68 @@ struct VideoGeometry {
     /// all, and the media engine's duration is only known once it is playing — so the probe that
     /// measures the file is asked for this at the same time it is asked for the shape.
     duration: Option<f64>,
+    /// How many subtitle streams the file carries and which of them the player would reach for
+    /// by itself — the whole of what a track choice is made of here (see `video_subtitles`).
+    subtitles: SubtitleStreams,
+}
+
+/// A file's subtitle streams, counted and ordered the way FFmpeg's `-sst s:` specifier orders
+/// them: from zero, counting only subtitle streams, whichever numbers the video and audio
+/// streams around them happen to carry.
+///
+/// Both numbers are needed and neither is enough alone. The count is what a next-track press
+/// wraps within, so a key pressed on a one-track file is a key that does nothing rather than a
+/// track that does not exist; the first is what a relaunch is given before the user has chosen
+/// anything, which is the player's own choice written down rather than this app's guess at it —
+/// and writing it down is the point, because a relaunch that left it unnamed would be a relaunch
+/// that let the player's own default stand in for a choice this app had forgotten to keep.
+///
+/// The default is *no* streams rather than one, because "the header was never read" and "the
+/// header said there are none" are the same answer to every question here — which is not the same
+/// thing as reading the tracks out of it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct SubtitleStreams {
+    count: usize,
+    first: usize,
+}
+
+impl SubtitleStreams {
+    /// What a relaunch is told when nothing has been chosen: the player's own first choice,
+    /// written down so that it survives the relaunch, and nothing at all for a file with no
+    /// subtitles — where naming a track is a track in a file that has none.
+    fn chosen(&self) -> Option<usize> {
+        (self.count > 0).then_some(self.first)
+    }
+}
+
+/// Paint a band of a layered window one flat opaque colour, for a window whose media is not there.
+///
+/// A layered window's hit testing and its compositing are both answered by the shape of its
+/// pixels, which is why a video pin leaves its middle band transparent for another process's
+/// window to show through. That arrangement has one failure mode and this is it: hide the player
+/// and the band stops being a hole for something and becomes a hole, with the desktop visible
+/// through a window the hand is dragging.
+///
+/// The alpha is forced opaque rather than blended, because a translucent fill over nothing is the
+/// same hole at lower contrast, and because the point of the band while a drag lasts is to stop
+/// being a picture at all.
+fn fill_band_opaque(out: &mut [u8], width: u32, origin_y: u32, height: u32) {
+    let stride = width as usize * 4;
+    if stride == 0 {
+        return;
+    }
+
+    let rows = out.len() / stride;
+    let first = (origin_y as usize).min(rows);
+    let last = (origin_y as usize + height as usize).min(rows);
+    for row in first..last {
+        let Some(pixels) = out.get_mut(row * stride..row * stride + stride) else {
+            return;
+        };
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[0, 0, 0, 255]);
+        }
+    }
 }
 
 impl MediaData {
@@ -2120,9 +2183,12 @@ fn spawn_video_probe(path: PathBuf, generation: u64) {
             // over the file with a decoder chain built for it, which is the shape of work this
             // thread exists to keep off that one; and the answer is held per file and version, so
             // what the replay, the load and the pin after it pay is a lookup (see
-            // `media_engine_plays`). It is asked of every video the probe runs for, whether or not
-            // the name is one the engine is asked to play: the layout reads the same answer out of
-            // an unmeasurable video's fall-back box.
+            // `media_engine_plays`). It is asked of every video the probe runs for, because the
+            // machine does not get a vote in which of the two engines is started for a file: where
+            // FFmpeg is installed the answer is no without the file being opened at all, and where
+            // it is not, this is the ask that decides whether the file has a preview at all —
+            // including in the layout, which reads the same answer out of an unmeasurable video's
+            // fall-back box.
             let _ = media_engine_plays(&path);
         }));
 
@@ -6172,10 +6238,18 @@ fn load_video_thumbnail(
     preview_scale: PreviewScale,
 ) -> Option<MediaData> {
     // Which engine plays this file is settled here, once, and everything below follows from it:
-    // the media engine Windows has where it can decode the file, and FFmpeg's player where it
-    // cannot (see `media_engine_plays`, which the preview loop asks the same question of before
-    // it decides whether a player takes the window over).
-    let native = media_engine_plays(path);
+    // the media engine Windows has draws it into this app's own window, and FFmpeg's player draws
+    // it in a window of its own (see `media_engine_plays`). The third answer is what this arm is
+    // — a file nothing on this machine will play has no preview at all, which is the whole of
+    // what a name only `[ffmpeg]` carries means on a machine with no FFmpeg, and what a name of
+    // `[video]` means there once the engine has turned the file down. A box nothing would ever be
+    // drawn into is not a preview, and the load that returned nothing is the branch that takes
+    // the window down rather than one that fills it with a placeholder.
+    let native = match video_route(path) {
+        VideoRoute::MediaEngine => true,
+        VideoRoute::Ffplay => false,
+        VideoRoute::NoPreview => return None,
+    };
 
     let geometry = match probe_video_geometry(path) {
         ProbedGeometry::Measured(geometry) => geometry,
@@ -6192,6 +6266,11 @@ fn load_video_thumbnail(
             frame_height: 1080,
             crop: None,
             duration: None,
+            // A file nothing could read is a file whose subtitle streams are unknown, which is
+            // answered the same way as a file known to have none: the player is told nothing,
+            // because a `-sst` guessed at is a specifier it may refuse outright (see
+            // `video_subtitles`).
+            subtitles: SubtitleStreams::default(),
         },
     };
 
@@ -6332,6 +6411,98 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32, Option<f64>)> {
     }
 
     Some((width?, height?, duration))
+}
+
+/// Read a file's subtitle streams, counted and ordered the way FFmpeg numbers them for `-sst`.
+///
+/// It is asked of the same probe that measures the shape and the length, and run beside the two
+/// others rather than after them, because none of the three needs another's answer — a file's
+/// subtitle streams are in its header whether or not anything has been decoded out of it yet, so
+/// adding this read costs a third process in parallel rather than a round trip in series.
+///
+/// `ffprobe` is asked for every stream rather than for `v:0`, because a selection is the one
+/// thing that would hide the answer: the count and the order of a file's subtitle streams are
+/// counted among themselves, so selecting the video alone would report no subtitles at all for a
+/// file that has three. What comes back is one `key=value` per line in stream order, and the two
+/// facts wanted are read from it the same way the shape is read from the other probe — by
+/// splitting on the first `=`, with the disposition's own `key:value` name left whole.
+fn probe_subtitle_streams(path: &Path) -> SubtitleStreams {
+    let child = engine_processes::hidden_command("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-err_detect",
+            "ignore_err",
+            "-fflags",
+            "+genpts+discardcorrupt+igndts",
+            "-show_entries",
+            "stream=index,codec_type:stream_disposition=default",
+            "-of",
+            "default=noprint_wrappers=1",
+        ])
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok();
+
+    let Some(child) = child else {
+        return SubtitleStreams { count: 0, first: 0 };
+    };
+    engine_processes::adopt(child.id());
+
+    let Some(output) = wait_bounded(child, Duration::from_secs(VIDEO_PROBE_TIMEOUT_SECS)) else {
+        return SubtitleStreams { count: 0, first: 0 };
+    };
+
+    parse_subtitle_streams(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// The subtitle streams of a probe's flat answer: how many there are and which the player would
+/// pick by itself.
+///
+/// The player's own choice is the first stream the container marks as the default one, and the
+/// first subtitle stream at all where the container marks none — which is how FFmpeg resolves
+/// it, and reproducing the rule here is the whole of what makes an unchosen track survive a
+/// relaunch unchanged rather than becoming whatever this app happened to guess was first.
+///
+/// The count is taken before the default is settled rather than by counting the parsed list
+/// afterwards, so that a container which marks no default still has its first subtitle stream as
+/// `first` rather than as a stream that was never looked for.
+fn parse_subtitle_streams(probe: &str) -> SubtitleStreams {
+    let mut count = 0usize;
+    let mut default = None;
+    let mut last_is_subtitle = false;
+
+    for line in probe.lines() {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            "codec_type" => {
+                // A stream begins here, so the disposition read for the previous one is finished
+                // with. Keying off the codec type rather than off the index is what keeps the two
+                // in step for a container that has chosen not to number its streams.
+                last_is_subtitle = value.trim() == "subtitle";
+                if last_is_subtitle {
+                    count += 1;
+                }
+            }
+            // The disposition belongs to the stream just above it, so it is only allowed to name
+            // a default while that stream is a subtitle one — otherwise the default *video*
+            // stream would be taken for a default subtitle track, which is the mistake a file
+            // with no subtitles at all would otherwise produce.
+            "DISPOSITION:default" if last_is_subtitle && value.trim() == "1" => {
+                default = default.or(Some(count - 1));
+            }
+            _ => {}
+        }
+    }
+
+    SubtitleStreams {
+        count,
+        first: default.unwrap_or(0).min(count.saturating_sub(1)),
+    }
 }
 
 fn parse_cropdetect_line(line: &str) -> Option<VideoCrop> {
@@ -6522,14 +6693,20 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // Reading the dimensions and detecting the crop are two external processes,
     // and the detector is the one that decodes frames: neither needs the other's
     // answer until the crop is validated, so they run at once and the hover waits
-    // for the slower one rather than for both in turn.
-    let (dimensions, candidates) = std::thread::scope(|scope| {
+    // for the slower one rather than for both in turn. The subtitle streams are a
+    // third, for the same reason and because they are in the file's header rather
+    // than in its pictures — a header read does not wait on a decode.
+    let (dimensions, candidates, subtitles) = std::thread::scope(|scope| {
         let dimensions = scope.spawn(|| get_video_dimensions(path));
         let candidates = scope.spawn(|| collect_video_crop_candidates(path));
+        let subtitles = scope.spawn(|| probe_subtitle_streams(path));
 
         (
             dimensions.join().unwrap_or(None),
             candidates.join().unwrap_or_default(),
+            subtitles
+                .join()
+                .unwrap_or(SubtitleStreams { count: 0, first: 0 }),
         )
     });
 
@@ -6596,6 +6773,7 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             frame_height: src_h,
             crop: Some(crop),
             duration: src_duration,
+            subtitles,
         }
     } else {
         VideoGeometry {
@@ -6605,6 +6783,7 @@ fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             frame_height: src_h,
             crop: None,
             duration: src_duration,
+            subtitles,
         }
     };
 
@@ -6681,6 +6860,33 @@ unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
         | WS_EX_TOOLWINDOW.0 as isize
         | WS_EX_TOPMOST.0 as isize;
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+
+    // The style is put on whatever else is happening, and the *raise* is not. This is the one
+    // place every raise of the player's window goes through — the monitor thread calls it about
+    // every hundred milliseconds for as long as a film plays, whether or not the tick has asked for
+    // anything — and that is what made a pinned window's volume popup open and vanish: the popup is
+    // drawn over the media band, the media band of a video is this very window, and a raise puts
+    // this window on top of the pin's own window every hundred milliseconds however carefully the
+    // tick is holding off. The tick's hold-off was the right idea against the wrong caller.
+    //
+    // So the raise waits while the popup is up, and the style does not: `WS_EX_NOACTIVATE` is what
+    // keeps the player from taking the keyboard, and that has to keep being asserted throughout,
+    // because the player's window is created without it and this is the only thing that ever puts
+    // it on (see `Bug 2`'s note over `try_apply_noactivate_style`). Nothing is asked for on the way
+    // out — the popup's closing raises the pin's own window, and the next raise through here
+    // settles the order (see `toggle_pin_volume`).
+    //
+    // **And it waits while a drag is parking the window, which is the same arrangement for the same
+    // reason: this is a thread of its own, asking every hundred milliseconds whether the player's
+    // window is still the window it styled.** Neither the drag's own raises nor the tick's can cover
+    // it — they are two callers, and this one answers for a film nobody asked about. A park this
+    // function undid would last from one monitor pass to the next, which at the pace it runs is a
+    // hundred milliseconds of a drag with the film back on screen and the compositor re-blitting it
+    // at the pointer's rate: the stutter the park was written for, and a band painted flat under a
+    // window that is standing in it (see `pin_player_is_parked`).
+    if pin_volume_open() || pin_player_is_parked() {
+        return true;
+    }
 
     // Force the video preview window to topmost so it doesn't hide behind Explorer
     let _ = SetWindowPos(
@@ -6864,6 +7070,585 @@ fn set_noactivate_for_process(pid: u32) {
     wake_noactivate_monitor();
 }
 
+/// A key as FFmpeg's player has to be given it, and the `lParam` that has to carry.
+///
+/// The three numbers are the virtual-key code, the scan code the same key has on a US layout
+/// (`MapVirtualKey`, which is what a real `WM_KEYDOWN` for it carries), and the message
+/// parameter built from the scan code. They are written out rather than computed because they
+/// were measured rather than reasoned about, and the measurement overturned the obvious
+/// answer: a `WM_KEYDOWN` posted with `lParam` of zero does *not* pause the player, and one
+/// posted with the scan code does — every time.
+///
+/// That is not this app being fussy. FFmpeg's player is an SDL program, and SDL turns a Win32
+/// key message into its own by looking the virtual-key code up to a scan code and the scan code
+/// up to a key symbol; a scan code of zero is not a key, so the symbol it arrives as is not
+/// `p`, and a player switching on the symbol it was given does nothing at all for a message
+/// whose scan code is missing. Reading the argument as "the message needs its scan code" is
+/// what the zero was missing, and no flag in the code says so.
+///
+/// The one bit deliberately *not* set is bit 30, which is Windows' own "this is an auto-repeat"
+/// and which SDL reads as a repeat and drops: a posted pause that repeated would toggle, toggle
+/// and toggle back, so a hand resting on the bar's button would flicker rather than hold. The
+/// low bit is the repeat *count*, which a real key-down of one press is 1.
+fn ffplay_key_lparam(scan: u32) -> LPARAM {
+    LPARAM((scan as isize) << 16 | 1)
+}
+
+/// A key FFmpeg's player is toggled with, and the scan code it is named by.
+const FFPLAY_PAUSE_KEY: (u32, u32) = (b'P' as u32, 0x19);
+
+/// The window belonging to `pid`, if the player this app believes is playing has a window of its
+/// own up — which is not the same question as whether a player is running: a process opens its
+/// window after it has read the file's header, so a player in the middle of starting is running
+/// and has no window yet.
+///
+/// The pid is asked about as well as the window, and that is what a relaunch made necessary.
+/// A relaunch now leaves two players alive at once — the one on screen and the one beginning over
+/// it (see `retire_replaced_player`) — and `VIDEO_HWND` is a single published handle that names
+/// whichever window the monitor found last. So "there is a window" is not a question that can be
+/// asked of the handle alone: a key posted through it during the overlap would reach the player
+/// being retired, which is a player this app is about to end, and the pin would be paused against
+/// a picture that is on its way out. A handle that belongs to another pid is therefore not this
+/// player's window at all, and neither is a handle whose player is not the one being played.
+///
+/// A handle that is not a window any more is cleared on the way out, because the only other paths
+/// that clear it are the ones that end a player, and this is the one place that can notice a
+/// window has gone on its own — a player that puts its window up, has it torn down, and goes on
+/// playing is a player this app must not post a key to for ever after.
+fn video_window_for(pid: u32) -> Option<HWND> {
+    if pid == 0 {
+        return None;
+    }
+
+    let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
+    if hwnd_val == 0 {
+        return None;
+    }
+
+    // SAFETY: `hwnd_val` is a window handle published by `apply_noactivate_to_hwnd` from the
+    // handle Windows gave back for a player's own window, and it is cleared by the same paths
+    // that end a player — so it is either a live window of some player of this app's or a handle
+    // to nothing, which `IsWindow` settles before the handle is used for anything. A window that
+    // is on its way out is discarded by the system rather than delivered to, which is the answer
+    // `PostMessageW` gives back as a failure and what every caller falls back on.
+    let hwnd = HWND(hwnd_val as *mut core::ffi::c_void);
+    unsafe {
+        if !IsWindow(hwnd).as_bool() {
+            VIDEO_HWND.store(0, Ordering::SeqCst);
+            return None;
+        }
+
+        let mut owner: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut owner));
+        (owner == pid).then_some(hwnd)
+    }
+}
+
+/// Whether a player's window is there to be told something, which is not the same question as
+/// whether a player is running (see `video_window_for`).
+///
+/// Nothing is asked of the player about what it is doing — it reports nothing, which is the
+/// whole reason `PinTransport` keeps what this app has asserted rather than what a player has
+/// answered (see `transport_playing`). All that is done here is put a key on the player's own
+/// message queue, which is a window's own business and is read off the handle already published
+/// for the rest of the window's handling (see `apply_noactivate_to_hwnd`).
+fn ffplay_key_pause() -> bool {
+    let Some(hwnd) = video_window_for(VIDEO_PID.load(Ordering::SeqCst)) else {
+        return false;
+    };
+
+    // SAFETY: the handle was just confirmed to be a live window of the player this app believes
+    // is playing, so both messages below reach the player the caller means. Posting is the whole
+    // of what is asked of it, and the two answers are the whole of what is known in return.
+    unsafe {
+        let (vk, scan) = FFPLAY_PAUSE_KEY;
+        let lparam = ffplay_key_lparam(scan);
+        // The release is as much a part of the press as the press is: a key the player has been
+        // sent down and never sent up is a key it will not report again until it is sent up,
+        // so the second pause press would arrive as the *first* one and the bar would stop
+        // answering altogether.
+        let down = PostMessageW(hwnd, WM_KEYDOWN, WPARAM(vk as usize), lparam).is_ok();
+        let up = PostMessageW(hwnd, WM_KEYUP, WPARAM(vk as usize), lparam).is_ok();
+        down && up
+    }
+}
+
+/// A player that has been begun to take the place of another, and the player being replaced.
+///
+/// It exists because a relaunch is two things at once and the order they happen in is what the
+/// user sees. Ending the old player first and beginning a new one leaves a window with nothing
+/// in it for as long as the new player takes to open the file, seek, and put a window up —
+/// which on a 1440p HEVC file is long enough to read as a flash of the desktop through the pin.
+/// Beginning the new one first means its window arrives over the old one and the old one is ended
+/// only once there is something to replace it with, so the picture on screen is continuous and
+/// the swap is invisible.
+///
+/// So the old player is not ended where it is replaced; it is parked here, with the player that
+/// has taken its place and the moment it was begun, and ended by the loop once the arrival is
+/// answered (see `settle_video_retirement`). What the loop asks is a question about two
+/// processes, and it is asked of this rather than of the state so that it can be answered with
+/// nothing up.
+///
+/// Only one player is ever parked this way, which is why the record holds one and not a list: a
+/// relaunch that arrives while another is parked ends the player in between rather than stacking
+/// a third wait on top of the first (see `retire_replaced_player`).
+///
+/// What the overlap costs is *sound*, and it is a price paid on purpose rather than an oversight:
+/// the player on screen is a whole player, not a window, and nothing can take the sound out of it
+/// while it is there. Its own window cannot even be addressed — `video_window_for` answers out of
+/// the one published handle, which through the overlap names whichever window the monitor found
+/// last, so a key posted to the parked player would reach it only on the ticks where its own window
+/// happens to be that one, and this app could not tell whether it arrived (see
+/// `transport_playing`). The other trade is worse: a replacement begun silent cannot be un-silenced
+/// afterwards, because the level of a running player is a key this app has no way to confirm and a
+/// mute is a toggle rather than a setting, so a film begun at zero stays at zero for good.
+///
+/// So two audio streams run at once for as long as the swap takes — bounded by the same
+/// `VIDEO_START_WAIT_SECS` the picture's hold is bounded by, and in practice a few hundred
+/// milliseconds, a player having to open the file, seek and put its window up — and the overlap ends
+/// the moment the wait does, whether that is the replacement arriving or the pin being gone.
+#[derive(Clone, Copy)]
+struct VideoRetirement {
+    /// The player being replaced, verified still to be `ffplay.exe` before it is ended however
+    /// long ago it was begun — a handle this old is a process id that has since been reused
+    /// (see `terminate_ffplay_pid`).
+    retiring: u32,
+    /// The player begun in its place, whose window arriving is what ends it.
+    replacement: u32,
+    /// When that player was begun, which bounds the wait exactly as `VIDEO_START_WAIT_SECS`
+    /// bounds a first start: a player that is never going to put a window up must not leave the
+    /// one it was replacing playing over the desktop for ever.
+    started: Instant,
+}
+
+/// The player being replaced by a relaunch, if one is waiting to be ended.
+///
+/// It is held behind the loop's own state rather than in the media, for the reason the media is
+/// never read for a question like this one: every thread here may ask, and the loop is the one
+/// that has to be the only one ending a player (see `settle_video_retirement`).
+static VIDEO_RETIREMENT: Lazy<Mutex<Option<VideoRetirement>>> = Lazy::new(|| Mutex::new(None));
+
+/// Park a player that a relaunch has taken the place of, so that it is ended once its
+/// replacement has arrived rather than before it was begun.
+///
+/// It is a no-op for a run with nothing playing and for a relaunch of a player that was not
+/// running — a hold that is being let go of has no window of its own to keep on screen, so
+/// there is nothing to overlap and the arriving player is all there is.
+///
+/// A relaunch that arrives while a player is already parked is answered by
+/// `retirement_after_relaunch`, and the lock is held across both: the record is one slot, so a
+/// relaunch and the loop's settling of that slot cannot be allowed to interleave, or the relaunch
+/// parks a player the settling then never looks at (see `settle_video_retirement`).
+fn retire_replaced_player(retiring: u32, replacement: u32) {
+    if retiring == 0 || replacement == 0 || retiring == replacement {
+        return;
+    }
+
+    let Ok(mut held) = VIDEO_RETIREMENT.lock() else {
+        return;
+    };
+
+    let (parked, ending) = retirement_after_relaunch(
+        *held,
+        retiring,
+        replacement,
+        video_window_for(retiring).is_some(),
+        Instant::now(),
+    );
+    if let Some(ending) = ending {
+        // Ended the same way a settled retirement is ended, and for the same reason: this player
+        // has left the media and `VIDEO_PID` already names its replacement, so this call is the
+        // only one that will ever end it or stop holding it (see `end_retired_player`).
+        end_retired_player(ending);
+    }
+    *held = parked;
+}
+
+/// The wait that is left when one player is retired while a replacement for another may already be
+/// running — and the player, if any, that has to be ended at once for that wait to be the right one.
+///
+/// The record holds one player, so a relaunch that arrives while a wait is running has to say what
+/// became of the player it displaced, and there is only ever one question to answer it with: whose
+/// window is on screen. Nothing else distinguishes the two cases, because in both of them a
+/// replacement is beginning over a player that is still on screen.
+///
+/// * The player being retired has a window, so it covers the one already parked, and that one is
+///   ended at once — it has nothing left to be kept on screen for.
+/// * It has no window, so the player already parked is still the only picture there is. Ending
+///   *that* one would leave the band empty for the whole of the new start, which is the flash of
+///   the desktop this record exists to prevent; the player in between has put no window up to
+///   lose, so it is the one that goes, and what stays parked is the oldest player with the newest
+///   player waited for — one wait, still bounded by the oldest player's own start, rather than a
+///   second wait stacked on a player nothing will ever look at again.
+///
+/// `now` is the moment this relaunch began its replacement, which is only used when there is no
+/// wait already running: a wait that is already running is bounded by the wait that began with the
+/// first of these players, and re-basing it on this one would let it outlive the start it stands
+/// for by however many relaunches arrived inside it.
+fn retirement_after_relaunch(
+    previous: Option<VideoRetirement>,
+    retiring: u32,
+    replacement: u32,
+    retiring_up: bool,
+    now: Instant,
+) -> (Option<VideoRetirement>, Option<u32>) {
+    let Some(previous) = previous else {
+        return (
+            Some(VideoRetirement {
+                retiring,
+                replacement,
+                started: now,
+            }),
+            None,
+        );
+    };
+
+    // The same player parked twice over is the case the record was built for: the wait is the
+    // older player's and the newer player is what is being waited for, and nothing is ended —
+    // the player is the one on screen, which is the whole of what it was parked for.
+    if previous.retiring == retiring {
+        return (
+            Some(VideoRetirement {
+                retiring,
+                replacement,
+                started: previous.started,
+            }),
+            None,
+        );
+    }
+
+    if retiring_up {
+        return (
+            Some(VideoRetirement {
+                retiring,
+                replacement,
+                started: previous.started,
+            }),
+            Some(previous.retiring),
+        );
+    }
+
+    (
+        Some(VideoRetirement {
+            retiring: previous.retiring,
+            replacement,
+            started: previous.started,
+        }),
+        Some(retiring),
+    )
+}
+
+/// Whether a player being replaced can be ended now, or is still the one on screen.
+///
+/// Everything in this is about not ending the only picture there is: a replacement with a
+/// window of its own is a replacement that has arrived; a replacement that is *gone* never will
+/// be, and waiting longer leaves the old player playing over a file nothing is going to show;
+/// and a replacement that has been starting for longer than a start ever takes is a player this
+/// app has already given up on once today (`player_wait`), so the wait is bounded by the same
+/// number and ends the old one rather than outliving it.
+fn retire_ready(replacement_up: bool, replacement_alive: bool, waited: Duration) -> bool {
+    replacement_up || !replacement_alive || waited >= Duration::from_secs(VIDEO_START_WAIT_SECS)
+}
+
+/// What is left of a retired player once it has been asked to end.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RetireEnd {
+    /// Confirmed gone. The record of it goes with it, and there is nothing left to wait over.
+    Gone,
+    /// Still there. The request has not taken, so the player stays parked and is asked again.
+    Asked,
+}
+
+/// Whether a retired player is gone or still there, from whether it was alive to be asked.
+///
+/// It is the same two answers `kill_stray_video_process` gives, and for the same reason: ending a
+/// player is a *request* (see `terminate_ffplay_pid`), and this is the one place that asks for one
+/// this app has already stopped holding — the `Child` went when the player was parked (see
+/// `restart_pinned_player`) and `VIDEO_PID` names the replacement by now, so nothing else in the
+/// preview would ever ask it again. Which is what makes the second answer mean anything: an
+/// unconfirmed request keeps the player parked rather than dropping it, and a confirmed one stops
+/// holding an id for a process that is gone.
+fn retire_end(alive: bool) -> RetireEnd {
+    if alive {
+        RetireEnd::Asked
+    } else {
+        RetireEnd::Gone
+    }
+}
+
+/// End a retired player and say what is left of it, giving up its process id only once it is
+/// confirmed gone.
+///
+/// It is the one place a player this app has stopped holding is ended, so it is also the one place
+/// that has to stop holding it: `record_player` writes every player down for the next run to answer
+/// for (see `engine_processes`), and a retired player is the only one that leaves without a
+/// confirmation of its own — `is_video_process_running` reads the handle in the media and
+/// `kill_stray_video_process` reads `VIDEO_PID`, and both name the replacement by the time a
+/// retirement is settled. Without this, every seek, resize and level change that ends in a relaunch
+/// leaves one dead pid behind in the record and in the state file it is written into, for the rest
+/// of the run.
+fn end_retired_player(pid: u32) -> RetireEnd {
+    terminate_ffplay_pid(pid);
+    let end = retire_end(is_ffplay_pid_alive(pid));
+    if end == RetireEnd::Gone {
+        // The player is confirmed gone, so the record of it goes with it rather than being left
+        // for the next run to look for.
+        engine_processes::forget(pid);
+    }
+    end
+}
+
+/// A player that a relaunch has taken the place of, ended now that there is a window to replace
+/// it with, and a player that died being settled in the bar that was drawn against it.
+///
+/// It answers out of the loop rather than out of whichever thread happened to begin the
+/// replacement, because ending a player is process discipline and this is the one place in the
+/// preview that owns it: a seek is asked for from the pinned window's own procedure and a
+/// resize from the loop's tick, and both arrive here rather than each taking a player's life
+/// into its own hands.
+///
+/// The wait it waits on is the same wait the first launch waits on (`VideoStart`, bounded by
+/// `VIDEO_START_WAIT_SECS`), which is what makes a relaunch no more visible than the start it
+/// replaces: on both sides of this is one hold — the spinner on a hover, the player's own still-
+/// on-screen frame on a pin — for as long as a player takes to put its window up.
+///
+/// The lock is held across the whole of it, and the record is read under it rather than taken out
+/// of it. That is what closes the race between here and a relaunch: a retirement taken out and put
+/// back afterwards is a gap in which a relaunch on the pin's own window thread parks a player of
+/// its own, and the put-back then overwrites it — a player left alive and unowned, its window on
+/// screen for as long as the app runs. Reading it under the lock leaves nothing to interleave
+/// with, and every path here is a handful of non-blocking Windows calls, so the wait a relaunch
+/// asks on this thread is a wait measured in microseconds.
+fn settle_video_retirement() {
+    let Ok(mut held) = VIDEO_RETIREMENT.lock() else {
+        return;
+    };
+    let Some(pending) = *held else {
+        return;
+    };
+
+    // The handle the arriving player published is what says it has arrived, and it has to be the
+    // handle that belongs to *that* player rather than to any window on screen: the two overlap,
+    // the old window is on screen throughout, and `VIDEO_HWND` names whichever of them the
+    // monitor found last (see `video_window_for`).
+    let arrival = video_window_for(pending.replacement).is_some();
+
+    // A pin that is no longer up is the other end of the wait, and it ends it at once. What this
+    // player is being kept on screen *for* is a window that has gone — a pin closed, a walk that
+    // stepped off, a hover that took the file over — and a replacement the pin is not waiting for
+    // any more is one whose arrival will never be answered by a window of this pin's, so waiting
+    // the full `VIDEO_START_WAIT_SECS` for it would leave a stray window on the desktop for ten
+    // seconds after the pin it belonged to had closed.
+    if !pinned()
+        || retire_ready(
+            arrival,
+            is_ffplay_pid_alive(pending.replacement),
+            pending.started.elapsed(),
+        )
+    {
+        // A player whose end was not confirmed keeps its place in the record and is asked again on
+        // the next tick, because nothing else here would ask it: the wait is over either way, and
+        // what is left of it is only the pid (see `end_retired_player`).
+        if end_retired_player(pending.retiring) == RetireEnd::Gone {
+            *held = None;
+        }
+    }
+}
+
+/// Settle a transport bar against the player actually behind it.
+///
+/// Everything a bar says about a video FFmpeg plays is something this app asserted when it began
+/// a player or sent it a key, and an assertion is not a reading: a player that has ended — a film
+/// watched to its end, a window the user closed from the taskbar, a process killed from outside —
+/// leaves every claim behind standing. So the loop, which already asks whether the player is alive
+/// to decide whether the *pin* has come apart (see `pin_media_is_alive`), asks it once more here
+/// to decide what the *bar* is allowed to say, and overwrites the claim where the two disagree.
+///
+/// This is why the pause glyph cannot get stuck. A file held and then lost is not a file that is
+/// playing, and `PinTransport::player_gone` writes it as a held file rather than as a running one:
+/// the second the film had reached is kept, so the bar goes on showing where it stopped and a
+/// press starts it from there — but the button stops claiming there is something playing to pause.
+fn settle_pinned_transport() {
+    if current_media_type() != Some(MediaType::Video) || !pinned() {
+        return;
+    }
+
+    if is_video_process_running() {
+        return;
+    }
+
+    let pinned = pin_state();
+    let pin = pinned.as_ref().and_then(|pinned| pinned.pin());
+    let played = pin.and_then(|pin| pin_playhead(&pin.transport).or(pin.transport.paused_at));
+    let Some(played) = played else {
+        // Nothing was ever claimed and nothing is running: a bar with nothing behind it, which is
+        // the state a pin that is only just starting is in and is not a reconciliation to make.
+        return;
+    };
+
+    update_pin_transport(|transport| transport.player_gone(played));
+}
+
+/// How near its end a film has to be before this app reads a player that has gone as having been
+/// watched to the end rather than as having been killed.
+///
+/// The clock underneath `PinTransport::started` is this app's own, counting from the moment it
+/// began a player, and it is a *wall* clock: a 2560x1440, 144 fps HEVC file on a machine that
+/// cannot decode it in real time plays back behind the clock, because `-framedrop` drops the
+/// frames it has no time for rather than waiting. So the two clocks drift, by seconds over a long
+/// film, and a decision made on an exact comparison would either begin the film again seconds
+/// before it finished — cutting the last scene off — or, on a machine that is behind rather than
+/// ahead, never recognise the end at all and leave a pin showing a dead player.
+///
+/// Five seconds is the width of that drift as measured rather than a round number picked for
+/// tidiness, and it is deliberately lopsided. A film restarted up to five seconds early costs the
+/// viewer the tail of one loop out of however many the preview runs for; a film restarted never
+/// costs a frozen pin and a play button over a picture that is not moving, which is the failure
+/// this number exists to prevent. The other side of that trade is a viewer who closes the window
+/// during the last five seconds of a film and finds it beginning again, which is indistinguishable
+/// from wanting it to and is what a looping preview does anyway.
+const FILM_END_GRACE_SECONDS: f64 = 5.0;
+
+/// What a pinned video's player being gone means, from what this app claimed about it.
+///
+/// Three answers because a player can leave for three reasons and this app has to tell them
+/// apart with nothing to ask it: FFmpeg's player is not asked whether it is still there, and all
+/// this app has is a clock it started and a length the probe read.
+///
+/// The distinction that matters is `Finished` against `Gone`, and it is the whole of why the loop
+/// is this app's. `-loop 0` was dropped from the launch because an input `-ss` sends the player's
+/// own loop back to the keyframe it landed on rather than to the start of the film — asked for
+/// 720.000 s on a file 723.754 s long, it began at 718.757 s and looped there forever, which is a
+/// preview that has stopped previewing anything but its own last five seconds. So the player plays
+/// once and this app begins it again, and the only question each time is whether the film finished
+/// or the player was killed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PlayerEnd {
+    /// The film was watched to its end and is to be begun again from the top.
+    Finished,
+    /// The player is gone for some other reason, and the film holds where it stopped.
+    Gone,
+}
+
+/// Whether a player that has ended ended because its film did.
+///
+/// `reached` is how much of the film this app's clock believes has gone by, counted from the
+/// moment this app began the player and deliberately *not* wrapped at the length of the file — the
+/// wrap in `transport_clock` is for drawing a playhead that goes round, and a decision about
+/// whether the film is over must be able to see past it.
+///
+/// Every condition here is a thing that could be otherwise, and each is one that has been: a held
+/// film whose player was killed is not a film that finished, a film whose length the probe never
+/// read cannot be judged against its end, and a player this app asked to end is a player whose
+/// replacement is already on its way.
+fn player_end(playing: bool, reached: f64, duration: Option<f64>, retiring: bool) -> PlayerEnd {
+    let long_enough = duration
+        .filter(|duration| *duration > 0.0)
+        .is_some_and(|duration| reached >= duration - FILM_END_GRACE_SECONDS);
+
+    if playing && !retiring && long_enough {
+        PlayerEnd::Finished
+    } else {
+        PlayerEnd::Gone
+    }
+}
+
+/// Begin a pinned film again from the beginning, answering whether that was what to do.
+///
+/// This is the loop FFmpeg's player is no longer asked for, and it is one tick of the preview loop
+/// rather than a thread of its own: a player that has ended is a process that is gone, the loop
+/// already asks every tick whether the pinned media is alive, and the relaunch it performs is the
+/// same relaunch a seek and a resize perform (see `restart_pinned_player`), so the film comes back
+/// over the hold that keeps its window up while the new player puts one of its own — the gap at the
+/// loop boundary is the same gap the first start of the preview has, and it is covered by the same
+/// thing.
+///
+/// It is asked *first* in a pinned tick, before anything else that reads the player as gone, and
+/// that order is the whole of how this loop works. Three other things in the tick notice a player
+/// that has exited — a bar that must stop claiming to be playing (`settle_pinned_transport`), a
+/// file written down as failed before it ever drew a frame (`pin_media_failed_before_a_frame`),
+/// and a pin whose media has come apart (`pin_media_is_alive`) — and each of them is right about
+/// what it sees and wrong about what it means: a film that has finished looks exactly like one
+/// whose player has been killed. Answered after any of them, the loop would be restarting a pin
+/// that has already closed itself.
+fn loop_ended_pinned_player() -> bool {
+    if current_media_type() != Some(MediaType::Video) {
+        return false;
+    }
+
+    // A player that is still running has not ended, whatever the clock says. The grace below is for
+    // a player that has *gone* and whose going is read as the film finishing; it is not a licence to
+    // cut the tail off a film that is still playing, and without this check a film shorter than the
+    // grace would be begun again on the tick after it began.
+    if is_video_process_running() {
+        return false;
+    }
+
+    let Some((path, content, transport, _)) = pinned_playback_state() else {
+        return false;
+    };
+    if transport.pending_hold {
+        return false;
+    }
+
+    let Some(started) = transport.started else {
+        // Nothing was ever running, so nothing ended: this is a bar with nothing behind it and it
+        // is `settle_pinned_transport`'s to answer, not this one's.
+        return false;
+    };
+
+    let retiring = VIDEO_RETIREMENT.lock().is_ok_and(|pending| pending.is_some());
+    let reached = started.1 + started.0.elapsed().as_secs_f64();
+    if player_end(transport.paused_at.is_none(), reached, transport.duration, retiring)
+        != PlayerEnd::Finished
+    {
+        return false;
+    }
+
+    restart_pinned_player(&path, content, 0.0, false);
+    true
+}
+
+/// Give a player that has been told nothing yet the hold that was written down for it.
+///
+/// It is the other half of carrying a hold through a relaunch, and it exists because a relaunch
+/// cannot finish the job itself: the player it begins has no window for a moment, and a hold this
+/// app could already deliver is a key posted to that player's own window (see `ffplay_key_pause`).
+/// So the relaunch writes the hold down as owed — the file *is* meant to be held, and a bar that
+/// forgot that would draw a play button over a paused film — and this is what delivers it on the
+/// tick that finds the window up, which is the first tick after the one that began it.
+///
+/// What the hold is re-based onto is the player's own clock rather than the second the relaunch
+/// began at, which is the whole of the correction: a player told to hold a moment after it started
+/// has got to that moment's worth of film since, and a bar left at the relaunch's second would be
+/// drawing the film a fraction behind where it stopped (see `transport_clock`).
+///
+/// A press of the play button takes an owed hold back rather than racing it, which is what
+/// `PinTransport::released` is for, and a player that died takes it with the claim it belonged to
+/// (see `PinTransport::player_gone`). What is left owing after that is a player that never put a
+/// window up, and the bar's own answer to that is a play button — which begins the file again
+/// rather than leaving it stuck (see `settle_pinned_transport`).
+fn settle_pending_hold() {
+    if current_media_type() != Some(MediaType::Video) {
+        return;
+    }
+
+    let Some((_, _, transport, _)) = pinned_playback_state() else {
+        return;
+    };
+    if !transport.pending_hold {
+        return;
+    }
+
+    // Nothing is done until there is a window to post a key to, which is the whole of the wait:
+    // a key posted into nothing is dropped, and the press that put the hold here would be
+    // answered by a fallback that begins a *third* player (see `toggle_pinned_playback`).
+    if ffplay_key_pause() {
+        let at = transport_clock(&transport).unwrap_or(0.0);
+        update_pin_transport(|state| state.held(at));
+    }
+}
+
 /// Start ffplay for video preview, at the level `volume` names and with the film's own measured
 /// loudness folded into it where `Normalize` is on for videos (see `normalizing_video`).
 ///
@@ -6871,7 +7656,10 @@ fn set_noactivate_for_process(pid: u32) {
 /// callers keep different ones: a preview that is beginning is played at `Volume → Video`, and a
 /// pinned one is played at the level its own window is holding — the one the tray named when that
 /// pin was taken up, moved by whatever the hand on its volume control has done since, and never
-/// written back to the setting (see `PinVolume`).
+/// written back to the setting (see `PinVolume`). `subtitle` is the same kind of answer for the
+/// same reason: it is what a pinned window is remembering, and `None` is what a hover asks for
+/// (see `next_subtitle`).
+#[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 fn start_video_playback(
     path: &PathBuf,
     x: i32,
@@ -6880,11 +7668,24 @@ fn start_video_playback(
     height: i32,
     start: f64,
     volume: u32,
+    subtitle: Option<usize>,
 ) -> Option<Child> {
     let volume = volume.min(100);
 
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = engine_processes::hidden_command("ffplay");
+
+    // Whether the film is decoded on the graphics card rather than on a core, which is the
+    // `Video` toggle under `Performance → Hardware Acceleration` in the tray.
+    //
+    // It is read here rather than at the top of the function because this is where a player is
+    // actually begun, and a setting that is read at a hover's beginning is read for the *next*
+    // hover: a film already playing was launched with the answer that was on then, and it is kept
+    // playing with it rather than being relaunched under the user's feet (see
+    // `video_hw_accel_device`).
+    if let Some(device) = video_hw_accel_device() {
+        cmd.args(["-hwaccel", device]);
+    }
 
     // If volume is 0, disable audio completely for better performance
     if volume == 0 {
@@ -6933,18 +7734,69 @@ fn start_video_playback(
         }),
         _ => None,
     };
+
+    // The subtitles are drawn into the same filter chain rather than named beside it, because
+    // `-sst` is inert on this build: the subtitle stream is demuxed and no subtitle filter is put
+    // in the graph, so nothing is drawn whatever track is chosen. What draws is the `subtitles`
+    // filter, which initialises libass — and which is appended *after* the crop rather than put in
+    // front of it, so the lettering is laid over the cropped picture rather than cropped along
+    // with it.
+    //
+    // The track named is the one the caller was given, where there is a choice. A caller that has
+    // chosen nothing is answered with the file's own default rather than with nothing at all,
+    // because the player is about to be launched with a specifier either way and the one it would
+    // have picked for itself is the one the picture was drawn with last time (see
+    // `SubtitleStreams::chosen`).
+    let streams = video_subtitles(path);
+    let subtitles =
+        video_launch::subtitle_filter(path, streams.count, subtitle.or(streams.chosen()));
+    let vf = match (vf, subtitles) {
+        (None, None) => None,
+        (Some(chain), None) => Some(chain),
+        (None, Some(filter)) => Some(filter),
+        (Some(chain), Some(filter)) => Some(format!("{chain},{filter}")),
+    };
+
     if let Some(vf) = vf.as_deref() {
         cmd.args(["-vf", vf]);
     }
 
     // Where the player is asked to start. A pinned preview's transport bar is the one caller that
     // asks for anything but the beginning: FFmpeg's player can be told nothing once it is running,
-    // so a seek is this player ended and another one begun at the second the bar was dragged to —
-    // and its own loop then returns to *that* second, which is the same bargain the sound path
-    // makes (see `start_audio_player`).
-    if start > 0.0 {
-        cmd.args(["-ss", &format!("{start:.3}")]);
+    // so a seek is this player ended and another one begun at the second the bar was dragged to.
+    //
+    // It is written *after* the file rather than before it, and that placement is not a style
+    // choice. Measured on FFmpeg 9.0.2: a `-ss` written before the input makes the `subtitles`
+    // filter draw nothing at all — the same frame comes back byte-identical with and without it —
+    // while the same `-ss` after the input changes the picture. A time-shifted anime release
+    // carries its subtitle track offset from the picture, so a seek that moved the video without
+    // drawing the track would leave the two disagreeing about where they are, which is the fault
+    // the relaunch names the track for in the first place.
+    //
+    // Moving the seek past the input does not fix the loop, which is why it is not asked to: with
+    // the seek on either side, `-loop 0` wraps the player back to *the seek* rather than to the
+    // beginning, so an eight-second film begun at six plays its last two and a half seconds for
+    // ever. The loop is therefore taken away from a player that was seeked and given by this app
+    // instead (see `video_launch::loop_is_ours` and `video_loop_tick`).
+    let seeked = start > 0.0;
+
+    // `-loop 0` is asked for only where it is right. A player begun at the beginning wraps to the
+    // beginning by itself and so never reaches its own end, which is what keeps a hover — which
+    // begins at zero — from closing its own preview by reaching the last frame of the file.
+    if !video_launch::loop_is_ours(seeked) {
+        cmd.args(["-loop", "0"]);
     }
+
+    // Which subtitle track, where there is a choice to have made. It is threaded into the filter
+    // above rather than named beside the command, because on this build nothing beside the command
+    // draws anything (see `video_launch::subtitle_filter`); it is written down by the pin that
+    // remembers it rather than by the player, which reports nothing about what it did with the
+    // number (see `PinTransport::subtitle`).
+    //
+    // The index is the specifier's own: FFmpeg counts subtitle streams from zero among themselves,
+    // so `s:0` is the first subtitle stream whatever the video and audio streams around it happen
+    // to be numbered — which is also the numbering a next-track press walks in, and the one
+    // `si=` is given in (see `next_subtitle`).
 
     let child = cmd
         .args([
@@ -6953,9 +7805,7 @@ fn start_video_playback(
             "-fflags",
             "+genpts+discardcorrupt+igndts", // Handle missing timestamps & corrupt data
             "-framedrop",                    // Drop undecodable frames instead of stalling
-            "-loop",
-            "0",         // Loop forever
-            "-noborder", // No window border
+            "-noborder",                     // No window border
             "-left",
             &x.to_string(),
             "-top",
@@ -6971,9 +7821,17 @@ fn start_video_playback(
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok();
+        .stderr(Stdio::null());
+
+    // The seek is written after the input file rather than before it, which is the whole of why it
+    // is written here and not above: a seek written before the input makes the `subtitles` filter
+    // draw nothing, and one written after it does not (measured — see the note over the filter
+    // chain). A player begun at the beginning is given no `-ss` rather than `-ss 0`, so that
+    // nothing is asked for that would be answered with the position it is already at.
+    let child = match (start > 0.0).then(|| format!("{start:.3}")) {
+        Some(second) => child.args(["-ss", &second]).spawn().ok(),
+        None => child.spawn().ok(),
+    };
 
     // After spawning, try to set WS_EX_NOACTIVATE on the ffplay window
     // to prevent it from stealing focus
@@ -6988,9 +7846,447 @@ fn start_video_playback(
         // hover ending: a tier being let go of — a preview type switched off, a worker
         // given up on — is not its to receive; see `engine_processes`.
         engine_processes::record_player(VIDEO_PROCESS_IMAGE_NAME, child_process.id());
+
+        // A player that was seeked has to be given its loop from out here, because it was not
+        // given one at all — see `video_launch::loop_is_ours`. The clock it is measured against
+        // starts here, at the second the player was actually begun at, and not at the moment the
+        // process appeared: the header is read before the window is up, and a film of a few
+        // hundred megabytes spends a good part of a second in there.
+        //
+        // The box goes in beside the clock because the rewind is a relaunch and a relaunch has to
+        // be told where to put its window — the film is not drawn into a surface of this app's, so
+        // the replacement's window has to be placed rather than laid out (see `video_loop_action`).
+        if video_launch::loop_is_ours(seeked) {
+            note_video_loop(
+                child_process.id(),
+                path,
+                (x, y, x + width, y + height),
+                start,
+                video_duration(path),
+            );
+        } else {
+            forget_video_loop(child_process.id());
+        }
     }
 
     child
+}
+
+/// The device a video is decoded on, or nothing for a video decoded on a core.
+///
+/// This is the `Video` toggle under `Performance → Hardware Acceleration` in the tray, read here
+/// rather than in the tray, because a setting read at a hover's beginning is read for the *next*
+/// hover: a film already playing was launched with the answer that stood then and is kept playing
+/// with it rather than being relaunched under the user's feet.
+///
+/// It is **read, never waited for**: the probe runs on a thread of its own and this is on the
+/// preview thread, which is the one thread that must not be waiting on an external process (see
+/// `HwAccelProbe::read`). A preview begun before the answer has landed is software decoded, which is
+/// the answer that works on every machine and the one a slow first hover should get anyway.
+///
+/// The answer is kept for as long as it answers the question that is being asked, which is the whole
+/// of what `HwAccelProbe` is: the question is about this machine's drivers, about one build of
+/// FFmpeg, and about *the setting as it stands*, and a tray toggle makes the third of those a
+/// different question (see `forget_video_hw_accel_answer`).
+fn video_hw_accel_device() -> Option<&'static str> {
+    VIDEO_HW_ACCEL.read(|| {
+        let on = CONFIG
+            .lock()
+            .map(|config| config.video_hw_accel)
+            .unwrap_or(DEFAULT_VIDEO_HW_ACCEL);
+
+        probe_hwaccel_device(on)
+    })
+}
+
+/// The one answer to "which device should a video be decoded on" for the run of the app.
+///
+/// It is a struct rather than a lone `OnceLock` because there are two parties with different rights
+/// over it, and folding them into one is what made the first version of this answer `None` for ever.
+/// A `OnceLock` completed by the thread that *reads* it is completed before the thread that
+/// *writes* it has run, so the write is refused and every launch in the run is software decoded —
+/// and the mistake is invisible to any test that reads the answer twice, because `None` is a
+/// perfectly good answer for a machine where nothing survives the probe.
+///
+/// So the two rights are two fields. `asked` is the reader's to set and the writer's never to touch:
+/// it says the question has been put, and a reader that finds it behind `current` is the one that
+/// puts it — a compare-and-swap, so any number of readers racing this way still ask once. The answer
+/// itself belongs to the probe alone, which is why it carries the generation it was found for: a
+/// probe still running when the user flips the toggle would otherwise land an answer to a question
+/// that is no longer being asked, and a film decoded on a card the user has just switched off is a
+/// worse fault than one decoded in software.
+struct HwAccelProbe {
+    /// The generation of the question a probe has been put for, and `0` for none — a reader that
+    /// finds this behind `current` is the one that asks.
+    asked: AtomicU32,
+    /// The generation of the question as it stands, which the tray moves on when the setting is
+    /// switched. It starts at one so that zero can mean "no question has ever been asked".
+    current: AtomicU32,
+    /// What a probe found, and which question it was found for. The generation is half the field for
+    /// the same reason it is in `asked`: an answer is only an answer to the question it was asked,
+    /// and a reader that cannot tell which question that was would have to take the newest on trust.
+    found: Mutex<Option<(u32, Option<&'static str>)>>,
+}
+
+impl HwAccelProbe {
+    /// The answer as it stands, putting the question if it has never been put.
+    ///
+    /// **This never waits for the probe**, which is the whole bargain and the reason the answer is
+    /// not behind a `OnceLock` the reader completes: the probe takes up to three seconds a device and
+    /// walks four of them, and this is on the preview thread — the one thread in this app that must
+    /// not be blocked on an external process, because it is the thread that has to keep answering
+    /// Explorer. So a reader that arrives before the answer gets nothing, and nothing is a working
+    /// answer: FFmpeg decodes in software and the film plays.
+    ///
+    /// The lock below is not a wait for anything slow. It is held by the probe for the length of one
+    /// pointer-sized write, which is the same arrangement every other piece of this app's own state
+    /// uses on this thread (`VIDEO_LOOP`, `PIN_STATE`).
+    ///
+    /// The record is taken by `&'static` rather than borrowed because the probe outlives this call by
+    /// a thread, and a borrow of a caller's frame is not what a thread can write through. That is a
+    /// constraint on where the record lives rather than a trick: it is a `static`, so every caller has
+    /// one.
+    fn read(
+        &'static self,
+        probe: impl FnOnce() -> Option<&'static str> + Send + 'static,
+    ) -> Option<&'static str> {
+        let generation = self.current.load(Ordering::Acquire);
+
+        // Asked once per generation however many readers arrive at once: the swap is what makes one
+        // of them the asker, and the losers read rather than ask, which is the answer they would have
+        // got had they waited a moment anyway.
+        if self.asked.load(Ordering::Acquire) != generation
+            && self.asked.swap(generation, Ordering::AcqRel) != generation
+        {
+            std::thread::spawn(move || {
+                let found = probe();
+
+                let Ok(mut answer) = self.found.lock() else {
+                    return;
+                };
+
+                if self.current.load(Ordering::Acquire) == generation {
+                    *answer = Some((generation, found));
+                }
+            });
+        }
+
+        self.found
+            .lock()
+            .ok()
+            .filter(|answer| {
+                answer
+                    .as_ref()
+                    .is_some_and(|(asked, _)| *asked == generation)
+            })
+            .and_then(|answer| answer.and_then(|(_, found)| found))
+    }
+
+    /// Make every answer found so far an answer to a question no longer being asked.
+    ///
+    /// This is what switching the setting does, and it is why the answer is not simply kept for the
+    /// run of the app. The question is about the machine *and* about the setting: a probe run with
+    /// the setting off names no device at all, so a run that kept its first answer would answer the
+    /// switched question with the answer to the question before it.
+    ///
+    /// It is a bump and not a clear, because the answer may be written by a probe that is still
+    /// running and which must be told which question it was asked rather than simply being ignored:
+    /// `read` is what discards it, by comparing the generation it was found for against the current
+    /// one. That is also why a launch made between the switch and the new answer gets nothing rather
+    /// than the old device — software decoding is the answer that is right when the setting is off.
+    fn forget(&self) {
+        self.current.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+/// Where the answer to "which device should a video be decoded on" is kept while it is on its way.
+static VIDEO_HW_ACCEL: HwAccelProbe = HwAccelProbe {
+    asked: AtomicU32::new(0),
+    current: AtomicU32::new(1),
+    found: Mutex::new(None),
+};
+
+/// Stop answering the hardware-acceleration question with what was found for the setting as it was
+/// before the user switched it.
+///
+/// The tray calls this when the `Video` row is toggled, and it is the whole of what makes that row
+/// work within a session rather than only across restarts. Without it the answer found for the
+/// setting as it stood at the first hover would stand for the rest of the run, so the row would be a
+/// question about the next run of the app rather than about the next preview — and the promise its
+/// own note makes, that the next hover is the first one decoded differently, would be true only
+/// after a restart the note never mentioned.
+pub fn forget_video_hw_accel_answer() {
+    VIDEO_HW_ACCEL.forget();
+}
+
+/// The first device of the ones worth trying that puts a frame on a screen without dying, and
+/// nothing at all where none of them does.
+///
+/// `None` is the answer on a machine where every name in the list is fatal, which on the machine
+/// this was written on is all of them — `ffplay` takes `-hwaccel` only alongside its Vulkan
+/// renderer, and a renderer that cannot be brought up here dies of an access violation rather than
+/// falling back (see `video_launch::HWACCEL_DEVICES` for the whole of the measurement). Falling
+/// back is therefore this app's job and not FFmpeg's, and a software-decoded preview is a preview.
+/// FFmpeg's own fallback is still behind the answer for a stream the device will not take, and the
+/// cost of that is a slower film rather than a dead one.
+fn probe_hwaccel_device(enabled: bool) -> Option<&'static str> {
+    video_launch::hw_accel_candidates(enabled)
+        .iter()
+        .copied()
+        .find(|device| probe_one_hwaccel(device))
+}
+
+/// Whether one device decoded something and drew it without FFmpeg's renderer giving up on it.
+///
+/// The source is FFmpeg's own `testsrc` pattern rather than a file: it asks nothing of the disk and
+/// answers the same on a machine with no video on it. It is the right limit because both of the
+/// ways this option fails happen before a film is looked at — the renderer is brought up when the
+/// option is parsed — so the answer is about the machine and the build rather than about the file.
+///
+/// A clean exit is the whole of the answer. Nothing about the picture is checked, because on a
+/// machine where the device *is* usable the failures being ruled out here are not ones that would
+/// show up in a tenth of a second of synthetic video: what they are is a process that is gone.
+///
+/// **A player that survives the budget is ended rather than left to finish.** It has drawn its tenth
+/// of a second and not died, which is the answer being asked for, so there is nothing more to wait
+/// for — but a `Child` dropped here is not a player ended: a `Drop` that closes a handle does not
+/// kill a process, so a probe that timed out would leave a player on screen for ever, on a machine
+/// that is precisely the slow one where nobody would have noticed it was meant to be a probe. It is
+/// killed rather than waited on, because this runs on the probe thread and the app has no reason to
+/// hold a thread open for a process it has already learned all it needed; the kill is confirmed by
+/// image name and is not ours to confirm by waiting (see `engine_processes::terminate_verified`).
+fn probe_one_hwaccel(device: &str) -> bool {
+    let Ok(mut child) = engine_processes::hidden_command("ffplay")
+        .args([
+            "-hwaccel",
+            device,
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x64:rate=1:duration=0.1",
+            "-x",
+            "16",
+            "-y",
+            "16",
+            "-noborder",
+            "-autoexit",
+            "-loglevel",
+            "warning",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+
+    // Bounded, because a probe that can wait for ever is a probe that can hang a thread of the app
+    // on something it cannot answer. The player is given longer to be alive than the tenth of a
+    // second of video it is asked to draw, because the failure being caught is an exit rather than
+    // a frame — and `try_wait` rather than `wait`, so the bound is this function's own and not a
+    // thread's.
+    let pid = child.id();
+    let deadline = Instant::now() + Duration::from_millis(3000);
+    let outcome = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            // Still running with nothing left of the budget: it has drawn its tenth of a second and
+            // not died, which is the answer the probe is asking for — the failures being ruled out
+            // here are exits, not hangs.
+            Ok(None) => break true,
+            // A poll that cannot be read is not a poll that saw the player alive, and a device
+            // named on an answer nobody read is a device that can be a fault on its own: this probe
+            // exists to *rule devices in*, so an indeterminate state has to rule nothing out and
+            // name nothing. It is not the exit either — nothing is known about the player — which is
+            // why it is its own arm rather than folded into the one above.
+            Err(_) => break false,
+        }
+    };
+
+    // Only the player that outlived its budget has anything to end. One that exited was reaped by
+    // `try_wait` above, and asking to be killed as well would be a kill aimed at an id the system is
+    // free to hand to something else in the meantime.
+    if child.try_wait().ok().flatten().is_none() {
+        engine_processes::terminate_verified(pid, "ffplay.exe", None);
+    }
+
+    outcome
+}
+
+/// A player this app has to loop itself: which one it is, what it is playing, the second it was
+/// begun at, how long the file is, and when it was begun.
+///
+/// It is here rather than in the pin's transport because it has to answer for a hover as much as
+/// for a pin. A hover begins at zero and is given FFmpeg's own loop, so it is never in here; but
+/// the transport is the pin's own record of a *pin*, and a pinned file that is seeked has to keep
+/// looping after the walk that began it has long since been answered.
+///
+/// **The file and the box are in the record because the rewind is a relaunch.** A loop this app
+/// gives cannot be given by posting a key — FFmpeg's player has no key that goes to the beginning,
+/// every seek key it binds being a fixed increment (see `video_launch::rewind_launch_seconds`) — so
+/// beginning the film again is the whole of the rewind, and a relaunch cannot be made out of a pid
+/// and a clock. The length is here for the same reason it always was: the question "how near the end
+/// is it" cannot be asked of a file nothing has measured, so a file with no length is a player with
+/// nothing to be saved from.
+struct VideoLoop {
+    /// The player the clock belongs to, so a relaunch leaves the old one's clock behind rather
+    /// than rewinding a player that is no longer the one on screen.
+    pid: u32,
+    /// The file, which is what the rewind begins again.
+    path: PathBuf,
+    /// The box the player's window fills, which is where the player that replaces it is begun: the
+    /// window is another program's, so it has to be told where to be rather than laid out by this
+    /// app's own surface.
+    content: ScreenRegion,
+    /// The second the player was begun at, which is where the first pass starts.
+    from: f64,
+    /// How long the file is, or nothing for one nothing has measured.
+    duration: Option<f64>,
+    /// When the pass began, from which the position is read.
+    at: Instant,
+}
+
+impl VideoLoop {
+    /// Where in the file this pass has got to, off this app's own clock — which is the only position
+    /// a player that reports nothing at all can be measured by (see `transport_clock`).
+    fn position(&self) -> f64 {
+        self.from + self.at.elapsed().as_secs_f64()
+    }
+}
+
+/// The one loop this app is giving, if one is being given.
+///
+/// A single slot rather than one per player because only one player is ever up: a relaunch ends the
+/// player it replaces before the next one is begun (see `retire_replaced_player`), and a preview
+/// that has been superseded is not a loop worth keeping.
+static VIDEO_LOOP: Mutex<Option<VideoLoop>> = Mutex::new(None);
+
+/// Start the clock on the loop of a player that has to be given one.
+fn note_video_loop(pid: u32, path: &Path, content: ScreenRegion, from: f64, duration: Option<f64>) {
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        *slot = Some(VideoLoop {
+            pid,
+            path: path.to_path_buf(),
+            content,
+            from,
+            duration,
+            at: Instant::now(),
+        });
+    }
+}
+
+/// Forget the loop of a player that has to be given one only when it is not `pid`.
+///
+/// The guard is what keeps a relaunch's own bookkeeping from clearing the clock of the player that
+/// replaced it: the outgoing player is retired after the incoming one is up, and an unconditional
+/// clear on every end would leave the new player with no loop at all.
+fn forget_video_loop(pid: u32) {
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        if slot.as_ref().is_some_and(|loop_| loop_.pid == pid) {
+            *slot = None;
+        }
+    }
+}
+
+/// What a tick does about the loop of a player this app is looping itself.
+enum VideoLoopAction {
+    /// The film is playing on and is nowhere near its end.
+    CarryOn,
+    /// The film is held, so the clock underneath the record is rebased onto the second it stands at
+    /// and nothing is begun.
+    Held,
+    /// Begin the file again, from `seconds` of it, in `content` — the whole of a rewind.
+    Rewind {
+        path: PathBuf,
+        content: ScreenRegion,
+        seconds: f64,
+    },
+}
+
+/// What one tick does about a loop, from the clock alone.
+///
+/// It is asked of the record rather than worked into the tick because the tick has to *do* the
+/// relaunch and this has to be right about what to relaunch, and a decision with three answers
+/// written inline beside a process being spawned is a decision nothing can be asked about.
+///
+/// The position is read off the clock rather than off the pin's transport, so that a file with no
+/// pin in front of it is measured the same way — and it is read against the *pid on screen*, so a
+/// clock left behind by a player that has been replaced cannot rewind the player that replaced it.
+///
+/// The hold is the other refusal, and it is what a gesture over the picture does: a drag holds the
+/// player with a pause key (see `video_drag_hold_apply`), so a film a second from its end would
+/// otherwise be rewound *underneath the hand holding it*, and the second the film was held at would
+/// keep counting up in the clock underneath this record — so that a film held for a minute near its
+/// end was past its end the moment it was let go of, and was rewound on the very next tick. Rebasing
+/// is what a release does to the transport's own clock, and it is the same arithmetic for the same
+/// reason (see `PinTransport::released`).
+fn video_loop_action(loop_: &VideoLoop, playing: bool) -> VideoLoopAction {
+    if !playing {
+        return VideoLoopAction::Held;
+    }
+
+    if !video_launch::rewind_due(true, loop_.duration, loop_.position()) {
+        return VideoLoopAction::CarryOn;
+    }
+
+    VideoLoopAction::Rewind {
+        path: loop_.path.clone(),
+        content: loop_.content,
+        seconds: video_launch::rewind_launch_seconds(),
+    }
+}
+
+/// What the tick does about the loop of a player this app is looping itself, answering whether it
+/// began the file again.
+///
+/// The clock is moved on before the key is posted rather than after, so that a tick which runs
+/// again inside the same margin — a slow tick, a loop of this app's own — does not post the same
+/// rewind twice and cut a second off the film it just began.
+///
+/// The record is *taken out* rather than updated, and that is what lets the rewind be a relaunch:
+/// `restart_pinned_player` begins a player, and beginning one takes this very lock (through
+/// `forget_video_loop`), so a record updated in place under a held lock would deadlock on the first
+/// pass. Taking it out also drops the clock of the player being replaced, which is right in its own
+/// right — a clock whose player is gone is a clock with nothing to measure.
+fn video_loop_tick(playing: bool) -> bool {
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    let Ok(mut slot) = VIDEO_LOOP.lock() else {
+        return false;
+    };
+    let Some(loop_) = slot.as_mut().filter(|loop_| loop_.pid == pid && pid != 0) else {
+        return false;
+    };
+
+    match video_loop_action(loop_, playing) {
+        VideoLoopAction::CarryOn => false,
+        VideoLoopAction::Held => {
+            // Rebased onto the second the film is standing at, which is the same correction the
+            // transport's own clock gets when the hand lets go of a held film.
+            loop_.from = loop_.position();
+            loop_.at = Instant::now();
+            false
+        }
+        VideoLoopAction::Rewind {
+            path,
+            content,
+            seconds,
+        } => {
+            *slot = None;
+            drop(slot);
+
+            // The film is played on from the beginning rather than sought back to it, because a
+            // seek cannot say "zero" on this player — every key it binds is a fixed step, and a
+            // step on a film longer than the step walks the film backwards instead of returning it
+            // to the start (see `video_launch::rewind_launch_seconds`). `holding` is false because
+            // the tick only rewinds a film that is playing.
+            restart_pinned_player(&path, content, seconds, false);
+            true
+        }
+    }
 }
 
 /// A player that has been started and has not put its window up yet.
@@ -7287,8 +8583,35 @@ pub fn kill_stray_video_process() {
     }
 }
 
-/// Ensure the ffplay window is topmost and positioned correctly
+/// Put the ffplay window where it belongs and on top of everything, re-discovering and re-asserting
+/// its style by pid so that a window ffplay recreated is styled again rather than inherited.
+///
+/// **This is the one place a player's window is raised, and the volume popup is guarded here rather
+/// than by its callers.** That is the whole of the arrangement: what the popup floats over is the
+/// media, and the media of a video FFmpeg plays *is* this window, so a raise while the popup is open
+/// puts the film over the thing the user is adjusting its level with. The tick was guarding this,
+/// which covered the periodic re-assertion and nothing else — a seek, a resize settling and the
+/// first appearance of a pinned player all raise the window from their own call sites, and those are
+/// exactly the moments a popup is most likely to be open, because all three of them are things a
+/// pinned window does while it is being looked at. Guarding here rather than in four places is what
+/// makes it true rather than nearly true.
+///
+/// **The drag's park is guarded by its callers rather than here, and the reason is that this
+/// function is one of the ways a park ends.** A relaunch is a new player with a window of its own,
+/// and it is the relaunch that puts that window up and clears the flag (see `restart_pinned_player`);
+/// a guard here would answer the unpark itself with "parked" and leave the replacement hidden behind
+/// a band painted flat for it. The callers are the two that spend a drag's life raising a window that
+/// should not be on screen — a drag's own pointer moves and the tick's re-assertion — and they read
+/// the same flag (see `pin_player_is_parked`); the monitor thread's own raise, which nobody can hold
+/// off from outside, is guarded where it is raised (see `apply_noactivate_to_hwnd`).
 fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
+    // For as long as a volume popup is open the player is left where it is, and the pin's window is
+    // the one on top. Nothing is asked of the order on the way out — the next tick of the caller asks
+    // for the player again once the popup is closed (see `pin_volume_open`, `toggle_pin_volume`).
+    if pin_volume_open() {
+        return false;
+    }
+
     // Re-discover/re-apply style by PID each time to survive ffplay window recreation
     // and keep topmost state resilient over time.
     let pid = VIDEO_PID.load(Ordering::SeqCst);
@@ -7640,12 +8963,22 @@ fn load_picture(
 /// (see `video_probe_due`). What the probe answered when it does answer is one of two
 /// things, and the file's own lack of an answer is neither: a shape is the shape, and a
 /// file with nothing to measure is placed at the 16:9 box FFmpeg's player is handed a
-/// file it could not measure at — while the media engine, which plays only what it can
-/// open, is answered with no size at all, which is how the layout drops it.
+/// file it could not measure at — while a file the media engine would not open is answered
+/// with no size at all, which is how the layout drops it rather than putting up a box
+/// nothing would be drawn into. That is the only case the engine's answer is read for here,
+/// and it is a case only a machine with no FFmpeg on it reaches.
 fn video_box(path: &Path) -> Option<(u32, u32)> {
     match cached_video_geometry(path) {
         Some(ProbedGeometry::Measured(geometry)) => Some((geometry.width, geometry.height)),
-        Some(ProbedGeometry::Unmeasurable) => (!media_engine_plays(path)).then_some((1920, 1080)),
+        Some(ProbedGeometry::Unmeasurable) => match video_route(path) {
+            VideoRoute::Ffplay => Some((1920, 1080)),
+            // No player will take the file: the engine has turned it down on a machine where
+            // it was the only player there is, or the name is one only the `[ffmpeg]` list
+            // carries on such a machine. That is a file with no preview at all, and the layout
+            // is answered with no size so the hover is dropped rather than laid out into a box
+            // nothing would be drawn into (see `route_video`).
+            VideoRoute::MediaEngine | VideoRoute::NoPreview => None,
+        },
         // Not probed yet: the wait for the probe, which is the box the hover is placed
         // in until the answer lands and the hover is replayed.
         None => Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX)),
@@ -7702,6 +9035,22 @@ fn video_duration(path: &Path) -> Option<f64> {
     }
 }
 
+/// A file's subtitle streams, as the probe that measured it read them, or none at all for a file
+/// the probe has no answer for.
+///
+/// "No answer" is answered as *no subtitle streams* rather than as nothing, because the two
+/// callers want the same thing out of it and only one of them can tell them apart: a relaunch
+/// naming `-sst s:0` at a file the probe never read is a player asked for a track in a file it
+/// has not been given, and a track this app has no idea exists is the one thing a specifier must
+/// never be guessed at. So an unprobed file plays with the player's own choice, which is what it
+/// has always done, and is re-seeded the moment the probe answers (see `PinTransport::subtitle`).
+fn video_subtitles(path: &Path) -> SubtitleStreams {
+    match cached_video_geometry(path) {
+        Some(ProbedGeometry::Measured(geometry)) => geometry.subtitles,
+        _ => SubtitleStreams { count: 0, first: 0 },
+    }
+}
+
 /// Whether this file is a video the probe has not answered for yet.
 ///
 /// A hover for one cannot be laid out as a video — the layout has no shape to place — so
@@ -7713,47 +9062,94 @@ fn video_probe_due(hover: &HoverFacts) -> bool {
     hover.is_video() && cached_video_geometry(hover.probe.path()).is_none()
 }
 
-/// Which of the two engines plays a video: the media engine the media stack of Windows has, or
-/// FFmpeg's `ffplay` in a window of its own.
+/// Who plays a video on this machine, which is one of three answers rather than a pair of
+/// preferences: the media engine Windows has, FFmpeg's `ffplay`, or nothing at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VideoRoute {
+    /// The media engine Windows has, drawing into this app's own window.
+    MediaEngine,
+    /// FFmpeg's `ffplay`, in a window of its own.
+    Ffplay,
+    /// No player: nothing installed here will take the file, so there is no preview of it. This
+    /// is the answer `[ffmpeg]` has always meant on a machine without FFmpeg, and it is an answer
+    /// rather than a failure — a file nothing plays is a file with no preview, not a broken one.
+    NoPreview,
+}
+
+/// The whole of the routing rule, as the table of two answers it is decided by.
+///
+/// Whether FFmpeg's player is installed is asked first and settles the question on its own: an
+/// installed `ffplay` plays every video there is, whatever either list says, because it is the
+/// player that decodes what Windows cannot and it costs nothing of a process's own time per frame
+/// — the engine hands every frame back to this app to draw, and on a high-resolution film that is
+/// the whole of the cost. So the two lists only ever decide anything on a machine with no FFmpeg
+/// on it, and there they are read in one order: a name of `[video]` is the one the engine is asked
+/// about, and a name only `[ffmpeg]` carries has no player here at all.
+///
+/// `named_for_the_media_engine` is a closure rather than an answer because it must not be paid for
+/// on the arm that does not consult it: consulting it takes the configuration lock, and the two
+/// extensions the video list shares with the text lists are settled by reading the file. A machine
+/// with FFmpeg on it answers every video from the install alone, and the decoder chain the engine
+/// would be asked to build for a file nobody is going to hand it is never built.
+fn route_video(
+    ffplay_installed: bool,
+    named_for_the_media_engine: impl FnOnce() -> bool,
+) -> VideoRoute {
+    if ffplay_installed {
+        return VideoRoute::Ffplay;
+    }
+
+    if named_for_the_media_engine() {
+        VideoRoute::MediaEngine
+    } else {
+        VideoRoute::NoPreview
+    }
+}
+
+/// Which of the two engines plays this file, on this machine, with these lists.
+fn video_route(path: &Path) -> VideoRoute {
+    // The machine before the file, which is the order the whole of the rule is: a player
+    // installed here takes every video, so nothing about this file is worth asking yet.
+    // `plays_video_natively` is that question read the other way round — it is true only where
+    // nothing of FFmpeg's is installed, which is the one case where the lists are read at all.
+    route_video(!codecs::plays_video_natively(), || {
+        // The list is copied out and the lock given up before the list is consulted, because the
+        // consultation is not free: the two extensions the video list shares with the text lists
+        // are settled by reading the file, and that read was happening under the process-wide
+        // configuration lock on the thread that pumps this window's messages.
+        let extensions = {
+            let Ok(config) = CONFIG.lock() else {
+                return false;
+            };
+            config.video_extensions.clone()
+        };
+
+        // The name first and the engine second, and the order is what the whole of this arm is
+        // for: a name `[ffmpeg]` carries is not asked about at all on a machine with no FFmpeg,
+        // because there would be nothing to do with an answer — the engine plays nothing — and
+        // what the answer is built out of is a source reader over the file, held per file and
+        // version so that a second ask is a lookup (see `video_player::plays`).
+        video_formats::claims_video_name(path, &extensions) && video_player::plays(path)
+    })
+}
+
+/// Whether the media engine Windows has plays this file, which is the one of the two players a
+/// layout, a load and a pin each ask about before they do anything else for a video.
 ///
 /// It is one answer and not a chain, and everything about a video follows from it — whether the
 /// frames are drawn by this app or by a player, whether a pin of one is resized and maximized or
 /// only moved, and whether its transport bar is a control or a read-out (see `pin_frame` and
-/// `pin_transport_kind`). The engine is taken wherever it can decode the file because of what
-/// only it can be told: a pause, a seek and a position that are real rather than a player ended
-/// and begun again at a second — and because the frames it hands back are this app's to draw,
-/// which is what lets a pinned window of one be resized by its edges.
-///
-/// Two things are asked, in this order. A machine with no FFmpeg has only one engine, so the
-/// first question settles it without asking anything about the file at all. Otherwise the name
-/// decides which engine is asked *first*: `[video]` is the formats Windows' own codecs read, and
-/// `[ffmpeg]` is what only FFmpeg's player reaches, so the engine is not asked about one of those
-/// at all. A file whose name is in `[video]` is then asked of the engine itself, once per file
-/// and version (`video_player::plays`), and a file it turns down — an HEVC film on a machine
-/// without the HEVC codec, a container whose handler Windows does not ship after all — is played
-/// by FFmpeg's player where one is installed, which is the one case that costs the resize and the
-/// transport controls.
+/// `pin_transport_kind`). It is also where the engine is asked about a file at all: a machine with
+/// FFmpeg on it never opens one, so `video_player::plays` and its per-file memo are reached only
+/// where nothing else will play a video, and that is the only case where they decide anything.
 ///
 /// The write-back is what makes the question affordable where it is asked: the probe opens the
 /// file and builds a decoder chain for it, so the answer is held, and a hover that asks twice —
-/// the layout, the load, a pin — is a lookup after the first (see `video_player::plays`).
+/// the layout, the load, a pin — is a lookup after the first (see `video_player::plays`). The
+/// geometry probe opens the file as well, so this is asked beside it on the thread that exists
+/// for keeping both off the one that draws (see `spawn_video_probe`).
 fn media_engine_plays(path: &Path) -> bool {
-    if codecs::plays_video_natively() {
-        return true;
-    }
-
-    // The list is copied out and the lock given up before the list is consulted, because the
-    // consultation is not free: the two extensions the video list shares with the text lists
-    // are settled by reading the file, and that read was happening under the process-wide
-    // configuration lock on the thread that pumps this window's messages.
-    let extensions = {
-        let Ok(config) = CONFIG.lock() else {
-            return false;
-        };
-        config.video_extensions.clone()
-    };
-
-    video_formats::claims_video_name(path, &extensions) && video_player::plays(path)
+    video_route(path) == VideoRoute::MediaEngine
 }
 
 /// The box a PDF page asks for, measured off the preview thread.
@@ -10362,6 +11758,16 @@ unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     );
     let band_height = band_height.max(1) as u32;
 
+    // A player parked for the length of a drag is painted over rather than painted through: the
+    // band is transparent everywhere else so that FFmpeg's own window shows through it, and a
+    // transparent band with the player hidden is a hole in the desktop shaped like a video. Black
+    // rather than the configured `Background -> Video`, because that setting is allowed to be
+    // `Transparent` — and a deliberately transparent band is exactly the hole this is here not to
+    // leave (see `park_pinned_player`).
+    if paint.parked {
+        fill_band_opaque(out, width.max(1) as u32, band_top.max(0) as u32, band_height);
+    }
+
     if let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) {
         if let Ok(media) = CURRENT_MEDIA.lock() {
             if let Some(media) = media.as_ref() {
@@ -10572,6 +11978,14 @@ struct PinnedPaint {
     playing: bool,
     position: Option<f64>,
     duration: Option<f64>,
+    /// Whether this pin's player has been put away for the length of a drag, which is what makes
+    /// the band a flat colour rather than a hole the player is supposed to show through.
+    ///
+    /// It is a field rather than a question asked of the pin at the paint because the paint may
+    /// not hold the pin's lock, and because the answer changes without anything about the window
+    /// changing — the same window, the same media, the same box, painted a different colour
+    /// because a hand is on its edge (see `park_pinned_player`).
+    parked: bool,
 }
 
 /// A repaint's one tooltip, taken out of the pin as a value: which button is saying it and what
@@ -10627,6 +12041,7 @@ fn pinned_paint() -> Option<PinnedPaint> {
             volume: pin.volume,
             volume_popup: None,
             transport_live: pin.transport_live,
+            parked: pin.parked,
         }
     };
 
@@ -12107,7 +13522,38 @@ fn pinned_key_command(vk: i32) -> Option<PinCommand> {
         return Some(PinCommand::TogglePlayback);
     }
 
+    // `T` is FFmpeg's own key for the next subtitle track, which is why it is this letter and
+    // not one invented here — a user who has used the player elsewhere presses the key they
+    // already know. It is answered as a relaunch rather than as a key, because the choice has to
+    // outlive the relaunch (see `PinCommand::NextSubtitle`).
+    //
+    // A repeat is let through here rather than swallowed as a Space is, and the reason is that
+    // every step of it is a relaunch and a relaunch takes long enough that a hand resting on
+    // the key would otherwise do nothing visible: one press asks for one track.
+    if vk == b'T' as i32 {
+        return Some(PinCommand::NextSubtitle);
+    }
+
     None
+}
+
+/// What a command the keyboard hook counted for a standing pin means, in the pin's own words.
+///
+/// The same answers `pinned_key_command` gives and in the same order, but read from the hook's
+/// numbers rather than from this app's own mapping: a `WH_KEYBOARD_LL` callback may not take the
+/// pin's lock to ask, so that mapping is a table of numbers over there (see
+/// `key_input::PIN_KEY_COMMANDS`) and this is the one place that turns them back into commands.
+/// The two must be kept in step — a key answered by one and not the other is a key this app acts
+/// on and also passes on, which is a double action rather than a missing one.
+fn hook_pin_key_command(command: u8) -> Option<PinCommand> {
+    match command {
+        0 => Some(PinCommand::Previous),
+        1 => Some(PinCommand::Next),
+        2 => Some(PinCommand::Close),
+        3 => Some(PinCommand::TogglePlayback),
+        4 => Some(PinCommand::NextSubtitle),
+        _ => None,
+    }
 }
 
 /// What one key-down on a pinned window leaves for the loop, if anything.
@@ -12120,6 +13566,23 @@ fn pinned_key_down_command(vk: i32, lparam: isize) -> Option<PinCommand> {
     let command = pinned_key_command(vk)?;
 
     (!matches!(command, PinCommand::TogglePlayback) || lparam & KEY_REPEAT == 0).then_some(command)
+}
+
+/// What one key message on a pinned window leaves for the loop, if anything, with the class of the
+/// message asked as part of the question.
+///
+/// A chord is a key the window eats without answering — it must not be closed by `Alt+F4` or left
+/// by `Alt+Tab`, and none of them is a walk or a hold — and the keyboard hook, which stands in for
+/// this window whenever the caret is in the player's rather than here, has to agree that it is a key
+/// it too must not answer. The rule is therefore asked of the hook's one rather than repeated here,
+/// because a repeat is where the two copies of one arrangement drift apart (see
+/// `key_input::pin_key_message_acts`).
+fn pinned_key_message_command(message: u32, vk: i32, lparam: isize) -> Option<PinCommand> {
+    if !crate::shell::key_input::pin_key_message_acts(message) {
+        return None;
+    }
+
+    pinned_key_down_command(vk, lparam)
 }
 
 /// A mouse message's point in the coordinates the media of a pinned window is drawn in: the same
@@ -12189,16 +13652,24 @@ unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
-        WM_KEYDOWN => {
+        WM_KEYDOWN | WM_SYSKEYDOWN => {
             // A key that arrives here is one Windows decided belonged to this window, which is the
             // whole of the gate: while the pin is the window the user is in, an arrow walks the
             // pin's own folder and is not sent on to the listing behind, and while it is not, no
             // key arrives here at all and the arrow belongs to whatever the user is working in.
             //
-            // The key is left as the same command a caption button leaves, rather than acted on
-            // here, because that is where the walk is answered (see `ask_pin` and
-            // `pin_command_request`).
-            if let Some(command) = pinned_key_down_command(wparam.0 as i32, lparam.0) {
+            // **The class of the message is asked of the same rule the keyboard hook asks**, because
+            // the hook stands in for this window whenever the caret is in the player's rather than
+            // here (see `key_input::pin_key_message_acts`). One answer to a press rather than two: a
+            // chord counted over there and swallowed here would walk this window's folder for a
+            // `Ctrl`+Left this procedure answers with nothing but a swallow — and swallowing it is
+            // also what keeps the system chords away from `DefWindowProcW`, which is where Alt+F4
+            // turns into a close and Alt+Tab into an application switcher.
+            //
+            // A key this window *does* answer is left as the same command a caption button leaves,
+            // rather than acted on here, because that is where the walk is answered (see `ask_pin`
+            // and `pin_command_request`).
+            if let Some(command) = pinned_key_message_command(msg, wparam.0 as i32, lparam.0) {
                 ask_pin(command);
             }
 
@@ -12207,13 +13678,6 @@ unsafe extern "system" fn window_proc(
             // other kind is answered by doing nothing at all, and letting `DefWindowProcW` ring
             // for the one key that is meant to be swallowed is a beep out of a window nobody can
             // see (see `pinned_key_command`).
-            LRESULT(0)
-        }
-        WM_SYSKEYDOWN => {
-            // A key held with a modifier. None of them is a walk and none of them is the pin's to
-            // answer, so they are swallowed exactly as the unshifted keys are — and swallowing
-            // them is also what keeps the system chords away from `DefWindowProcW`, which is where
-            // Alt+F4 turns into a close and Alt+Tab into an application switcher.
             LRESULT(0)
         }
         WM_CLOSE | WM_SYSCOMMAND => {
@@ -12319,23 +13783,9 @@ unsafe extern "system" fn window_proc(
         }
         windows::Win32::UI::WindowsAndMessaging::WM_CAPTURECHANGED => {
             // Whatever a pinned window was doing with the pointer is over: a capture lost to
-            // another window is a drag that is not coming back.
-            if pinned() {
-                if let Some(mut pinned) = pin_state() {
-                    if let Some(pin) = pinned.pin_mut() {
-                        pin.dragging = None;
-                        pin.pressed = None;
-                        pin.transport.pressed = None;
-                        pin.transport.seeking = None;
-                        pin.transport.hovered = None;
-                        // A knob that was being held is let go of with the capture: a pointer that
-                        // has gone elsewhere is not a hand still on the level, and the popup is put
-                        // away by the tick that finds the pointer away from it (see
-                        // `refresh_pin_volume`).
-                        pin.volume.dragging = false;
-                    }
-                }
-            }
+            // another window is a drag that is not coming back, and one this app released itself
+            // is its own road's to finish (see `pin_capture_lost`).
+            pin_capture_lost(&Win32PinWindow);
             LRESULT(0)
         }
         WM_RBUTTONUP => {
@@ -13555,6 +15005,26 @@ struct PinnedPreview {
     tooltip: PinTooltip,
     /// A drag or a resize in progress.
     dragging: Option<PinDrag>,
+    /// Whether the player behind this pin has been put away for the length of a drag.
+    ///
+    /// A video pin's picture is not drawn by this app: the band in the middle of the window is
+    /// transparent, and FFmpeg's own window shows through it. That is what makes the picture sharp
+    /// and free, and it is also what makes the window expensive to move — every pointer move puts
+    /// the player's window to a new size and the compositor has to re-blit a 2560x1440 surface,
+    /// which on a 144 Hz screen is a stutter the hand feels rather than sees (see `park_pinned_player`).
+    ///
+    /// While this is set the player's window is hidden and the band is painted a flat
+    /// colour instead of being left for it to show through, so a drag is a rectangle of the pin's own
+    /// background following the pointer. Blank is the point: there is nothing for the picture to be
+    /// rescaled into, so there is nothing to rescale.
+    ///
+    /// **It carries nothing about the film**, and that is the whole of how the pair avoids pausing
+    /// twice. Whether the film is held, and whether it should come back, are the transport's own
+    /// facts (`PinTransport::drag_held`), written by the tick that holds it and reconciled by every
+    /// path that ends the player it was made against — so a flag here that remembered whether the
+    /// film was playing would be a second record of a thing that is recorded once (see
+    /// `park_pinned_player`).
+    parked: bool,
     /// Where the playback of a video is, which is what the transport bar is drawn from and what
     /// a seek or a pause is measured against (see `PinTransport`).
     transport: PinTransport,
@@ -13595,6 +15065,7 @@ impl PinnedPreview {
             pressed: None,
             tooltip: PinTooltip::default(),
             dragging: None,
+            parked: false,
             transport: PinTransport::default(),
             volume: PinVolume::default(),
             audio_hovered: None,
@@ -13632,18 +15103,230 @@ struct PinTransport {
     /// When a player of this app's was started, and the second of the file it was started at.
     started: Option<(Instant, f64)>,
     /// Where a player of this app's was stopped — a pause — and nothing while it is running.
+    ///
+    /// What is behind this field changed when a video FFmpeg plays became a video this app can
+    /// hold: a pause used to be that player *ended*, with the second it had reached kept here
+    /// for the player that took its place, and it is now a key sent to a player that keeps
+    /// running (see `ffplay_key_pause`). So `paused_at` no longer implies a dead process — the
+    /// process behind a held file is *alive and holding still* — and the second written here is
+    /// read out of this app's own clock over the start below, which is the only position a
+    /// player that reports nothing can be measured by.
     paused_at: Option<f64>,
+    /// Whether the hold in `paused_at` has reached the player yet.
+    ///
+    /// It is here for the one case where a hold is written down before it can be acted on: a
+    /// relaunch of a held file begins a player that has no window for a moment, and a key cannot
+    /// be posted to a window that does not exist (see `ffplay_key_pause`). The hold is written
+    /// anyway — the file *is* meant to be held — and this flag is what says the player has not
+    /// been told yet, so the loop tells it the moment there is a window to tell it through (see
+    /// `settle_pending_hold`). It is a field rather than a flag beside the pin because it is the
+    /// same kind of thing as the rest of this struct: something this app has asserted about a
+    /// player, which a press of the play button has to be able to take back — and the press that
+    /// takes it back is the answer it changes (see `toggle_pinned_playback`).
+    pending_hold: bool,
+    /// Whether the hold in `paused_at` is a gesture's rather than a press of the pause button's.
+    ///
+    /// It is a field of this struct rather than a flag of its own beside the pin because a claim
+    /// about a player belongs to the player it was made against: every path that begins, holds,
+    /// lets go of, loses or replaces a player writes *here*, and a pin taken down or a file swapped
+    /// takes this with it. A flag beside the pin outlives all of them, and a claim that outlives
+    /// its film is a claim the next film to be dragged is answered with — and it is answered with a
+    /// pause, because the key a drag posts is a toggle (see `video_drag_hold_apply`).
+    ///
+    /// So it is reconciled by those same writes rather than asked of anything, and the one that
+    /// must *not* reconcile it is a relaunch carrying the hold: the film is still held for the
+    /// gesture that is still in flight (see `PinTransport::begun`).
+    drag_held: bool,
     /// Where the pointer is dragging the bar, while it is: what the playhead is drawn at rather
     /// than where the file really is, since a drag that is still going is not a seek yet.
     seeking: Option<f64>,
     /// Which part of the bar the pointer is over, and which it has pressed.
     hovered: Option<pin_chrome::TransportPart>,
     pressed: Option<pin_chrome::TransportPart>,
+    /// The subtitle track this pin is showing, as the index FFmpeg's `-sst s:` specifier
+    /// numbers them by — that is, from zero, counting only the file's subtitle streams — and
+    /// nothing for a file with none.
+    ///
+    /// It is kept here rather than read back off the player, because there is nothing to read
+    /// it back off: the player was started with this number and reports nothing at all about
+    /// what it did with it. So this is the whole of what a track choice *is* as far as a
+    /// relaunch is concerned — a seek and a resize both begin a player again, and a choice
+    /// this app had not written down would silently go back to whatever the player chose for
+    /// itself (see `next_subtitle`).
+    subtitle: Option<usize>,
+}
+
+impl PinTransport {
+    /// A player of this app's was begun at `from`, where `up` says whether one is behind it and
+    /// `holding` whether it is meant to be paused.
+    ///
+    /// The second is written down either way because a player that has not come up is still the
+    /// one the bar is drawn against — the wait for a window is the loop's business, and a bar
+    /// that forgot where it was while waiting would spring back to the beginning the moment the
+    /// window appeared.
+    ///
+    /// `holding` is what carries a hold *through* a relaunch, and without it every relaunch of a
+    /// held file would start playing: a seek, a resize settling, a change of track. Those are all
+    /// this one function, so this is where a hold has to survive one, and it survives it as an
+    /// assertion rather than as an action — the player that has just begun has no window to be
+    /// given a key through, so the hold is written down as owing and the loop delivers it (see
+    /// `pending_hold`). The second written is the relaunch's own second rather than the one the
+    /// hold began at, because that is the second the file is now at and the second the bar has to
+    /// agree with.
+    fn begun(&mut self, from: f64, up: bool, holding: bool) {
+        self.started = up.then_some((Instant::now(), from));
+        self.paused_at = holding.then_some(from);
+        self.pending_hold = holding && up;
+        self.seeking = None;
+        // A claim of a gesture's goes with the player it was made against, so it survives a
+        // relaunch exactly where the hold does: a seek or a resize settling underneath a hand in
+        // flight begins another player that is held for that same gesture, and dropping the claim
+        // there would leave the film frozen for good the moment the hand let go of the window. A
+        // relaunch that carries no hold is a film playing on, and no gesture is holding a film that
+        // is playing (see `drag_held`).
+        self.drag_held = self.drag_held && holding;
+    }
+
+    /// The player was told to hold where it is, at `at`.
+    ///
+    /// The start is *kept*, and that is the whole of what a hold is for a video FFmpeg plays:
+    /// the player is still running, it is the one holding the second, and the clock underneath
+    /// `started` is what the position is read from the moment the file is let go again — so a
+    /// resume is a key sent to the player that is already there rather than a second player
+    /// begun from scratch (see `ffplay_key_pause`).
+    ///
+    /// Nothing is left owing, because the player has been told: this is what both the press of the
+    /// pause button and the loop's delivery of a hold owed by a relaunch come through.
+    fn held(&mut self, at: f64) {
+        self.paused_at = Some(at);
+        self.pending_hold = false;
+        self.seeking = None;
+    }
+
+    /// The player was let go of at `at`, and is playing on from there.
+    ///
+    /// The start is *rebased* rather than kept, and that is the whole of the arithmetic here. The
+    /// position of a file FFmpeg plays is this app's own clock over a moment it began a player
+    /// (see `pin_playhead`), and a clock keeps running while the file is held — so leaving the
+    /// start where it was would make the playhead jump forward by exactly the length of the hold
+    /// the moment the file was let go, which is a bar whose own pause makes it lose its place.
+    ///
+    /// Rebasing onto the second the file was held at is exact rather than a fudge: the player was
+    /// asked to hold and did, so it did not advance while it was held, and the second written down
+    /// at that moment is the second it is at when the key arrives. What is measured from there is
+    /// this app's clock over a stretch the player is actually playing, which is the best a player
+    /// that reports nothing can be measured by (see `B4` in the handoff, on the drift that remains).
+    ///
+    /// A hold that was still owing is taken back here rather than delivered afterwards, which is
+    /// the only answer a press can give: the file is playing on from here, so a pause that had not
+    /// reached the player yet must never reach it.
+    fn released(&mut self, at: f64) {
+        self.started = Some((Instant::now(), at));
+        self.paused_at = None;
+        self.pending_hold = false;
+        self.seeking = None;
+        // A film playing on is held by nothing, so whatever put the hold there is taken back: the
+        // gesture that was holding it has either just let go of it — which is the whole of what
+        // this write is — or a press of the pause button has, and a claim left standing here is a
+        // claim the *next* film to be dragged is answered with (see `drag_held`).
+        self.drag_held = false;
+    }
+
+    /// The player behind this transport is gone, and had got to `at`.
+    ///
+    /// What is dropped is the claim that one is running, and what is kept is the second it had
+    /// reached — because a file nothing is playing is a file that can still be *started*, and a
+    /// bar that forgot where the film had got to would offer to start it again from the
+    /// beginning. A hold is kept as a hold rather than dropped for the same reason: the second
+    /// is the only record of where the film stopped, and nothing else holds it.
+    ///
+    /// Nothing is left owing either, and this is the bound on a hold a relaunch could not deliver:
+    /// there is no player to deliver it to, so the flag that said it was owed goes with the claim
+    /// that a player was there to owe it to.
+    ///
+    /// This is the reconciliation, and it is deliberately written *through* the state rather
+    /// than consulted beside it: the process is the only thing here that can be *observed*, and
+    /// every other field is something this app asserted, so a disagreement is settled by
+    /// overwriting the assertion (see `settle_pinned_transport`).
+    fn player_gone(&mut self, at: f64) {
+        self.started = None;
+        self.paused_at = Some(at);
+        self.pending_hold = false;
+        self.seeking = None;
+        // The hold is kept and the claim over it is dropped, and the asymmetry is the point: the
+        // second is the only record of where the film stopped, so nothing else holds it, but the
+        // claim is about a player and there is no player left to hold. So a drag that ends after
+        // this finds a film that nothing is holding rather than one it believes it is.
+        self.drag_held = false;
+    }
+
+    /// The file was taken to `to`, by a seek taken while it was held.
+    ///
+    /// A player of this app's goes where it is taken and starts from there whatever it was doing,
+    /// so the hold moves with it — and a hold left behind is a bar drawn at the second the pause
+    /// began at while the film is somewhere else entirely. What is owed by the hold is untouched:
+    /// the file is meant to be held at the new second just as much as at the old one.
+    fn sought(&mut self, to: f64) {
+        if self.paused_at.is_some() {
+            self.paused_at = Some(to);
+        }
+        self.seeking = None;
+    }
+}
+
+/// Whether a transport bar behind a player that is `up` should be drawing a pause glyph.
+///
+/// Three claims have to agree before this app says a file is playing, and the process is the one
+/// that is *observed* while the other two are things this app asserted and can therefore be
+/// wrong about: a player that has been ended leaves `started` behind, and a player that has died
+/// leaves both claims standing until something notices. So liveness is asked here rather than
+/// believed, and a bar can never say a file is playing once nothing is playing it.
+///
+/// The engine's own answers are not asked this way — it reports its own position and its own
+/// liveness, so there is nothing here to reconcile (see `pin_is_playing`).
+fn transport_playing(transport: &PinTransport, up: bool) -> bool {
+    up && transport.started.is_some() && transport.paused_at.is_none()
+}
+
+/// The subtitle track a press of the next-track key lands on, and why it is a number rather
+/// than a name.
+///
+/// FFmpeg's specifier numbers subtitle streams from zero *among themselves* — `s:0` is the
+/// file's first subtitle stream whatever the video and audio streams around it are numbered —
+/// which is exactly the numbering a cycling key wants, and exactly why this cannot be an index
+/// into the file's whole stream list: that would be a different number for the same track
+/// depending on how many audio tracks the container happens to carry.
+///
+/// Nothing is chosen for a file with no subtitle streams at all, rather than choosing its
+/// zeroth, because `s:0` against a file with none is refused by the player and a refused
+/// stream specifier is a player that exits instead of a player that plays the file without
+/// subtitles. A file with one stream has a key that does nothing, which is the same answer a
+/// key against a sound's card gives (see `pin_toggle_target`).
+fn next_subtitle(current: Option<usize>, streams: usize) -> Option<usize> {
+    (streams > 0).then(|| current.map_or(0, |index| (index + 1) % streams))
 }
 
 /// Whether a kind is one the transport bar is drawn for.
 fn pin_transport_kind(kind: Option<MediaType>) -> bool {
     matches!(kind, Some(MediaType::Video) | Some(MediaType::NativeVideo))
+}
+
+/// Whether a kind is one whose transport bar carries controls that do something.
+///
+/// It is the same question as whether the bar is drawn at all, and it is asked as a separate
+/// name because the two stopped being different at different times and for different reasons.
+/// The bar was drawn for both kinds of video from the start, but only the engine's did anything:
+/// FFmpeg's player takes no pause, reports no position, and can only be taken to another second by
+/// being ended and begun again, so a bar for one was drawn without a button and with nothing to
+/// drag — a read-out, because a button that does nothing is a promise the app cannot keep.
+///
+/// Two things changed that, and neither of them is "the player got better". The player takes a
+/// pause as a key posted to its own window (see `ffplay_key_pause`), and the bar's button and
+/// track both reach it now. So a bar that cannot be told anything would have to be some *third*
+/// kind's — and there is none, because a sound's card carries its own controls on its own row and
+/// everything else has no playback behind it at all.
+fn pin_transport_live(kind: Option<MediaType>) -> bool {
+    pin_transport_kind(kind)
 }
 
 /// Whether a pinned window's chrome comes and goes with the pointer, which is true of the kinds
@@ -14059,6 +15742,274 @@ fn close_pin_volume() -> bool {
     closed
 }
 
+/// Whether the player on screen is playing, for a caller that has no transport in hand.
+///
+/// It is the pin's own answer where there is a pin, and `true` where there is not — which is the
+/// honest answer rather than a convenient one. A player with no pin in front of it is a hover, and
+/// a hover is begun at zero and given FFmpeg's own loop, so it is never the player a rewind is owed
+/// to; and nothing is holding it, because there is no transport that could be holding it (see
+/// `pin_is_playing` and `video_loop_tick`).
+fn pin_is_playing_current() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin_is_playing(&pin.transport)))
+        .unwrap_or(true)
+}
+
+/// Whether the pin's keyboard should be asked for again: it was claimed, and Windows says the pin
+/// does not have it.
+///
+/// This is the whole of what makes an arrow a walk of the pin's own folder rather than a key of
+/// whatever is in front of it. The claim is written when a press hands the pin the keyboard and
+/// dropped when the pin is activated away from it (`pin_take_focus`, `pin_release_focus`), so the
+/// two can disagree for as long as it takes the tick that notices — and something *can* activate the
+/// pin away: the player is launched again on every navigation, every seek and every resize, and
+/// FFmpeg's window is created without `WS_EX_NOACTIVATE` (measured) and only styled after this app
+/// finds it on a monitor thread's next pass. A window that is briefly activatable, in front of the
+/// pin, and coming and going on every arrow press is a window an arrow press can be swallowed by.
+///
+/// The two facts are the whole question and neither is asked for. The claim is this app's own
+/// record and needs no window to read. `GetFocus` is Windows' own answer about where the caret is,
+/// and it is the only answer that cannot be wrong about a window that does not exist in any test.
+fn pin_keyboard_wanted_back(claimed: bool, has_focus: bool) -> bool {
+    claimed && !has_focus
+}
+
+/// Ask the keyboard back into a pin that still holds a claim and no longer has it, answering
+/// whether it was asked for.
+///
+/// It is `pin_take_focus` with the press left out, and everything in that function's long note
+/// applies to it unchanged — including the rule that the claim is written on the *answer* rather
+/// than on the asking, so a refusal by the foreground lock leaves the pin holding nothing and
+/// asking again on the next tick rather than stuck believing it holds a keyboard it was never given.
+unsafe fn pin_ask_keyboard_back(hwnd: HWND) -> bool {
+    if !pin_keyboard_wanted_back(pin_window::pin_claims_the_keyboard(), pin_is_focused()) {
+        return false;
+    }
+
+    pin_take_focus(hwnd);
+    true
+}
+
+/// Whether a pinned window's pointer is carrying it or pulling it to a new size right now.
+///
+/// A press that has not moved is not yet a drag, which is the whole of what this asks over the
+/// drag itself: `PinnedPreview::dragging` is written when the press becomes a drag and not when the
+/// pointer goes down, so a click on the caption is not a drag and a click does not stop the film.
+fn pin_is_dragging() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.dragging.is_some()))
+        .unwrap_or(false)
+}
+
+/// Whether the player standing behind a pinned window's media band has been put away for the length
+/// of a drag.
+///
+/// **It is asked by every place that would put that window up again, and it is the whole of what
+/// makes the park hold.** A drag hides the player's window on its own first pointer message and
+/// paints the band flat over the hole that leaves (see `park_pinned_player`), and a hide something
+/// else undoes is not a park at all: both `SetWindowPos(SWP_SHOWWINDOW)` and
+/// `ShowWindow(SW_SHOWNOACTIVATE)` are shows, so every place that puts the window where the band is
+/// has been putting it back on screen as well.
+///
+/// Three of those places run many times a second, and they are the three a drag spends its life
+/// inside: a resize places the player on every pointer move (see `apply_pin_drag`), the tick
+/// re-asserts it every couple of hundred milliseconds, and the style monitor's own raise goes every
+/// hundred milliseconds whatever anybody asked for (see `apply_noactivate_to_hwnd`). The tick is what
+/// holds a hand that has stopped moving — a hand resting on an edge is a drag like any other and the
+/// longest one a user spends — and the monitor is the one no caller can hold off, so the film was
+/// back on screen a frame after it was hidden, at the pointer's own pace: the exact cost the park
+/// exists to pay, with the stutter it was written for coming back along with the picture.
+///
+/// **The band cannot cover for the park, and the flat paint is why.** The band is transparent
+/// everywhere else so that the window underneath shows through it, and the player is topmost and
+/// nearer the front of the band than the pin itself — so a re-shown player is a window over an
+/// opaque rectangle, which is worse on screen than the hole the paint was hiding, not better (see
+/// `render_pinned_preview_at`).
+///
+/// So the window is left exactly where the park left it: hidden, and at the place the drag had put
+/// it before the park, which costs nothing to be out of date because the tick places it the moment
+/// the park is undone (see `unpark_pinned_player`).
+fn pin_player_is_parked() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.parked))
+        .unwrap_or(false)
+}
+
+/// Whether the player on screen is being held for the length of a gesture.
+///
+/// It is one flag rather than a question asked of the player, because the player reports nothing:
+/// this is the same arrangement `PinTransport` keeps for its own hold (see `transport_playing`), and
+/// it is read here so that a gesture which is begun and ended between two ticks costs nothing and
+/// one that is in flight is settled on the tick that finds it.
+static VIDEO_DRAG_HOLDING: AtomicBool = AtomicBool::new(false);
+
+/// Whether the player on screen is being held for the length of a gesture.
+fn video_drag_holding() -> bool {
+    VIDEO_DRAG_HOLDING.load(Ordering::Acquire)
+}
+
+/// Remember which way the hold is, answering whether it changed — so that the key is only posted
+/// on the tick a gesture began or ended and not on every tick in between.
+fn video_drag_hold_set(dragging: bool) -> bool {
+    VIDEO_DRAG_HOLDING.swap(dragging, Ordering::AcqRel) != dragging
+}
+
+/// What a drag of the window does to the film in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VideoDragHold {
+    /// Nothing at all — the gesture is over a film this app did not stop, or is not over one.
+    Leave,
+    /// Hold the player where it stands.
+    Hold,
+    /// Let the player go on from where it stands.
+    Release,
+}
+
+/// What a drag does to a film that is `playing`, on a hold that is `ours`.
+///
+/// The three facts are the whole question and two of them are refusals. **The key this posts is a
+/// toggle**, which is what makes the gesture the wrong thing to consult: a toggle on a film that is
+/// already held *resumes* it, so a drag begun over a film the pause button had stopped and then let
+/// go of is a film the user started by moving the window they were watching it in. And a hold this
+/// app did not put there is not ours to take back at the end of a gesture, or the same thing happens
+/// a second time round.
+///
+/// So a film that is not playing is left alone, and a hold that is not ours is left alone, and only
+/// a film that is playing and a hold that is ours are answered. The two refusals are not the same
+/// refusal: the first is about there being nothing to hold and the second about not having been the
+/// one to hold it, and the second is the one a test on the film alone would miss.
+///
+/// **The third fact is read out of the film on screen rather than kept beside it**, which is the
+/// whole of what makes the second refusal reliable: `ours` is the transport's own record of a hold
+/// this app put there (see `PinTransport::drag_held`), so it is reconciled by every path that ends
+/// the player it was made against — a pin taken down, a file swapped, a player that died — and a
+/// gesture that has ended cannot leave one standing for the next film to be dragged.
+fn video_drag_hold_decision(dragging: bool, playing: bool, ours: bool) -> VideoDragHold {
+    match (dragging, ours) {
+        (true, false) if playing => VideoDragHold::Hold,
+        (false, true) => VideoDragHold::Release,
+        _ => VideoDragHold::Leave,
+    }
+}
+
+/// The claim over the film on screen, after a tick that has found a gesture in flight or has not.
+///
+/// **A claim ends with the gesture that made it, and with nothing else**, which is what makes it
+/// safe to ask this before anything at all is known about the film on screen: a claim that outlives
+/// its gesture is a claim the *next* film to be dragged is answered with, and that film was never
+/// held by anybody — so the drag is refused the hold it exists for, and its release then posts the
+/// toggle onto a film nobody stopped.
+///
+/// It is asked of the gesture and the claim alone rather than of either film, because the two
+/// refusals further down are about what a drag does to a player and a claim is not about a player:
+/// one of them is a kind of pin whose media this app does not hold and the other is no pin at all,
+/// and behind either of them a claim used to be left standing for the rest of the run (see
+/// `video_drag_hold_apply`).
+fn video_drag_hold_claim(dragging: bool, ours: bool) -> bool {
+    dragging && ours
+}
+
+/// Begin or end the hold, answering whether a player was told.
+///
+/// It is the pause key, and it is the same key the transport bar's own hold is (see
+/// `ffplay_key_pause`), posted to the same window: a player asked to hold does hold, and a player
+/// that is holding is still there to be let go of — which is what makes the end of the gesture a
+/// key rather than a relaunch. A relaunch would put the film back at the second the gesture began
+/// at, so a window dragged for a second and released would lose the second it was watching.
+///
+/// **It is asked of the film rather than of the gesture, because the key is a toggle.** That is the
+/// fault this used to have: the gesture was the only thing consulted, so a drag begun over a film
+/// the pause button had already held posted a pause key onto a held film and *resumed* it — a film
+/// started by the user moving the window they were watching it in. So both ends ask whether there
+/// is anything playing to hold and whether this app is the one holding it, and a hold that is not
+/// ours is left exactly as it was found.
+///
+/// **The hold is also written down**, or rather it is written through the transport, because a hold
+/// this app has only asserted in a static flag is a hold nothing else can see: `pin_is_playing`
+/// would still say the film is playing, the loop would still count its clock up, and the bar would
+/// still be drawn at a playhead racing away from a frozen picture. It goes in through the same
+/// `held`/`released` a press of the pause button uses, so the second written is the second the
+/// picture is at and the clock under it is rebased when the hand lets go (see `PinTransport::held`
+/// and `PinTransport::released`).
+///
+/// A hold that is begun and never ended is the one fault worth guarding: the picture would stay
+/// frozen with the window moving under it for ever. The hold is ended again by every path that ends
+/// a drag — the release, a capture lost to another window, the pin going down (which kills the
+/// player outright, so there is nothing left to be holding) — and the tick is what notices, so the
+/// only way to be stuck is a tick that stops running, which takes the whole window with it.
+///
+/// **And the claim over the hold is taken back before any of that is asked.** Two things were true
+/// of it where it used to be written, and together they were the fault. It was a flag beside the
+/// pin, so it outlived the film it was made against — a pin taken down, a file swapped and a player
+/// that died all left it standing — and the release arm answered out of it only after two refusals
+/// that both return early, so a gesture that ended over either of them left it standing as well. The
+/// next film to be dragged was then answered by a claim belonging to a film that was not there: the
+/// drag refused the hold it exists for, and its release posted the toggle onto a film nobody had
+/// stopped — a frozen picture with a pause glyph over it and a loop still counting a clock.
+///
+/// So the claim is the transport's own field, which every path that begins, holds, lets go of or
+/// loses a player reconciles (see `PinTransport::drag_held`), and the take-back runs ahead of the
+/// refusals rather than behind them. A key that could not be posted is a player with no window, and
+/// a player with no window is holding nothing — so the claim goes whether or not the key lands,
+/// because leaving it standing would refuse every *later* gesture the film for the rest of the run.
+fn video_drag_hold_apply(dragging: bool) -> bool {
+    // The film in front of the window — in flight, or the one the last gesture was over — read
+    // before anything is refused below, because the claim has to be reconciled whether or not there
+    // is still a film of its own to reconcile it in. A pin that is not up has taken the claim with
+    // it, since there is nothing left to reconcile, and a pin that is up over something else is
+    // carrying a claim about that something else rather than about this.
+    //
+    // It is read from a copy rather than from the pin: a lock held across the keys below would be a
+    // lock held while this thread posts to another program's window.
+    let Some((_, _, transport, _)) = pinned_playback_state() else {
+        return false;
+    };
+
+    // Reconciled before anything is asked about the film on screen, and written only when it has
+    // actually moved: see `video_drag_hold_claim`.
+    let reconciled = video_drag_hold_claim(dragging, transport.drag_held);
+    if reconciled != transport.drag_held {
+        update_pin_transport(|state| state.drag_held = reconciled);
+    }
+
+    // A drag on a pin of a kind whose media this app draws is not a drag on a player at all: the
+    // engine's window is not FFmpeg's and there is nothing to hold. The claim is already back where
+    // it belongs by this point, which is the whole of what it was reconciled for.
+    if current_media_type() != Some(MediaType::Video) {
+        return false;
+    }
+
+    // What the decision is given is the claim as it stood when the tick began rather than the one
+    // reconciled above, because that is what the gesture in flight did: a claim made while a gesture
+    // was in flight is the one that gesture is still to let go of.
+    match video_drag_hold_decision(dragging, pin_is_playing(&transport), transport.drag_held) {
+        VideoDragHold::Leave => false,
+
+        VideoDragHold::Hold => {
+            if !ffplay_key_pause() {
+                return false;
+            }
+
+            update_pin_transport(|state| {
+                state.held(pin_playhead(&transport).unwrap_or(0.0));
+                // The claim is written with the hold rather than beside it, because this is the
+                // only place one is ever made and it is the records of this hold that take it back.
+                state.drag_held = true;
+            });
+            true
+        }
+
+        VideoDragHold::Release => {
+            if !ffplay_key_pause() {
+                return false;
+            }
+
+            update_pin_transport(|state| state.released(pin_playhead(&transport).unwrap_or(0.0)));
+            true
+        }
+    }
+}
+
 /// Which strips of a pinned window's chrome are showing, and what is asking for them.
 ///
 /// Only the kinds whose chrome is drawn over their media have anything to show or hide: for those
@@ -14344,12 +16295,21 @@ enum PinFrame {
 
 fn pin_frame(kind: Option<MediaType>) -> PinFrame {
     match kind {
-        // A sound's card is its own size, and a video FFmpeg's player has is a window of
-        // somebody else's: the card has no box to grow into, and the player's window is not
-        // this app's to resize — what it would be given is a picture scaled into a box it was
-        // not made for, with the bars a wrong shape leaves. Both are moved by their caption and
-        // their band, and neither is framed.
-        Some(MediaType::Audio) | Some(MediaType::Video) => PinFrame::None,
+        // A sound's card is its own size, and there is no box for it to grow into: it is moved by
+        // its caption and its band, and it is not framed. A video is nothing like that, whoever is
+        // playing it — its pixels are the file's own shape, so a box of another shape is a picture
+        // stretched into a box it was not made for, which is the rule the other kinds are given
+        // and the reason a video's edges scale both sides rather than one at a time.
+        //
+        // It used to be framed by nothing at all, on the reasoning that a window of somebody
+        // else's is not this app's to resize. What that got right is that the *stretch* is
+        // somebody else's window being asked to do something (see `relayout_pinned_media`); what
+        // it got wrong was the conclusion, because the player's window can be moved and told its
+        // size, and a relaunch begins one at whatever size it is asked for — so a video FFmpeg
+        // plays is resized by its edges and maximized by its caption like any other picture, with
+        // a relaunch at the end of the drag to render it sharply at the size it settled on.
+        Some(MediaType::Audio) => PinFrame::None,
+        Some(MediaType::Video) | Some(MediaType::NativeVideo) => PinFrame::Shaped,
         Some(MediaType::Text) | Some(MediaType::Archive) => PinFrame::Free,
         _ => PinFrame::Shaped,
     }
@@ -14373,15 +16333,34 @@ fn pin_playhead(transport: &PinTransport) -> Option<f64> {
 
     match current_media_type() {
         Some(MediaType::NativeVideo) => video_player::position().or(Some(0.0)),
-        Some(MediaType::Video) => transport.started.map(|(at, from)| {
-            let elapsed = from + at.elapsed().as_secs_f64();
-            match transport.duration {
-                Some(duration) if duration > 0.0 => elapsed % duration,
-                _ => elapsed,
-            }
-        }),
+        Some(MediaType::Video) => transport_clock(transport),
         _ => None,
     }
+}
+
+/// The second a player of this app's has reached, off its own clock and nothing else.
+///
+/// It is `pin_playhead` with the hold ignored, and it is what a hold is *re-based onto* once the
+/// player has actually been told to hold: the second written when the pause began is the second
+/// the film was at when the press happened, and the film has been playing since — so it is where
+/// the file was, not where it stopped (see `settle_pending_hold`).
+fn transport_clock(transport: &PinTransport) -> Option<f64> {
+    transport.started.map(|(at, from)| {
+        let elapsed = from + at.elapsed().as_secs_f64();
+        match transport.duration {
+            Some(duration) if duration > 0.0 => elapsed % duration,
+            _ => elapsed,
+        }
+    })
+}
+
+/// Where a pinned preview's playhead is, read out of the pin that is up: the same answer as
+/// above, for a caller that has no transport in hand — a resize deciding where the player it is
+/// about to begin again should start (see `relayout_pinned_media`).
+fn pinned_playhead() -> Option<f64> {
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
+    pin_playhead(&pin.transport)
 }
 
 /// How long the pinned file plays: the length the probe read, or the engine's own answer where
@@ -14396,6 +16375,19 @@ fn pin_duration(transport: &PinTransport) -> Option<f64> {
 
 /// Whether a pinned preview is playing: the engine's own answer, or whether a player of this
 /// app's is running.
+///
+/// A file FFmpeg plays is answered from what this app has written down *and* from whether the
+/// process is still there, because the first of those is an assertion and the second is the only
+/// thing about a player that can be observed — this player reports nothing, which is why what it
+/// is doing is kept rather than asked for (see `transport_playing`).
+///
+/// The process is read off the published pid rather than through `is_video_process_running`
+/// because the bar is drawn from a paint, and asking that would take the media's lock: a paint
+/// is reached with the media held in one place and a lock a thread already owns is not a wait
+/// but a stop (see `pin_media_is_alive` for the same rule at length). What the pid is asked is
+/// weaker in one way and stronger in another — weaker, because it is only cleared once a death
+/// has been *confirmed*, so it can outlive a process by a check; stronger, because it is an
+/// atomic and so can be read anywhere, from any thread, at any point in a tick.
 fn pin_is_playing(transport: &PinTransport) -> bool {
     if transport.paused_at.is_some() {
         return false;
@@ -14403,7 +16395,9 @@ fn pin_is_playing(transport: &PinTransport) -> bool {
 
     match current_media_type() {
         Some(MediaType::NativeVideo) => video_player::is_playing(),
-        Some(MediaType::Video) => transport.started.is_some(),
+        Some(MediaType::Video) => {
+            transport_playing(transport, VIDEO_PID.load(Ordering::Acquire) != 0)
+        }
         _ => false,
     }
 }
@@ -14421,22 +16415,62 @@ fn pinned_playback_state() -> Option<(PathBuf, ScreenRegion, PinTransport, PinVo
 /// It is what a seek and a resume from a pause both are with FFmpeg, whose player can be told
 /// nothing once it is running: the same bargain the sound path makes, where a file dropped in
 /// half way is a player started at that second (see `start_audio_player`). It is also what the one
-/// thing about a running player that *can* be changed is asked by — the level — so the player that
-/// begins is given the pin's own level rather than the tray's setting (see `PinVolume`).
-fn restart_pinned_player(path: &PathBuf, content: ScreenRegion, seconds: f64) {
+/// thing about a running player that *can* be changed is asked by — the level, and the subtitle
+/// track — so the player that begins is given the pin's own level rather than the tray's setting
+/// (see `PinVolume`), and the pin's own track rather than whatever the player would pick for
+/// itself (see `PinTransport::subtitle`).
+///
+/// The order of the two is the whole of what the user sees, and it is the reason the player being
+/// replaced is *taken out of the media* rather than ended here. It is parked — still running, still
+/// drawing — until the player begun in its place has a window of its own, which the loop ends it
+/// for (see `retire_replaced_player`). Ending it first would leave the pin's band showing the
+/// desktop for as long as the new player takes to open the file, seek, and put a window up, which
+/// on a 1440p file is long enough to read as a flash, and which is why nothing here goes through
+/// `stop_video_playback`: that call is for a player that has ended, and this one has not.
+///
+/// What *is* stopped is the media's own background work, which belongs to the player being
+/// replaced and has nothing to do with whether that player is still there.
+/// What is *not* done here is a wait for the new player's window, and the reason is the order of
+/// the two players: the one being replaced is parked rather than ended, so that its window is on
+/// screen until the one replacing it has a window of its own (see `retire_replaced_player`).
+///
+/// `holding` is a decision this function does not make for itself, because it is not the function's
+/// business. A seek, a resize settling and a change of track are all relaunches of a file that is
+/// meant to go on being held, and the press that cannot be answered by a key is a relaunch of a file
+/// the hand has just let go of — so which of the two this is belongs to the caller, and the only
+/// thing that has to be true of either is that it is said out loud (see `PinTransport::begun`).
+fn restart_pinned_player(path: &PathBuf, content: ScreenRegion, seconds: f64, holding: bool) {
     let width = (content.2 - content.0).max(1);
     let height = (content.3 - content.1).max(1);
     let volume = pinned_volume_level();
+    let subtitle = pinned_subtitle();
 
+    // The player this relaunch is replacing, read from the record rather than from the handle in
+    // the media. The record is this app's own account of the player it last started, and it is the
+    // right account to read here for a second reason as well as the obvious one: it is also the
+    // account of a player whose handle was dropped without a kill ever being confirmed, which is
+    // precisely the process a second one must not be stacked up behind (see
+    // `kill_stray_video_process`). A handle would have said nothing about that one, because there
+    // is no handle left to ask.
+    //
+    // It is read before the new player is started, because starting one overwrites the record with
+    // its own pid — and a player being retired deliberately does *not* clear it, only a death
+    // being confirmed does, so it still names the process that was there a moment ago.
+    let replaced = VIDEO_PID.load(Ordering::SeqCst);
+
+    // The handle is taken and the process left alone, which is the whole of what "parked" means for
+    // the media: nothing else in here can reach the player, so the only thing that can end it is
+    // the loop that was told about it.
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(media) = current.as_mut() {
             media.cancel_background_work();
-            stop_video_playback(media);
+            media.video_process = None;
         }
     }
-    kill_stray_video_process();
 
-    let process = start_video_playback(path, content.0, content.1, width, height, seconds, volume);
+    let process = start_video_playback(
+        path, content.0, content.1, width, height, seconds, volume, subtitle,
+    );
     let pid = process.as_ref().map(|child| child.id()).unwrap_or(0);
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -14445,17 +16479,51 @@ fn restart_pinned_player(path: &PathBuf, content: ScreenRegion, seconds: f64) {
         }
     }
 
+    // The player being replaced is parked once the replacement exists, and it is parked *and
+    // running* — a relaunch that ended it instead would leave the band empty for the whole of the
+    // wait below, and the wait is as long as a player takes to open the file.
+    if pid != 0 {
+        retire_replaced_player(replaced, pid);
+    } else {
+        // A replacement that did not come up leaves nothing to arrive, so the player on screen is
+        // ended here instead of waiting for an arrival that is never going to happen — which is the
+        // road the sweep is still for, and the only road that reaches it.
+        kill_stray_video_process();
+    }
+
     // The window the new player puts up is placed by the tick, which re-asserts it every two
     // hundred milliseconds; a seek is one window gone and another arriving, so it is asked for
     // now rather than at the next of those.
     let _ = ensure_video_window_topmost(content.0, content.1, width, height);
 
-    update_pin_transport(|transport| {
-        transport.started = (pid != 0).then(|| (Instant::now(), seconds));
-        transport.paused_at = None;
-        transport.seeking = None;
-    });
+    update_pin_transport(|transport| transport.begun(seconds, pid != 0, holding));
     with_pin(|pin| pin.volume.playing_at = volume);
+
+    // A relaunch is also how a drag's parking is undone, because a relaunch brings a player of its
+    // own with a window of its own: there is nothing left to unpark, and the flag that would keep
+    // the band painted flat has to go with it or the new picture is drawn behind an opaque
+    // rectangle. The hold written just above is the relaunch's own, so it is not the one the drag
+    // made and there is nothing here to restore (see `park_pinned_player`).
+    with_pin(|pin| pin.parked = false);
+}
+
+/// Whether the pinned window is showing a held file, for a relaunch that has no transport of its
+/// own in hand: the two callers that have none are a seek taken from the bar and the settle of a
+/// resize, and a resize is exactly as much a relaunch of a held file as a seek is (see
+/// `restart_pinned_player`).
+fn pinned_is_held() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport.paused_at.is_some()))
+        .unwrap_or(false)
+}
+
+/// The subtitle track a pinned window is showing, out of what the probe read of the file on
+/// screen: nothing for a pin with no file up, and for a file the probe never answered for
+/// nothing either (see `video_subtitles`).
+fn pinned_subtitle() -> Option<usize> {
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
+    pin.transport.subtitle
 }
 
 /// Take a pinned video to a second of its file.
@@ -14464,6 +16532,26 @@ fn restart_pinned_player(path: &PathBuf, content: ScreenRegion, seconds: f64) {
 /// its own, while FFmpeg's player is ended and begun again at that second — which is why a drag
 /// on the bar shows where it is being taken rather than seeking as it moves, and the seek is made
 /// where the pointer lets go.
+///
+/// The restart is *kept* rather than replaced by a key sent to the player, and the reason is
+/// what a drag on the bar means. The bar knows a second — four minutes thirty-one and a half, say
+/// — and every key FFmpeg's player has for moving is a step of a fixed size: ten seconds left,
+/// ten right, a minute up or down. None of them is "go to this second", and rounding a drag to
+/// the nearest multiple of ten would be a seek that lands somewhere the hand did not ask for and
+/// cannot be undone by dragging the bar further. `-ss` says the second itself, lands there, and
+/// lands there on the *next* frame rather than on the one a step of playback happened to arrive
+/// at, which for a film at 144 frames a second is the difference between the frame the hand let
+/// go on and one up to seventy milliseconds either side of it.
+///
+/// It is also the only way to land a seek with the film's own subtitles in the right place. A
+/// time-shifted anime release carries its subtitle track offset from the picture, and a seek that
+/// moved the video without naming a track would leave the two disagreeing about where they are —
+/// so the track travels with the seek because the relaunch names it, which is the same fact B5
+/// needs and the reason one relaunch path serves both (see `restart_pinned_player`).
+///
+/// What it must not fight is the loop's own re-hover checks, and it does not: nothing here
+/// touches the media the hover installed, only the player behind it, and the player that a hover
+/// would have started for a *different* file is swept first (see `kill_stray_video_process`).
 fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, seconds: f64) {
     match current_media_type() {
         Some(MediaType::NativeVideo) => {
@@ -14474,24 +16562,42 @@ fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, seconds: f64) {
             // to move that second with it. The engine goes where it was taken either way; what
             // this is for is the bar, which would otherwise spring back to the second the pause
             // began at the moment the hand let go — the file seeked, and the bar saying otherwise.
-            update_pin_transport(|transport| {
-                if transport.paused_at.is_some() {
-                    transport.paused_at = Some(seconds);
-                }
-                transport.seeking = None;
-            });
+            update_pin_transport(|transport| transport.sought(seconds));
         }
-        Some(MediaType::Video) => restart_pinned_player(path, content, seconds),
+        // A held file is still held afterwards: the bar is drawn from a second this side wrote
+        // down, so a seek taken while it is held has to move that second with it — which for
+        // FFmpeg's player is the same statement as telling the player it is to be begun at that
+        // second held (see `PinTransport::begun` and `settle_pending_hold`).
+        Some(MediaType::Video) => restart_pinned_player(path, content, seconds, pinned_is_held()),
         _ => {}
     }
 }
 
 /// Pause a pinned video, or set it going again.
 ///
-/// The media engine is asked to hold where it is. FFmpeg's player cannot be, so a pause is that
-/// player ended with the second it had got to kept, and a resume is another one begun there —
-/// which is what the playhead is drawn from in the meantime, so a paused picture sits at the
-/// second it stopped at rather than snapping back to the beginning.
+/// The media engine is asked to hold where it is. FFmpeg's player is asked as well, which used
+/// to be impossible: it can be told nothing (see §"Where the commands went" in `ARCHITECTURE.md`),
+/// so a hold was that player *ended* with the second it had reached kept for the player that
+/// took its place. It can be asked one thing — a key, posted to its own window the way Windows
+/// would have delivered it — and that is enough, because a player that is asked to hold does
+/// hold, and a player that is holding is still there to be let go of.
+///
+/// Which changes what a resume costs: it used to be a second start, with the second it stopped
+/// at typed into `-ss` and the window rebuilt; it is now a key to the player that never stopped.
+/// That is the whole of the difference in what the user sees, and it is why the hold keeps the
+/// start rather than giving it up (see `PinTransport::held`).
+///
+/// The fallback is the arrangement this function had before, and it is not a formality: a player
+/// that has no window — one still starting, or one whose window has gone the way its process
+/// went — cannot be given a key, and a player that cannot be given a key has to be *ended* to
+/// hold a file, exactly as before. So the shape of the state is the same either way and only the
+/// cost differs, which is what keeps one function answer for both.
+///
+/// One case is answered by neither, and it is the same gap a relaunch leaves. A hold the relaunch
+/// wrote down and has not delivered yet is not a player holding — the player is playing, and the
+/// key that would let it go of the hold has not been sent — so a press in that moment is not a
+/// request to un-pause anything: it is the hand taking the hold back, and the film carries on from
+/// where the relaunch put it (see `PinTransport::pending_hold`).
 fn toggle_pinned_playback(path: &PathBuf, content: ScreenRegion, transport: PinTransport) {
     let playing = pin_is_playing(&transport);
     let playhead = pin_playhead(&transport).unwrap_or(0.0);
@@ -14500,27 +16606,97 @@ fn toggle_pinned_playback(path: &PathBuf, content: ScreenRegion, transport: PinT
         Some(MediaType::NativeVideo) => {
             video_player::set_paused(playing);
             update_pin_transport(|state| {
-                state.paused_at = playing.then_some(playhead);
+                if playing {
+                    state.held(playhead);
+                } else {
+                    // The engine reports its own position, so the second the hold began at is
+                    // only what the *bar* was drawn at and not what the file is at; re-basing
+                    // onto it is a no-op for the engine's own reading and is the whole of the
+                    // correction for the clock a player of this app's is measured by.
+                    state.released(playhead);
+                }
             });
         }
         Some(MediaType::Video) => {
-            if playing {
-                if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                    if let Some(media) = current.as_mut() {
-                        media.cancel_background_work();
-                        stop_video_playback(media);
-                    }
+            if transport.pending_hold {
+                // The player is playing and no key has reached it, so there is nothing to let go
+                // of: what this press does is stop the hold from ever being sent.
+                update_pin_transport(|state| state.released(transport.paused_at.unwrap_or(0.0)));
+            } else if playing {
+                if ffplay_key_pause() {
+                    update_pin_transport(|state| state.held(playhead));
+                } else {
+                    hold_pinned_player_without_a_key(playhead);
                 }
-                update_pin_transport(|state| {
-                    state.paused_at = Some(playhead);
-                    state.started = None;
-                });
+            } else if ffplay_key_pause() {
+                update_pin_transport(|state| state.released(transport.paused_at.unwrap_or(0.0)));
             } else {
-                restart_pinned_player(path, content, transport.paused_at.unwrap_or(0.0));
+                // A player begun to resume a file is not one to be told to hold, or the press
+                // would arrive twice over: once here, and once as a hold the relaunch owed. So
+                // the relaunch is told, at its own call site, that this is a file being let go.
+                restart_pinned_player(path, content, transport.paused_at.unwrap_or(0.0), false);
             }
         }
         _ => {}
     }
+}
+
+/// A file whose player could not be given a key, held the only other way there is: the player
+/// is ended and the second it had reached kept for the player that takes its place.
+///
+/// This is what a hold was before a video FFmpeg plays could be paused at all, and it is kept
+/// for the case that still needs it — a player with no window to post a key to. Nothing is lost
+/// by falling back to it: `PinTransport::held` is the same field either way, so the bar looks
+/// the same, and what differs is only which player will be there when the file is let go.
+fn hold_pinned_player_without_a_key(playhead: f64) {
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.cancel_background_work();
+            stop_video_playback(media);
+        }
+    }
+    update_pin_transport(|state| {
+        state.player_gone(playhead);
+    });
+}
+
+/// Take a pinned film to its next subtitle track, and begin the player again naming it.
+///
+/// The number is written down *before* the player is begun, so that a relaunch that failed to
+/// start still leaves the choice standing: a player that did not come up is not a reason to
+/// forget which track the user asked for, and a key pressed again after it gets what it asked
+/// for rather than the next track on from one it never reached.
+///
+/// Everything else is refused rather than attempted. A file with no subtitle streams has no next
+/// track, and a file the probe has not answered for is treated as having none — guessing at a
+/// track in a file whose header has not been read is a `-sst` the player may refuse outright,
+/// which is a player that exits (see `video_subtitles`). The engine's own videos are refused too:
+/// it shows no subtitles at all, in frame-server mode or any other (see `video_player`), so there
+/// is nothing on screen for a track to change.
+fn step_pinned_subtitle() {
+    if current_media_type() != Some(MediaType::Video) {
+        return;
+    }
+
+    let Some((path, content, transport, _)) = pinned_playback_state() else {
+        return;
+    };
+
+    let Some(next) = next_subtitle(transport.subtitle, video_subtitles(&path).count) else {
+        return;
+    };
+
+    if Some(next) == transport.subtitle {
+        return;
+    }
+
+    update_pin_transport(|state| state.subtitle = Some(next));
+    restart_pinned_player(
+        &path,
+        content,
+        pinned_playhead().unwrap_or(0.0),
+        transport.paused_at.is_some(),
+    );
 }
 
 /// Write an answer about the transport back into the pin, if there is still one.
@@ -14944,13 +17120,59 @@ fn put_remembered_pin_volume(config: &mut AppConfig, kind: Option<MediaType>, le
     }
 }
 
+/// What a level let go of on a pinned FFmpeg video is settled by.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PinLevelSettling {
+    /// A player is behind the pin and takes a level only by being begun at one, so it is replaced:
+    /// begun at the pin's own level, and — where the file is held — begun holding it, because the
+    /// replacement is the player that will be asked to hold (see `restart_pinned_player`).
+    Relaunch { holding: bool },
+    /// No player is behind the pin at all. Nothing is begun: the level is written down as the one
+    /// playing, and the player that takes it is the one a later press begins at it.
+    Recorded,
+}
+
+/// Whether a level moved on a pinned FFmpeg video is owed to a player replaced or written down, and
+/// whether that player is begun held.
+///
+/// The question is whether a *player* is behind the pin rather than whether the film is playing,
+/// which is what makes a held file owe the level at all: a held file is still a file playing at a
+/// level, and the knob moved while it was held would otherwise reach a player that never learns of
+/// it — the film would go on at the level it was at when the hand stopped it while the bar claimed
+/// the level it was set to (see `settle_pin_volume`).
+///
+/// The hold travels across the replacement rather than being dropped by it, so a level turned while
+/// the file was held does not hand the film back to the sound: the level and the hold are the same
+/// relaunch, and a player begun playing where the file was held is a file the bar says is held and
+/// the desk says is not.
+///
+/// A player this app has lost the handle to is still a player while it is running, so a process
+/// behind a bar that has stopped claiming playback is still owed the level; only a pin with neither
+/// a claim nor a process is owed nothing.
+///
+/// Both answers are taken before the decision rather than one short-circuiting the other, so a knob
+/// let go of on a playing film reconciles the player behind it exactly as one let go of on a held
+/// film does — and the lock that costs is one the relaunch is about to take anyway (see
+/// `restart_pinned_player`).
+fn pin_level_settled_by(playing: bool, running: bool, held: bool) -> PinLevelSettling {
+    if playing || running {
+        PinLevelSettling::Relaunch { holding: held }
+    } else {
+        PinLevelSettling::Recorded
+    }
+}
+
 /// Give the pin's level to the player it is owed to, where giving it costs a player replaced.
 ///
 /// FFmpeg's player is told nothing once it is running, so the level it is to play at is another
 /// player begun at it — the same bargain a seek makes, and it is taken to the second the hand let
-/// go of the knob at rather than back to the beginning (see `pin_playhead`). A pin that is paused
-/// owes nothing now: the player that is begun when it resumes is begun at the level
-/// `restart_pinned_player` reads, so the two are written down as settled here.
+/// go of the knob at rather than back to the beginning (see `pin_playhead`).
+///
+/// A pin that is *held* owes it too, which it did not before a hold could be a running player, and
+/// what is asked in that arm is which of two things the level is settled by (see
+/// `pin_level_settled_by`). What is genuinely owed nothing is a pin whose player has gone, where the
+/// file is held because there is nothing holding it: the player that begins when the file is let go
+/// of is begun at the level this reads.
 ///
 /// A sound is the one kind whose settling is the loop's rather than this one's: the clock behind
 /// its card and the player a level is owed to are both the loop's, so the door is a flag rather
@@ -14973,14 +17195,19 @@ fn settle_pin_volume() {
             video_player::set_volume(volume.level);
             with_pin(|pin| pin.volume.playing_at = pin.volume.level);
         }
-        Some(MediaType::Video) => {
-            if pin_is_playing(&transport) {
+        Some(MediaType::Video) => match pin_level_settled_by(
+            pin_is_playing(&transport),
+            is_video_process_running(),
+            transport.paused_at.is_some(),
+        ) {
+            PinLevelSettling::Relaunch { holding } => {
                 let playhead = pin_playhead(&transport).unwrap_or(0.0);
-                restart_pinned_player(&path, content, playhead);
-            } else {
+                restart_pinned_player(&path, content, playhead, holding);
+            }
+            PinLevelSettling::Recorded => {
                 with_pin(|pin| pin.volume.playing_at = pin.volume.level);
             }
-        }
+        },
         Some(MediaType::Audio) => {
             let playing = audio_preview_level_is_owed_to_the_engine();
             if playing {
@@ -15240,6 +17467,18 @@ pub(crate) enum PinCommand {
     /// keyboard rather than by a press on the bar (see `toggle_pinned_audio` and
     /// `toggle_pinned_playback`).
     TogglePlayback,
+    /// The next subtitle track, wrapping within the file's own.
+    ///
+    /// It is a relaunch and not a key sent to the player, and the reason is the same as it is for
+    /// a seek: the choice has to be *remembered*, because every relaunch — this one, a seek, a
+    /// resize, a change of level — begins a player again, and a player begun without being told
+    /// which track to show falls back on its own default. So the number is written down first and
+    /// the relaunch is told it, which is what makes the choice this one makes survive the next
+    /// three (see `next_subtitle` and `PinTransport::subtitle`).
+    ///
+    /// Refused for every kind but a video FFmpeg plays, because it is the only player this app
+    /// begins again on its own and the only one whose track this app therefore has to know.
+    NextSubtitle,
 }
 
 // The commands the window procedure has left for the preview loop are a field of the pin's own
@@ -15483,6 +17722,20 @@ impl PinWindow for Win32PinWindow {
         let hwnd = HWND(self.hwnd() as *mut _);
         if !hwnd.is_invalid() {
             unsafe { render_layered_preview(hwnd) };
+        }
+    }
+
+    fn unpark_player_window(&self, band: Option<ScreenRegion>) {
+        // Nothing here is unsafe: the player's window is found by the process this app started it
+        // for rather than held as a handle, so there is no dereference to justify and a window
+        // that has since gone is found not to be there.
+        match band {
+            // The place is the show — `ensure_pinned_sibling_box` puts the window up in the same
+            // `SetWindowPos` that moves it, so a band answered here is answered on screen at once.
+            Some(band) => ensure_pinned_sibling_box(band),
+            // A pin with no band to go back into has no rect to be told, so only its hiddenness is
+            // taken back (see `unpark_pinned_player`).
+            None => show_pinned_player_window(),
         }
     }
 
@@ -16436,9 +18689,20 @@ fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
         // the sweep before every other player start is for (see `start_audio_playback`).
         kill_stray_video_process();
 
-        let Some(process) =
-            start_video_playback(&file.path, content.0, content.1, width, height, 0.0, volume)
-        else {
+        // The track is the new file's own choice, which is the one the take-up that
+        // installs this file writes down beside it — so the player and the bar
+        // agree from the first frame rather than the bar being corrected by the
+        // first seek (see `PinTransport::subtitle`).
+        let Some(process) = start_video_playback(
+            &file.path,
+            content.0,
+            content.1,
+            width,
+            height,
+            0.0,
+            volume,
+            video_subtitles(&file.path).chosen(),
+        ) else {
             return PinSwap::Refused {
                 path: file.path,
                 walk: file.walk,
@@ -17160,10 +19424,52 @@ fn relayout_pinned_media(
         .and_then(|media| media.as_ref().map(|media| media.media_type));
 
     match kind {
-        // FFmpeg's player draws in a window of its own and scales the picture to it, so the
-        // box that changed is a window that moved.
+        // FFmpeg's player draws in a window of its own and scales the picture to it, so the box
+        // that changed is a window that has to be moved — and, because the player rendered at
+        // whatever size it was begun at, one that has to be *begun again* to be rendered sharply
+        // at the size it has settled on.
+        //
+        // The two happen at different times and that is the whole of the two-phase resize. While
+        // the hand is still moving the edge, what is on screen is asked for on every pointer move
+        // (see `place_pinned_siblings`, called from `apply_pin_drag`): the window is put to the
+        // new size with `SetWindowPos` and the frame already rendered is scaled into it. It is
+        // responsive, it follows the pointer at the pointer's own pace, and it is soft — a 1440p
+        // frame shown in a box half its size and scaled back up is not the picture the user is
+        // choosing a size for.
+        //
+        // This is the settle, and it is the only place a relaunch happens for a resize. The
+        // player is ended and begun again at the box the drag ended up with, cropped from the
+        // same geometry probe the first launch cropped from, so the file that comes up is the
+        // file that was already there at full resolution — and it arrives over the old window
+        // rather than after it (see `retire_replaced_player`), so the soft frame under the hand
+        // is replaced by a sharp one without the band ever showing the desktop.
+        //
+        // The alternative — holding the old size until the relaunch lands — was rejected, and
+        // the reason is what a resize *is* while it is happening. A window that refused to follow
+        // the hand and sprang to a new size at the end is not a window being resized; it is a
+        // window that was closed and opened again, and the thing the user is doing — judging a
+        // size by how the film looks in it — cannot be done against a picture that does not
+        // change. Softness for the duration of a drag is a cost paid while the hand is moving
+        // and nothing else is happening; a band that stays at the old size until a relaunch
+        // completes is a visible discontinuity in the middle of a gesture, and it is the
+        // discontinuity the user would notice rather than the softness.
+        //
+        // The position is kept, so a resize does not throw away where the film was: the bar is
+        // read for the second the player had got to and the new one is begun there. A resize that
+        // restarted the film at the beginning would be the one thing about a resize that has to be
+        // undone by hand afterwards — and a hold is kept for the same reason, because a pin that
+        // was holding the film and was resized is a pin holding the film at a different size, not a
+        // pin that has started playing it (see `restart_pinned_player`).
         Some(MediaType::Video) => {
             ensure_pinned_sibling_box(content);
+            if let Some((path, _)) = pinned_media_owner() {
+                restart_pinned_player(
+                    &path,
+                    content,
+                    pinned_playhead().unwrap_or(0.0),
+                    pinned_is_held(),
+                );
+            }
             None
         }
         // The media engine draws into a surface of the size it was started at, and this window
@@ -17539,7 +19845,19 @@ fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Option<CardContr
 }
 
 /// Put a window of somebody else's — the player's — where a pinned window's media band is.
+///
+/// **A band whose player is parked is left alone, which is what this is for rather than an
+/// afterthought of it.** The park is a hide on the drag's first pointer message, and a raise here
+/// is a show as well as a place (see `ensure_video_window_topmost`): a resize drag puts the player
+/// here on every pointer move, and a maximized or restored window, a relayout and a take-up each put
+/// it here once more, so the film would be back on screen for as long as the drag lasted. What the
+/// park holds is the window's *absence*, and there is nothing about being out of date to say the
+/// absence can be ended (see `pin_player_is_parked`).
 fn ensure_pinned_sibling_box(content: ScreenRegion) {
+    if pin_player_is_parked() {
+        return;
+    }
+
     let _ = ensure_video_window_topmost(
         content.0,
         content.1,
@@ -17900,6 +20218,10 @@ fn pin_command_request(
         Some(PinCommand::Next) => step_pinned_file(1, wait),
         Some(PinCommand::TogglePlayback) => {
             toggle_pinned_by_key(audio_started, audio_start_offset, audio_paused);
+            None
+        }
+        Some(PinCommand::NextSubtitle) => {
+            step_pinned_subtitle();
             None
         }
         None => None,
@@ -20413,9 +22735,155 @@ fn begin_pin_drag(hwnd: HWND, window: &dyn PinWindow, action: PinDragAction, del
 
     if installed {
         window.capture(hwnd);
+        park_pinned_player();
     } else {
         window.release_capture(hwnd);
     }
+}
+
+/// Put a pinned video's player away for as long as a drag lasts.
+///
+/// The reason is a measurement rather than a guess. A video pin's picture is FFmpeg's own window
+/// standing behind a transparent band, and every pointer move of a resize puts that window to a new
+/// size and position (`place_pinned_siblings` -> `ensure_video_window_topmost`). The compositor
+/// then has to re-blit a 2560x1440 surface at the pointer's pace, on a 144 Hz screen, while the
+/// player is still decoding at whatever rate the machine can manage — which arrives at the hand as
+/// a drag that stutters, and arrives at the eye as a picture that is soft and laggy for as long as
+/// the hand is on the edge.
+///
+/// So two things are done about it, by two different callers at two different times, and this is
+/// one of them. The window is hidden here, on the drag's own first pointer message, and the film is
+/// held by the tick (see `video_drag_hold_apply`), which is the only thing that may pause it: a
+/// pause posted from here as well would be a second toggle onto the same film, so a drag begun over
+/// a playing film would leave it playing (and its window hidden) and a drag begun over a held one
+/// would start it. The split is also the faster of the two orders — the window is hidden on the
+/// message the hand sent, not on the tick after it — and the two halves cannot disagree about
+/// whether a drag is in flight, because both are asked of `pin.dragging`.
+///
+/// The band is painted flat while the picture is away rather than left transparent, so the desktop
+/// does not show through a window that has been hidden: the paint reads this flag (see
+/// `paint.parked`).
+fn park_pinned_player() -> bool {
+    let parked = pin_state().is_some_and(|mut pinned| {
+        let Some(pin) = pinned.pin_mut() else {
+            return false;
+        };
+
+        // A drag that parks twice is one drag, not two: a second call would hide a window that is
+        // already hidden and answer a question the first call has already answered.
+        if std::mem::replace(&mut pin.parked, true) {
+            return false;
+        }
+
+        true
+    });
+
+    if parked {
+        hide_pinned_player_window();
+    }
+
+    parked
+}
+
+/// Put the player's window back where it was parked from, at where the band is *now*.
+///
+/// **The place is part of putting it back, and it is not tidiness.** A park is a hide and nothing
+/// else: the window is left standing exactly where the drag last put it, and every place that
+/// would move it while the park stands is answered out of the hand (see `pin_player_is_parked`).
+/// So on a move — the one drag with no relaunch to bring a window of its own back — the rect the
+/// player's window is still at is the rect the drag *began* from, and a bare `ShowWindow` puts
+/// the film on screen there: a picture at the old box, behind a band that has moved, for as long
+/// as the tick takes to re-assert the real one. Two hundred milliseconds of a film in the wrong
+/// place is what the hand sees at the moment it lets go, so the place is asked for here rather
+/// than waited for — and it is asked for through `ensure_pinned_sibling_box`, which is the same
+/// call the tick makes, so a park that ends and a tick that re-asserts cannot disagree about where
+/// the picture belongs. The band is read now, out of the pin, rather than remembered from before
+/// the drag; a rect read at the wrong moment is the whole of the defect.
+///
+/// The film is *not* let go of here: that is the tick's half of the pair (see
+/// `video_drag_hold_apply`), and the window is shown before that tick rather than after it, which
+/// is the order worth having — a player unpaused while its window is hidden decodes into nothing,
+/// so the first frame the hand sees is whichever one it decodes after being shown, a stutter on the
+/// single frame the drag ended on.
+///
+/// It is asked of the pin and not of the player's window, because a pin taken down mid-drag has
+/// ended the player outright and there is no window of its own left to find (see `park_pinned_player`).
+fn unpark_pinned_player(window: &dyn PinWindow) -> bool {
+    let unparked = pin_state().is_some_and(|mut pinned| {
+        pinned
+            .pin_mut()
+            .is_some_and(|pin| std::mem::take(&mut pin.parked))
+    });
+
+    if !unparked {
+        return false;
+    }
+
+    // The band is read after the flag rather than with it, and both are read before the window is
+    // asked for anything — the flag says the park is over and the band says where the window is
+    // to go, and a pin that has been taken down between the two has no band to go to.
+    window.unpark_player_window(pinned_content());
+    true
+}
+
+/// Whether the capture being lost is one this app asked for, which Windows itself will not say.
+///
+/// `WM_CAPTURECHANGED` is delivered to the window that lost the capture whether it released it or
+/// another window took it, and by the time a window procedure is looking at it, `GetCapture()`
+/// gives the same answer either way: not this window. Only this app's own record of what it asked
+/// for can tell the two ends apart, and a drag's end needs them apart — its own release is a moment
+/// the road that let go of the pointer is already handling, and a capture stolen is a drag that is
+/// not coming back (see `pin_capture_lost`).
+///
+/// A static rather than a field of anything, because the writer and the reader are not the same
+/// function: the release is asked of a window and the notice is answered inside the call it raises.
+static PIN_CAPTURE_OURS: AtomicBool = AtomicBool::new(false);
+
+/// Let go of the pointer, marking the notice the release raises as one this app asked for.
+///
+/// The marking is around the call and not after it, because the notice arrives *inside* it:
+/// `ReleaseCapture` sends `WM_CAPTURECHANGED` back into this same thread's own window procedure
+/// before it returns (see `release_pin_capture`), so the window procedure answering one has to be
+/// able to see that this app is the one who let go. Unmarked, the two ends of a drag are one end,
+/// and the notice this app raised itself is answered by a road with no relaunch decision in hand —
+/// which puts a player that is about to be taken down back on screen at the box its drag began at.
+fn release_the_pointer(window: &dyn PinWindow, hwnd: isize) {
+    PIN_CAPTURE_OURS.store(true, Ordering::Release);
+    window.release_capture(hwnd);
+    PIN_CAPTURE_OURS.store(false, Ordering::Release);
+}
+
+/// Whether the capture being lost is one this app released on purpose.
+fn pin_capture_is_ours() -> bool {
+    PIN_CAPTURE_OURS.load(Ordering::Acquire)
+}
+
+/// Hide or show the window FFmpeg is drawing the picture into.
+///
+/// It is hidden with `ShowWindow(SW_HIDE)` rather than by moving it off the screen or making it
+/// zero-sized: this is a window of another process, and the two cheapest ways to hide a window
+/// this app does not own are to lie about its size or to lie about where it is. `ShowWindow` is the
+/// one that says what it means, and it is the same call the style monitor already makes to put the
+/// window up without activating it (see `ensure_video_window_topmost`).
+fn set_pinned_player_window_visible(visible: bool) {
+    let Some(hwnd) = video_window_for(VIDEO_PID.load(Ordering::SeqCst)) else {
+        return;
+    };
+
+    // SAFETY: `hwnd` is a window this app found by enumerating the desktop and matching it to the
+    // player it started, so it is a live handle to this process's own window; `ShowWindow` takes
+    // any window and reports rather than faults.
+    unsafe {
+        let _ = ShowWindow(hwnd, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
+    }
+}
+
+fn hide_pinned_player_window() {
+    set_pinned_player_window_visible(false);
+}
+
+fn show_pinned_player_window() {
+    set_pinned_player_window_visible(true);
 }
 
 /// Carry on, and let go of, a drag whose press this window was never given.
@@ -21264,12 +23732,12 @@ unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
 ///
 /// The tail of `pinned_release` and the whole of what a drag read out of the hook's published
 /// button state owes the same three things, so they are one function: the pointer this window
-/// took for the drag is let go of (it is taken outside the lock, because `ReleaseCapture`
-/// delivers `WM_CAPTURECHANGED` and the window procedure asks for that same lock — see
-/// `release_pin_capture`), a resize asks for its media to be laid out again at the box it ended
-/// up with, and the window is painted at where it stands. Which of the two ends is *asked* is
-/// the caller's: a message ends a drag this window was given, and the tick ends a drag begun out
-/// of what the hook published (see `settle_pinned_engine_drag`).
+/// took for the drag is let go of (it is taken outside the lock, and marked as this app's own
+/// release, because `ReleaseCapture` delivers `WM_CAPTURECHANGED` into this same thread's window
+/// procedure before it returns — see `release_the_pointer`), a resize asks for its media to be
+/// laid out again at the box it ended up with, and the window is painted at where it stands. Which
+/// of the two ends is *asked* is the caller's: a message ends a drag this window was given, and
+/// the tick ends a drag begun out of what the hook published (see `settle_pinned_engine_drag`).
 ///
 /// Returns whether there was a drag to let go of, which is what a caller that has other release
 /// work to do needs to know.
@@ -21284,18 +23752,92 @@ fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
         return false;
     };
 
-    window.release_capture(hwnd.0 as isize);
+    release_the_pointer(window, hwnd.0 as isize);
 
-    if matches!(drag.action, PinDragAction::Resize(_)) {
-        if let Some(content) = pinned_content() {
+    // A resize relaunches at the size the drag settled on (see `relayout_pinned_media`), and a
+    // relaunch is a player being ended and another begun — so it is the relaunch that puts the
+    // parked window back, and putting it back here as well would show a window that is about to be
+    // taken down again, for as long as the relaunch takes. A move has no relaunch, so it is the
+    // move's own release, which is also the drag that has to place the picture rather than only
+    // show it (see `unpark_pinned_player`).
+    let relaunching = matches!(drag.action, PinDragAction::Resize(_))
+        && pinned_content().is_some_and(|content| {
             if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
                 *request = Some(content);
             }
-        }
+            true
+        });
+    if !relaunching {
+        unpark_pinned_player(window);
     }
 
     window.repaint();
     true
+}
+
+/// Let go of everything a pinned window was doing with the pointer, now that the pointer is a
+/// window's other than this one's to be doing it with.
+///
+/// Windows delivers this message to the window that *lost* the capture rather than a release to the
+/// one that took it, and it is the only notice a gesture gets when it did not end at this window's
+/// own release: a click into another window, a dialog of somebody else's, or the watchdog taking a
+/// pin down mid-drag all end here rather than on a `WM_LBUTTONUP` (see `release_pin_capture`). So
+/// the drag's record goes, and with it the gesture the tick is watching for.
+///
+/// **The park goes with it, which is the whole of what this path was missing.** A drag of a video
+/// parks the player's window and paints the band flat over the hole that leaves (see
+/// `park_pinned_player`), and both halves were undone by the drag's own release and by nothing else —
+/// so a capture taken from under a drag ended the drag and left the park standing. The film went
+/// back to playing regardless, because the tick watches the gesture and not the park, and what was
+/// left on screen was an opaque band with no picture behind it for the rest of the pin's life and not
+/// for the length of the drag. Only a relaunch took it, and a relaunch is not something a user does
+/// to fix a window that has gone black.
+///
+/// So this is the release's work without the release's moment: the pointer's own facts are dropped,
+/// the picture is put back before the tick lets the film go — that order being the one worth having
+/// for the same reason it is there (see `finish_pin_drag`) — and the band is transparent again
+/// because the flag it reads is down. What there is no `hwnd` for is a capture this app has already
+/// lost: Windows has taken it, and releasing it would be a courtesy owed to nobody.
+///
+/// **Only a capture somebody else took gives the park up, and that is the whole of what this path
+/// gets wrong by not saying.** Windows delivers `WM_CAPTURECHANGED` to the window that lost the
+/// capture whether it released it or another window took it, and it says in no way the two can be
+/// told apart afterwards — `GetCapture()` answers the same thing for both, which is that this
+/// window is not the one holding anything. But this app's own `ReleaseCapture` is how a drag ends,
+/// and the road letting go of the pointer is already deciding on the way out what happens to the
+/// park: a resize is a relaunch, and a relaunch is a player with a window of its own that puts
+/// that window up and takes the flag down (see `restart_pinned_player`). A capture-loss answering
+/// its own app's release by putting the parked window back undoes that deliberate hold-off — the
+/// outgoing player comes up at the box the drag began at, over a band the flag has already stopped
+/// painting flat, for as long as the relaunch takes. So a notice this app raised itself is answered
+/// as a notice and not as a loss: the pointer's facts still go, and the park is left standing for
+/// the road that let go of it to take back (see `release_the_pointer`).
+fn pin_capture_lost(window: &dyn PinWindow) {
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
+            pin.dragging = None;
+            pin.pressed = None;
+            pin.transport.pressed = None;
+            pin.transport.seeking = None;
+            pin.transport.hovered = None;
+            // A knob that was being held is let go of with the capture: a pointer that has gone
+            // elsewhere is not a hand still on the level, and the popup is put away by the tick that
+            // finds the pointer away from it (see `refresh_pin_volume`).
+            pin.volume.dragging = false;
+        }
+    }
+
+    // This app's own release, and the road that asked for it is still inside the call: the park is
+    // that road's to take back, with the relaunch decision in hand that a release delivered to a
+    // window procedure has not got (see `finish_pin_drag`).
+    if pin_capture_is_ours() {
+        return;
+    }
+
+    // Asked of the pin rather than taken from the lock above, because putting another process's
+    // window up is not work to be done while this app's own lock is held — the same seam
+    // `finish_pin_drag` keeps its `ReleaseCapture` outside of, for the same reason.
+    unpark_pinned_player(window);
 }
 
 /// Wait for a preview message or for window input, whichever comes first.
@@ -21496,10 +24038,11 @@ pub fn run_preview_window() {
         // behaves (see `upgrading`).
         let mut video_replay: Option<PathBuf> = None;
         // The file the engine was watched failing at: the engine took it and then never drew a
-        // frame of it, so it is a file FFmpeg's player is what is left for. The hover that is up
-        // is replayed for the player to take it, which is what this waits to be done where a
-        // replay can be started — the tick that finds the failure out cannot start one itself
-        // (see `video_player::mark_unplayable`).
+        // frame of it, so it is a file no player here will take — which, now that FFmpeg's player
+        // is where every video is played where it is installed at all, is a machine whose only
+        // player is the one that failed. The hover that is up is replayed to be answered without
+        // a preview, which is what this waits to be done where a replay can be started — the tick
+        // that finds the failure out cannot start one itself (see `video_player::mark_unplayable`).
         let mut engine_failed: Option<PathBuf> = None;
         // The hover a box measured off the preview thread has just answered for. Its replay is
         // the same wait carried on rather than a new preview, the way a video's is (see
@@ -21697,6 +24240,19 @@ pub fn run_preview_window() {
                 pin_request = Some(end_pin_state(Reason::Asked));
             }
 
+            // Which windows a standing pin takes the keyboard keys for, told to the hook once a
+            // tick: a `WH_KEYBOARD_LL` callback may not walk the desktop to find them, so this is
+            // the tick publishing what it already knows. Zero for both says there is no such pin,
+            // which is what leaves the arrows alone in the listing behind a preview that is not
+            // one (see `key_input::pin_owns_caret`).
+            let pin_keys_owner = if pinned() { hwnd.0 as u64 } else { 0 };
+            let pin_keys_video = if pin_keys_owner != 0 {
+                VIDEO_HWND.load(Ordering::SeqCst) as u64
+            } else {
+                0
+            };
+            crate::shell::key_input::publish_pin_key_owner(pin_keys_owner, pin_keys_video);
+
             // The key is drained whether or not it is watched, so that a press made while the
             // feature was off is not acted on when it comes back on.
             let pin_presses = crate::shell::key_input::take_presses();
@@ -21743,6 +24299,13 @@ pub fn run_preview_window() {
             }
 
             if pinned() {
+                // A film that has been watched to its end is begun again here, before anything else
+                // in this tick reads the player that ended it as a failure. Three things down here
+                // would each close the pin over a player that exited because its film finished
+                // rather than because it died, and the loop that replaces them is this one (see
+                // `loop_ended_pinned_player`).
+                loop_ended_pinned_player();
+
                 // A press that landed on the window the engine draws a document in, which is the
                 // one thing on a pinned window the window procedure cannot be told about: the
                 // band is a browser's window over this one, so the press is read here and the
@@ -21816,6 +24379,17 @@ pub fn run_preview_window() {
                 // that has gone (see `pin_media_is_alive`). The mark is a load, so it is in
                 // there for the one tick it is in hand; the tick after it, the media answers
                 // for itself (see `MediaType::Unplayable`).
+                // A key the hook took because the caret was in one of the pin's own two windows,
+                // and would otherwise have reached FFmpeg rather than this app. The commands are
+                // the same ones the pin's own window procedure queues, so they go on the same
+                // queue: a walk of the folder is a walk of the folder whether the arrow arrived as
+                // a message to this window or was swallowed before it could become one.
+                for taken in crate::shell::key_input::take_pin_key_presses() {
+                    if let Some(command) = hook_pin_key_command(taken) {
+                        ask_pin(command);
+                    }
+                }
+
                 if let Some(walk) = pin_command_request(
                     &mut pin_request,
                     &mut pin_walk_wait,
@@ -21896,6 +24470,17 @@ pub fn run_preview_window() {
                 // thrown while the pin is a bubble is answered on the next one (see
                 // `settle_bubble_playback`).
                 settle_bubble_playback(&mut audio_started, &mut audio_start_offset);
+
+                // And the same for a bar that is drawn against a player this app started: what
+                // it is allowed to claim is settled against the player that is actually there,
+                // a player a relaunch has replaced is ended once its replacement has a window to
+                // replace it with, and a hold a relaunch could not deliver is delivered now that
+                // there is a window to deliver it through. All three are asked of the process
+                // rather than of what this app wrote down, because everything a bar says about a
+                // video FFmpeg plays is something this app asserted (see `settle_pinned_transport`).
+                settle_pinned_transport();
+                settle_video_retirement();
+                settle_pending_hold();
 
                 // What a key does to a pinned text preview, polled rather than waited for: a pin
                 // that the user has not pressed is a window nobody is in, and a window nobody is
@@ -22057,23 +24642,89 @@ pub fn run_preview_window() {
             // Periodically re-assert topmost on the video window to prevent it
             // from falling behind Explorer or other windows (Bug 2 fix)
             //
-            // For as long as a volume popup is open it is left where it is, and the pin's window is
-            // the one on top: what the popup floats over is the media, and the media of a video
-            // FFmpeg plays is this very window. Nothing is asked of the order on the way out — the
-            // next tick of this asks for the player again (see `toggle_pin_volume`).
-            //
             // Split cadence: a pinned video competes with the pin's own window and keeps
             // the tight band, while a hover video gets the slow one — reordering DWM
             // 5x/s for a tooltip is what this used to cost (see `topmost_cadence_ms`).
+            //
+            // The volume popup is *not* guarded here any more: it is guarded inside the raise, which
+            // is the one place a player's window is put on top and is reached from four others that
+            // this guard did not cover (see `ensure_video_window_topmost`).
             let topmost_cadence_ms = topmost_cadence_ms(pinned());
             if current_video_path.is_some()
                 && !pin_is_collapsed()
-                && !pin_volume_open()
                 && last_topmost_check.elapsed() >= Duration::from_millis(topmost_cadence_ms)
             {
                 last_topmost_check = Instant::now();
-                let _ =
-                    ensure_video_window_topmost(video_pos.0, video_pos.1, video_pos.2, video_pos.3);
+
+                // A volume slider is drawn *into the pin's own window*, in the band where the
+                // picture is, and the picture is a window of FFmpeg's own sitting above the pin in
+                // the topmost band. So the slider is behind the video unless the pin is raised above
+                // it — and the tick that used to raise the player skipped itself entirely while the
+                // slider was open, on the reasoning that not re-raising the player was the same
+                // thing as keeping it down. It is not: three other places raise the player (a drag,
+                // a relaunch, a relayout), and one of them runs on the pointer move that opens the
+                // slider's own knob. The symptom is a slider that appears for a frame and is then
+                // behind the film again, which reads to the hand as a slider that closes by itself.
+                //
+                // So while the slider is up the pin is raised authoritatively, on every tick that
+                // would otherwise have been spent raising the player. Both windows are topmost, so
+                // this is a question of which of the two is nearer the front of one band, and the
+                // answer is put in rather than left to whoever raised last.
+                //
+                // And a player parked for the length of a drag is not raised at all, which this arm
+                // is where a hand resting on an edge is answered: the drag's own raises only run
+                // while the pointer is moving, so a raise here is the whole of what a still hand
+                // would be looking at — and it put the film back over a band being held flat (see
+                // `pin_player_is_parked`). The slider is still raised over a parked player, because
+                // it is drawn into the pin's own window and that window is the one thing on screen.
+                if pin_volume_open() {
+                    raise_pinned_window(HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _));
+                } else if !pin_player_is_parked() {
+                    let _ = ensure_video_window_topmost(
+                        video_pos.0,
+                        video_pos.1,
+                        video_pos.2,
+                        video_pos.3,
+                    );
+                }
+            }
+
+            // A player this app is looping itself is begun again at the beginning of its file rather
+            // than being given `-loop 0` at the start, because the two cannot be asked for together:
+            // with a `-ss` in the same command the player wraps back to the seek rather than to the
+            // beginning, so an eight-second film begun at six plays its last two and a half seconds
+            // for ever (measured — see `video_launch::loop_is_ours`). It rides the same tick as the
+            // topmost re-assertion rather than a timer of its own, because both are questions about
+            // the player that is on screen and this is the tick that already asks.
+            //
+            // The `playing` it is given is the pin's own answer rather than a guess, and it is what
+            // holds the loop off a film a gesture has stopped: a hold that did not rebase the loop's
+            // clock would keep counting up under the hand, and a film held for a minute near its end
+            // would be past its end — and so rewound — the instant it was let go of (see
+            // `video_loop_action`).
+            if current_video_path.is_some() {
+                let _ = video_loop_tick(pin_is_playing_current());
+            }
+
+            // A pin that still believes it holds the keyboard, and that Windows says does not, is
+            // asked for it back. The player is begun again on every navigation and every resize, and
+            // its window is created activatable and only styled once this app finds it — so an arrow
+            // press can be answered by the player rather than by the pin, and FFmpeg's own arrow
+            // keys are all seeks (see `pin_ask_keyboard_back`).
+            if pinned() {
+                let _ = pin_ask_keyboard_back(hwnd);
+            }
+
+            // A window being carried or pulled to a new size stops playing for the length of the
+            // gesture and picks the film up where it left off on release. A video whose picture is
+            // another program's window is re-scaled and re-presented on every one of the pointer's
+            // messages, and doing that to a film that is also decoding is what makes a drag stutter;
+            // every other kind of pinned window does the same work out of a surface it owns and is
+            // not troubled (see `video_drag_hold`).
+            let dragging = pin_is_dragging();
+            if dragging != video_drag_holding() {
+                video_drag_hold_set(dragging);
+                let _ = video_drag_hold_apply(dragging);
             }
 
             // Advance animation frames if needed
@@ -22170,14 +24821,16 @@ pub fn run_preview_window() {
                         if media.take_native_video_frame() {
                             needs_repaint = true;
                         } else if let Some(failing) = video_player::failing_path() {
-                            // An engine that has had the file long enough to have handed a
-                            // frame over many times and has handed over none is an engine
-                            // that cannot draw it: what the probe asked about was a decoder
+                            // A file the engine has had long enough to have handed a
+                            // frame over many times and has handed over none is a file the engine
+                            // cannot draw: what the probe asked about was a decoder
                             // and a converter, which this file has, and what it cannot speak
                             // for is the pipeline the engine plays through. So the file is
-                            // written down as one FFmpeg's player takes, and the replay that
-                            // hands the hover over to it is asked for where a replay can be
-                            // started (see `video_player::mark_unplayable`).
+                            // written down as one no player here will take — and because the
+                            // engine only holds video files at all where nothing of FFmpeg's
+                            // is installed, that is a file with no preview rather than one
+                            // handed to another engine. The replay is asked for where a
+                            // replay can be started (see `video_player::mark_unplayable`).
                             video_player::mark_unplayable(&failing);
                             engine_failed = Some(failing);
                         }
@@ -23435,14 +26088,14 @@ pub fn run_preview_window() {
 
             // And a file the engine was watched failing at: the engine took it — every part of
             // the question the probe asks answered yes — and then never drew a frame of it, so
-            // what plays it is FFmpeg's player and the hover is replayed for the player to take
-            // it (see `video_player::mark_unplayable`). It waits for the tick where the hover of
-            // the file is the one that can be replayed, which is why it is a flag rather than
+            // nothing here will play it and the hover is replayed to be answered without a
+            // preview (see `video_player::mark_unplayable`). It waits for the tick where the hover
+            // of the file is the one that can be replayed, which is why it is a flag rather than
             // something the tick does itself.
             //
             // A pin is not replayed from a hover, so a file that fails under a pin keeps what it
-            // has: the mark is what the *next* pin of that file takes, and it is FFmpeg's player
-            // that plays the file from then on.
+            // has: the mark is what the *next* pin of that file takes, and what plays it from then
+            // on is nothing at all.
             let failed_file_is_shown = engine_failed.as_ref().is_some_and(|failed| {
                 !pinned() && current_show.as_ref().and_then(show_path) == Some(failed)
             });
@@ -24233,7 +26886,10 @@ pub fn run_preview_window() {
                                 ),
                                 dpi,
                                 transport_bar,
-                                transport_live: kind == Some(MediaType::NativeVideo),
+                                // Both kinds of video carry a bar that does something, and for
+                                // opposite reasons: the engine answers every question the bar asks,
+                                // and FFmpeg's player answers the two that are keys.
+                                transport_live: pin_transport_live(kind),
                                 frame: pin_frame(kind),
                                 overlay,
                                 hides_chrome,
@@ -24272,6 +26928,7 @@ pub fn run_preview_window() {
                                 // was below the lock before (see `default_app_name`).
                                 tooltip: PinTooltip::default(),
                                 dragging: None,
+                                parked: false,
                                 transport: PinTransport {
                                     // The length the probe read, and where a player this app
                                     // started has got to: a video FFmpeg plays has been running
@@ -24281,6 +26938,12 @@ pub fn run_preview_window() {
                                     duration,
                                     started: (kind == Some(MediaType::Video))
                                         .then_some((Instant::now(), 0.0)),
+                                    // Which subtitle track this pin opens on, which is the
+                                    // player's own choice for the file until a key says
+                                    // otherwise — written down rather than left unnamed, so that
+                                    // the first seek does not quietly replace it (see
+                                    // `video_subtitles`).
+                                    subtitle: video_subtitles(&path).chosen(),
                                     ..Default::default()
                                 },
                                 // A level carried onto a file of the same kind is that file's
@@ -24476,15 +27139,22 @@ pub fn run_preview_window() {
                         current_show = show_snapshot.clone();
                     }
 
-                    // A video is played by the media engine Windows has wherever it can decode
-                    // the file, and by FFmpeg's player only where it cannot (see
-                    // `media_engine_plays`). The two take different roads from here: the engine's
-                    // frames come back through the ordinary load and are drawn by this app's own
-                    // window — which is what a pin of one is resized, maximized and dragged by —
-                    // while FFmpeg's player is a window of its own, which is what the branch
-                    // below puts up.
-                    let ffplay_plays_video =
-                        show_is_video && !media_engine_plays(&path) && codecs::ffplay_available();
+                    // Where FFmpeg's player is installed a video is played by it, whatever the
+                    // two lists say, and that is this whole question: the engine is not started
+                    // for a video at all on such a machine, so there is nothing for the lists to
+                    // decide here and nothing to ask the engine (see `media_engine_plays`). It is
+                    // the machine's answer and not the file's, which is why it is asked of the
+                    // install rather than of the router — a fork that asked the router first
+                    // would ask it on this thread, and the one file-shaped part of that answer is
+                    // a source reader over the file (see `video_route` and `spawn_video_probe`).
+                    //
+                    // The two take different roads from here: the engine's frames come back
+                    // through the ordinary load and are drawn by this app's own window — which is
+                    // what a pin of one is resized, maximized and dragged by — while FFmpeg's
+                    // player is a window of its own, which is what the branch below puts up. A
+                    // video neither of them will take is answered by that load with no media at
+                    // all, rather than by a third branch here (see `load_video_thumbnail`).
+                    let ffplay_plays_video = show_is_video && codecs::ffplay_available();
 
                     if show_video_probe || show_measure_probe {
                         // The hover is waiting on a probe: nothing of the file can be
@@ -24624,6 +27294,11 @@ pub fn run_preview_window() {
                                     media_height,
                                     0.0,
                                     current_video_volume(),
+                                    // A hover shows the file the way the player chooses to, which
+                                    // is its first subtitle stream and the one any relaunch
+                                    // reaches again by the same route. Only a pinned window is
+                                    // remembering a track of its own (see `next_subtitle`).
+                                    None,
                                 );
                                 let pid =
                                     video_process.as_ref().map(|child| child.id()).unwrap_or(0);
@@ -25268,6 +27943,17 @@ mod tests {
     /// work: the pointer this window took for the drag is let go of. They were two hand-written
     /// halves — a `SetCapture` on the way in and a `release_pin_capture` on the way out — and
     /// nothing said they had to agree about which window.
+    ///
+    /// The player's window is on the list too, because a move is the drag with no relaunch to
+    /// bring one of its own back, and the place it goes back to is the band as it stands rather
+    /// than the box the drag began at (see `unpark_pinned_player`).
+    ///
+    /// The band is moved by the hand while the drag runs, which is what a move *is*, and the
+    /// player's window has not followed it: the park is a hide and nothing else, so the rect the
+    /// window is still standing at is the one the drag started from. A picture put back by a bare
+    /// `ShowWindow` therefore lands at the old box, behind a band that has moved, and the tick's
+    /// re-assertion corrects it a couple of hundred milliseconds later — a sixth of a second of a
+    /// film in the wrong place, at the moment the hand lets go.
     #[test]
     fn a_drag_lets_go_of_the_pointer_it_took() {
         let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -25278,10 +27964,18 @@ mod tests {
         let hwnd = HWND(0x1000 as *mut _);
         a_pin_awaiting_a_press();
         begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+        with_pin(|pin| pin.content = (900, 700, 1300, 1100));
         assert!(
             finish_pin_drag(hwnd, &window),
             "there was a drag to let go of"
         );
+
+        // The band as it stands at the drag's end, read here rather than spelled out: the pin is a
+        // process-wide value other tests write, and a rect written out here would be this test
+        // asserting against whichever pin happened to be standing when it was read. What is being
+        // asserted is that the window is put back *somewhere*, and that the somewhere is the band —
+        // a call that is not there at all, or one carrying the box the drag began at, both fail.
+        let band = pinned_content();
 
         assert_eq!(
             window.calls(),
@@ -25290,10 +27984,12 @@ mod tests {
                 PinWindowCall::WindowBox(Some((300, 200, 700, 600))),
                 PinWindowCall::Capture,
                 PinWindowCall::ReleaseCapture,
+                PinWindowCall::UnparkPlayerWindow(band),
                 PinWindowCall::Repaint,
             ],
-            "the pointer is taken for the drag and given back when the drag is over, and the \
-             window is drawn at where the hand left it — the pointer first, because a window \
+            "the pointer is taken for the drag and given back when the drag is over, the picture \
+             goes back to the band as it now stands rather than to the box the drag began at, and \
+             the window is drawn at where the hand left it — the pointer first, because a window \
              still holding it after the drag has gone eats every mouse message on the desktop"
         );
 
@@ -26913,6 +29609,7 @@ mod tests {
                 frame_height: 1080,
                 crop: None,
                 duration: None,
+                subtitles: SubtitleStreams::default(),
             }),
         );
 
@@ -26976,6 +29673,7 @@ mod tests {
                     frame_height: shape.1,
                     crop: None,
                     duration: None,
+                    subtitles: SubtitleStreams::default(),
                 }),
             );
         }
@@ -28335,14 +31033,15 @@ mod tests {
             "document: {}",
             crate::engines::webview_preview::draws(&path)
         );
-        // Which engine would play a video here, asked the way the app asks it: whether there is
-        // anything of FFmpeg's to fall back to, and — where there is — whether this file is one
-        // the engine is asked about and can decode. Reported for every file rather than only for
-        // a video, because a probe is run to find out what the machine is doing.
+        // Which engine would play a video here, asked the way the app asks it: whether FFmpeg's
+        // player is installed, which settles it on its own where it is, and — where it is not —
+        // whether this file is one the media engine is asked about and can decode. Reported for
+        // every file rather than only for a video, because a probe is run to find out what the
+        // machine is doing. The machine's own half of it is reported by `video_engine_probe`.
         println!(
-            "video: engine is the only player = {} (machine), engine can decode this file = {}",
-            crate::formats::codecs::plays_video_natively(),
-            media_engine_plays(&path)
+            "video: the media engine plays it = {}, and ffplay is installed = {}",
+            media_engine_plays(&path),
+            crate::formats::codecs::ffplay_available()
         );
 
         std::thread::spawn(run_preview_window);
@@ -28970,9 +31669,9 @@ mod tests {
         }
     }
 
-    /// The router's question about a video, against the machine it runs on: whether the media
-    /// engine can decode this file, which of the two engines would play it, and what the geometry
-    /// probe has to say about it.
+    /// The router's question about a video, against the machine it runs on: whether FFmpeg's
+    /// player is installed here, whether the media engine can decode this file, which of the
+    /// three answers the router reaches, and what the geometry probe has to say about it.
     ///
     /// It is the probe beside this one's counterpart for pictures, and it is ignored for the same
     /// reason — it reads real files and starts a real media stack.
@@ -28993,7 +31692,9 @@ mod tests {
         // Both halves, because the name reads as a question about whether this machine can play
         // video and is not one: what it answers is whether the media engine is the *only* player
         // here, which is the absence of FFmpeg's rather than the presence of a decoder. Printed
-        // together so the two cannot be read as contradicting each other.
+        // together so the two cannot be read as contradicting each other, and it is the first of
+        // the two that settles the routing wherever FFmpeg is installed — so where it reads true,
+        // everything below it is read for the record rather than because the answer is in doubt.
         println!(
             "ffmpeg installed = {}, so plays_video_natively = {}",
             crate::formats::codecs::ffplay_available(),
@@ -29040,10 +31741,10 @@ mod tests {
             );
             println!(
                 "so a preview of it is played by {}",
-                if media_engine_plays(&path) {
-                    "the media engine Windows has"
-                } else {
-                    "FFmpeg's player"
+                match video_route(&path) {
+                    VideoRoute::MediaEngine => "the media engine Windows has",
+                    VideoRoute::Ffplay => "FFmpeg's player",
+                    VideoRoute::NoPreview => "nothing at all, so there is no preview",
                 }
             );
 
@@ -29139,14 +31840,14 @@ mod tests {
                     }
 
                     println!(
-                        "so what plays it reads as {} (plays = {}, engine = {})",
-                        if media_engine_plays(&path) {
-                            "the media engine Windows has"
-                        } else {
-                            "FFmpeg's player"
+                        "so what plays it reads as {} (plays = {}, route = {:?})",
+                        match video_route(&path) {
+                            VideoRoute::MediaEngine => "the media engine Windows has",
+                            VideoRoute::Ffplay => "FFmpeg's player",
+                            VideoRoute::NoPreview => "nothing at all, so there is no preview",
                         },
                         video_player::plays(&path),
-                        media_engine_plays(&path),
+                        video_route(&path),
                     );
                 }
 
@@ -29195,20 +31896,77 @@ mod tests {
                 frame_height: 360,
                 crop: None,
                 duration: None,
+                subtitles: SubtitleStreams::default(),
             }),
         );
         assert_eq!(video_box(&path), Some((640, 360)));
 
-        // A file the probe could not measure is not a file to probe again: it is the box
-        // the player that would try the file anyway is given, and no preview at all where
-        // the engine that plays it cannot open it either.
+        // A file the probe could not measure is not a file to probe again: where a player is
+        // going to be handed it anyway it is the box that player is given, and where no player
+        // will take it at all the hover is dropped rather than laid out.
         video_geometry_cache().insert(key, ProbedGeometry::Unmeasurable);
         assert_eq!(
             video_box(&path),
-            (!media_engine_plays(&path)).then_some((1920, 1080))
+            match video_route(&path) {
+                VideoRoute::Ffplay => Some((1920, 1080)),
+                VideoRoute::MediaEngine | VideoRoute::NoPreview => None,
+            },
+            "an unmeasurable video is placed at the 16:9 box where FFmpeg's player is what will play it, and dropped where no player will"
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Which engine plays a video is four answers rather than a chain, and the whole of it is
+    /// decided by two things that are not the file: whether FFmpeg's player is installed on this
+    /// machine, and whether the file's name is one the media engine's own list carries.
+    ///
+    /// The order is the whole of the rule and it is worth stating as a table rather than as a
+    /// chain because every arm of it says something different about who decides. Where FFmpeg is
+    /// installed its player takes every video there is, both lists or neither, because it is the
+    /// one that decodes what Windows cannot at no cost of a process per frame — and where it is
+    /// not installed the two lists are the only thing left to decide with, so they are the only
+    /// case where they are read at all.
+    #[test]
+    fn a_video_is_played_by_whichever_of_the_two_engines_the_lists_and_the_machine_leave_to_it() {
+        assert_eq!(
+            route_video(true, || true),
+            VideoRoute::Ffplay,
+            "with FFmpeg installed a name the media engine's list carries is played by FFmpeg's player anyway"
+        );
+        assert_eq!(
+            route_video(true, || false),
+            VideoRoute::Ffplay,
+            "with FFmpeg installed a name only the `[ffmpeg]` list carries is played by FFmpeg's player as well"
+        );
+        assert_eq!(
+            route_video(false, || true),
+            VideoRoute::MediaEngine,
+            "with no FFmpeg on the machine a name of the media engine's list is the one the engine is asked about"
+        );
+        assert_eq!(
+            route_video(false, || false),
+            VideoRoute::NoPreview,
+            "with no FFmpeg on the machine a name neither list reaches has no player at all"
+        );
+    }
+
+    /// The list is not read where FFmpeg's player is installed, and what reading it would cost is
+    /// not only a lock: the two extensions the video list shares with the text lists are settled
+    /// by whether the file holds MPEG-TS packets, which is an open and a read of it. So a hover on
+    /// a machine with FFmpeg answers its routing from the install alone, and the decoder chain
+    /// the engine would be asked to build is never built for a file FFmpeg's player will take.
+    #[test]
+    fn the_video_lists_are_not_read_where_ffmpeg_is_installed() {
+        let route = route_video(true, || {
+            panic!("the video lists were read on a machine where FFmpeg plays the file anyway")
+        });
+
+        assert_eq!(
+            route,
+            VideoRoute::Ffplay,
+            "FFmpeg's player takes the file without a list or the media engine being consulted"
+        );
     }
 
     /// The wait for a video's player ends one of two ways and never by itself: a player
@@ -33574,6 +36332,7 @@ mod tests {
             pressed: None,
             tooltip: PinTooltip::default(),
             dragging: None,
+            parked: false,
             transport: PinTransport::default(),
             volume: PinVolume::default(),
             audio_hovered: None,
@@ -33891,21 +36650,41 @@ mod tests {
     #[test]
     fn what_a_kind_is_framed_by_follows_what_is_inside_it() {
         // What is drawn is the file's own shape, so the box can only be a box of that shape:
-        // a picture, a page an engine rendered, and a video the media engine decodes.
+        // a picture, a page an engine rendered, and a video — whichever of the two players is
+        // the one drawing it. A video FFmpeg plays is framed like any other picture because its
+        // pixels are still the file's own shape, and a window of somebody else's can be asked
+        // for a different size and even begun again at one (see `relayout_pinned_media`).
         assert_eq!(pin_frame(Some(MediaType::StaticImage)), PinFrame::Shaped);
         assert_eq!(pin_frame(Some(MediaType::AnimatedGif)), PinFrame::Shaped);
         assert_eq!(pin_frame(Some(MediaType::NativeVideo)), PinFrame::Shaped);
+        assert_eq!(pin_frame(Some(MediaType::Video)), PinFrame::Shaped);
         assert_eq!(pin_frame(Some(MediaType::Pdf)), PinFrame::Shaped);
 
         // A page of text is poured into whatever box it is given, at any shape.
         assert_eq!(pin_frame(Some(MediaType::Text)), PinFrame::Free);
         assert_eq!(pin_frame(Some(MediaType::Archive)), PinFrame::Free);
 
-        // And two kinds are framed by nothing: a sound's card is its own size, and a video
-        // FFmpeg's player has is a window of somebody else's — the one box this app does not
-        // own, so there is no shape of its own to keep and no resize it could be given.
+        // And one kind is framed by nothing: a sound's card is its own size, and a window around
+        // it would only be a window with room in it.
         assert_eq!(pin_frame(Some(MediaType::Audio)), PinFrame::None);
-        assert_eq!(pin_frame(Some(MediaType::Video)), PinFrame::None);
+    }
+
+    #[test]
+    fn a_video_played_by_ffmpeg_carries_a_transport_bar_that_does_something() {
+        // Both kinds of video now carry a live bar, for opposite reasons — the engine answers
+        // every question it is asked, and FFmpeg's player answers the two that are keys posted to
+        // its window — so the button, the track and the bar underneath are all the pointer's.
+        assert_eq!(
+            pin_transport_kind(Some(MediaType::Video)),
+            pin_transport_live(Some(MediaType::Video)),
+            "a bar that cannot be told anything must not draw a button it cannot honour"
+        );
+        assert!(pin_transport_live(Some(MediaType::NativeVideo)));
+        assert!(
+            !pin_transport_live(Some(MediaType::Audio)),
+            "a sound's controls are the card's, not a bar's"
+        );
+        assert!(!pin_transport_live(None));
     }
 
     #[test]
@@ -35034,6 +37813,7 @@ mod tests {
                 pressed: None,
                 tooltip: PinTooltip::default(),
                 dragging: None,
+                parked: false,
                 transport: PinTransport {
                     duration: Some(120.0),
                     paused_at,
@@ -35064,5 +37844,1852 @@ mod tests {
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
+    }
+
+    /// A transport bar begun at a second, and the claim it makes about a player.
+    fn transport_beginning_at(from: f64) -> PinTransport {
+        let mut transport = PinTransport::default();
+        transport.begun(from, true, false);
+        transport
+    }
+
+    #[test]
+    fn a_player_begun_where_the_film_was_watched_from_is_the_one_the_bar_is_drawn_against() {
+        let transport = transport_beginning_at(90.0);
+
+        assert!(
+            transport_playing(&transport, true),
+            "a player that has been begun is playing until something says otherwise"
+        );
+        assert_eq!(
+            transport.started.map(|(_, from)| from),
+            Some(90.0),
+            "and the bar's clock starts from the second it was told to begin at rather than from \
+             the beginning, so a seek does not silently rewind what is on screen"
+        );
+
+        // A relaunch that did not come up is still the bar's reference: nothing is playing, but
+        // the second is remembered so that the wait does not throw the position away.
+        let mut failed = PinTransport::default();
+        failed.begun(90.0, false, false);
+        assert!(
+            !transport_playing(&failed, true),
+            "a player that never came up is not one the bar may claim is playing"
+        );
+        assert!(
+            failed.started.is_none(),
+            "and nothing is left claiming a clock for a player that is not there"
+        );
+    }
+
+    #[test]
+    fn a_hold_keeps_the_player_and_its_clock_so_a_resume_is_a_key_rather_than_a_start() {
+        let mut transport = transport_beginning_at(0.0);
+
+        transport.held(12.5);
+        assert_eq!(
+            transport.paused_at,
+            Some(12.5),
+            "a held file is drawn at the second it was stopped at"
+        );
+        assert!(
+            !transport_playing(&transport, true),
+            "and the bar stops claiming that it is playing"
+        );
+        assert!(
+            transport.started.is_some(),
+            "the player behind it is still the one that is running: a hold is a key, not a kill, \
+             and the clock under it is what a resume continues from"
+        );
+
+        transport.released(12.5);
+        assert_eq!(
+            transport.paused_at, None,
+            "letting go of the file clears the hold"
+        );
+        assert!(
+            transport_playing(&transport, true),
+            "and the same player is playing on from the second it was held at"
+        );
+        assert_eq!(
+            transport.started.map(|(_, from)| from),
+            Some(12.5),
+            "with the clock re-based onto that second rather than left where it was: the position \
+             of a file this app's player is playing is this app's own clock over a moment it began \
+             the player, and a clock left running through a hold would make the playhead jump \
+             forward by the length of the pause the instant the file was let go"
+        );
+    }
+
+    #[test]
+    fn a_player_that_died_while_the_bar_believed_it_was_playing_leaves_no_stuck_glyph() {
+        let mut transport = transport_beginning_at(0.0);
+
+        transport.player_gone(41.0);
+        assert!(
+            !transport_playing(&transport, true),
+            "nothing is playing a file whose player has gone, whatever this side wrote down"
+        );
+        assert_eq!(
+            transport.paused_at,
+            Some(41.0),
+            "but the second it had reached is kept, so the bar still shows where the film stopped \
+             and a press starts it from there rather than from the beginning"
+        );
+        assert_eq!(
+            transport.started, None,
+            "and the clock of a player that is not there is given up rather than left running"
+        );
+    }
+
+    #[test]
+    fn a_file_that_dies_while_it_is_held_stays_a_hold_rather_than_becoming_a_play() {
+        let mut transport = transport_beginning_at(0.0);
+        transport.held(7.0);
+
+        transport.player_gone(7.0);
+        assert!(
+            !transport_playing(&transport, true),
+            "a hold and a dead player both draw a play button: neither is a file that is playing"
+        );
+        assert_eq!(
+            transport.paused_at,
+            Some(7.0),
+            "and the second it was held at is the one a press would begin it from, because that is \
+             where the film stopped rather than where it was taken"
+        );
+    }
+
+    #[test]
+    fn a_seek_taken_while_a_file_is_held_moves_the_hold_with_it() {
+        // Held: the bar is drawn from a second this side wrote down, so it has to move.
+        let mut held = transport_beginning_at(0.0);
+        held.held(30.0);
+        held.sought(90.0);
+        assert_eq!(
+            held.paused_at,
+            Some(90.0),
+            "a held file is drawn at the second it was taken to, and a drag that is over is a \
+             drag that is over"
+        );
+
+        // Playing: the position is the player's own clock, which the seek has already moved by
+        // beginning a player at the new second — writing a second down here would freeze the bar
+        // at where the hand let go.
+        let mut playing = transport_beginning_at(0.0);
+        playing.sought(90.0);
+        assert_eq!(
+            playing.paused_at, None,
+            "a seek taken while the file is playing writes no position of its own; the player that \
+             was begun at the new second is what the bar is measured against"
+        );
+    }
+
+    /// The same seek on a video FFmpeg plays, which is not `sought` at all: there is no player
+    /// to move, so a seek is a player ended and begun again at the second the bar was let go at,
+    /// and a hold is something the relaunch has to be *told* about rather than something the
+    /// seek carries out for itself.
+    #[test]
+    fn a_seek_through_ffplays_player_comes_back_held_because_the_relaunch_owed_a_hold() {
+        // A held file, seeked to ninety seconds: the bar's own answer to that is the second it
+        // was taken to, and the file is still meant to be held there.
+        let mut transport = transport_beginning_at(0.0);
+        transport.held(30.0);
+        transport.begun(90.0, true, true);
+
+        assert_eq!(
+            transport.paused_at,
+            Some(90.0),
+            "a relaunch of a held file is begun at the second it was taken to and held there, or a \
+             seek made while the file was paused would start it playing — which is what it did \
+             before a hold was carried across the relaunch at all"
+        );
+        assert!(
+            transport.pending_hold,
+            "and the hold is left owing, because a player that has only just been begun has no \
+             window for the key that holds it to be posted to"
+        );
+        assert!(
+            !transport_playing(&transport, true),
+            "so the bar draws a play button from the moment of the seek rather than a pause glyph \
+             over a film that is playing for the tick it takes to be told otherwise"
+        );
+
+        // And the loop's delivery: the second is written from the player's own clock, not from
+        // the one the relaunch began at, so the film is not left drawn a tick behind where the
+        // player actually stopped.
+        let stopped = transport_clock(&transport).expect("a begun player has a clock");
+        transport.held(stopped);
+        assert!(
+            !transport.pending_hold,
+            "a player that has been told to hold owes nothing any more"
+        );
+        assert_eq!(
+            transport.paused_at,
+            Some(stopped),
+            "and it is held at the second it reached, which is at or a tick past the second the \
+             relaunch began at and never behind it"
+        );
+        assert!(
+            transport.started.is_some(),
+            "with the player still the one behind the bar, so the resume is a key rather than a \
+             second start"
+        );
+
+        // A press of play takes the owed hold back rather than racing it: the file goes on from
+        // where it was, and a pause that had not been delivered must not arrive afterwards.
+        let mut resumed = transport;
+        resumed.released(transport.paused_at.unwrap_or(0.0));
+        assert!(
+            !resumed.pending_hold && resumed.paused_at.is_none(),
+            "letting go of a file whose hold was still owed cancels the hold, because the hand has \
+             asked for the film to play and a pause arriving afterwards would be a press answered \
+             by the opposite of what was asked"
+        );
+        assert!(
+            transport_playing(&resumed, true),
+            "and the file is playing from the second it was held at, off a clock rebased onto it"
+        );
+
+        // A player that died takes the owed hold with the claim it belonged to, so the flag can
+        // never outlive the player it was waiting for.
+        let mut gone = transport;
+        gone.player_gone(95.0);
+        assert!(
+            !gone.pending_hold,
+            "there is no player left to owe a hold to, so nothing is left owing"
+        );
+    }
+
+    #[test]
+    fn a_bar_never_claims_a_file_is_playing_once_the_player_behind_it_is_gone() {
+        let transport = transport_beginning_at(0.0);
+
+        assert!(
+            transport_playing(&transport, true),
+            "a player that is there and was begun at a second is a file that is playing"
+        );
+        assert!(
+            !transport_playing(&transport, false),
+            "liveness wins over every claim this app made about what the player was doing: a \
+             player that has gone cannot be playing a file, however recently it was begun"
+        );
+        assert!(
+            !transport_playing(&PinTransport::default(), true),
+            "and a bar that never claimed a player cannot claim one is playing"
+        );
+
+        // A file this app paused by ending its player is the same case from the other side: the
+        // hold is written, so the bar says held rather than playing, and liveness is not even
+        // asked — which is what keeps a key that could not be reached from leaving the wrong glyph.
+        let mut ended = transport_beginning_at(0.0);
+        ended.player_gone(3.0);
+        assert!(!transport_playing(&ended, true));
+    }
+
+    #[test]
+    fn a_relaunch_keeps_the_subtitle_track_it_was_asked_for() {
+        let mut transport = PinTransport {
+            subtitle: Some(1),
+            ..PinTransport::default()
+        };
+
+        // Everything a relaunch does to a bar that is not about the track itself: it begins a
+        // player, gives up a drag in progress, and — where the file was held — writes the hold
+        // down again as owed by the player it began. The track is not among them, because the
+        // track is the one thing about the file the user chose and a seek is not a reason to
+        // take it away.
+        transport.begun(90.0, true, false);
+        assert_eq!(
+            transport.subtitle,
+            Some(1),
+            "a player begun again at a new second is told which track to show, so the choice \
+             survives the seek that caused it"
+        );
+
+        // And it survives a resize and a hold and a player that died, for the same reason.
+        transport.held(90.0);
+        assert_eq!(transport.subtitle, Some(1), "a hold keeps the track");
+        transport.player_gone(95.0);
+        assert_eq!(
+            transport.subtitle,
+            Some(1),
+            "and a player that died keeps it too, so the film resumes on the track it was on"
+        );
+    }
+
+    #[test]
+    fn a_replaced_player_is_ended_once_there_is_a_window_to_replace_it_with() {
+        let waited = Duration::from_millis(200);
+
+        assert!(
+            retire_ready(true, true, waited),
+            "a replacement with a window of its own is a replacement that has arrived, and the \
+             player under it has served its purpose"
+        );
+        assert!(
+            retire_ready(false, false, waited),
+            "a replacement that is gone never will be, so waiting longer leaves the old player \
+             playing over a file nothing is going to show"
+        );
+        assert!(
+            retire_ready(false, true, Duration::from_secs(VIDEO_START_WAIT_SECS)),
+            "a replacement that has been starting for longer than a start ever takes is one this \
+             app has already given up on once today, and the wait is bounded by the same number"
+        );
+        assert!(
+            !retire_ready(false, true, waited),
+            "and a replacement still on its way is not an arrival: ending the only picture there \
+             is now is the flash of the desktop that a relaunch has to avoid"
+        );
+    }
+
+    /// A retired player is the one process this app holds that no other check reaches: the handle
+    /// went when it was parked and `VIDEO_PID` names the replacement, so the call that ends it is
+    /// the call that has to stop holding it — once its death is confirmed, and not on the request.
+    #[test]
+    fn a_retired_players_id_is_given_up_only_once_the_end_is_confirmed() {
+        assert_eq!(
+            retire_end(true),
+            RetireEnd::Asked,
+            "an end that has not taken is not an end, and a player this app has stopped holding is \
+             asked for by nothing else: it stays parked, and its id stays held, until it is gone"
+        );
+        assert_eq!(
+            retire_end(false),
+            RetireEnd::Gone,
+            "and a player confirmed gone is the end of the wait, so the record of it goes with it \
+             rather than being left in the state file for the next run to pass over"
+        );
+
+        // The half of it that is reachable without a player to end: a retirement settled against a
+        // process that is not there is the whole of the leak, once per relaunch.
+        assert_eq!(
+            end_retired_player(u32::MAX),
+            RetireEnd::Gone,
+            "a retired player that has already gone is confirmed gone the moment it is asked to \
+             end, which is the path every settled retirement takes"
+        );
+    }
+
+    /// The knob let go of on a pinned FFmpeg video: whether the level costs a player, and whether a
+    /// file that was held is held again afterwards.
+    #[test]
+    fn a_level_is_owed_to_a_player_replaced_and_travels_with_the_hold_it_was_turned_during() {
+        assert_eq!(
+            pin_level_settled_by(true, false, false),
+            PinLevelSettling::Relaunch { holding: false },
+            "a player that is playing takes a level only by being begun at one, so it is replaced, \
+             and a file that was not held is begun playing"
+        );
+        assert_eq!(
+            pin_level_settled_by(false, true, true),
+            PinLevelSettling::Relaunch { holding: true },
+            "a held file still owes the level, and it is owed to the player that replaces it — begun \
+             holding, or a film the bar says is held would be heard playing on"
+        );
+        assert_eq!(
+            pin_level_settled_by(false, false, true),
+            PinLevelSettling::Recorded,
+            "but a pin with neither a claim nor a player behind it is owed nothing: the level is \
+             written down and the player that begins when the file is let go of takes it then"
+        );
+    }
+
+    /// Two relaunches inside one wait — two presses of the track key, or a resize settling twice
+    /// — which is the only way a parked player can be displaced, and the only way one can be left
+    /// alive with nothing left to look at it.
+    #[test]
+    fn a_relaunch_inside_a_wait_never_leaves_a_player_nothing_is_waiting_on() {
+        let first = Instant::now();
+        let second = first + Duration::from_millis(40);
+
+        // The ordinary relaunch: one wait, and no player ended by the relaunch itself.
+        let (parked, ended) = retirement_after_relaunch(None, 100, 200, true, first);
+        assert_eq!(
+            (parked.map(|wait| (wait.retiring, wait.replacement)), ended),
+            (Some((100, 200)), None),
+            "a player that has put a window up is parked for its replacement and ended by the loop, \
+             which is the whole of what parking it is for"
+        );
+
+        // A second relaunch while the first replacement is still on its way: the middle player
+        // has no window of its own, so it is the one that goes and the oldest stays on screen.
+        let waiting = VideoRetirement {
+            retiring: 100,
+            replacement: 200,
+            started: first,
+        };
+        let (parked, ended) = retirement_after_relaunch(Some(waiting), 200, 300, false, second);
+        assert_eq!(
+            ended,
+            Some(200),
+            "the player in between has put no window up to lose, so it is ended at once rather than \
+             left playing for as long as the app runs with nothing waiting on it"
+        );
+        assert_eq!(
+            parked.map(|wait| (wait.retiring, wait.replacement)),
+            Some((100, 300)),
+            "and what stays parked is the oldest player — still the only picture on screen — with \
+             the newest player waited for, so the band is never empty for a whole start"
+        );
+        assert_eq!(
+            parked.map(|wait| wait.started),
+            Some(first),
+            "with the wait still bounded by the first of the starts rather than re-based on this \
+             one, so a chain of relaunches cannot leave a player on screen for ever"
+        );
+
+        // And the other half of the same question: a second relaunch whose player *has* arrived
+        // covers the one parked under it, so that one is what goes.
+        let (parked, ended) = retirement_after_relaunch(Some(waiting), 200, 300, true, second);
+        assert_eq!(
+            ended,
+            Some(100),
+            "a player that has arrived covers the one under it, which has nothing left to be kept \
+             on screen for"
+        );
+        assert_eq!(
+            parked.map(|wait| (wait.retiring, wait.replacement)),
+            Some((200, 300)),
+            "and the wait is now for the player that is on screen, against the one replacing it"
+        );
+
+        // The same player parked again — which is the wait this record was built for — leaves both
+        // ends where they are and ends nobody.
+        let (parked, ended) = retirement_after_relaunch(Some(waiting), 100, 300, true, second);
+        assert_eq!(
+            (parked.map(|wait| (wait.retiring, wait.replacement)), ended),
+            (Some((100, 300)), None),
+            "the player that is already parked stays the one waited over, because it is the one on \
+             screen, and the newer player is what has arrived to replace it"
+        );
+    }
+
+    #[test]
+    fn a_next_track_press_walks_the_files_own_tracks_and_stops_where_there_are_none() {
+        assert_eq!(
+            next_subtitle(Some(0), 3),
+            Some(1),
+            "the second of three tracks is the one after the first"
+        );
+        assert_eq!(
+            next_subtitle(Some(2), 3),
+            Some(0),
+            "and the press wraps at the last of them rather than running off the end"
+        );
+        assert_eq!(
+            next_subtitle(Some(0), 1),
+            Some(0),
+            "a file with one track has a key that does nothing, which is the same answer a key \
+             against a sound's card gives"
+        );
+        assert_eq!(
+            next_subtitle(None, 3),
+            Some(0),
+            "a file nothing has chosen a track of yet steps onto its first"
+        );
+        assert_eq!(
+            next_subtitle(Some(0), 0),
+            None,
+            "and a file with no subtitle streams is refused rather than sent a track that is not \
+             there, because a refused stream specifier is a player that exits"
+        );
+    }
+
+    #[test]
+    fn a_files_first_subtitle_track_is_the_one_the_player_would_pick_for_itself() {
+        // The three answers below are ffprobe 9.0.2's verbatim, captured from real files rather
+        // than written out by hand: a MatVuka with two subtitle tracks whose *second* is the
+        // container's default, an MP4 of the same pair whose first is, and a Matroska with the
+        // default cleared off both. The shape matters as much as the values — one `index=`, one
+        // `codec_type=` and one `DISPOSITION:default=` line per stream, in that order, with the
+        // disposition belonging to the stream above it — because the parser reads the disposition
+        // as the stream it follows and would silently number the tracks against the wrong one if
+        // the player ever answered in another order.
+        let second_default = "index=0\n\
+                             codec_type=video\n\
+                             DISPOSITION:default=0\n\
+                             index=1\n\
+                             codec_type=audio\n\
+                             DISPOSITION:default=0\n\
+                             index=2\n\
+                             codec_type=subtitle\n\
+                             DISPOSITION:default=0\n\
+                             index=3\n\
+                             codec_type=subtitle\n\
+                             DISPOSITION:default=1\n";
+        let first_default = "index=0\n\
+                            codec_type=video\n\
+                            DISPOSITION:default=1\n\
+                            index=1\n\
+                            codec_type=audio\n\
+                            DISPOSITION:default=1\n\
+                            index=2\n\
+                            codec_type=subtitle\n\
+                            DISPOSITION:default=1\n\
+                            index=3\n\
+                            codec_type=subtitle\n\
+                            DISPOSITION:default=0\n";
+        let none_default = "index=0\n\
+                           codec_type=video\n\
+                           DISPOSITION:default=0\n\
+                           index=1\n\
+                           codec_type=audio\n\
+                           DISPOSITION:default=0\n\
+                           index=2\n\
+                           codec_type=subtitle\n\
+                           DISPOSITION:default=0\n\
+                           index=3\n\
+                           codec_type=subtitle\n\
+                           DISPOSITION:default=0\n";
+
+        // The two subtitle streams sit at absolute indices 2 and 3, so what is being read here is
+        // FFmpeg's rule reproduced: the container's default if it marks one, the first of them if
+        // it does not — and never the file's own stream numbering, which `-sst s:` does not use.
+        let streams = parse_subtitle_streams(second_default);
+        assert_eq!(
+            streams.count, 2,
+            "the two subtitle streams are counted among themselves"
+        );
+        assert_eq!(
+            streams.first, 1,
+            "and where the container's default is the *second* of them, that is the track the \
+             player picks for itself — taking the first because it is first would show a different \
+             language than the one the file asks for"
+        );
+        assert_eq!(
+            streams.chosen(),
+            Some(1),
+            "so a relaunch before anything has been chosen names exactly what the player would \
+             have picked anyway"
+        );
+
+        assert_eq!(
+            parse_subtitle_streams(first_default),
+            SubtitleStreams { count: 2, first: 0 },
+            "the same two tracks in a file whose default is the first of them resolve to the \
+             first, and the video and audio defaults above them are not mistaken for tracks: \
+             `default = default.or(..)` only ever takes the *first* default marked, and only \
+             while the stream it belongs to is a subtitle one"
+        );
+
+        assert_eq!(
+            parse_subtitle_streams(none_default),
+            SubtitleStreams { count: 2, first: 0 },
+            "and a file that marks no stream as the default still has a first subtitle track, so \
+             an unmarked file resolves to a track rather than to nothing"
+        );
+
+        // What the capture above cannot produce, and what a probe can still answer: nothing.
+        assert_eq!(
+            parse_subtitle_streams(""),
+            SubtitleStreams::default(),
+            "and a probe that answered nothing is a file with no known tracks, which is answered \
+             as a file with none rather than guessed at"
+        );
+    }
+
+    #[test]
+    fn a_key_posted_to_ffplays_player_carries_the_scan_code_its_symbol_is_read_from() {
+        let lparam = ffplay_key_lparam(FFPLAY_PAUSE_KEY.1).0;
+
+        assert_eq!(
+            lparam >> 16,
+            FFPLAY_PAUSE_KEY.1 as isize,
+            "the scan code is what the posted message has to carry: the player is an SDL program \
+             and SDL reads a Win32 key message's scan code to work out which key it names, so a \
+             message posted without one names no key at all and pauses nothing"
+        );
+        assert_eq!(lparam & 1, 1, "and the repeat count of one press is one");
+        assert_eq!(
+            lparam & (1 << 30),
+            0,
+            "Windows' own auto-repeat bit is deliberately left clear, because a repeated pause \
+             would toggle back to playing and a hand resting on the button would flicker instead \
+             of holding"
+        );
+    }
+
+    /// A loop is given by beginning the file again from the beginning, and by carrying enough about
+    /// the film to do it — which is what a key could never have done.
+    ///
+    /// This is the regression test for a loop that was right on a short clip and wrong on every other.
+    /// The rewind used to be a posted `Down`, on the belief that the player's own binding for *seek
+    /// to beginning* was `Down`. Read out of `ffplay.c` for the exact build on this machine (tag
+    /// `n9.0.2`, `event_loop`), `Down` is `incr = -60.0` — sixty seconds back — and every other key
+    /// bound to a seek is a fixed increment too: `Left`/`Right` ten, `Up` sixty, `PageUp`/`PageDown`
+    /// six hundred or a chapter. There is no key that names a second, so there is no key that goes
+    /// to the beginning. On a clip shorter than a step the seek clamps to the start and looks exactly
+    /// like the go-to-start it was believed to be; on a film of ten minutes it is a seek to nine
+    /// minutes, then to eight, while this app's own clock — zeroed by the tick — says it is at the
+    /// beginning throughout.
+    ///
+    /// So the second is asserted for a film of every length, and so is the fact that the record
+    /// carries the file and the box, because a relaunch cannot be made out of a pid and a clock: the
+    /// first version of this took a `path` and threw it away.
+    #[test]
+    fn a_loop_is_begun_again_from_the_beginning_and_carries_what_the_relaunch_needs() {
+        // Begun inside the margin the tick acts in, at every length: the record's clock is what says
+        // how near the end the film is, and it is the same arithmetic whatever the file's length is.
+        let passed = Duration::from_millis(95);
+
+        for duration in [8.0, 61.0, 600.0, 7_200.0] {
+            let looped = VideoLoop {
+                pid: 1,
+                path: PathBuf::from("film.mkv"),
+                content: (10, 20, 410, 320),
+                from: duration - 0.15,
+                duration: Some(duration),
+                at: Instant::now() - passed,
+            };
+
+            let VideoLoopAction::Rewind {
+                path,
+                content,
+                seconds,
+            } = video_loop_action(&looped, true)
+            else {
+                panic!(
+                    "a film of {duration}s within a tenth of a second of its end has to be begun \
+                     again, or it reaches the end of the file and exits"
+                );
+            };
+
+            assert_eq!(
+                seconds, 0.0,
+                "a loop begun again at {seconds} of a {duration}s film is not a loop: this player \
+                 has no key that goes to the beginning, every seek key it binds is a fixed increment, \
+                 and `Down` in particular is sixty seconds back — which is the whole film on a \
+                 sixty-second clip and nine minutes of walking backwards on a ten-minute one"
+            );
+            assert_eq!(
+                path, PathBuf::from("film.mkv"),
+                "the rewind is a relaunch, so the file has to survive in the record: taking a path \
+                 and dropping it is a loop that can be timed but never taken"
+            );
+            assert_eq!(
+                content,
+                (10, 20, 410, 320),
+                "and the box the player's window fills, because the window is another program's and \
+                 the replacement has to be told where to be put rather than laid out by this app"
+            );
+        }
+    }
+
+    /// A held film is neither begun again nor left with a clock that has run on underneath the hand.
+    ///
+    /// A drag holds the player with a pause key (see `video_drag_hold_apply`), so a film a second
+    /// from its end would otherwise be begun again *underneath the hand holding it* — and the second
+    /// it was held at would keep counting up in the clock underneath the record, so that a film held
+    /// for a minute near its end was past its end the moment it was let go of and was rewound on the
+    /// next tick. That is the same arithmetic a release does to the transport's own clock, and for
+    /// the same reason.
+    #[test]
+    fn a_held_film_is_neither_begun_again_nor_left_with_a_clock_that_ran_on() {
+        let looped = VideoLoop {
+            pid: 1,
+            path: PathBuf::from("film.mkv"),
+            content: (10, 20, 410, 320),
+            from: 7.95,
+            duration: Some(8.0),
+            at: Instant::now() - Duration::from_millis(95),
+        };
+
+        assert!(
+            matches!(
+                video_loop_action(&looped, false),
+                VideoLoopAction::Held
+            ),
+            "a film a twentieth of a second from its end, held, must not be begun again underneath \
+             the hand holding it: the hold is the user's, and a loop that ignores it is a loop that \
+             undoes it"
+        );
+
+        assert!(
+            matches!(
+                video_loop_action(&looped, true),
+                VideoLoopAction::Rewind { .. }
+            ),
+            "and the very same film playing *is* due, so the refusal above is about the hold and not \
+             about a decision that always says no"
+        );
+    }
+
+    /// A film a gesture has stopped is held in the transport, so nothing else can read it as playing.
+    ///
+    /// This is the second half of the drag-hold fault. The pause key was posted and nothing was
+    /// written down, so `pin_is_playing` still said the film was playing, the loop still counted its
+    /// clock up, and the bar was drawn at a playhead racing away from a frozen picture. So the hold
+    /// goes in through the same `held` and `released` a press of the pause button uses, which is
+    /// what writes `paused_at` and rebases the clock — and both of those are visible in the two
+    /// fields the bar and the loop read.
+    #[test]
+    fn a_hold_a_gesture_puts_a_film_into_is_one_the_bar_can_see() {
+        let mut playing = PinTransport::default();
+        playing.begun(12.0, true, false);
+
+        assert_eq!(
+            playing.paused_at, None,
+            "a film this app began is not held, which is the precondition for the two claims below \
+             to mean anything"
+        );
+        assert!(
+            transport_clock(&playing).is_some(),
+            "and it is at some second — the one this transport's own clock measures, which is what \
+             `video_drag_hold_apply` writes down"
+        );
+
+        // What `video_drag_hold_apply` writes when a gesture begins over a playing film.
+        let mut held = playing;
+        held.held(14.5);
+
+        assert_eq!(
+            held.paused_at,
+            Some(14.5),
+            "a gesture that stops a film has to write down that it stopped it, or `pin_is_playing` \
+             says the film is playing, the loop counts its clock up, and the bar races away from a \
+             frozen picture"
+        );
+        assert!(
+            !transport_playing(&held, true),
+            "and a transport bar must then be drawn with a play glyph rather than a pause one: the \
+             player behind it is alive but holding still, which is the whole of what `paused_at` \
+             stopped meaning"
+        );
+
+        // And what it writes when the gesture ends.
+        let mut released = held;
+        released.released(
+            held.paused_at
+                .expect("a held film has the second it was held at"),
+        );
+
+        assert_eq!(
+            released.paused_at, None,
+            "letting go of a window is not a hold: the film is playing on from the second it was \
+             stopped at"
+        );
+        assert!(
+            transport_playing(&released, true),
+            "so the bar is a pause glyph again, and the loop is free to count the clock up"
+        );
+        assert!(
+            released.started.is_some_and(|(_, from)| from == 14.5),
+            "rebased onto the second the film was held at rather than left at twelve, or the playhead \
+             jumps forward by the whole length of the gesture the moment the hand lets go"
+        );
+    }
+
+    /// A gesture over a film that is already held changes nothing, and ending it starts nothing.
+    ///
+    /// The key this posts is a *toggle*, so posting it onto a held film resumes it — which is how a
+    /// drag over a paused film used to start it: the user moving the window they were watching it in.
+    /// So both ends of the gesture are refused, and they are refused for two different reasons that
+    /// are both asserted here because either one on its own would leave the fault half-fixed.
+    ///
+    /// The film is `playing` in every case below and the only thing that changes is whether the hold
+    /// is ours, which is the fault's actual shape: the drag was told `true`, and the film was not
+    /// playing.
+    #[test]
+    fn a_gesture_over_a_film_that_is_already_held_leaves_it_held() {
+        let mut held = PinTransport::default();
+        held.begun(30.0, true, false);
+        held.held(44.0);
+
+        assert!(
+            !pin_is_playing_about(&held),
+            "the premise: a film the pause button is holding is not playing, so there is nothing for \
+             a gesture to hold and nothing for ending it to release"
+        );
+
+        for (dragging, ours, expected, what) in [
+            (
+                true,
+                false,
+                VideoDragHold::Leave,
+                "a gesture begun over a film somebody else is holding has to be refused: the key is a \
+                 toggle, so posting it here *resumes* a film the user paused",
+            ),
+            (
+                false,
+                false,
+                VideoDragHold::Leave,
+                "and ending that gesture has to be refused as well, or the film is started on the \
+                 way out by the hand that let go of the window",
+            ),
+            (
+                true,
+                true,
+                VideoDragHold::Leave,
+                "a gesture over a film this app is already holding has stopped nothing and so has \
+                 nothing to add — posting the toggle here would let go of the very hold the \
+                 transport is recording",
+            ),
+            (
+                false,
+                true,
+                VideoDragHold::Release,
+                "and only a hold this app put there is taken back when the gesture ends",
+            ),
+        ] {
+            assert_eq!(
+                video_drag_hold_decision(dragging, false, ours),
+                expected,
+                "{what}"
+            );
+        }
+
+        assert_eq!(
+            held.paused_at,
+            Some(44.0),
+            "and none of it moved the film: both ends of a gesture over a hold that is not ours leave \
+             it exactly where it was, which is the whole of what the refusals above are for"
+        );
+    }
+
+    /// A gesture over a film that is playing holds it, and only that.
+    ///
+    /// The other two cells of the decision, which together with the refusals make the whole of it: a
+    /// film that is playing and a hold this app does not have is the only combination that holds,
+    /// because it is the only one where the toggle does what the gesture means.
+    #[test]
+    fn a_gesture_over_a_playing_film_holds_it_and_only_a_playing_film() {
+        assert_eq!(
+            video_drag_hold_decision(true, true, false),
+            VideoDragHold::Hold,
+            "a hand moving the window of a film that is playing stops the film, which is the whole \
+             of what the gesture is for — decoding while the window is being re-scaled and \
+             re-presented on every pointer message is what makes a drag stutter"
+        );
+
+        assert_eq!(
+            video_drag_hold_decision(false, true, false),
+            VideoDragHold::Leave,
+            "and a gesture that ends while the film is playing but is not held by us has nothing to \
+             release: posting the toggle here would start a film the user had already stopped"
+        );
+
+        assert_eq!(
+            video_drag_hold_decision(false, false, false),
+            VideoDragHold::Leave,
+            "a gesture over a film that was never playing is nothing at either end"
+        );
+    }
+
+    /// A claim ends with the gesture that made it, and with nothing else — so it is reconciled
+    /// before anything at all is known about the film on screen.
+    ///
+    /// The first row is the whole of the fault the reconciliation exists to take back, and it is
+    /// what the two refusals in `video_drag_hold_apply` used to skip: a gesture that ended over a
+    /// kind of pin whose media this app does not hold, or over no pin at all, left the claim
+    /// standing, and the next film to be dragged was answered by it — refused the hold it exists
+    /// for, and then paused by its release, since the key this posts is a toggle.
+    ///
+    /// The second row is the one that must not be reconciled away: a relaunch underneath a hand in
+    /// flight begins another player that is held for that same gesture (see
+    /// `PinTransport::begun`), so the claim it carries is what the gesture is still to let go of.
+    #[test]
+    fn a_claim_ends_with_the_gesture_that_made_it_and_with_nothing_else() {
+        for (dragging, ours, wanted, what) in [
+            (
+                false,
+                true,
+                false,
+                "a gesture that has ended takes its claim back whatever is on screen — a kind of \
+                 pin whose media this app does not hold, and no pin at all, are both refusals about \
+                 the film and neither is a reason to keep a claim over it",
+            ),
+            (
+                true,
+                true,
+                true,
+                "while a gesture is in flight the claim stands, including across a relaunch that \
+                 carries the hold: the film is still held for that same gesture, and dropping it \
+                 there would freeze the picture for good once the hand let go",
+            ),
+            (
+                false,
+                false,
+                false,
+                "and there is nothing to take back where nothing was claimed",
+            ),
+            (
+                true,
+                false,
+                false,
+                "nor to keep where nothing is claimed, whatever the gesture is doing",
+            ),
+        ] {
+            assert_eq!(video_drag_hold_claim(dragging, ours), wanted, "{what}");
+        }
+    }
+
+    /// The hold a gesture puts a film into, written as the drag-hold arm writes it.
+    ///
+    /// It is a function because every case below is what happens to this afterwards, and because it
+    /// stands in for the arm itself: a test cannot post a pause key to a player that does not
+    /// exist, so the write the arm makes is made here (see `video_drag_hold_apply`).
+    fn transport_held_by_a_gesture(began_at: f64) -> PinTransport {
+        let mut transport = PinTransport::default();
+        transport.begun(began_at, true, false);
+        transport.held(began_at + 2.0);
+        transport.drag_held = true;
+        transport
+    }
+
+    /// A claim a gesture made does not outlive the player it was made against, whichever of the
+    /// ways that film stops being that player's.
+    ///
+    /// This is the fault the claim used to have, and it needed both of its halves to be a fault a
+    /// user could see. It was a flag beside the pin, so nothing that ended the *player* ended it: a
+    /// pin taken down, a file swapped and a player that died all left it standing. And the next film
+    /// to be dragged was then answered by a claim belonging to a film that was not on screen — the
+    /// drag refused the hold it exists for, and then its release posted the toggle onto a film
+    /// nobody had stopped: a frozen picture, a pause glyph over it, and a loop counting up a clock
+    /// that nothing is playing.
+    ///
+    /// So the claim is the transport's own field and every end of a player reconciles it (see
+    /// `PinTransport::drag_held`). The one that must *not* is the relaunch that carries the hold,
+    /// which is asserted at the end: the film is still held for the gesture that is still in flight,
+    /// and a claim dropped there would freeze it for good the moment the hand let go.
+    #[test]
+    fn a_claim_a_gesture_made_does_not_outlive_the_player_it_was_made_against() {
+        assert!(
+            transport_held_by_a_gesture(12.0).drag_held,
+            "the premise: a gesture over a film that is playing holds it and says so, and that is \
+             the only place a claim is ever made"
+        );
+
+        for (transport, what) in [
+            (
+                {
+                    let mut transport = transport_held_by_a_gesture(12.0);
+                    transport.player_gone(14.0);
+                    transport
+                },
+                "a player that has died is kept as a held file and not as a held gesture: there is \
+                 no player left to hold, so a drag ending after that has to find nothing holding",
+            ),
+            (
+                {
+                    let mut transport = transport_held_by_a_gesture(12.0);
+                    transport.begun(90.0, true, false);
+                    transport
+                },
+                "a relaunch carrying no hold is a film playing on, and no gesture is holding a \
+                 film that is playing",
+            ),
+            (
+                {
+                    let mut transport = transport_held_by_a_gesture(12.0);
+                    transport.released(14.0);
+                    transport
+                },
+                "a film let go of is playing on, and the press that let it go is the pause \
+                 button's as much as the gesture's — either way nothing is holding it now",
+            ),
+            (
+                PinTransport::default(),
+                "and a transport that is not that player's claims nothing at all, which is what \
+                 both a pin taken down and a file swapped between the two gestures leave behind",
+            ),
+        ] {
+            assert!(!transport.drag_held, "{what}");
+
+            // And what the next gesture is answered with, which is the half of the fault a user
+            // is the one to see.
+            let mut next = transport;
+            next.begun(3.0, true, false);
+
+            assert_eq!(
+                video_drag_hold_decision(true, true, next.drag_held),
+                VideoDragHold::Hold,
+                "a drag over a film that is playing has to stop it, whatever a gesture that ended \
+                 over some other film asserted on the way out"
+            );
+            assert_eq!(
+                video_drag_hold_decision(false, false, next.drag_held),
+                VideoDragHold::Leave,
+                "and that gesture's release has to start nothing: the key is a toggle, so posting \
+                 it here pauses a film that was never held"
+            );
+        }
+
+        let mut relaunched = transport_held_by_a_gesture(12.0);
+        relaunched.begun(90.0, true, true);
+
+        assert!(
+            relaunched.drag_held && relaunched.paused_at.is_some(),
+            "a seek or a resize settling underneath a hand in flight begins another player that is \
+             held for that same gesture, so the claim travels with it — dropping it here would leave \
+             the film frozen for good once the hand let go of the window"
+        );
+        assert_eq!(
+            video_drag_hold_decision(false, false, relaunched.drag_held),
+            VideoDragHold::Release,
+            "and the gesture that was in flight is still owed its release, which is the one case \
+             where the toggle lands on a film a gesture really is holding"
+        );
+    }
+
+    /// A gesture that has ended takes its claim back off whatever is on screen, refusals included.
+    ///
+    /// The refusals the release arm used to make first — a pin that is not up, and a kind of pin
+    /// whose media this app does not hold — are the right answers to what a drag does to a film,
+    /// and are exactly where a claim was left standing behind them. So the reconciliation runs ahead
+    /// of them, and what is asserted here is that the claim is gone afterwards either way.
+    ///
+    /// The rest of the release is not asserted because it cannot be reached from a test: the key is
+    /// posted to a player's own window, and there is no player on this machine to post it to (see
+    /// `video_window_for`), so the arm stops after the claim has been reconciled — which is the
+    /// whole of what this is about, and the whole of what starting a player in a test would buy.
+    ///
+    /// **What is asserted is only this test's own pin.** The pin is a process-wide value, and only
+    /// the tests that take `PIN_TESTS_ONE_AT_A_TIME` are held off one another (see `stand_pin`), so
+    /// another test can take this one's pin away and put it back between two steps of it — a claim
+    /// left in a transport this test did not write, or a transport taken away before this test could
+    /// reconcile it, is a moment of another test's and not a fault to be found here. So the pin is
+    /// recognised by the file it was put up with, and a moment when something else is standing is
+    /// left alone.
+    #[test]
+    fn a_gesture_that_has_ended_takes_its_claim_back_off_whatever_is_on_screen() {
+        let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = take_pin_for_a_test();
+
+        let mine = PathBuf::from("claimed-by-a-gesture.mkv");
+
+        for kind in [MediaType::Video, MediaType::StaticImage] {
+            stand_pin(Some(PinnedPreview {
+                path: mine.clone(),
+                transport: transport_held_by_a_gesture(12.0),
+                ..PinnedPreview::for_test()
+            }));
+
+            let mut media = create_loading_media(320, 240);
+            media.media_type = kind;
+            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                *current = Some(media);
+            }
+
+            assert!(
+                !video_drag_hold_apply(false),
+                "a gesture that has ended is told to no player at all — there is none here for the \
+                 key to be posted to — so the only thing it can have done is take the claim back \
+                 ({kind:?})"
+            );
+
+            let standing = pin_state().and_then(|state| {
+                state
+                    .pin()
+                    .map(|pin| (pin.path == mine, pin.transport.drag_held))
+            });
+            if let Some((true, claimed)) = standing {
+                assert!(
+                    !claimed,
+                    "and the claim has to be gone from this test's own pin whatever is on screen \
+                     now, or the next drag of that film is refused the hold and then paused by its \
+                     release ({kind:?})"
+                );
+            }
+        }
+
+        // And a pin that is not up: there is no transport to reconcile, and a claim that went down
+        // with the pin cannot be answered for by whatever is put up in its place.
+        stand_pin(None);
+        assert!(
+            !video_drag_hold_apply(false),
+            "a gesture that ended over no pin at all has nothing to hold and nothing to let go of, \
+             and whatever is put up in the pin's place is not to be answered for it"
+        );
+
+        stand_pin(previous_pin);
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
+    }
+
+    /// The pin's own answer about a transport, without asking the desktop what is playing.
+    ///
+    /// `pin_is_playing` routes on the media's type and would ask the engine about a file this app
+    /// plays itself, so the claim under test — a film with a second written down is not playing — is
+    /// asked of the transport directly, which is the part that is the transport's own.
+    fn pin_is_playing_about(transport: &PinTransport) -> bool {
+        transport_playing(transport, true)
+    }
+
+    /// A pin that was given the keyboard and no longer has it asks for it back — and a pin that
+    /// never had it, or that still has it, does not.
+    ///
+    /// Both facts are unarguable, which is why they are the whole question: the claim is this app's
+    /// own record of a press, and `GetFocus` is Windows' answer about the caret. The fault behind
+    /// this is that an arrow press on a pin can be taken by the player instead. The player is begun
+    /// again on every navigation, every seek and every resize; its window is created *without*
+    /// `WS_EX_NOACTIVATE` — measured, the style is absent the whole time between the window
+    /// appearing and this app's monitor thread styling it — and all four of FFmpeg's arrows are
+    /// seeks, so an arrow that reaches the player is a seek however the symptom is described.
+    #[test]
+    fn a_pin_that_claims_the_keyboard_and_does_not_have_it_asks_for_it_back() {
+        assert!(
+            pin_keyboard_wanted_back(true, false),
+            "a claim standing while Windows says the pin does not have the caret is a claim that \
+             has stopped being true, and the pin's arrows are then the keys of whatever is in front \
+             of it"
+        );
+        assert!(
+            !pin_keyboard_wanted_back(false, false),
+            "a pin that was never given the keyboard must not ask for it: that is asking for a \
+             keyboard nobody handed over, and the claim would be written on the asking"
+        );
+        assert!(
+            !pin_keyboard_wanted_back(true, true),
+            "a pin that still has the caret holds the keyboard it claimed, and asking again is the \
+             ask that takes the focus from whatever the user is now working in"
+        );
+    }
+
+    /// The arrows on a pinned window walk the pin's own folder and nothing else, on every press.
+    ///
+    /// The mapping itself is asserted above this one; what is asserted here is the property the
+    /// whole fault turns on. There is no key-driven seek anywhere in this app — a seek is what the
+    /// transport bar's mouse asks for, and the only keys this app has ever posted to a player are
+    /// the pause and the bar's own hold, which is the same key — so an arrow cannot be a seek
+    /// whatever state the pin is in. That is what makes "navigates on the first press, seeks on the
+    /// second" a statement about *which window* got the key rather than about what the key means,
+    /// and it is why a loop is given by beginning the file again rather than by posting an arrow at
+    /// it (see `video_launch::rewind_launch_seconds`).
+    #[test]
+    fn an_arrow_on_a_pinned_window_is_always_a_walk_of_its_own_folder() {
+        for (vk, expected, name) in [
+            (VK_LEFT.0 as i32, PinCommand::Previous, "left"),
+            (VK_UP.0 as i32, PinCommand::Previous, "up"),
+            (VK_RIGHT.0 as i32, PinCommand::Next, "right"),
+            (VK_DOWN.0 as i32, PinCommand::Next, "down"),
+        ] {
+            assert_eq!(
+                pinned_key_command(vk),
+                Some(expected),
+                "{name} walks the pin's own folder, in both the pin's directions and not only in \
+                 the reading one"
+            );
+        }
+
+        let walks = [PinCommand::Previous, PinCommand::Next];
+        for vk in [
+            VK_LEFT.0 as i32,
+            VK_RIGHT.0 as i32,
+            VK_UP.0 as i32,
+            VK_DOWN.0 as i32,
+        ] {
+            assert!(
+                walks.contains(&pinned_key_command(vk).expect("an arrow is always a walk")),
+                "an arrow must never map to anything that is not one of the two walks, whatever \
+                 state the pin is in"
+            );
+        }
+    }
+
+    /// The hook and the pin's own window answer the same keys, and mean the same thing by them.
+    ///
+    /// These are two copies of one table, because a `WH_KEYBOARD_LL` callback may not take the
+    /// pin's lock to ask for the other one (see `key_input::PIN_KEY_COMMANDS`). A number that drifts
+    /// between them is a key this app acts on *wrongly* rather than one that stops working, and it
+    /// is invisible from either side alone: each side is right about itself.
+    ///
+    /// The set of keys being the same set is the whole of **one owner per keypress**, which is what
+    /// the swallow rests on. A key the pin's window answers and the hook does not name reaches
+    /// FFmpeg whenever the caret is in the player's window — and every key bound to a seek in that
+    /// player is a fixed increment, so an arrow that arrives there is a step and not a walk. A key
+    /// the hook names and the pin's window does not answer is acted on for a caret the window was
+    /// never in. Neither is a missing key: both are a key answered by the wrong party, or by both.
+    ///
+    /// **And the same is asked of the class of the message, not only of the key.** A chord is not a
+    /// walk and not a hold however plain the key under the modifier is: the pin's own window eats
+    /// `Alt+F4` and `Alt+Tab` without answering them, so a hook that counted `WM_SYSKEYDOWN` was
+    /// walking this window's folder for a `Ctrl`+Left and holding its film for a `Ctrl`+Space —
+    /// each one a key acted on for a caret the hook owns and answered by nothing for a caret the
+    /// window was in.
+    #[test]
+    fn the_hook_and_the_pin_window_answer_the_same_keys_the_same_way() {
+        use crate::shell::key_input::{pin_key_command, pin_key_message_acts, PIN_KEY_COMMANDS};
+
+        for (vk, command) in PIN_KEY_COMMANDS {
+            assert_eq!(
+                hook_pin_key_command(command),
+                pinned_key_command(vk),
+                "the hook counts `{vk:#x}` as command {command}, and that number has to mean what \
+                 the pin's own window would have done with the key, or a walk arrives as a close"
+            );
+        }
+
+        // Both directions of the set, over every virtual key a `wParam` can hold: a key one side
+        // answers and the other does not is the double action above, and it is exactly what makes
+        // "one owner per keypress" a property of the code rather than a hope about it.
+        let drifted: Vec<i32> = (0..=0xFF)
+            .filter(|vk| pinned_key_command(*vk).is_some() != pin_key_command(*vk).is_some())
+            .collect();
+
+        assert!(
+            drifted.is_empty(),
+            "these keys are answered by one of the two mappings and not the other, which is a key \
+             acted on once for a caret this app is not in and passed on once for a caret it is: \
+             {drifted:#x?}"
+        );
+
+        // The class, over the four messages a key can arrive as. `pinned_key_message_command` is
+        // what this window's own procedure asks, so this is the procedure's rule read back rather
+        // than a second copy of it — which is the point: the two sides ask one function, and this
+        // is what pins that function to the answer both of them need.
+        for (message, acted_on, name) in [
+            (WM_KEYDOWN, true, "a key-down"),
+            (WM_SYSKEYDOWN, false, "a system key-down"),
+            (WM_KEYUP, false, "a key release"),
+            (
+                windows::Win32::UI::WindowsAndMessaging::WM_SYSKEYUP,
+                false,
+                "a system release",
+            ),
+        ] {
+            assert_eq!(
+                pin_key_message_acts(message),
+                acted_on,
+                "{name} of a key a standing pin answers is {acted_on} answered by the hook, and a \
+                 chord the pin's own window throws away must not be counted for a caret this app is \
+                 in merely because the caret is in FFmpeg's window instead"
+            );
+            assert_eq!(
+                pinned_key_message_command(message, VK_LEFT.0 as i32, 0).is_some(),
+                acted_on,
+                "and {name} is answered by the pin's own window on the same question, or the same \
+                 key is a walk for one of the two windows this app has and nothing for the other"
+            );
+        }
+    }
+
+    /// The gesture is noticed on the ticks it begins and ends on, and costing nothing in between.
+    ///
+    /// A press is not a drag — `PinnedPreview::dragging` is written when the pointer moves, not when
+    /// it goes down — so a click on the caption, which is how a pin is given the keyboard, must not
+    /// stop the film. And the flag is compared rather than read, because posting the pause key on
+    /// every tick of a gesture would toggle a held film back into playing on the second one.
+    ///
+    /// **The two records are separate, and this is why.** One says a drag is in flight; the other,
+    /// in the transport, says the film on screen is held *because of* it. They are not the same
+    /// question, because a drag begun over a film the pause button has already held has stopped
+    /// nothing — and ending that gesture must not start anything. So the claim is asserted where
+    /// the hold it belongs to is, and a claim that was never taken is not taken back by a gesture
+    /// that had nothing to do with it (see `PinTransport::drag_held`).
+    #[test]
+    fn a_gesture_is_noticed_on_the_ticks_it_begins_and_ends_on() {
+        let start = video_drag_holding();
+        let begun = !start;
+
+        assert!(
+            video_drag_hold_set(begun),
+            "the tick that finds the gesture begun has to be told, because that is the tick that \
+             posts the hold"
+        );
+        assert_eq!(
+            video_drag_holding(),
+            begun,
+            "and the gesture is in flight while it is"
+        );
+        assert!(
+            !video_drag_hold_set(begun),
+            "a tick inside the gesture has nothing to post, and posting the pause key again would \
+             toggle a held film back into playing"
+        );
+        assert!(
+            video_drag_hold_set(start),
+            "the tick that finds the gesture over has to be told, so that the film is let go of \
+             where it stood rather than left frozen under a window that is still moving"
+        );
+        assert_eq!(
+            video_drag_holding(),
+            start,
+            "and the two ends of a gesture undo each other"
+        );
+    }
+
+    /// A drag parks the player's window and holds the film, and neither of the two does the other's
+    /// half — which is the whole of how a drag stops the picture stuttering without pausing it
+    /// twice.
+    ///
+    /// Parking is asked of the window and holding is asked of the film, and they are asked by two
+    /// different callers at two different times: the window is hidden on the drag's own first
+    /// pointer message, and the film is held by the tick. The key is a **toggle**, so a pause
+    /// posted from both places is not a pause at all — a drag begun over a playing film would leave
+    /// it playing with its window hidden, and a drag begun over a film the pause button had held
+    /// would start it. So the flag carries nothing about the film: what the film is doing is the
+    /// transport's own fact (`PinTransport::drag_held`), written by the tick that holds it and
+    /// reconciled by every path that ends the player it was made against.
+    ///
+    /// Neither half is asked twice, and that is asserted on the flag rather than on a key: this
+    /// machine has no player to post a key to (see `video_window_for`), so the arms stop at the
+    /// point where the key would go. What *is* asserted is the whole of what could have made them
+    /// stop agreeing — that parking writes nothing to the transport, that a second park of the same
+    /// drag and a second unpark of the same drag are both no-ops, that the tick's half leaves the
+    /// parking flag exactly as it found it, that the park stands in the way of every raise while it
+    /// is held and that a capture lost to another window lets go of it, and that with no pin up
+    /// neither half has anything to do.
+    ///
+    /// The capture is the second end of a drag and a whole of the park on its own: a drag ends either
+    /// at this window's own release or at a capture another window took, and only the release was
+    /// undoing what the park had done (see `pin_capture_lost`).
+    #[test]
+    fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
+        let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = take_pin_for_a_test();
+
+        let mut transport = PinTransport::default();
+        transport.begun(3.0, true, false);
+
+        stand_pin(Some(PinnedPreview {
+            path: PathBuf::from("parked-because-a-window-was-dragged.mkv"),
+            transport,
+            ..PinnedPreview::for_test()
+        }));
+
+        let mut media = create_loading_media(320, 240);
+        media.media_type = MediaType::Video;
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(media);
+        }
+
+        // What a pin is asked about rather than a copy of it, because the pin is a process-wide
+        // value and only the tests taking `PIN_TESTS_ONE_AT_A_TIME` are held off one another (see
+        // `stand_pin`).
+        let parked = || {
+            pin_state().and_then(|state| {
+                state
+                    .pin()
+                    .map(|pin| (pin.parked, pin.transport.drag_held, pin.transport.paused_at))
+            })
+        };
+
+        // The window the park and the unpark are asked of, so that what this test is about — the
+        // flag, and the film's two halves — can be told from what is asked of the player's window
+        // (see `PinWindow::unpark_player_window`).
+        let window = RecordedPinWindow::new(0x1000);
+
+        assert!(
+            park_pinned_player(),
+            "the first pointer message of a drag hides the player's window, which is the half of \
+             the stutter that is the compositor's and the half this app can answer on the message"
+        );
+        assert_eq!(
+            parked(),
+            Some((true, false, None)),
+            "and it hides nothing else: the flag says the picture is away and carries no word about \
+             the film, because the film is held by the tick posting one key and a second key would \
+             be a toggle out of the hold rather than into it"
+        );
+        assert!(
+            !park_pinned_player(),
+            "a drag that parks twice is one drag, not two: the second call would hide a window that \
+             is already hidden and answer a question the first has already answered"
+        );
+
+        // The tick's half of the pair, asked with the gesture in flight. It stops before the key —
+        // there is no player on this machine to post it to — and what it stops without is the
+        // claim, because a claim this app could not act on is a claim it must not leave standing.
+        assert!(
+            !video_drag_hold_apply(true),
+            "a tick that cannot post the hold tells no player about anything, so the whole of what \
+             it can have done is taken back"
+        );
+        assert_eq!(
+            parked(),
+            Some((true, false, None)),
+            "and holding the film leaves the parking flag alone: the two halves are paired by the \
+             gesture rather than by each other, so one of them running a tick late cannot show a \
+             player window over a band painted flat, nor a hole in the desktop over a window that \
+             is still being resized"
+        );
+
+        assert!(
+            unpark_pinned_player(&window),
+            "the release puts the player's window back before the tick lets the film go, which is \
+             the order worth having — a player resumed into a hidden window decodes into nothing, \
+             so the first frame the hand sees is whichever one it decodes afterwards"
+        );
+        assert!(
+            !unpark_pinned_player(&window),
+            "and a release that has already put it back has nothing left to put back, so a pin \
+             taken down mid-drag cannot put up a window that no longer exists"
+        );
+
+        // The park is not a hide and no re-show: every place that would put the player's window
+        // where the band is — a resize drag's own raise on every pointer move, and the tick's
+        // re-assertion every couple of hundred milliseconds — is answered out of the hand while a
+        // park stands, so the film stays away for the whole of the drag rather than for the one
+        // pointer message it was hidden on (see `pin_player_is_parked`).
+        assert!(
+            park_pinned_player() && pin_player_is_parked(),
+            "a parked player is a parked pin as far as every raise is concerned, which is what makes \
+             the park hold for a hand that has stopped moving as well as one that has not"
+        );
+
+        // The release this window asks of itself is not a capture lost to anybody, and the
+        // difference is the whole of what the hold-off above is for. `WM_CAPTURECHANGED` is
+        // delivered to the window that lost the capture whether it let go or another window took
+        // it, so a resize that let go of the pointer was raising this notice at itself — and an
+        // answer that puts the parked player back is a film on screen at the box the drag began
+        // at, over a band the flag has already stopped painting flat, for as long as the relaunch
+        // takes (see `finish_pin_drag`).
+        let releasing = CapturingWindow::around(a_window_at((300, 200, 700, 600)));
+        with_pin(|pin| {
+            pin.dragging = Some(PinDrag {
+                from: (0, 0),
+                window: (0, 0, 640, 480),
+                action: PinDragAction::Resize(PinResize {
+                    left: false,
+                    top: false,
+                    right: true,
+                    bottom: true,
+                }),
+                delivered: true,
+                carried: (i32::MIN, i32::MIN),
+            });
+        });
+        assert!(
+            finish_pin_drag(HWND(0x1000 as *mut _), &releasing),
+            "a resize is let go of through a release that raises its own notice from inside the call"
+        );
+        assert!(
+            pin_player_is_parked(),
+            "and that notice leaves the park standing, because the road that let go of the pointer \
+             is the one holding it off for the relaunch that undoes it"
+        );
+        assert!(
+            !releasing
+                .calls()
+                .iter()
+                .any(|call| matches!(call, PinWindowCall::UnparkPlayerWindow(_))),
+            "with nothing asked of the player's window at all: a player about to be taken down must \
+             not be put back up on the way to being taken down"
+        );
+        // The relayout this release asked for is not asserted on: the slot it is written to is a
+        // machine value the loop drains on its next turn and several tests here write, so what is
+        // in it while this test runs belongs to whoever gets there. It is taken so that a resize's
+        // end leaves nothing behind. The hold-off itself is the assertion above — a park still
+        // standing can only be a resize's, since a move's own release puts the picture back.
+        let _relayout_on_its_way_to_the_loop = take_relayout_request();
+
+        // The other end of a drag is the capture going to another window, and it ends everything the
+        // drag was doing — the park above included, which the release above deliberately left
+        // standing. It used to end the drag record alone, which the tick reads and lets the film go
+        // by, so the picture came back to a band still painted flat over a window that stayed hidden
+        // for the rest of the pin's life (see `pin_capture_lost`).
+        let stolen = RecordedPinWindow::new(0x1000);
+        with_pin(|pin| {
+            pin.dragging = Some(PinDrag {
+                from: (0, 0),
+                window: (0, 0, 640, 480),
+                action: PinDragAction::Resize(PinResize {
+                    left: false,
+                    top: false,
+                    right: true,
+                    bottom: true,
+                }),
+                delivered: true,
+                carried: (i32::MIN, i32::MIN),
+            });
+        });
+        assert!(
+            pin_is_dragging(),
+            "a drag is in flight before the capture is stolen from it, which is the state the message \
+             has to find"
+        );
+
+        pin_capture_lost(&stolen);
+
+        assert!(
+            !pin_is_dragging() && !pin_player_is_parked(),
+            "a capture stolen mid-gesture ends the drag and the park with it: the film goes back to \
+             playing because the tick watches the gesture, and a park left standing would leave the \
+             band opaque over a window that is not there for the rest of the pin's life"
+        );
+        assert_eq!(
+            parked(),
+            Some((false, false, None)),
+            "and the pair is back where the release leaves it, so the picture behind the band is the \
+             player's own window again rather than black"
+        );
+        // The band read at the assertion rather than spelled out, for the reason the drag test above
+        // gives: what matters is that the picture is put back at the band and not merely shown.
+        assert_eq!(
+            stolen.calls(),
+            vec![PinWindowCall::UnparkPlayerWindow(pinned_content())],
+            "put back once and at the band as it stands, rather than merely shown and left for the \
+             tick to find a couple of hundred milliseconds later"
+        );
+
+        // With no pin up there is no flag to write and no transport to reconcile, so a drag that
+        // ends over nothing at all is answered by neither half.
+        stand_pin(None);
+        assert!(
+            !park_pinned_player(),
+            "a drag over no pin at all has no picture to park and nothing to hold"
+        );
+        assert!(
+            !unpark_pinned_player(&window),
+            "and no pin to put a picture back for"
+        );
+        assert!(
+            !video_drag_hold_apply(false),
+            "while a claim that went down with the pin cannot be answered for by whatever is put up \
+             in its place"
+        );
+
+        stand_pin(previous_pin);
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
+    }
+
+    /// A window that hands the pointer back the way the machine does, by delivering the capture
+    /// notice back into the window procedure before the call returns.
+    ///
+    /// `ReleaseCapture` sends `WM_CAPTURECHANGED` to the window it took the capture from, on the
+    /// same thread and *during* the call, so a window procedure answering one is answering it
+    /// while the caller is still inside its own release. Standing that up here is the whole of
+    /// what makes the two ends of a capture tellable apart on a machine with no desktop: a
+    /// recorder that merely recorded the release would let a park be undone twice with nothing in
+    /// the test ever noticing.
+    struct CapturingWindow {
+        inner: RecordedPinWindow,
+    }
+
+    impl CapturingWindow {
+        /// This window, keeping the rest of a drag's list on the recorder underneath.
+        fn around(inner: RecordedPinWindow) -> Self {
+            Self { inner }
+        }
+
+        /// Everything the road did, in the order it did it.
+        fn calls(&self) -> Vec<PinWindowCall> {
+            self.inner.calls()
+        }
+    }
+
+    impl PinWindow for CapturingWindow {
+        fn hwnd(&self) -> isize {
+            self.inner.hwnd()
+        }
+
+        fn pointer(&self) -> Option<(i32, i32)> {
+            self.inner.pointer()
+        }
+
+        fn window_box(&self, hwnd: isize) -> Option<ScreenRegion> {
+            self.inner.window_box(hwnd)
+        }
+
+        fn capture(&self, hwnd: isize) {
+            self.inner.capture(hwnd)
+        }
+
+        fn release_capture(&self, hwnd: isize) {
+            self.inner.release_capture(hwnd);
+            // On the machine this is `ReleaseCapture` sending `WM_CAPTURECHANGED` back into this
+            // thread's own window procedure, which is where `pin_capture_lost` is called from and
+            // still inside the release that caused it.
+            pin_capture_lost(self);
+        }
+
+        fn set_focusable(&self, hwnd: isize, focusable: bool) {
+            self.inner.set_focusable(hwnd, focusable)
+        }
+
+        fn set_focus(&self, hwnd: isize) {
+            self.inner.set_focus(hwnd)
+        }
+
+        fn set_foreground(&self, hwnd: isize) {
+            self.inner.set_foreground(hwnd)
+        }
+
+        fn hide_pin_windows(&self) {
+            self.inner.hide_pin_windows()
+        }
+
+        fn hide_pin_bubble(&self) {
+            self.inner.hide_pin_bubble()
+        }
+
+        fn unpark_player_window(&self, band: Option<ScreenRegion>) {
+            self.inner.unpark_player_window(band)
+        }
+
+        fn repaint(&self) {
+            self.inner.repaint()
+        }
+
+        fn post(&self, hwnd: isize, message: u32) {
+            self.inner.post(hwnd, message)
+        }
+    }
+
+    /// The relayout a finished resize asked for, taken off the request slot.
+    ///
+    /// Taken rather than read because the slot is a machine value the loop drains on its next turn and
+    /// other tests write it too, so a test that left one behind would be laying out whatever pin ran
+    /// next.
+    fn take_relayout_request() -> Option<ScreenRegion> {
+        PIN_BOX_REQUEST
+            .lock()
+            .ok()
+            .and_then(|mut request| request.take())
+    }
+
+    /// A loop this app gives is posted short of the end of the file rather than at it, and a file
+    /// nothing has measured is never rewound at all.
+    ///
+    /// The margin is the whole of why a posted rewind works: a player that has reached the end of
+    /// its file has already closed its window, so a rewind posted *at* the end is a no-op on a
+    /// window on its way out.
+    #[test]
+    fn a_loop_this_app_gives_is_rewound_short_of_the_end_and_only_where_it_can_be() {
+        assert!(
+            video_launch::rewind_due(true, Some(8.0), 7.95),
+            "a player within the margin of a measured end is sent back before it reaches it"
+        );
+        assert!(
+            !video_launch::rewind_due(true, Some(8.0), 2.0),
+            "a player in the middle of the file is left playing it"
+        );
+        assert!(
+            !video_launch::rewind_due(false, Some(8.0), 7.95),
+            "a held film is not rewound: a hold that jumped to the beginning would be a hold that \
+             did nothing"
+        );
+        assert!(
+            !video_launch::rewind_due(true, None, 7.95),
+            "a file whose length nothing has read has no end to be near, and a player begun at zero \
+             of it has nothing to be saved from"
+        );
+        assert!(
+            !video_launch::rewind_due(true, Some(0.05), 0.04),
+            "a file shorter than the margin is every second inside it, so rewinding it would send \
+             the player back the instant it began"
+        );
+    }
+
+    /// Only a player that was seeked has its loop given by this app.
+    ///
+    /// Measured against FFmpeg 9.0.2 on an eight-second clip: `-loop 0` alone wraps from `0` back
+    /// to `0`, while `-loop 0` with `-ss 6` wraps from `5.208` back to `5.208` — the last two and
+    /// a half seconds of the film, for ever, and the first six seconds never seen. The seek is
+    /// what breaks the loop; writing it after the input rather than before does not fix it.
+    #[test]
+    fn only_a_player_that_was_seeked_has_its_loop_given_by_this_app() {
+        assert!(
+            !video_launch::loop_is_ours(false),
+            "a hover begins at zero, and a player wrapping to the beginning by itself is also what \
+             keeps a hover from closing its own preview at the last frame of the file"
+        );
+        assert!(
+            video_launch::loop_is_ours(true),
+            "a player begun at a second wraps back to that second, so the loop is taken away from \
+             it and given by the rewind instead"
+        );
+    }
+
+    /// Subtitles are drawn by a filter in the same chain as the crop, and the file is named the
+    /// one way the filter parses.
+    ///
+    /// The escaping is measured in both directions and only one spelling survives. The `subtitles`
+    /// filter separates its filename from its options with a colon, and a Windows path opens with
+    /// one, so the drive letter is read as a filename and the rest as the filter's first option —
+    /// which is why FFmpeg's complaint names `original_size`, which nobody asked for. The whole of
+    /// the escaping, the characters beyond the colon and the one that cannot be escaped at all, is
+    /// in `video_launch` beside it; what is asserted here is that the track the pin is remembering
+    /// reaches the filter, which is the half that was missing.
+    #[test]
+    fn subtitles_are_named_the_way_the_filter_that_reads_them_parses() {
+        assert_eq!(
+            video_launch::escape_filter_path(&PathBuf::from(r"D:\video\clip.srt")),
+            "D\\:/video/clip.srt",
+            "the colon after the drive letter is the filter's own separator, and the separators \
+             themselves need no escaping because forward slashes are what a Windows path API takes"
+        );
+
+        let dir = std::env::temp_dir().join(format!("preview-subs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+        let video = dir.join("film.mkv");
+        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+
+        let filter = video_launch::subtitle_filter(&video, 2, Some(1))
+            .expect("a file with a subtitle stream of its own has a filter to draw it with");
+        assert!(
+            filter.starts_with("subtitles='") && filter.contains(":si=1"),
+            "the value is quoted so the escape survives the filtergraph parser, and the track is the \
+             one the pin is remembering rather than a hard-coded first: `si=2` on a third stream is \
+             refused outright with 'Unable to locate subtitle stream', so the index has to be \
+             counted among subtitle streams and it has to be the one that was chosen: {filter}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What the probe found is readable by the reader that asked for it, once the probe has finished.
+    ///
+    /// This is the regression test for an answer that was `None` for the whole run of the app and
+    /// looked like a perfectly good answer the entire time. The answer was a `OnceLock` completed by
+    /// the thread that *reads* it: `get_or_init` stores `None` before the probe thread has run a
+    /// line, so the probe's own `set` was refused every time and `-hwaccel` was never passed. Every
+    /// film in the run was software decoded and nothing said so.
+    ///
+    /// The test that could not see it compared the answer with itself — `None == None` — which is why
+    /// it passed on the broken arrangement and would pass again. So this asserts the thing that was
+    /// actually broken: an answer written *after* a reader has already read is still readable by a
+    /// later reader. Reading before the answer lands gives nothing, reading after gives what the
+    /// probe found, and reading twice gives the same thing both times.
+    #[test]
+    fn what_the_probe_finds_is_readable_once_the_probe_has_finished() {
+        static PROBE: HwAccelProbe = HwAccelProbe {
+            asked: AtomicU32::new(0),
+            current: AtomicU32::new(1),
+            found: Mutex::new(None),
+        };
+
+        assert_eq!(
+            PROBE.read(|| Some("dxva2")),
+            None,
+            "a reader that arrives before the probe has run must be given nothing rather than made \
+             to wait: this runs on the preview thread, and a preview begun before the answer lands \
+             is software decoded, which is the answer that works on every machine"
+        );
+
+        // Waited for rather than joined, and the difference is the whole of the arrangement being
+        // tested: the probe thread finishes *by writing*, so a join would return while the answer
+        // was still in flight — which is precisely the window in which the old arrangement dropped
+        // it on the floor. The wait is bounded, so a probe that never lands fails here rather than
+        // hanging the suite.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut answered = PROBE.read(|| unreachable!("the question is put once"));
+        while answered.is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+            answered = PROBE.read(|| unreachable!("the question is put once"));
+        }
+
+        assert_eq!(
+            answered,
+            Some("dxva2"),
+            "the device the probe found has to be reachable by a launch that comes after it, or the \
+             probe is a question nobody hears the answer to and every film is software decoded for \
+             the whole run of the app"
+        );
+        assert_eq!(
+            PROBE.read(|| unreachable!("the question has been put once and is not put again")),
+            Some("dxva2"),
+            "and reading again gives the same answer rather than starting a second probe: the \
+             question is about this machine's drivers and about one build of FFmpeg"
+        );
+    }
+
+    /// A setting that is switched makes the answer found for it an answer to a question no longer
+    /// being asked.
+    ///
+    /// The tray row promises that the next hover is the first one decoded differently, and without
+    /// this it would have been a question about the next *run* of the app: the answer found at the
+    /// first hover stood for the rest of the session, and a probe run with the setting off names no
+    /// device at all. So the direction that matters is the one that stops naming a device — a film
+    /// decoded on a card the user has just switched off is a worse fault than one decoded in
+    /// software, which is what a preview always can be.
+    #[test]
+    fn a_switched_setting_stops_the_answer_found_for_the_one_before_it() {
+        static PROBE: HwAccelProbe = HwAccelProbe {
+            asked: AtomicU32::new(0),
+            current: AtomicU32::new(1),
+            found: Mutex::new(None),
+        };
+
+        assert_eq!(
+            PROBE.read(|| Some("dxva2")),
+            None,
+            "the premise: with the setting on, the first reader puts the question and is itself \
+             given nothing"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut named = PROBE.read(|| unreachable!("the question is put once"));
+        while named.is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+            named = PROBE.read(|| unreachable!("the question is put once"));
+        }
+
+        assert_eq!(
+            named,
+            Some("dxva2"),
+            "and the device found under that setting is named by every launch after it"
+        );
+
+        PROBE.forget();
+
+        assert_eq!(
+            PROBE.read(|| None),
+            None,
+            "after the row is switched the device found for the setting as it was must stop being \
+             named, or the row is a question about the next run of the app rather than about the \
+             next preview — and a probe run with the setting off names nothing at all"
+        );
+
+        // The question is put again for the setting as it now stands, and this time with the answer
+        // the setting asks for.
+        assert_eq!(
+            PROBE.read(|| None),
+            None,
+            "and it is asked once more, which is what makes the next hover the first one decided by \
+             the new setting rather than by the old one"
+        );
+        assert_eq!(
+            PROBE.read(|| unreachable!("the new setting's question has been put once")),
+            None,
+            "a setting that names no device is asked for once and answered once, so the walk over \
+             the candidates is not repeated on every hover"
+        );
+    }
+
+    /// A device is named only when a probe found one that survives, and a name FFmpeg does not know
+    /// is refused before it decodes a frame.
+    ///
+    /// These two facts are the whole of why the toggle can be on by default and every preview still
+    /// plays. `-hwaccel` is fatal on machines where FFmpeg's Vulkan renderer cannot be brought up —
+    /// measured here: `d3d11va` dies of an access violation after four frames, `auto` and `cuda`
+    /// draw nothing at all — and FFmpeg's own software fallback does not cover that, because a
+    /// renderer that crashes while the device was being derived never gets as far as a codec the
+    /// fallback could be offered. So the fallback is this app's: a probe that names nothing when
+    /// nothing survives, and a preview that plays in software.
+    ///
+    /// The branch that ends a probe's player when it outlives its budget is the one thing here with
+    /// no test, and that is deliberate rather than an omission left for later: reaching it needs a
+    /// player that survives three seconds, which is a fact about the machine rather than about the
+    /// code, and asserting it would mean leaving a real `ffplay` running on the machine that ran the
+    /// tests — which is the fault being fixed, reproduced on purpose.
+    #[test]
+    fn a_device_is_named_only_when_a_probe_found_one_that_survives() {
+        // The answer is read, never waited for: this runs on the preview thread, which is the one
+        // thread in this app that must not be waiting on an external process. So this says nothing
+        // about *which* device this machine has — it is the arrangement above that is under test —
+        // and only that asking twice is asking once.
+        assert_eq!(
+            video_hw_accel_device(),
+            video_hw_accel_device(),
+            "two launches of the same run must get the same answer, because the question is about \
+             this machine's drivers and about one build of FFmpeg"
+        );
+
+        // A device the player refuses before it decodes anything is refused here too, and that is
+        // the whole contract of the probe: it is a list walked against the machine, not a name
+        // passed on faith.
+        assert!(
+            !probe_one_hwaccel("no-such-device"),
+            "a name FFmpeg does not know is refused before it decodes a frame, so the walk stops \
+             rather than naming something fatal"
+        );
     }
 }

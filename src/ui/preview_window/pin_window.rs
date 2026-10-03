@@ -44,14 +44,21 @@
 //! share one list, and that the list can be read back on a machine with no display and no pin
 //! in it.
 //!
-//! It grew by four for a reason worth recording, because the four are not lifecycle operations
+//! It grew by five for a reason worth recording, because the five are not lifecycle operations
 //! at all: they are *a drag*, which is the other thing this window is asked of a pin and the
-//! only one that had no test surface. `pointer`, `window_box`, `capture` and `repaint` are the
-//! whole of what "a press becomes a carried drag, and the drag is let go of" costs the machine.
-//! They are here rather than in a second trait over the same window for the reason the two ends
-//! of the capture are here: they are two halves of one handoff, and a handoff whose halves are
-//! asked of two different objects is a handoff that can disagree with itself — which is what a
-//! window left holding the pointer for the whole desktop was (see `begin_pin_drag`).
+//! only one that had no test surface. `pointer`, `window_box`, `capture`, `repaint` and
+//! `unpark_player_window` are the whole of what "a press becomes a carried drag, and the drag is
+//! let go of" costs the machine. They are here rather than in a second trait over the same window
+//! for the reason the two ends of the capture are here: they are two halves of one handoff, and a
+//! handoff whose halves are asked of two different objects is a handoff that can disagree with
+//! itself — which is what a window left holding the pointer for the whole desktop was (see
+//! `begin_pin_drag`).
+//!
+//! The last of the five is a window of *another* process, and it earns its place the same way the
+//! others do: the defect it covers is a film on screen at a box nobody put it at, and a test can
+//! only see that by being shown the call. Every other way of undoing a drag's park was invisible
+//! from here — the flag came down and nothing was recorded, so an unpark that showed the window
+//! without placing it read exactly like one that placed it (see `unpark_pinned_player`).
 //!
 //! What is deliberately still *not* here is the rest of a drag: `apply_pin_drag` moves the
 //! window and resizes it, and that is a `SetWindowPos` and an `UpdateLayeredWindow` on
@@ -718,6 +725,26 @@ pub(super) trait PinWindow {
     /// memory rather than a test.
     fn repaint(&self);
 
+    /// Put the window FFmpeg draws the picture into back where the pin's media band is, and put it
+    /// up there — which is the whole of what undoes a drag's park.
+    ///
+    /// One method rather than a show and a place, because on a window of another process the show
+    /// *is* the place: `ShowWindow` un-hides a window where it stands, and both halves of undoing
+    /// a park are one `SetWindowPos` carrying `SWP_SHOWWINDOW` (see `ensure_video_window_topmost`).
+    /// Split into two, the second is the half that can be left out, and a show without the place
+    /// is a film on screen at the box the drag began at — the failure this call exists to be able
+    /// to assert about.
+    ///
+    /// The band is read at the moment the park ends rather than remembered from before it, which
+    /// is the whole of what a move changes: the hand carries the window somewhere else and every
+    /// place that would have told the player about it was answered out of the hand while the park
+    /// stood, so the rect the player's window is still at is the one the drag started from.
+    ///
+    /// `None` for a pin with no band to go back into — collapsed, or already gone — where there is
+    /// no rect to be told and only the window's own hiddenness left to take back. That is a real
+    /// answer rather than a degenerate one, and the recorder can be given it.
+    fn unpark_player_window(&self, band: Option<ScreenRegion>);
+
     /// Leave a message for the loop to answer, rather than making it answer now.
     fn post(&self, hwnd: isize, message: u32);
 }
@@ -754,6 +781,13 @@ pub(super) enum PinWindowCall {
     /// The pin's own window drawn as it stands, which is what a drag's end owes after letting
     /// go of the pointer: the window is where the hand left it and the screen has to be told.
     Repaint,
+    /// The player's own window put back where the pin's band is and put up there — the band, or
+    /// nothing at all where there is no band to put it back into.
+    ///
+    /// Recorded whole rather than as a show and a place, because the two are one `SetWindowPos` on
+    /// a window of another process and a test that could only see one of them would pass against
+    /// the defect this records: a picture on screen at the box the drag began at.
+    UnparkPlayerWindow(Option<ScreenRegion>),
     Post(u32),
 }
 
@@ -868,16 +902,32 @@ impl PinWindow for RecordedPinWindow {
         self.record(PinWindowCall::Repaint);
     }
 
+    fn unpark_player_window(&self, band: Option<ScreenRegion>) {
+        self.record(PinWindowCall::UnparkPlayerWindow(band));
+    }
+
     fn post(&self, _hwnd: isize, message: u32) {
         self.record(PinWindowCall::Post(message));
     }
+}
+
+/// Whether the pin holds a claim on the keyboard, which is this app's own record of a press that
+/// handed it the keyboard — and not the question of where the caret is now, which is
+/// `preview_window::pin_is_focused` and which can be answered without this module at all.
+///
+/// The two are read together for exactly one question, which is whether a pin that was given the
+/// keyboard still has it: a claim that stands while the pin has been activated away from is a claim
+/// that has stopped being true, and the pin's own arrows are then the keys of whatever is in front
+/// of it (see `preview_window::pin_keyboard_wanted_back`).
+pub(super) fn pin_claims_the_keyboard() -> bool {
+    pin_state().is_some_and(|mut state| state.keyboard_mut().is_some_and(|held| held.is_some()))
 }
 
 /// Whether the pin holds a claim on the keyboard, for the tests on this side of the module,
 /// which cannot ask the desktop where the caret is.
 #[cfg(test)]
 pub(super) fn pin_holds_a_keyboard() -> bool {
-    pin_state().is_some_and(|mut state| state.keyboard_mut().is_some_and(|held| held.is_some()))
+    pin_claims_the_keyboard()
 }
 
 /// Take the pin that is up away and hand it back, for a test that means to put one where it was.
@@ -1259,6 +1309,10 @@ mod tests {
 
         fn repaint(&self) {
             self.inner.repaint();
+        }
+
+        fn unpark_player_window(&self, band: Option<ScreenRegion>) {
+            self.inner.unpark_player_window(band);
         }
 
         fn post(&self, hwnd: isize, message: u32) {
