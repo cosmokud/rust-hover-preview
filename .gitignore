@@ -23,6 +23,7 @@ MEMORY.md
 /docs/adr
 /scratchpad/
 /.scratch/
-/.serena/
+/.tmp/
+/.spec/
 /.venv/
 /.commandcode/
