@@ -56,9 +56,8 @@ use crate::config::config::{read_within_budget, AppConfig};
 use crate::engines::document_cache::{self, PageKind};
 use crate::engines::supervisor::{self, Adapter, Worker};
 use once_cell::sync::Lazy;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 /// The name this engine's pages are kept under, which is what tells one of its pages from the page
@@ -237,13 +236,12 @@ fn convert(source: &Path) {
 /// nothing about the file's own name can move a file of this app's or be read as one of the
 /// engine's own switches.
 fn run(program: &Path, source: &Path, written: &Path) -> Option<Vec<u8>> {
-    let mut child = Command::new(program)
+    let mut child = crate::app::engine_processes::hidden_command(program)
         .arg(source)
         .arg(written)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(crate::app::engine_processes::CREATE_NO_WINDOW)
         .spawn()
         .ok()?;
 

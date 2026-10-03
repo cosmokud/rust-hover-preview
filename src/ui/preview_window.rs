@@ -65,7 +65,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Output, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
@@ -6236,7 +6236,7 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32, Option<f64>)> {
     // is waiting for. The wait that follows is bounded rather than the plain one, so
     // that a file this probe cannot finish with is answered rather than waited on
     // (see `wait_bounded`).
-    let child = Command::new("ffprobe")
+    let child = engine_processes::hidden_command("ffprobe")
         .args([
             "-v",
             "error",
@@ -6254,7 +6254,6 @@ fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32, Option<f64>)> {
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .creation_flags(engine_processes::CREATE_NO_WINDOW) // Hide the console window
         .spawn()
         .ok()?;
 
@@ -6360,7 +6359,7 @@ fn collect_video_crop_candidates(path: &PathBuf) -> HashMap<(u32, u32, u32, u32)
     // Spawned rather than run through `Command::output` for the same reason the
     // ffprobe next to it is: a probe that is in the job is one a crash cannot leave
     // reading a file with nobody waiting for it.
-    let child = match Command::new("ffmpeg")
+    let child = match engine_processes::hidden_command("ffmpeg")
         .args([
             "-v",
             "info",
@@ -6382,7 +6381,6 @@ fn collect_video_crop_candidates(path: &PathBuf) -> HashMap<(u32, u32, u32, u32)
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .creation_flags(engine_processes::CREATE_NO_WINDOW)
         .spawn()
     {
         Ok(child) => child,
@@ -6842,7 +6840,7 @@ fn start_video_playback(
     let volume = volume.min(100);
 
     // Use ffplay for video playback - borderless, positioned at preview location
-    let mut cmd = Command::new("ffplay");
+    let mut cmd = engine_processes::hidden_command("ffplay");
 
     // If volume is 0, disable audio completely for better performance
     if volume == 0 {
@@ -6930,7 +6928,6 @@ fn start_video_playback(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(engine_processes::CREATE_NO_WINDOW) // Hide the console window
         .spawn()
         .ok();
 
@@ -7955,7 +7952,7 @@ fn ffprobe_audio_track(path: &Path) -> Option<audio_track::Track> {
     // Spawned rather than run through `Command::output` so that the probe is in the job before
     // it is waited on, and waited for under a cap rather than for as long as it takes — the
     // same arrangement the video path's own probes have (see `wait_bounded`).
-    let child = Command::new("ffprobe")
+    let child = engine_processes::hidden_command("ffprobe")
         .args([
             "-v",
             "error",
@@ -7971,7 +7968,6 @@ fn ffprobe_audio_track(path: &Path) -> Option<audio_track::Track> {
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .creation_flags(engine_processes::CREATE_NO_WINDOW)
         .spawn()
         .ok()?;
 
@@ -8247,7 +8243,7 @@ fn measure_audio_loudness(path: &Path) -> Option<f64> {
     // Spawned and waited for under a cap, the arrangement every probe here has: a meter left
     // behind by a crash is one the job ends, and one that has not answered by the deadline is
     // killed rather than waited for (see `wait_bounded`).
-    let child = Command::new("ffmpeg")
+    let child = engine_processes::hidden_command("ffmpeg")
         .args(["-v", "info", "-nostdin", "-hide_banner"])
         .arg("-i")
         .arg(path)
@@ -8255,7 +8251,6 @@ fn measure_audio_loudness(path: &Path) -> Option<f64> {
         .args(["-f", "null", "-"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .creation_flags(engine_processes::CREATE_NO_WINDOW)
         .spawn()
         .ok()?;
 
@@ -8459,7 +8454,7 @@ fn start_audio_playback_at(path: &Path, media: &mut MediaData, start: f64, volum
 /// A sound that starts at the beginning of its file is that second player already, so it is
 /// given that player's own loop rather than a pass for this side to restart after.
 fn start_audio_player(path: &Path, volume: u32, start: f64, gain: Option<f64>) -> Option<Child> {
-    let mut command = Command::new("ffplay");
+    let mut command = engine_processes::hidden_command("ffplay");
     command.args(["-nodisp", "-autoexit", "-loglevel", "quiet"]);
 
     // The level the sound is played at, with the file's own measured gain folded into it where
@@ -8490,7 +8485,6 @@ fn start_audio_player(path: &Path, volume: u32, start: f64, gain: Option<f64>) -
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(engine_processes::CREATE_NO_WINDOW)
         .spawn()
         .ok()?;
 
@@ -20980,7 +20974,7 @@ fn show_open_with_dialog(path: &Path) {
     // guarantees the only space in the tail is the one separating the entry point from it.
     let tail = format!("shell32.dll,OpenAs_RunDLL {}", plain_path(path));
 
-    let mut command = Command::new("rundll32.exe");
+    let mut command = engine_processes::hidden_command("rundll32.exe");
     command.raw_arg(&tail);
 
     // The child is dropped on the floor rather than kept: nothing here is waiting on it and
@@ -29081,7 +29075,7 @@ mod tests {
     /// moment later whatever it is told.
     #[test]
     fn waits_for_a_probes_child_only_until_the_deadline() {
-        let quick = Command::new("cmd")
+        let quick = engine_processes::hidden_command("cmd")
             .args(["/C", "echo", "a line from the child"])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -29096,7 +29090,7 @@ mod tests {
             "and what it wrote is in the answer, which is the pipe that was drained"
         );
 
-        let slow = Command::new("ping")
+        let slow = engine_processes::hidden_command("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
