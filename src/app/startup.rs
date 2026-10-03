@@ -270,10 +270,7 @@ mod tests {
 
         // The stray portable copy: another folder, another version, the thing the check
         // exists for.
-        assert!(!same_path(
-            r"C:\Users\test\Downloads\rust-hover-preview.exe",
-            running
-        ));
+        assert!(!same_path(r"C:\downloads\rust-hover-preview.exe", running));
         // A path that no longer resolves at all is not this one either, and is not asked
         // about: it is exactly what has to be replaced.
         assert!(!same_path(
