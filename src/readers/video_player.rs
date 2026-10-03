@@ -23,19 +23,28 @@
 //!
 //! # Where the decoding happens, and why it is not where it should be
 //!
-//! Every video this app plays is decoded in software, and it does not have to be. A media engine
-//! handed a DXGI device manager through `MF_MEDIA_ENGINE_DXGI_MANAGER` uses the display's own
-//! hardware for the decoding instead, and the difference is not a matter of degrees: on a 144 fps
-//! 1440p HEVC file shown at a preview box of a display's own size, the engine with a manager
-//! spends 0.11 s of a core over eight seconds where the same engine without one spends 44.02 s
-//! (see `tests::video_take_cost`). Attaching one is four fields and a device creation away.
+//! Every video this app plays is decoded in software, and the first thing to be clear about why
+//! is that attaching a DXGI device manager cannot fix it on this machine. A media engine handed
+//! one through `MF_MEDIA_ENGINE_DXGI_MANAGER` is documented to use the display's own hardware for
+//! the decoding instead, and it does not: the media stack here has no hardware HEVC decoder
+//! registered at all, so there is nothing for a manager to select.
 //!
-//! It is not attached, because on this machine the media engine will not then hand a frame over
-//! at all. `TransferVideoFrame` accepts a DXGI surface *or* a WIC bitmap, a hardware-decoded frame
-//! lives in a texture on the GPU, and the obvious reading is that the destination has to become a
-//! texture too — a buffer made by `MFCreateDXGISurfaceBuffer` over a D3D11 texture, read back
-//! through a staging copy. That was built, and it is refused. Measured, on this machine, over a
-//! 1440p HEVC file and a 1920x800 H.264 one:
+//! That makes the measurement this starts from a trap, and it is worth stating plainly because it
+//! has been read the wrong way twice. Attaching a manager on a 144 fps 1440p HEVC file shown at
+//! a preview box of a display's own size takes the engine from 44.02 s of a core over eight
+//! seconds to 0.11 s — which reads as a four-hundred-fold win and is not one. The 0.11 s is an
+//! idle engine: it is decoding nothing, because every transfer fails and no frame is ever
+//! produced. The control settles it. Remove the device manager and the cost per frame is
+//! identical; only the buffer the samples arrive in changes. So the manager was never selecting a
+//! hardware decoder here, and the only thing it was selecting was a way for the engine to stop.
+//!
+//! That is why one is not attached, and not because it would be dearer to build: on this machine
+//! the media engine will not then hand a frame over at all. `TransferVideoFrame` accepts a DXGI
+//! surface *or* a WIC bitmap, a hardware-decoded frame lives in a texture on the GPU, and the
+//! obvious reading is that the destination has to become a texture too — a buffer made by
+//! `MFCreateDXGISurfaceBuffer` over a D3D11 texture, read back through a staging copy. That was
+//! built, and it is refused. Measured, on this machine, over a 1440p HEVC file and a 1920x800
+//! H.264 one:
 //!
 //!   * a WIC bitmap destination — the one this app already uses — answers the *first* transfer
 //!     and every transfer after it with `E_NOINTERFACE` (`0x80004002`). The first frame is
