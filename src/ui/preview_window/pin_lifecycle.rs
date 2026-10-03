@@ -451,6 +451,12 @@ pub(super) fn end_pin_beside_the_state() {
     if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
         *request = None;
     }
+
+    // And the frame a drag of this pin held for its media band. A pin taken down with a drag still
+    // in flight — a pick from the bubble under the hand, the watchdog — never reaches the other end
+    // of its park, and what it was holding is a picture the size of a display (see
+    // `compose_parked_band`).
+    forget_video_frame();
 }
 
 /// Whether the thing a pin is a window onto is still there.

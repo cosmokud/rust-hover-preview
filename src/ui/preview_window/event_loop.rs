@@ -599,6 +599,11 @@ pub fn run_preview_window() {
                 // video FFmpeg plays is something this app asserted (see `settle_pinned_transport`).
                 settle_pinned_transport();
                 settle_video_retirement();
+                // And the band a drag's parking is holding: it is a hole again only once the
+                // player's own window is standing in it, which for a relaunch begun on a resize's
+                // release is the first tick that finds the replacement up (see
+                // `settle_pinned_park`).
+                settle_pinned_park();
                 settle_pending_hold();
 
                 // What a key does to a pinned text preview, polled rather than waited for: a pin

@@ -201,6 +201,125 @@ fn a_page_that_is_laid_out_to_its_box_is_resized_one_edge_at_a_time() {
     assert_eq!(content, (0, 30, 400, 30 + PIN_MIN_MEDIA_PIXELS as i32));
 }
 
+/// A drag of a pinned film hides the player's window for its whole length, and the band that
+/// window was standing in is this app's to fill for that length. What it is filled with is the
+/// last frame the player had on screen, scaled to the box being dragged to — a hand choosing a
+/// size needs the film in the box, not a rectangle the film is behind.
+///
+/// So this is a test of the three answers the fill can give, and the middle one is the one that
+/// used to be the only one: a frame grows with the box and shrinks into it, both of them opaque,
+/// and a frame that could not be taken leaves black rather than a hole. Black rather than
+/// transparent is not a smaller version of the same wrong thing — a layered window's hit testing
+/// and its compositing are both answered by the shape of its pixels, so a band of transparent
+/// ones is the desktop, and a drag that leaves one is a hole in the desktop shaped like a video
+/// (see `compose_parked_band` and `render_pinned_preview_at`).
+#[test]
+fn a_band_whose_player_is_parked_is_the_last_frame_scaled_and_never_a_hole() {
+    // A window's own surface with a band of it four rows down, so what is asserted is the band and
+    // the rows around it: a fill that reached past the band would be as wrong as one that stopped
+    // short of it. The band is always the window's own width — that is what a band is, and what
+    // `stretch_into_band` stretches into — so the dimension a drag changes is the height.
+    fn painted(
+        held: Option<(&[u8], (u32, u32))>,
+        window: (u32, u32),
+        band_height: u32,
+    ) -> (Vec<u8>, bool) {
+        let (width, height) = window;
+        let origin_y = 4u32;
+        let surface = DibSurface::create(width, height).expect("a surface to paint the band into");
+        let out = unsafe {
+            std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize)
+        };
+
+        let filled = compose_parked_band(
+            held,
+            width,
+            BandTarget {
+                out,
+                dc: surface.dc,
+                width,
+                origin_y,
+                height: band_height,
+            },
+        );
+        (out.to_vec(), filled)
+    }
+
+    // A red frame, so a band that is anything but the film says so.
+    let red = [0u8, 0, 255, 255].repeat(64);
+
+    // Grown: a four-by-four frame into a band eight rows high is the frame at the band's size,
+    // which is what makes a hand dragging an edge downwards see the film grow.
+    let (grown, filled) = painted(Some((&red, (4, 4))), (16, 12), 8);
+    assert!(filled, "a held frame fills the band it is scaled into");
+
+    // Shrunk: an eight-by-four frame into a band two rows high, sampled down rather than cropped.
+    let (shrunk, filled) = painted(Some((&red, (8, 4))), (8, 8), 2);
+    assert!(
+        filled,
+        "and it fills a band it is being shrunk into just as well"
+    );
+
+    // Both are opaque everywhere and are the film, which is the whole of what the user is owed:
+    // scaled, and never a hole to see the desktop through.
+    for (surface, window, band_height, what) in [
+        (&grown, (16u32, 12u32), 8u32, "grown"),
+        (&shrunk, (8u32, 8u32), 2u32, "shrunk"),
+    ] {
+        let (width, height) = window;
+        for row in 0..height as usize {
+            for column in 0..width as usize {
+                let pixel = surface_pixel(surface, window, row, column);
+                let in_band = row >= 4 && row < 4 + band_height as usize;
+
+                if !in_band {
+                    assert_eq!(
+                        pixel,
+                        &[0, 0, 0, 0],
+                        "{what}: pixel {row}:{column} is outside the band and is nothing at all"
+                    );
+                    continue;
+                }
+
+                assert_eq!(pixel[3], 255, "{what}: pixel {row}:{column} is opaque");
+                for (channel, wanted) in [0u8, 0, 255].iter().enumerate() {
+                    assert!(
+                        (pixel[channel] as i32 - *wanted as i32).abs() <= 8,
+                        "{what}: pixel {row}:{column} is the film scaled: {pixel:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    // And with nothing held there is still no hole: black is a picture this app owns, transparent
+    // is the desktop showing through a window that has nothing behind it.
+    let (bare, filled) = painted(None, (16, 12), 8);
+    assert!(
+        !filled,
+        "a park that took no frame says so, rather than answering with an empty frame"
+    );
+    for row in 4..12usize {
+        for pixel in bare[(row * 16 * 4)..(row * 16 * 4 + 16 * 4)]
+            .as_chunks::<4>()
+            .0
+        {
+            assert_eq!(
+                pixel,
+                &[0, 0, 0, 255],
+                "row {row} is black and opaque, never a hole in the desktop"
+            );
+        }
+    }
+}
+
+/// One pixel of a painted surface, by row and column: the windows these tests paint are of two
+/// sizes, so a pixel cannot be spelled out as an offset into a fixed stride.
+fn surface_pixel(surface: &[u8], window: (u32, u32), row: usize, column: usize) -> &[u8] {
+    let stride = window.0 as usize * 4;
+    &surface[row * stride + column * 4..row * stride + column * 4 + 4]
+}
+
 #[test]
 fn what_a_kind_is_framed_by_follows_what_is_inside_it() {
     // What is drawn is the file's own shape, so the box can only be a box of that shape:
