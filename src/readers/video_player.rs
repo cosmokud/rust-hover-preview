@@ -47,28 +47,26 @@
 //! H.264 one:
 //!
 //!   * a WIC bitmap destination — the one this app already uses — answers the *first* transfer
-//!     and every transfer after it with `E_NOINTERFACE` (`0x80004002`). The first frame is
-//!     decoded before the DXGI pipeline is up; every frame after it is decoded on the GPU, and
-//!     the engine will not render a GPU frame into a bitmap in system memory. That was true with
-//!     the output format set to `ARGB32`, to `RGB32`, to `NV12` and unset entirely.
+//!     and every transfer after it with `E_NOINTERFACE` (`0x80004002`). The first frame is the one
+//!     decoded before the DXGI pipeline is up; every frame after it is refused, whatever decoded
+//!     it. That was true with the output format set to `ARGB32`, to `RGB32`, to `NV12` and unset
+//!     entirely.
 //!   * a `MFCreateDXGISurfaceBuffer` destination is refused on the first transfer as well as the
 //!     rest, over a plain `D3D11_USAGE_DEFAULT` texture, over the same texture bound as a render
 //!     target, over a surface from `IDXGIDevice::CreateSurface`, at the box's size and at the
 //!     picture's own size, and over all of those again with the same four output formats.
 //!
-//! So the engine will render into a bitmap only while it is decoding in software, and into
-//! nothing at all while it is decoding on the GPU. Attaching a manager therefore is not a slower
+//! So the engine renders into a bitmap only while no manager is attached, and into nothing at all
+//! once one is. Attaching a manager therefore is not a slower
 //! preview: it is one frame, then three seconds of refusals, then the file handed to FFmpeg's
 //! player (see [`TRANSFER_FAILURES_GIVE_UP`]) — which is a working preview on a machine that has
 //! FFmpeg's player and no preview at all on a machine that does not.
 //!
 //! What is left of it, and the reason this paragraph is here rather than a branch somewhere, is
-//! that the failure above is precisely the one that used to be invisible. It was measured twice
-//! before: once as a frame pipeline that froze on the first frame and reported nothing, and once
-//! as a hundred and forty-four frames a second decoded in software for a box that could show
-//! sixty of them. Anyone reaching for this again should read this first, and should read
-//! [`failing_path`] second, because that is the thing standing between the attempt and a preview
-//! that hangs.
+//! that the freeze is precisely the failure that used to be invisible: it was measured once as a
+//! frame pipeline that sat on the first frame and reported nothing. Anyone reaching for this again
+//! should read this first and [`failing_path`] second, because that is what stands between the
+//! attempt and a preview that hangs.
 //!
 //! # The one other way a media engine is asked for frames, and why it is not this one
 //!
@@ -159,21 +157,17 @@
 //! takes anyway. What it is worth is the last thing it found, and that is the way to read every
 //! other measurement here: **a claim that hardware decode engaged is gated on CPU cost and never
 //! on having been handed a GPU buffer.** A device manager wraps a software decoder's output in an
-//! `IMFDXGIBuffer` as readily as a hardware one's — here the DXGI buffer came back over the same
-//! twenty milliseconds as the plain system-memory one — so the buffer says which path produced the
-//! frame and says nothing whatever about what decoded it.
+//! `IMFDXGIBuffer` as readily as a hardware one's, so the buffer says which path produced the frame
+//! and says nothing whatever about what decoded it.
 //!
 //! A tick is not a frame. The clock this side ticks on is a vertical blank, sixty times a
-//! second whatever the file runs at, so most ticks of a film find the engine offering the
-//! picture it offered the last four of them, and a tick that finds one is answered without
-//! taking it at all (see [`is_a_new_frame`]). That is most of the difference between a video
-//! previewed on the engine and a video previewed by FFmpeg's player: the same file is
-//! decoded, copied and handed to the compositor as many times as it has frames rather than
-//! as many times as the display refreshes, and a 4K one is four times the frame of a
-//! 1080p one throughout. It is also why the two ends of it have to be read together: a 144 fps
-//! file is decoded at 144 fps and drawn at sixty, so most of what the engine decodes is never
-//! shown — nearly free on a GPU, and on a preview box of a display's own size it is the largest
-//! single cost there is (see `tests::video_take_cost`).
+//! second whatever the file runs at, so for a file at or below that rate most ticks find the
+//! engine offering the picture it offered the last of them, and a tick that finds one is answered
+//! without taking it at all (see [`is_a_new_frame`]). A file above that rate is the other way
+//! round: a 144 fps one is decoded at 144 fps and drawn at sixty, so most of what the engine
+//! decodes is never shown at all — and on a machine whose decoder is the software one, which this
+//! is, that is the largest single cost there is (see `tests::video_take_cost`). A 4K picture is
+//! four times the frame of a 1080p one throughout, which is why that cost is where it is felt.
 //!
 //! Who *scales* the picture is settled by the two sizes alone: a box meaningfully larger than
 //! the picture is one this side scales into it ([`scale_rows`]), because which filter the
