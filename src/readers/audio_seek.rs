@@ -568,7 +568,7 @@ mod tests {
     /// in the app keeps anything that says so.
     #[test]
     fn a_remembered_position_is_written_where_the_next_run_reads_it() {
-        let path = Path::new(r"C:\Music\Kind of Blue - So What (Remastered).flac");
+        let path = Path::new(r"C:\Music\track.flac");
         let _ = std::fs::remove_file(memory_path());
 
         assert_eq!(

@@ -4235,8 +4235,8 @@ impl HoverLocation {
 /// A fact out of the Shell is the Shell's own spelling of it, and the Shell does not spell
 /// one place the same way on every look. The folder a view has open is canonicalized where
 /// that succeeds — which is where the verbatim `\\?\` form comes from — and is left as the
-/// view reported it where it does not, so the same folder answers `\\?\<pictures>` on one
-/// look and `<pictures>` on the next, on the volumes where canonicalizing is the thing
+/// view reported it where it does not, so the same folder answers `\\?\D:\Pictures` on one
+/// look and `D:\Pictures` on the next, on the volumes where canonicalizing is the thing
 /// that fails from time to time. Read as it comes, that difference is a difference of
 /// *place*, and the preview of a file that never moved is taken down on the look that
 /// happens to answer the other spelling — and put back on the one after it, which is a
@@ -8610,18 +8610,18 @@ mod tests {
     #[test]
     fn one_place_spelled_two_ways_is_one_place() {
         assert_eq!(
-            location_fact_key(r"\\?\<downloads>\fixture"),
-            location_fact_key(r"<downloads>\fixture"),
+            location_fact_key(r"\\?\D:\Downloads\media\fixture"),
+            location_fact_key(r"D:\Downloads\media\fixture"),
             "the verbatim form names the path it is written around"
         );
         assert_eq!(
-            location_fact_key(r"<pictures>\"),
-            location_fact_key(r"<pictures>"),
+            location_fact_key(r"D:\Pictures\"),
+            location_fact_key(r"D:\Pictures"),
             "a trailing separator names the place named without it"
         );
         assert_eq!(
-            location_fact_key(r"<pictures>"),
-            location_fact_key(r"g:\pictures"),
+            location_fact_key(r"D:\Pictures"),
+            location_fact_key(r"d:\pictures"),
             "and Windows reads two spellings of a path as one path"
         );
         assert_eq!(
