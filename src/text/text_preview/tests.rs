@@ -1,5 +1,8 @@
+use super::frame::TextFrame;
 use super::*;
+use crate::config::config::{MarkdownMode, TextTheme};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Where the fixtures and the pictures of them are written. The scratchpad
 /// the session hands out, so a render can be looked at rather than only
@@ -60,8 +63,7 @@ fn draws_pages_of_text() {
             full_mode,
         };
 
-        let (width, height) =
-            measure(path, 1_920, 1_200, 96, options).expect("a measured page");
+        let (width, height) = measure(path, 1_920, 1_200, 96, options).expect("a measured page");
         let frame = render_scrolled(path, 0, width, height, 96, options, None).expect("a page");
 
         assert!(frame.width > 0 && frame.height > 0, "{name}");
