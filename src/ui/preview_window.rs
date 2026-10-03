@@ -13921,6 +13921,13 @@ struct PinVolume {
     audio: bool,
     /// The level this pin is playing at, 0-100.
     level: u32,
+    /// The level this pin was playing a file of the *other* kind at, and which kind that was:
+    /// the level one slot cannot hold across a walk from a sound onto a film and back.
+    ///
+    /// Only a level `Remember` says is kept is kept, and it is only asked for while it says so —
+    /// with the switch off the knob belongs to the window it was turned on and to no other file
+    /// whatever, so there is nothing here for a walk to come back to (see `pin_level_is_remembered`).
+    kept: Option<(bool, u32)>,
     /// The level the player that is running now was started at. FFmpeg's player is told nothing
     /// while it runs — a level is another player begun at that level — so what says whether one is
     /// owed is this against `level`, and what the bar is drawn from is always `level`.
@@ -13949,22 +13956,89 @@ fn pinned_volume_level() -> u32 {
 
 /// The level the pin that is up plays at, for a file of the kind named: the pin's own where the
 /// level it is holding belongs to that kind — a knob turned on the bar is a hand on the file the bar
-/// is under, and it is kept for the next file of that kind — and the tray's setting for the kind
-/// otherwise.
+/// is under, and it is kept for the next file of that kind — the level it was playing that kind at
+/// before it walked off it, where `Remember` says a level moved on a knob is kept — and the tray's
+/// setting for the kind otherwise.
 ///
 /// Reading the two apart is the whole of what a pin walking off a sound and onto a film needs: the
 /// level in hand is the sound's, so a film played at `Volume → Video` — 0% and silent, as the tray
 /// is set more often than not — is played at `Volume → Audio` if the sound's level is carried onto
-/// it, which is a film at full volume out of a tray that says it should make no noise at all.
+/// it, which is a film at full volume out of a tray that says it should make no noise at all. And
+/// the walk back is what one slot cannot answer on its own: a sound at 100% walked onto a film and
+/// back is a sound at 100% again while `Remember` says so, and one slot has been holding the film's
+/// 0% by then (see `PinVolume::kept`).
 fn pinned_level(audio: bool) -> u32 {
-    let held =
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| (pin.volume.audio, pin.volume.level)));
+    pin_level_for(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.volume)),
+        audio,
+    )
+}
 
-    match held {
-        Some((on_audio, level)) if on_audio == audio => level,
-        _ if audio => current_audio_volume(),
-        _ => current_video_volume(),
+/// The same answer as `pinned_level`, over a level in hand rather than over the pin it is on — the
+/// one place both the read above and the take-up below are asked it, so the level a swap is made
+/// with and the level a player is begun at cannot be two answers to one question.
+fn pin_level_for(holding: Option<PinVolume>, audio: bool) -> u32 {
+    let tray = || {
+        if audio {
+            current_audio_volume()
+        } else {
+            current_video_volume()
+        }
+    };
+
+    let Some(holding) = holding else {
+        return tray();
+    };
+
+    if holding.audio == audio {
+        return holding.level;
     }
+
+    match holding.kept {
+        Some((kind, level)) if kind == audio && pin_level_is_remembered(audio) => level,
+        _ => tray(),
+    }
+}
+
+/// What a pin is up at after it has been taken up on a file of the kind named: `pin_level_for`'s
+/// answer, of that kind, with the level it was holding kept for the kind it walked off.
+///
+/// A file of the kind the pin is already showing carries its level whole rather than coming through
+/// here, so what this is for is the walk from one kind to the other: the level in hand is that other
+/// kind's and is answered by that other kind's setting, and the level it is replaced with is kept so
+/// that walking back is answered by the pin rather than by whatever the setting says by then.
+fn pin_volume_taken_up(holding: Option<PinVolume>, audio: bool) -> PinVolume {
+    let level = pin_level_for(holding, audio);
+    // Kept where `Remember` says the level in hand is the level the next file of its kind is played
+    // at, and nowhere else: with it off the knob belongs to the window it was turned on, so a level
+    // that leaves this window's kind leaves it (see `pin_level_is_remembered`).
+    let kept = holding.and_then(|holding| {
+        pin_level_is_remembered(holding.audio).then_some((holding.audio, holding.level))
+    });
+
+    PinVolume {
+        audio,
+        level,
+        playing_at: level,
+        kept,
+        ..Default::default()
+    }
+}
+
+/// Whether a level moved on a pin's own knob is the level the next file of that kind is played at:
+/// the `Remember` row under the level it was moved against, which is what says whether a level
+/// outlives a walk onto a file of another kind (see `PinVolume::kept` and `remember_pin_volume`).
+fn pin_level_is_remembered(audio: bool) -> bool {
+    CONFIG
+        .lock()
+        .map(|config| {
+            if audio {
+                config.remember_audio_volume
+            } else {
+                config.remember_video_volume
+            }
+        })
+        .unwrap_or(false)
 }
 
 /// Whether the pin that is up has its volume popup open, which is what the tick's re-assertion of
@@ -14837,30 +14911,42 @@ fn remember_pin_volume(level: u32) {
 /// Write the file a pin's level is remembered in once the knob is let go of, so that a drag is one
 /// write rather than the hundred the knob moved through.
 ///
-/// The write happens where the level and what is written of it disagree, which is nowhere on a drag
-/// — every step of it already put the level into the configuration — and on the click that moved
-/// nothing before the release. It is asked for whether or not a player was owed a level: a knob
+/// One write, and it is the write the `Remember` row beside the level promises: where the row is on
+/// the file is brought up to the level in hand, and where it is off nothing is written at all (see
+/// `put_remembered_pin_volume`). It is asked for whether or not a player was owed a level: a knob
 /// turned on a paused pin settles nothing to a player but is still a level the next sound is wanted
 /// at (see `remember_pin_volume`).
 fn save_remembered_pin_volume(level: u32) {
     let Ok(mut config) = CONFIG.lock() else {
         return;
     };
-    let written = match current_media_type() {
-        Some(MediaType::Audio) if config.remember_audio_volume && config.audio_volume != level => {
+    if put_remembered_pin_volume(&mut config, current_media_type(), level) {
+        config.save();
+    }
+}
+
+/// Put the level a pin's knob was let go at where `Remember` says a level moved on that knob is
+/// kept, answering whether the file is owed a write because of it.
+///
+/// Nothing here compares the level against what the configuration already holds, and that is the
+/// whole of what it used to get wrong: by the time the knob is let go the configuration holds
+/// exactly this level, because every step of the drag put it there and so did the click that moved
+/// nothing before the release (`remember_pin_volume`). A comparison of the two is a comparison of a
+/// thing with itself, which is why the file was never written at all.
+///
+/// What it answers is asked of a configuration in hand rather than of the running one, so the
+/// question can be asked of a level without a file being written for the asking.
+fn put_remembered_pin_volume(config: &mut AppConfig, kind: Option<MediaType>, level: u32) -> bool {
+    match kind {
+        Some(MediaType::Audio) if config.remember_audio_volume => {
             config.audio_volume = level;
             true
         }
-        Some(MediaType::NativeVideo) | Some(MediaType::Video)
-            if config.remember_video_volume && config.video_volume != level =>
-        {
+        Some(MediaType::NativeVideo) | Some(MediaType::Video) if config.remember_video_volume => {
             config.video_volume = level;
             true
         }
         _ => false,
-    };
-    if written {
-        config.save();
     }
 }
 
@@ -16375,12 +16461,18 @@ fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     // length nothing has read yet is kept for the tick that can ask for it (see
     // `audio_seek::start_position`). A sound no player will take is a card with no clock behind it,
     // which is the same answer the load path gives one.
+    //
+    // At the level the plan was made with rather than at the tray's, which is the level a film two
+    // arms above is started at and the level the card is about to be drawn at: a knob moved on this
+    // window's own bar is a level the next sound is played at, and a player begun at the tray's
+    // under a card that says otherwise is a sound the card and the user's ear disagree about (see
+    // `PinVolume`).
     if file.media.media_type.is_audio() {
         let seek = current_audio_seek();
         let length = audio_track::playable(&file.path).and_then(|track| track.duration);
         let start = audio_seek::start_position(&file.path, seek, length);
 
-        if !start_audio_playback(&file.path, &mut file.media, start) {
+        if !start_audio_playback_at(&file.path, &mut file.media, start, volume) {
             return PinSwap::Refused {
                 path: file.path,
                 walk: file.walk,
@@ -24055,18 +24147,14 @@ pub fn run_preview_window() {
                         );
                         let content = content_box_of(window, dpi, transport_bar, overlay, caption);
 
-                        // The level the pin plays at is the one the tray names now — which is the
-                        // level the preview it came from is already playing at, both engines being
-                        // started at `Volume → Video` — and from the moment the pin is up the level
-                        // is this window's own: a knob moved on its bar moves nothing else (see
-                        // `PinVolume`). A sound's is `Volume → Audio`, for the same reason and
-                        // because it is the setting that preview was playing at.
+                        // Whether the file this pin is coming up on is a sound, which is what says
+                        // which of the tray's two level settings the level it plays at is read of:
+                        // `Volume → Audio` for a sound, because that is the setting its preview was
+                        // playing at, and `Volume → Video` for every other kind. From the moment the
+                        // pin is up the level is this window's own, so it is asked of the pin where
+                        // it is holding one and of the tray where it is not (see `pin_volume_taken_up`
+                        // and `PinVolume`).
                         let audio_kind = matches!(kind, Some(MediaType::Audio));
-                        let volume = if audio_kind {
-                            current_audio_volume()
-                        } else {
-                            current_video_volume()
-                        };
 
                         // A pin taken up over another one — the file it was showing was picked by
                         // the pointer or the keyboard while it was up (see `PinUpdate`) — is the
@@ -24213,19 +24301,17 @@ pub fn run_preview_window() {
                                 // own and is carried; one carried onto a file of another kind
                                 // is that other kind's bar having been turned, and is not
                                 // carried — the file arrives at the level the tray names for
-                                // it above, which is the whole of a pin walking off a sound
-                                // at `Volume → Audio` and onto a film the tray has muted
-                                // (see `pinned_level`).
+                                // it, and the level walked off is kept so that walking back is
+                                // answered by the pin rather than by the setting (see
+                                // `pin_volume_taken_up`).
                                 volume: match carried {
                                     Some((_, _, volume, ..)) if volume.audio == audio_kind => {
                                         volume
                                     }
-                                    _ => PinVolume {
-                                        audio: audio_kind,
-                                        level: volume,
-                                        playing_at: volume,
-                                        ..Default::default()
-                                    },
+                                    carried => pin_volume_taken_up(
+                                        carried.map(|(_, _, volume, ..)| volume),
+                                        audio_kind,
+                                    ),
                                 },
                                 audio_hovered: None,
                                 audio_pressed: None,
@@ -31775,6 +31861,9 @@ mod tests {
     struct PinLevels {
         video: u32,
         audio: u32,
+        /// The two `Remember` rows beside them, put where `remembering` says and put back with the
+        /// levels (see `pin_level_is_remembered`).
+        remember: Option<(bool, bool)>,
     }
 
     impl PinLevels {
@@ -31783,11 +31872,31 @@ mod tests {
             let was = PinLevels {
                 video: config.video_volume,
                 audio: config.audio_volume,
+                remember: None,
             };
             config.video_volume = video;
             config.audio_volume = audio;
 
             was
+        }
+
+        /// The two `Remember` rows under the two levels, for a test whose subject is what a level
+        /// moved on a pin's own knob outlives (see `PinVolume::kept`).
+        fn remembering(&mut self, audio: bool, video: bool) {
+            if let Ok(mut config) = CONFIG.lock() {
+                config.remember_audio_volume = audio;
+                config.remember_video_volume = video;
+            }
+            self.remember = Some((audio, video));
+        }
+
+        /// The two levels moved again under a guard already taken, which is what reading the setting
+        /// back out of the file looks like to the pin holding it.
+        fn set_levels(&mut self, video: u32, audio: u32) {
+            if let Ok(mut config) = CONFIG.lock() {
+                config.video_volume = video;
+                config.audio_volume = audio;
+            }
         }
     }
 
@@ -31796,6 +31905,10 @@ mod tests {
             if let Ok(mut config) = CONFIG.lock() {
                 config.video_volume = self.video;
                 config.audio_volume = self.audio;
+                if let Some((audio, video)) = self.remember {
+                    config.remember_audio_volume = audio;
+                    config.remember_video_volume = video;
+                }
             }
         }
     }
@@ -31895,6 +32008,158 @@ mod tests {
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = previous_media;
         }
+    }
+
+    /// The round trip a sound's card makes through a film, both ways round: with
+    /// `Volume → Audio`'s `Remember` on a level a hand left on that card is the level the next sound
+    /// is played at and a film stepped onto in between does not throw it away, and with the row off
+    /// the knob goes with the sound it was turned on and every switch is the setting's own.
+    ///
+    /// The step in the middle of the remembered half is the whole of it.
+    /// `remember_pin_volume` puts the level into the configuration as the knob moves, but
+    /// `save_remembered_pin_volume` writes the file only where the two disagree — and they never do,
+    /// because the first of those has just made them agree — so the file still says what the tray
+    /// said before the drag. Anything that reads the setting back hands the pin a tray at 10% again:
+    /// the watcher after `config.ini` is edited, or the next run. One slot cannot answer for both
+    /// kinds at once, so a pin holding only the film's 0% by then plays the returning sound at 10%,
+    /// out of a card its own knob was left at 100%.
+    #[test]
+    fn a_sound_stepped_back_onto_from_a_film_is_at_the_level_its_own_card_was_left_at() {
+        let mut levels = PinLevels::set(0, 10);
+        levels.remembering(true, false);
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = take_pin_for_a_test();
+
+        let mut sound = create_loading_media(320, 240);
+        sound.media_type = MediaType::Audio;
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = Some(sound);
+        }
+
+        // The pin comes up on a sound at the tray's 10%, and a hand turns its knob to 100%.
+        stand_pin(Some(PinnedPreview {
+            volume: PinVolume {
+                audio: true,
+                level: 10,
+                playing_at: 10,
+                ..Default::default()
+            },
+            ..sound_pin()
+        }));
+        set_pin_volume(100);
+
+        // A film is stepped onto, at `Volume → Video`, which the tray has at 0%.
+        stand_pin(Some(PinnedPreview {
+            volume: pin_volume_taken_up(pin_holding(), false),
+            ..overlay_pin((100, 100, 420, 340), PinChrome::always())
+        }));
+        assert_eq!(
+            pinned_volume_level(),
+            0,
+            "the film is at `Volume → Video`, so it is silent"
+        );
+
+        // The setting is read back out of the file the release never wrote, and says 10% again.
+        levels.set_levels(0, 10);
+
+        // And the sound is stepped onto from it, which is the whole of the round trip.
+        stand_pin(Some(PinnedPreview {
+            volume: pin_volume_taken_up(pin_holding(), true),
+            ..sound_pin()
+        }));
+        assert_eq!(
+            pinned_audio_level(),
+            100,
+            "the sound is at the level its own card was left at, and not at what the setting says"
+        );
+
+        // The same round trip with the row off, where none of the above is written down at all: a
+        // knob belongs to the window it was turned on and to no other file whatever, so the setting
+        // is what every switch is answered by (see `pin_level_is_remembered`).
+        levels.remembering(false, false);
+        stand_pin(Some(PinnedPreview {
+            volume: PinVolume {
+                audio: true,
+                level: 10,
+                playing_at: 10,
+                ..Default::default()
+            },
+            ..sound_pin()
+        }));
+        set_pin_volume(100);
+        stand_pin(Some(PinnedPreview {
+            volume: pin_volume_taken_up(pin_holding(), false),
+            ..overlay_pin((100, 100, 420, 340), PinChrome::always())
+        }));
+        assert_eq!(
+            current_audio_volume(),
+            10,
+            "and nothing was written down, so there is nothing to read back either"
+        );
+
+        stand_pin(Some(PinnedPreview {
+            volume: pin_volume_taken_up(pin_holding(), true),
+            ..sound_pin()
+        }));
+        assert_eq!(
+            pinned_audio_level(),
+            10,
+            "the knob's 100% went with the sound it was turned on, and the setting is what is left"
+        );
+
+        stand_pin(previous_pin);
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = previous_media;
+        }
+    }
+
+    /// What the pin that is up is holding, as the take-up reads it before the file it is coming up
+    /// on is known.
+    fn pin_holding() -> Option<PinVolume> {
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.volume))
+    }
+
+    /// `Volume → Audio`'s `Remember` is a claim about `config.ini`, and this is the claim: the level
+    /// in hand is put where the file will be asked for it again, and the file is written.
+    ///
+    /// The level is already in the configuration before the question is asked, and it always is —
+    /// `remember_pin_volume` put it there on every step of the drag, and again on the click that
+    /// moved nothing before the release — so a question shaped as "is the file out of step with the
+    /// level?" is answered no every time, and the file was never written by either of the two rows
+    /// (`a_level_moved_on_a_pin_is_the_pins_and_not_the_setting` covers the half that keeps the
+    /// level in hand, which is a different thing entirely from writing it down).
+    #[test]
+    fn a_remembered_level_is_written_even_where_the_configuration_already_holds_it() {
+        let mut config = AppConfig::default();
+        config.remember_audio_volume = true;
+        config.remember_video_volume = true;
+        config.audio_volume = 100;
+        config.video_volume = 0;
+
+        assert!(
+            put_remembered_pin_volume(&mut config, Some(MediaType::Audio), 100),
+            "the level is in the configuration already, which is what a drag is, and the file is \
+             written all the same"
+        );
+
+        assert!(
+            put_remembered_pin_volume(&mut config, Some(MediaType::Video), 0),
+            "and a film's own row is asked the same question of its own level"
+        );
+
+        // A level that is not remembered is the window's own and there is nothing to write down.
+        config.remember_audio_volume = false;
+        config.remember_video_volume = false;
+        assert!(
+            !put_remembered_pin_volume(&mut config, Some(MediaType::Audio), 100),
+            "with the row off the knob moves the window alone"
+        );
+
+        // And a kind with no row of its own is neither half's answer.
+        assert!(
+            !put_remembered_pin_volume(&mut config, Some(MediaType::Pdf), 100),
+            "a page has no level to remember"
+        );
     }
 
     fn edge(left: bool, top: bool, right: bool, bottom: bool) -> PinResize {
