@@ -67,7 +67,9 @@ fn memory_path() -> PathBuf {
     #[cfg(test)]
     let root = std::env::temp_dir().join("rust-hover-preview-audio-seek-tests");
     #[cfg(not(test))]
-    let root = std::env::temp_dir().join("rust-hover-preview").join("audio");
+    let root = std::env::temp_dir()
+        .join("rust-hover-preview")
+        .join("audio");
 
     root.join("seek.txt")
 }
@@ -185,12 +187,19 @@ pub fn remember(path: &Path, position: f64) {
     let key = key(path);
 
     with_memory(|memory| {
-        memory
-            .entries
-            .insert(key, Entry { position, used: now() });
+        memory.entries.insert(
+            key,
+            Entry {
+                position,
+                used: now(),
+            },
+        );
         memory.dirty = true;
 
-        if memory.written.is_none_or(|at| at.elapsed() >= FLUSH_INTERVAL) {
+        if memory
+            .written
+            .is_none_or(|at| at.elapsed() >= FLUSH_INTERVAL)
+        {
             write(memory);
         }
     });
@@ -268,13 +277,7 @@ fn parse(text: &str) -> HashMap<String, Entry> {
             continue;
         }
 
-        entries.insert(
-            key.to_string(),
-            Entry {
-                position,
-                used,
-            },
-        );
+        entries.insert(key.to_string(), Entry { position, used });
     }
 
     entries
@@ -407,7 +410,10 @@ fn anywhere() -> f64 {
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_nanos() as u64)
         .unwrap_or(0);
-    let roll = clock ^ DRAWN.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let roll = clock
+        ^ DRAWN
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     roll.hash(&mut hasher);
@@ -622,7 +628,11 @@ mod tests {
 
         // A memory with room for all four keeps all four.
         let text = render(&mut entries, 4096);
-        assert_eq!(entries.len(), 4, "nothing is given up where everything fits");
+        assert_eq!(
+            entries.len(),
+            4,
+            "nothing is given up where everything fits"
+        );
         assert_eq!(text.lines().count(), 5, "a header and one line per sound");
 
         // And one with room for two keeps the two that were left off most recently.

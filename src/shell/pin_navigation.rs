@@ -761,8 +761,10 @@ mod tests {
 
         FOLDERS.lock().expect("the walk's own map").clear();
 
-        let mut config = AppConfig::default();
-        config.audio_preview_enabled = false;
+        let config = AppConfig {
+            audio_preview_enabled: false,
+            ..Default::default()
+        };
         let current = folder.join("a.txt");
 
         let list = list_for(&current, &config)

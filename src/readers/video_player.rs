@@ -222,11 +222,10 @@ use windows::Win32::Media::MediaFoundation::{
     MFMediaType_Audio, MFMediaType_Video, MFVideoFormat_ARGB32, MFVideoFormat_RGB32,
     MFVideoNormalizedRect, MFARGB, MF_BYTESTREAM_ORIGIN_NAME, MF_MEDIA_ENGINE_CALLBACK,
     MF_MEDIA_ENGINE_EVENT_ERROR, MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY,
-    MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA,
-    MF_MEDIA_ENGINE_READY_HAVE_METADATA, MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
-    MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE, MF_MT_FRAME_SIZE,
-    MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_PD_DURATION,
-    MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
+    MF_MEDIA_ENGINE_READY_HAVE_CURRENT_DATA, MF_MEDIA_ENGINE_READY_HAVE_METADATA,
+    MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND,
+    MF_MT_AVG_BITRATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+    MF_PD_DURATION, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
     MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE,
 };
 use windows::Win32::System::Com::{
@@ -836,8 +835,7 @@ pub fn failing_path() -> Option<PathBuf> {
 /// — it belongs to a tick — and a question that has to be asked with a borrow of a session on
 /// the preview thread is a question that cannot be asked in a test at all.
 fn engine_is_failing(surface: bool, drew: bool, refusals: u32, age: Duration) -> bool {
-    surface
-        && (a_run_of_refusals_is_a_failure(refusals) || (!drew && age >= FIRST_FRAME_GIVE_UP))
+    surface && (a_run_of_refusals_is_a_failure(refusals) || (!drew && age >= FIRST_FRAME_GIVE_UP))
 }
 
 /// The file the engine is failing at before it has drawn a frame of it, if it is failing at one
@@ -2744,10 +2742,7 @@ mod tests {
             }
         );
         println!("{refused} ticks came back with nothing to draw");
-        println!(
-            "the session is still playing: {}",
-            is_playing(),
-        );
+        println!("the session is still playing: {}", is_playing(),);
 
         stop();
     }
