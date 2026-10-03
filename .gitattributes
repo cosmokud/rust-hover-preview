@@ -6,3 +6,10 @@
 # and a worktree whose files disagree with that is one `cargo fmt` rewrites on sight.
 # CI checks out the same bytes, so a formatting run answers the same there as here.
 *.rs text eol=lf
+
+# Hooks are shell scripts that git runs itself, and a shebang with a carriage return
+# on the end is not a shebang: a Windows clone carrying `core.autocrlf` would rewrite
+# these to CRLF and every hook would fail with `bad interpreter` before running a
+# line. Same reason as the rule above, and the same fix - say the line ending out
+# rather than leaving it to whichever machine is cloning.
+.githooks/* text eol=lf
