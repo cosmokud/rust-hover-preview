@@ -916,16 +916,63 @@ pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
     }
 }
 
+/// The lock every test that shares the preview's own state takes, so that one of them runs at a
+/// time: what is shared is process-wide and there is one copy of it, so two of these at once is
+/// one test's press answered by another's window.
+///
+/// That state is the media the preview is showing (`CURRENT_MEDIA`), the pin's slot and the
+/// published copy of whether one is up (`PIN_STATE` and `PIN_UP`, reached through `stand_pin`
+/// and `pin_state`), and the press the Explorer hook publishes for the pin's drag
+/// (`publish_pin_media_press`). A pin is the clearest case of what goes wrong without this. A
+/// test stands a pin up through `stand_pin`, which writes the slot whole, and a second test
+/// doing the same at the same moment does not merge with it — it replaces it, so the first goes
+/// on to assert against the second's pin and is answered by it. There is no torn read to appeal
+/// to here: both takes are whole, and both take the slot's own lock. Two tests each holding a
+/// lock, and neither holding the other's answer.
+///
+/// So the lock is wanted of every test that reaches that state and not only of the ones that
+/// write it. A test that merely asks `pinned()`, or reads `CURRENT_MEDIA` to see what kind of
+/// media is up, is still asserting on what it found, and what it found is whatever the test
+/// beside it left standing: a hover asked while a pin is up is answered by `show_preview`'s
+/// early return, and reports no hover at all rather than a wrong one. Reading is the half that
+/// is easy to leave out, and it fails the same way writing does.
+///
+/// There is one lock for this state, not one per module, and it is here because this module owns
+/// the state: the slot is the one declared above, and the tests that stand a pin up stand it from
+/// both sides of the module wall. A second lock over the same slot is not a second line of
+/// defence, it is no defence at all — a test in `preview_window` holding that one and a test here
+/// holding this one each believe they are alone with the pin, and are not. The fix for that is
+/// not a second mutex, which is what this file had alongside the one in `preview_window`, but
+/// this one mutex with both modules' tests reaching it by path.
+///
+/// A poisoned lock is read through rather than refused. This mutex holds no state, only the order
+/// of the tests around it, so a panic inside one of them leaves nothing behind to recover but
+/// that order — and refusing the lock would turn one failed assertion into every later test of
+/// the group, each turned away at the door over a hold it never needed. What is being protected
+/// is the order, so the order is taken back.
+///
+/// The rule for a test that reaches this state, then: does it stand a pin up, take one down,
+/// write the media, or ask any of the above? Take this lock on the first line of the body, before
+/// anything touches that state. A test that touches none of it takes nothing — most of both
+/// modules is arithmetic over values handed to it — so the suite is not serialised, only the part
+/// of it that shares a machine. A lock over some other process-wide thing, like the pointer's own
+/// stand-in in `preview_window`, is a different lock and neither stands in for this one.
+///
+/// And holding the lock is half of what is owed to the test that comes next: a test that stands a
+/// pin up puts it down again before it lets the lock go. Serialising the tests puts them one at a
+/// time, which is what stops them answering one another mid-test, but it does nothing about what
+/// one of them leaves standing for the next one to walk into — and a test that asserts "no pin to
+/// read at first" is asserting about whatever the test before it did not clean up. That is an
+/// order dependence rather than a race, so it hides from a suite that happens to run in a lucky
+/// order and shows up as an occasional red under load, where thread scheduling decides who runs
+/// next. Three tests here stood a pin up to ask about its queue and left it up, and the read of
+/// the empty slot is what caught it.
+#[cfg(test)]
+pub(super) static PIN_TESTS_ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The lifecycle's whole vocabulary, in the order a pin goes through it, so a test that
-    /// wants a pin up has one call for it and a test that wants it down has one for that.
-    ///
-    /// The state is a process-wide value, so these tests are one at a time: a suite of
-    /// transitions over a shared machine is a suite where one test's pin is another's.
-    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     /// Every reason there is, which is what a road out of a pin is asked for.
     const EVERY_REASON: [Reason; 5] = [
@@ -983,7 +1030,9 @@ mod tests {
     /// same reason the state does — the release is a message back into this thread.
     #[test]
     fn the_pointer_goes_before_the_state_and_only_where_this_thread_holds_it() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         let loop_window = RecordedPinWindow::new(0x1000);
@@ -1026,7 +1075,9 @@ mod tests {
     /// would have passed against the copy.
     #[test]
     fn the_whole_of_what_each_road_owes_the_window() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         a_pin_holding_the_keyboard(0x2000);
         let loop_window = RecordedPinWindow::new(0x1000);
@@ -1077,7 +1128,9 @@ mod tests {
     /// is over whether or not there was anything to take down.
     #[test]
     fn a_road_with_no_window_asks_it_for_nothing() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         for reason in EVERY_REASON {
             install(a_pin());
@@ -1109,7 +1162,9 @@ mod tests {
     /// the time the focus is given up, the pin is already gone.
     #[test]
     fn the_pin_s_own_lock_is_not_held_across_a_window_call() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         a_pin_holding_the_keyboard(0x2000);
         let window = LookingWindow::new();
@@ -1221,7 +1276,9 @@ mod tests {
     /// over a window nothing would ever take down.
     #[test]
     fn the_published_flag_and_the_state_never_disagree() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         assert!(pin_is_up(), "installed: a pin is published as up");
@@ -1252,7 +1309,9 @@ mod tests {
     /// claiming it, rather than leaving a claim on a file the window is no longer showing.
     #[test]
     fn a_pin_taken_up_over_another_one_keeps_the_window_s_own_queue_and_drops_its_claim() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         a_pin_holding_the_keyboard(0x2000);
         install(a_pin());
@@ -1270,6 +1329,8 @@ mod tests {
             "but the keyboard claim is not carried: it was the old file's, and the new pin has \
              pressed nothing"
         );
+
+        stand_pin(None);
     }
 
     /// Every command a caption's button asks for survives the trip out of the window procedure
@@ -1279,7 +1340,9 @@ mod tests {
     /// nothing else — so a button whose code nothing reads back is a button that does nothing.
     #[test]
     fn every_command_a_caption_asks_for_comes_back_to_the_loop() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         for command in [
@@ -1307,6 +1370,8 @@ mod tests {
         assert_eq!(take_pin_command(), Some(PinCommand::Previous));
         assert_eq!(take_pin_command(), Some(PinCommand::Next));
         assert_eq!(take_pin_command(), None, "a command is taken once");
+
+        stand_pin(None);
     }
 
     /// A command queue drops the oldest rather than growing without end.
@@ -1315,7 +1380,9 @@ mod tests {
     /// session ends. What goes is the oldest, so what survives is what was last asked for.
     #[test]
     fn a_command_queue_drops_the_oldest_rather_than_growing_without_end() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         for _ in 0..(PIN_COMMANDS_MAX + 4) {
@@ -1332,6 +1399,8 @@ mod tests {
             PIN_COMMANDS_MAX,
             "the queue is bounded, however many asks are made of it"
         );
+
+        stand_pin(None);
     }
 
     /// The keyboard goes back to the window it came from.
@@ -1341,7 +1410,9 @@ mod tests {
     /// window that was in front a moment ago.
     #[test]
     fn the_keyboard_goes_back_to_the_window_it_came_from() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         take_keyboard(0x2000, true);
@@ -1368,7 +1439,9 @@ mod tests {
     /// never there.
     #[test]
     fn a_pin_that_took_the_keyboard_from_nothing_hands_it_back_to_nothing() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         take_keyboard(0, true);
@@ -1393,7 +1466,9 @@ mod tests {
     /// `make_the_window_unfocusable_again`).
     #[test]
     fn a_pin_with_nothing_on_the_keyboard_owes_nobody_a_handover() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         let window = RecordedPinWindow::new(0x1000);
@@ -1432,7 +1507,9 @@ mod tests {
     /// handover itself would have gone on each.
     #[test]
     fn a_road_out_of_a_pin_holding_no_keyboard_still_puts_the_style_back() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         for reason in EVERY_REASON {
             // A pin the hand never pressed, which is the ordinary one: nothing is claimed, so the
@@ -1485,7 +1562,9 @@ mod tests {
     /// bit and a handle that could be set one without the other.
     #[test]
     fn the_note_that_the_keyboard_was_taken_is_dropped_with_the_focus() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         take_keyboard(0x2000, true);
@@ -1514,7 +1593,9 @@ mod tests {
     /// it from (see `make_the_window_unfocusable_again`).
     #[test]
     fn a_press_the_windows_refused_leaves_no_claim_to_hand_over() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         take_keyboard(0x2000, false);
@@ -1560,7 +1641,9 @@ mod tests {
     /// be the one that leaves the keyboard claimed.
     #[test]
     fn two_roads_racing_on_one_pin_end_it_once() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         a_pin_holding_the_keyboard(0x2000);
         end_pin(Reason::Hung, &RecordedPinWindow::new(0x1000));
@@ -1591,7 +1674,9 @@ mod tests {
     /// sample of it, because each of those four items was one the copy had wrong.
     #[test]
     fn every_reason_reaches_the_same_teardown() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         for reason in EVERY_REASON {
             a_pin_holding_the_keyboard(0x2000);
@@ -1627,7 +1712,9 @@ mod tests {
     /// collapsed with the caret on it still has to hand it back.
     #[test]
     fn a_collapsed_pin_is_still_a_pin_and_still_goes_down_the_same_way() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         take_keyboard(0x2000, true);
@@ -1660,7 +1747,9 @@ mod tests {
     /// watchdog's road cannot, and its own thread's hide covers it (see `hide_pin_windows`).
     #[test]
     fn a_pin_whose_window_is_a_bubble_takes_the_bubble_with_it() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         install(a_pin());
         let window = RecordedPinWindow::new(0x1000);
@@ -1675,7 +1764,9 @@ mod tests {
     /// The pin's own value is readable while it is up and gone once it is over.
     #[test]
     fn the_pin_s_own_state_is_readable_while_it_is_up_and_gone_once_it_is_over() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         assert!(
             pin_state().is_none_or(|state| state.pin().is_none()),
@@ -1704,7 +1795,9 @@ mod tests {
     /// that happened to remember to do it.
     #[test]
     fn a_pin_s_end_is_published_to_the_hook_once() {
-        let _one = ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         // Whatever a test elsewhere on the machine left published is drained first, since the
         // flag is process-wide and this one is about what an end does rather than about the
