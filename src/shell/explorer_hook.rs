@@ -59,9 +59,9 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowPlacement,
-    GetWindowRect, IsChild, IsIconic, IsWindowVisible, SystemParametersInfoW, WindowFromPoint,
-    GA_ROOT, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    WINDOWPLACEMENT,
+    GetWindowRect, IsChild, IsIconic, IsWindow, IsWindowVisible, SystemParametersInfoW,
+    WindowFromPoint, GA_ROOT, SPI_GETICONTITLELOGFONT, SW_SHOWMAXIMIZED,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOWPLACEMENT,
 };
 
 /// What the walk over Explorer's own windows found: how many there are, how many are
@@ -3723,6 +3723,29 @@ fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -> bool {
     over_explorer || over_our_own
 }
 
+/// Whether a press read on this tick is one a listing can answer for: the window it landed
+/// on is Explorer's or this app's own, and it is still there.
+///
+/// The second half is what a flyout the press just dismissed fails: `View ▸ Tiles` and
+/// `Sort ▸ Name` are popups covering rows, they are destroyed by the press that clicked
+/// them, and the hand does not move — so by the tick that reads the press the point is back
+/// over the Explorer frame and the lookup answers with the row the popup was covering. A
+/// press aimed at a window that no longer exists is not a press on the listing behind it.
+fn press_is_a_listing(
+    over_explorer: bool,
+    over_our_own: bool,
+    aimed_at_a_gone_window: bool,
+) -> bool {
+    click_is_over_a_listing(over_explorer, over_our_own) && !aimed_at_a_gone_window
+}
+
+/// Whether the window under the pointer on the tick before has been destroyed. Nothing on the
+/// first tick of a watch, and nothing where that tick named no window at all: a tick that read no
+/// window is a gap in the reading rather than a window that went away.
+fn window_is_gone(window: Option<HWND>) -> bool {
+    window.is_some_and(|window| !window.is_invalid() && !unsafe { IsWindow(window) }.as_bool())
+}
+
 /// The state the counts come out as: which sleep the loop takes, and whether the
 /// cursor is asked about at all.
 ///
@@ -4341,6 +4364,10 @@ struct PinUpdateWatch {
     /// The pointer as the last tick read it, or nothing on the first tick: what has been
     /// measured since is how the hand has come.
     pointer: Option<POINT>,
+    /// The window under the pointer as the tick before this one read it, or nothing on the
+    /// first tick. What a press is refused by when that window is gone: a flyout the press
+    /// dismissed is exactly that (see `press_is_a_listing`).
+    window: Option<HWND>,
     /// When the pointer last moved, which is what a hover of what is under it is measured from.
     settled_at: Option<Instant>,
     /// Whether the file under a settled pointer has already been resolved for that settle.
@@ -4482,6 +4509,8 @@ impl PinUpdateWatch {
             }
             None => true,
         };
+        let previous_window = self.window;
+        self.window = Some(pointer.window);
         self.pointer = Some(pointer.point);
 
         if moved {
@@ -4512,8 +4541,16 @@ impl PinUpdateWatch {
         // happens to have drawn there. Both doors a press comes through are closed by this one
         // answer: the file under the point, and the listing's own selection (see
         // `PinUpdateWatch::press_is_a_pick`).
+        //
+        // Where the press landed is the other half of what makes it a pick: a press is read off
+        // the key rather than off a window, so the window it landed on is the only thing that
+        // says a listing is under it (see `press_is_a_listing`). It is asked *after* the
+        // double-click rule rather than before, so a press refused for having landed somewhere
+        // else still books its point and cannot make the next press its own second half.
         let clicked = focus_move.clicked;
-        let pick = clicked && self.press_is_a_pick(pointer.point, threshold);
+        let pick = clicked
+            && self.press_is_a_pick(pointer.point, threshold)
+            && press_is_a_listing(over_explorer, over_our_own, window_is_gone(previous_window));
 
         // Whether the press was read at all, before anything is decided about it, and where
         // the pointer was when it was. This is the one reading that says a click was lost
@@ -4521,11 +4558,13 @@ impl PinUpdateWatch {
         // below because every one of them is reached only where something else already held.
         if clicked {
             note_pin_click!(
-                "press read  fg {}  at {},{}  win {}",
+                "press read  fg {}  at {},{}  win {}  prev win {}  gone {}",
                 is_foreground_explorer() as u8,
                 pointer.point.x,
                 pointer.point.y,
                 window_class_of(pointer.window),
+                previous_window.map_or_else(|| "none".to_string(), window_class_of),
+                window_is_gone(previous_window) as u8,
             );
         }
 
@@ -4539,9 +4578,11 @@ impl PinUpdateWatch {
             resolver.forget_window_views();
         }
 
-        if (pick && click_is_over_a_listing(over_explorer, over_our_own))
-            || (hovered && over_explorer)
-        {
+        // A pick is already a press that landed on a listing — that is what `press_is_a_listing`
+        // asked above — so this is the two ways a listing under the pointer is read, and neither
+        // of them asks again whether there is one. A hover is not a pick and is asked for
+        // separately, and only over Explorer's own window rather than over this app's.
+        if pick || (hovered && over_explorer) {
             self.probed = true;
 
             if let Some(path) = get_file_under_cursor(resolver, &pointer) {
@@ -4580,24 +4621,6 @@ impl PinUpdateWatch {
                     Some(Duration::ZERO),
                 );
             }
-        } else if pick {
-            // The same click, one step earlier in the race: what is under the pointer is not
-            // Explorer's own window because the window is not there yet, and a click is asked
-            // about wherever it landed rather than dropped for having landed early.
-            self.pending = Some(PendingClick {
-                at: now,
-                point: pointer.point,
-                place: click_place(resolver, &pointer),
-            });
-            trace_click(
-                &pointer,
-                &showing,
-                over_explorer,
-                true,
-                None,
-                false,
-                Some(Duration::ZERO),
-            );
         }
 
         // The click above, asked again now that the shell may have caught up. It runs only where
@@ -7189,6 +7212,46 @@ mod tests {
         assert!(
             !click_is_over_a_listing(false, false),
             "a click on the desktop, or another program, has no listing behind it to read"
+        );
+    }
+
+    /// A press whose window was destroyed is not a press on the listing that took its place:
+    /// `View ▸ Tiles` and `Sort ▸ Name` are popups covering rows, and the press that picks one
+    /// destroys the popup without the hand moving. A press over a listing that is still there
+    /// is unchanged, and a press over nothing at all was already refused.
+    #[test]
+    fn a_press_through_a_dismissed_popup_is_not_a_pick() {
+        assert!(
+            press_is_a_listing(true, false, false),
+            "a press on Explorer's own window, still there, is a pick"
+        );
+        assert!(
+            press_is_a_listing(false, true, false),
+            "and a press on a pinned window standing over the listing is one too"
+        );
+        assert!(
+            press_is_a_listing(true, true, false),
+            "and both at once is still one"
+        );
+        assert!(
+            !press_is_a_listing(true, false, true),
+            "a press that destroyed the window it landed on is a press on the popup, not the row behind it"
+        );
+        assert!(
+            !press_is_a_listing(false, true, true),
+            "and it is refused on a pinned window over the listing as well"
+        );
+        assert!(
+            !press_is_a_listing(false, false, false),
+            "a press on the desktop, or another program, has no listing behind it to read"
+        );
+        assert!(
+            !window_is_gone(None),
+            "nothing to have been destroyed on the first tick of a watch"
+        );
+        assert!(
+            !window_is_gone(Some(HWND(std::ptr::null_mut()))),
+            "and a tick that named no window at all is a gap in the reading, not a window that went away"
         );
     }
 
