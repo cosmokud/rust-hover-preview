@@ -8610,8 +8610,8 @@ mod tests {
     #[test]
     fn one_place_spelled_two_ways_is_one_place() {
         assert_eq!(
-            location_fact_key(r"\\?\D:\Downloads\media\fixture"),
-            location_fact_key(r"D:\Downloads\media\fixture"),
+            location_fact_key(r"\\?\D:\downloads"),
+            location_fact_key(r"D:\downloads"),
             "the verbatim form names the path it is written around"
         );
         assert_eq!(
