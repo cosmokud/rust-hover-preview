@@ -856,7 +856,7 @@ mod tests {
         let _in_flight = crate::engines::supervisor::IN_FLIGHT_TAKEN
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut engine = std::process::Command::new("ping")
+        let mut engine = crate::app::engine_processes::hidden_command("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
             .spawn()
@@ -954,7 +954,7 @@ mod tests {
 
         // And a process that is gone is not waited for at all: what that costs is a launch
         // for the document at hand, which is what a machine without an engine pays anyway.
-        let mut gone = std::process::Command::new("ping")
+        let mut gone = crate::app::engine_processes::hidden_command("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
             .spawn()

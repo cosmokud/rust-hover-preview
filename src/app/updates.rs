@@ -155,7 +155,7 @@ pub(crate) fn install() -> bool {
         return false;
     };
 
-    std::process::Command::new(installer)
+    crate::app::engine_processes::hidden_command(installer)
         .arg("/S")
         .arg("/R")
         .spawn()
