@@ -68,9 +68,8 @@ use crate::engines::supervisor::{self, Adapter, Worker};
 use crate::formats::peazip_formats::Backend;
 use once_cell::sync::Lazy;
 use std::io::Read;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -386,7 +385,7 @@ fn list(path: &Path) -> Option<crate::readers::archive_listing::Listing> {
 ///   own — a black rectangle over whatever the pointer was on, for as long as the launch lasted.
 ///   See `engine_processes` for the flag and for what it is said of.
 fn contents(backend: Backend, program: &Path, source: &Path) -> Option<(String, ExitStatus)> {
-    let mut command = Command::new(program);
+    let mut command = crate::app::engine_processes::hidden_command(program);
 
     match backend {
         Backend::SevenZip => {
@@ -409,7 +408,6 @@ fn contents(backend: Backend, program: &Path, source: &Path) -> Option<(String, 
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .creation_flags(crate::app::engine_processes::CREATE_NO_WINDOW)
         .spawn()
         .ok()?;
 
@@ -567,7 +565,7 @@ mod tests {
         let _in_flight = crate::engines::supervisor::IN_FLIGHT_TAKEN
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut engine = std::process::Command::new("ping")
+        let mut engine = crate::app::engine_processes::hidden_command("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
             .spawn()
@@ -706,7 +704,7 @@ mod tests {
         std::fs::write(&source, b"a text file, to be compressed\n").expect("a written file");
 
         let sample = folder.join("probe-source.txt.xz");
-        let made = Command::new(program)
+        let made = crate::app::engine_processes::hidden_command(program)
             .args(["a", "-txz", "-y"])
             .arg(&sample)
             .arg(&source)

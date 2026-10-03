@@ -67,6 +67,27 @@ pub const BROWSER_IMAGE: &str = "msedgewebview2.exe";
 /// it is.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// A `Command` for a program that must not put a window on the screen: the flag above, where
+/// there is a flag to set, and an ordinary command everywhere else.
+///
+/// Every console program this app or its tests start goes through here rather than through
+/// `Command::new` - a probe, an engine, an installer, a stand-in process a test needs to be a
+/// real process - because the one thing all of them have in common is that a window appearing
+/// for as long as the launch lasts is the last thing any of them wants, and in a test suite it
+/// is a console window flashing over whatever the machine is doing, taking the keyboard with
+/// it. A program that draws a window of its own is unaffected either way.
+pub fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
+}
+
 /// The longest image path `QueryFullProcessImageNameW` is given room for.
 const MAX_IMAGE_PATH: usize = 260;
 
@@ -801,7 +822,7 @@ mod tests {
     /// engine: what the reaper does to one it was told about is the same whatever the
     /// process is, and a test is not going to start an Office application to find out.
     fn stand_in() -> std::process::Child {
-        std::process::Command::new("ping")
+        hidden_command("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
             .spawn()
