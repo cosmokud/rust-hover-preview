@@ -1,0 +1,15 @@
+#!/bin/sh
+# The tree this pushes, and every message behind it. prepare-commit-msg covers a
+# message written with -m or -F and cannot be bypassed; this covers the two things it
+# cannot see, which are a message typed in an editor and a file in the working tree.
+#
+# It reads HEAD. Pushing a branch other than the one checked out is therefore checked
+# against the wrong tree, and the tag workflows are what catch that.
+
+set -eu
+
+if ! cargo test --test no_path_leaks; then
+  echo "" >&2
+  echo "The push is stopped. Fix what is above, commit, and push again." >&2
+  exit 1
+fi
