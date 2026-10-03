@@ -128,6 +128,41 @@
 //! `DXGI_ERROR_ALREADY_EXISTS`. Which is the same finding as the one above, wearing a different
 //! hat: there is always already a chain there, and it is not one anybody is showing.
 //!
+//! # The third way, which works and is still not the answer
+//!
+//! There is a third, and unlike the two above it does hand pixels back: an `IMFSourceReader`
+//! handed an `IMFDXGIDeviceManager` through `MF_SOURCE_READER_D3D_MANAGER`, with advanced video
+//! processing on, decoding the file through the same software HEVC decoder and answering
+//! `ReadSample` with an `IMFDXGIBuffer` over a texture that a staging copy maps and reads. No
+//! compositor is involved at any point and the pixels come back as decoded picture in system
+//! memory, which is the thing the engine above would not do for anything. So the refusal is
+//! narrower than it reads: it belongs to that engine rather than to Media Foundation, which is
+//! worth having written down before anyone concludes the latter.
+//!
+//! Measured on this machine over eight seconds with the process's own clock, five runs of each
+//! because the number moves a few milliseconds between them: 20.3–24.3 ms of CPU a frame to
+//! decode alone, 25.3–31.2 ms a frame to decode and copy the staging texture back, against the
+//! 128.99 ms a frame this side spends handing one over (345 frames in 8.01 s for 44.50 s of CPU,
+//! the same instrument as `tests::video_take_cost`). Four to six times cheaper, which is a real
+//! result and not a rounding error. It is also nowhere near the two milliseconds or so a hardware
+//! decode of a 1440p picture would cost, and it could not be, because the decoder underneath is
+//! the software one and no arrangement of attributes changes which decoder is registered. Only
+//! `NV12` would negotiate as an output type at all — `BGRA` was refused `MF_E_INVALIDMEDIATYPE` at
+//! every size and every frame rate tried — and the NV12 staging layout that had the most reason
+//! to be trouble was not trouble at all.
+//!
+//! **So the frame pipeline is not being rewritten on a source reader**, and the measurements are
+//! why: a source reader would hand this app a presentation clock, a WASAPI audio client and an
+//! error channel that the engine gives away for free, and would buy four to six times on a
+//! machine whose decoder is software whatever asks for it. The spike that measured all of this is
+//! gone and the numbers are what is left of it, which is the arrangement the rest of this file
+//! takes anyway. What it is worth is the last thing it found, and that is the way to read every
+//! other measurement here: **a claim that hardware decode engaged is gated on CPU cost and never
+//! on having been handed a GPU buffer.** A device manager wraps a software decoder's output in an
+//! `IMFDXGIBuffer` as readily as a hardware one's — here the DXGI buffer came back over the same
+//! twenty milliseconds as the plain system-memory one — so the buffer says which path produced the
+//! frame and says nothing whatever about what decoded it.
+//!
 //! A tick is not a frame. The clock this side ticks on is a vertical blank, sixty times a
 //! second whatever the file runs at, so most ticks of a film find the engine offering the
 //! picture it offered the last four of them, and a tick that finds one is answered without
