@@ -14830,30 +14830,42 @@ fn remember_pin_volume(level: u32) {
 /// Write the file a pin's level is remembered in once the knob is let go of, so that a drag is one
 /// write rather than the hundred the knob moved through.
 ///
-/// The write happens where the level and what is written of it disagree, which is nowhere on a drag
-/// — every step of it already put the level into the configuration — and on the click that moved
-/// nothing before the release. It is asked for whether or not a player was owed a level: a knob
+/// One write, and it is the write the `Remember` row beside the level promises: where the row is on
+/// the file is brought up to the level in hand, and where it is off nothing is written at all (see
+/// `put_remembered_pin_volume`). It is asked for whether or not a player was owed a level: a knob
 /// turned on a paused pin settles nothing to a player but is still a level the next sound is wanted
 /// at (see `remember_pin_volume`).
 fn save_remembered_pin_volume(level: u32) {
     let Ok(mut config) = CONFIG.lock() else {
         return;
     };
-    let written = match current_media_type() {
-        Some(MediaType::Audio) if config.remember_audio_volume && config.audio_volume != level => {
+    if put_remembered_pin_volume(&mut config, current_media_type(), level) {
+        config.save();
+    }
+}
+
+/// Put the level a pin's knob was let go at where `Remember` says a level moved on that knob is
+/// kept, answering whether the file is owed a write because of it.
+///
+/// Nothing here compares the level against what the configuration already holds, and that is the
+/// whole of what it used to get wrong: by the time the knob is let go the configuration holds
+/// exactly this level, because every step of the drag put it there and so did the click that moved
+/// nothing before the release (`remember_pin_volume`). A comparison of the two is a comparison of a
+/// thing with itself, which is why the file was never written at all.
+///
+/// What it answers is asked of a configuration in hand rather than of the running one, so the
+/// question can be asked of a level without a file being written for the asking.
+fn put_remembered_pin_volume(config: &mut AppConfig, kind: Option<MediaType>, level: u32) -> bool {
+    match kind {
+        Some(MediaType::Audio) if config.remember_audio_volume => {
             config.audio_volume = level;
             true
         }
-        Some(MediaType::NativeVideo) | Some(MediaType::Video)
-            if config.remember_video_volume && config.video_volume != level =>
-        {
+        Some(MediaType::NativeVideo) | Some(MediaType::Video) if config.remember_video_volume => {
             config.video_volume = level;
             true
         }
         _ => false,
-    };
-    if written {
-        config.save();
     }
 }
 
@@ -31839,6 +31851,49 @@ mod tests {
     /// on is known.
     fn pin_holding() -> Option<PinVolume> {
         pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.volume))
+    }
+
+    /// `Volume → Audio`'s `Remember` is a claim about `config.ini`, and this is the claim: the level
+    /// in hand is put where the file will be asked for it again, and the file is written.
+    ///
+    /// The level is already in the configuration before the question is asked, and it always is —
+    /// `remember_pin_volume` put it there on every step of the drag, and again on the click that
+    /// moved nothing before the release — so a question shaped as "is the file out of step with the
+    /// level?" is answered no every time, and the file was never written by either of the two rows
+    /// (`a_level_moved_on_a_pin_is_the_pins_and_not_the_setting` covers the half that keeps the
+    /// level in hand, which is a different thing entirely from writing it down).
+    #[test]
+    fn a_remembered_level_is_written_even_where_the_configuration_already_holds_it() {
+        let mut config = AppConfig::default();
+        config.remember_audio_volume = true;
+        config.remember_video_volume = true;
+        config.audio_volume = 100;
+        config.video_volume = 0;
+
+        assert!(
+            put_remembered_pin_volume(&mut config, Some(MediaType::Audio), 100),
+            "the level is in the configuration already, which is what a drag is, and the file is \
+             written all the same"
+        );
+
+        assert!(
+            put_remembered_pin_volume(&mut config, Some(MediaType::Video), 0),
+            "and a film's own row is asked the same question of its own level"
+        );
+
+        // A level that is not remembered is the window's own and there is nothing to write down.
+        config.remember_audio_volume = false;
+        config.remember_video_volume = false;
+        assert!(
+            !put_remembered_pin_volume(&mut config, Some(MediaType::Audio), 100),
+            "with the row off the knob moves the window alone"
+        );
+
+        // And a kind with no row of its own is neither half's answer.
+        assert!(
+            !put_remembered_pin_volume(&mut config, Some(MediaType::Pdf), 100),
+            "a page has no level to remember"
+        );
     }
 
     fn edge(left: bool, top: bool, right: bool, bottom: bool) -> PinResize {
