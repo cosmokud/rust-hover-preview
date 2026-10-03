@@ -1,0 +1,29 @@
+#!/bin/sh
+# A path in a commit message reaches every clone the way a path in a fixture does,
+# and the message becomes a commit before any workflow exists to look at it. This is
+# the only check that stands between the two.
+#
+# git does not let --no-verify past this hook. Verified on 2.50.0: a commit-msg hook
+# is suppressed by it and this one is not, which is the whole reason for choosing it.
+#
+# $1 is the file holding the message being written. It runs before the editor opens,
+# so a message typed by hand walks straight past here and is caught by the Rust test
+# instead, which reads committed history rather than the file in front of it.
+
+set -eu
+
+# Each shape is two quoted halves that the shell joins, so that this file does not
+# match the guard that reads it: a pattern written whole is a literal string, and a
+# literal string written whole is found in the very line that writes it.
+SHAPES=$(printf '%s\n' \
+  '[:\\/]Users''[:\\/]' \
+  ':/Us''ers/' \
+  '/hom''e/' \
+  '/Us''ers/')
+
+if grep -qE "$SHAPES" "$1"; then
+  echo "This message names a profile directory, which is named after the account" >&2
+  echo "that owns it, and every clone of this branch inherits it. Write the path" >&2
+  echo "with a made-up directory instead." >&2
+  exit 1
+fi
