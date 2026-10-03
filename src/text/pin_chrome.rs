@@ -91,11 +91,10 @@ impl ChromePalette {
 
         let background = text_paint::rgb(theme.background());
         let foreground = text_paint::rgb(theme.foreground());
-        let accent = text_paint::rgb(
-            theme
-                .style_for_scopes(&["keyword.control", "keyword"])
-                .foreground,
-        );
+        // The same accent a sound's card draws its bar and its clock in, so that the knob on this
+        // chrome and the track on that card are one color rather than two near neighbours (see
+        // `audio_preview::build_page`).
+        let accent = text_paint::rgb(theme.style_for_scopes(&["support.function"]).foreground);
 
         Some(Self {
             background,
@@ -270,8 +269,29 @@ pub(crate) fn volume_popup_layout(
     strip_height: i32,
     dpi: u32,
 ) -> VolumePopup {
+    // The button is the transport bar's own, and the bar begins `strip_top` rows down the
+    // window, so the box it opens from is the strip's box moved down the window — which is what
+    // makes the two answers one answer (see `volume_popup_from_button`).
+    let in_strip = transport_layout(width, strip_height, dpi, true).volume;
+    let button = RECT {
+        top: in_strip.top + strip_top,
+        bottom: in_strip.bottom + strip_top,
+        ..in_strip
+    };
+
+    volume_popup_from_button(button, width, dpi)
+}
+
+/// The popup a volume button opens, hung from that button's own box in the window's own
+/// coordinates: the same panel the transport bar's button opens, from wherever the button that
+/// opened it is drawn.
+///
+/// Split from `volume_popup_layout` so that a button drawn on a sound's card can open the very
+/// same panel — the card's own row is a window away from the transport bar (see
+/// `audio_preview::CardControl::Volume`), and a second panel for it would be a second set of
+/// numbers for one control this app has once.
+pub(crate) fn volume_popup_from_button(button: RECT, width: i32, dpi: u32) -> VolumePopup {
     let scale = dpi as f32 / 96.0;
-    let button = transport_layout(width, strip_height, dpi, true).volume;
 
     let panel_width = text_paint::scaled(VOLUME_PANEL_WIDTH, scale).max(8);
     let panel_height = text_paint::scaled(VOLUME_PANEL_HEIGHT, scale).max(8);
@@ -280,7 +300,10 @@ pub(crate) fn volume_popup_layout(
     let right = button.right.clamp(0, width.max(0));
     let left = (right - panel_width).max(0);
     let right = left + panel_width;
-    let bottom = (strip_top + button.top - gap).max(panel_height);
+    // The panel floats above the button rather than over it: a level is aimed at from the side
+    // it is heard on, and a panel covering the button that opened it is a panel the hand has to
+    // reach through to close again.
+    let bottom = (button.top - gap).max(panel_height);
     let panel = RECT {
         left,
         top: bottom - panel_height,
@@ -479,6 +502,124 @@ pub(crate) fn paint_transport(
     }
 }
 
+/// The two bars a play/pause button shows while the thing behind it is playing, which is the
+/// whole of what "pause" is drawn as: two uprights side by side, held apart far enough that they
+/// do not read as one mark.
+fn draw_pause_glyph(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: i32,
+    center_y: i32,
+    size: i32,
+    ink: [u8; 3],
+) {
+    let bar = (size / 3).max(2);
+    let gap = (size / 5).max(1);
+    for left in [center_x - gap - bar, center_x + gap] {
+        fill_box(
+            buffer,
+            width,
+            RECT {
+                left,
+                top: center_y - size / 2,
+                right: left + bar,
+                bottom: center_y + size / 2,
+            },
+            ink,
+            1.0,
+        );
+    }
+}
+
+/// The triangle a play/pause button shows while the thing behind it is stopped, drawn as a scan
+/// of half-widths, widest at its left edge.
+fn draw_play_glyph(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: i32,
+    center_y: i32,
+    size: i32,
+    ink: [u8; 3],
+) {
+    let left = center_x - size / 3;
+    let half = size / 2;
+    for step in 0..=size {
+        let x = left + step;
+        let share = 1.0 - (step as f32 / size as f32);
+        for y in 0..=(half as f32 * share) as i32 {
+            put(buffer, width, x, center_y - y, ink, 1.0);
+            put(buffer, width, x, center_y + y, ink, 1.0);
+        }
+    }
+}
+
+/// One step of a walk through files, as a transport draws it: a bar against the side the step
+/// comes from, and a triangle pointing the way it goes — ⏮ and ⏭, the marks every player has
+/// drawn for this since there were players.
+///
+/// Not the caption's chevron beside it, and the difference is a claim about two different
+/// things rather than a matter of taste. A chevron on a caption is the walk with no end, drawn as
+/// one open mark because a caption's row is five buttons and a name, and a pair of uprights
+/// there would be read as a resize handle; on a transport it is a control with room round it,
+/// and the mark a hand has been reaching for beside a play button for thirty years is the bar
+/// and the triangle. Drawing the caption's mark beside a play button would put two marks for one
+/// thing on one row, a hand apart, which is what a row of four controls is not for.
+fn draw_track_step(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: i32,
+    center_y: i32,
+    span: i32,
+    color: [u8; 3],
+    forward: bool,
+) {
+    let bar_width = (span / 4).max(1);
+    let gap = (span / 6).max(1);
+    let head = (span - bar_width - gap).max(1);
+    let half = span / 2;
+
+    // The bar: at the far edge of the mark, which is the leading edge for a step forward and the
+    // trailing one for a step back, so that the bar is always the wall the triangle is pushed off.
+    let bar_left = if forward {
+        center_x + half - bar_width
+    } else {
+        center_x - half
+    };
+    fill_box(
+        buffer,
+        width,
+        RECT {
+            left: bar_left,
+            top: center_y - half,
+            right: bar_left + bar_width,
+            bottom: center_y + half,
+        },
+        color,
+        1.0,
+    );
+
+    // The triangle, walked as a scan of half-widths in the direction the step goes: widest at the
+    // far edge and closing to nothing at the bar, which is what a triangle is.
+    //
+    // The far edge is the last *column* of the mark rather than its first, on both sides: the mark
+    // is a whole number of columns wide, so the two ends it has are a pixel either side of the
+    // centreline rather than at it. Measuring the far edge from the centre instead is what makes
+    // the back one a column wider than the on one and its triangle sit across its own bar.
+    let far = if forward {
+        center_x - half
+    } else {
+        center_x + half - 1
+    };
+    for step in 0..=head {
+        let x = if forward { far + step } else { far - step };
+        let share = 1.0 - (step as f32 / head as f32);
+        for y in 0..=(half as f32 * share).round() as i32 {
+            put(buffer, width, x, center_y - y, color, 1.0);
+            put(buffer, width, x, center_y + y, color, 1.0);
+        }
+    }
+}
+
 fn paint_play_button(
     surface: &DibSurface,
     palette: &ChromePalette,
@@ -508,47 +649,13 @@ fn paint_play_button(
         )
     };
 
+    // One glyph or the other, whichever the player behind the button says the truth is: the two
+    // are the transport's own, and a card's row draws them at the size its row gives them
+    // (see `paint_card_control`).
     if state.playing {
-        // Pause: two bars.
-        let bar = (size / 3).max(2);
-        let gap = (size / 5).max(1);
-        fill_box(
-            buffer,
-            width,
-            RECT {
-                left: center_x - gap - bar,
-                top: center_y - size / 2,
-                right: center_x - gap,
-                bottom: center_y + size / 2,
-            },
-            ink,
-            1.0,
-        );
-        fill_box(
-            buffer,
-            width,
-            RECT {
-                left: center_x + gap,
-                top: center_y - size / 2,
-                right: center_x + gap + bar,
-                bottom: center_y + size / 2,
-            },
-            ink,
-            1.0,
-        );
-        return;
-    }
-
-    // Play: a triangle, drawn as a scan of half-widths, widest at the left edge.
-    let left = center_x - size / 3;
-    let half = size / 2;
-    for step in 0..=size {
-        let x = left + step;
-        let share = 1.0 - (step as f32 / size as f32);
-        for y in 0..=(half as f32 * share) as i32 {
-            put(buffer, width, x, center_y - y, ink, 1.0);
-            put(buffer, width, x, center_y + y, ink, 1.0);
-        }
+        draw_pause_glyph(buffer, width, center_x, center_y, size, ink);
+    } else {
+        draw_play_glyph(buffer, width, center_x, center_y, size, ink);
     }
 }
 
@@ -670,6 +777,113 @@ fn paint_speaker(
     if volume >= 34 {
         stroke_arc(buffer, width, center, half * 0.86, stroke, ink, 1.0);
     }
+}
+
+/// One of the marks this app's own transport is drawn in, named so that a button which has to
+/// say one of them does not have to know how: the two a play/pause button is either, the pair a
+/// step through files is, and the speaker a level is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ControlGlyph {
+    /// A triangle: the thing behind it is stopped.
+    Play,
+    /// Two bars: the thing behind it is going.
+    Pause,
+    /// A bar and a triangle pointing back: the step before this one.
+    Previous,
+    /// A bar and a triangle pointing on: the step after this one.
+    Next,
+    /// A speaker with the sound leaving it, crossed out at a level of nothing.
+    Volume(u32),
+}
+
+/// Paint one of a sound's card's own control buttons into a page rather than into a strip of the
+/// window: the marks are the transport's, drawn at the size a card's row gives them and in the
+/// page's own foreground, because a button on a card is a control of that page and not a strip of
+/// chrome beside it (see `audio_preview::CardControl`).
+///
+/// It draws the mark and nothing else. The wash under a pointer is the card's own paint, drawn
+/// from the theme the page is painted with — this module's palette is the caption's, which a
+/// card does not have — and a wash drawn here as well would be the same button lit twice at two
+/// colours.
+///
+/// Everything here is written premultiplied (see the module documentation), which a page cannot
+/// see: `DibSurface::pixels` forces the alpha byte of every pixel it hands back to 255, so a
+/// mark written at full coverage reads the same either way. Every glyph below is therefore drawn
+/// at coverage 1.0 only — a mark at partial coverage would be composited twice over the page's
+/// own opaque pixel and come out darker than the same mark on a strip.
+pub(crate) fn paint_card_control(
+    surface: &DibSurface,
+    rect: RECT,
+    glyph: ControlGlyph,
+    ink: [u8; 3],
+    scale: f32,
+) {
+    let width = surface.width as i32;
+    let center_x = (rect.left + rect.right) / 2;
+    let center_y = (rect.top + rect.bottom) / 2;
+    let side = (rect.bottom - rect.top).max(8);
+
+    let buffer = unsafe {
+        std::slice::from_raw_parts_mut(
+            surface_pixels(surface),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    };
+
+    match glyph {
+        ControlGlyph::Play => draw_play_glyph(
+            buffer,
+            width,
+            center_x,
+            center_y,
+            size_in(scale, side, 9),
+            ink,
+        ),
+        ControlGlyph::Pause => draw_pause_glyph(
+            buffer,
+            width,
+            center_x,
+            center_y,
+            size_in(scale, side, 9),
+            ink,
+        ),
+        ControlGlyph::Previous => draw_track_step(
+            buffer,
+            width,
+            center_x,
+            center_y,
+            size_in(scale, side, 12),
+            ink,
+            false,
+        ),
+        ControlGlyph::Next => draw_track_step(
+            buffer,
+            width,
+            center_x,
+            center_y,
+            size_in(scale, side, 12),
+            ink,
+            true,
+        ),
+        // The speaker is drawn at the transport's own size rather than the play button's: it is
+        // the widest mark of the three, and at the smaller size it loses the cone it is read by.
+        ControlGlyph::Volume(volume) => paint_speaker(
+            buffer,
+            width,
+            (center_x as f32, center_y as f32),
+            size_in(scale, side, 17) as f32,
+            ink,
+            (GLYPH_STROKE_PIXELS * scale * 1.1).max(1.0),
+            volume,
+        ),
+    }
+}
+
+/// The size a mark of `nominal` pixels is drawn at inside a box of `side` pixels, never larger
+/// than the box and never smaller than the floor every mark in this file shares: a mark smaller
+/// than that is a speck, and a mark larger than its button is a mark on the card beside it.
+fn size_in(scale: f32, side: i32, nominal: i32) -> i32 {
+    text_paint::scaled(nominal, scale).clamp(6, side)
 }
 
 /// Paint the popup a volume button opens: a panel floating over the media above the bar, the
@@ -2751,6 +2965,72 @@ mod tests {
         }
     }
 
+    /// The popup the transport bar's own button opens, and the same panel hung from that button
+    /// given directly, are one panel and not two: a sound's card opens the very same one from a
+    /// button drawn on its own row, so a level that was placed one way there and another way on
+    /// the bar would be a level that moves as the file it is playing changes.
+    #[test]
+    fn the_popup_hung_from_a_button_is_the_one_the_transport_bar_opens() {
+        for (width, height, top) in [(600, 30, 0), (600, 40, 200), (320, 30, 55)] {
+            for dpi in [96, 144] {
+                let strip = transport_layout(width, height, dpi, true).volume;
+                let button = RECT {
+                    top: strip.top + top,
+                    bottom: strip.bottom + top,
+                    ..strip
+                };
+
+                let panel = volume_popup_layout(width, top, height, dpi);
+                let from_button = volume_popup_from_button(button, width, dpi);
+                let (a, b) = (
+                    RECT {
+                        left: panel.panel.left,
+                        top: panel.panel.top,
+                        right: panel.panel.right,
+                        bottom: panel.panel.bottom,
+                    },
+                    RECT {
+                        left: from_button.panel.left,
+                        top: from_button.panel.top,
+                        right: from_button.panel.right,
+                        bottom: from_button.panel.bottom,
+                    },
+                );
+                assert_eq!(a, b, "{width}x{height} at dpi {dpi}");
+
+                let groove = RECT {
+                    left: panel.track.left,
+                    top: panel.track.top,
+                    right: panel.track.right,
+                    bottom: panel.track.bottom,
+                };
+                let hung = RECT {
+                    left: from_button.track.left,
+                    top: from_button.track.top,
+                    right: from_button.track.right,
+                    bottom: from_button.track.bottom,
+                };
+                assert_eq!(groove, hung, "{width}x{height} at dpi {dpi}");
+
+                // And the panel is still where it belongs: hung from the button's own right edge,
+                // above it, and inside the window it belongs to.
+                assert!(panel.panel.right <= width && panel.panel.left >= 0);
+                // And it floats above the button rather than over it — unless the window is too
+                // short for that, which is what the panel's own floor is for: a level that cannot
+                // be aimed at is worse than one drawn a little high.
+                let panel_height = panel.panel.bottom - panel.panel.top;
+                assert!(
+                    panel.panel.bottom <= button.top || panel.panel.top == 0,
+                    "the panel is not hung over the button it came out of"
+                );
+                assert!(
+                    panel.panel.bottom - panel.panel.top == panel_height,
+                    "{width}x{height} at dpi {dpi}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_clock_is_written_the_way_a_player_writes_one() {
         assert_eq!(clock_text(Some(7.4)), "0:07");
@@ -3560,6 +3840,73 @@ mod tests {
                 bottom - top + 1,
                 span + 1,
                 "a chevron is a glyph tall, whatever else it is"
+            );
+        }
+    }
+
+    /// The two steps of a walk are one another's mirror: a bar at the far edge of the mark and a
+    /// triangle beside it pointing the way the step goes — ⏮ beside a step back and ⏭ beside a
+    /// step on, which is what a hand has been reaching for beside a play button for thirty years.
+    ///
+    /// The bar is the wall the triangle is pushed off, and it is at a different end for each of
+    /// them; so is the triangle's wide end. A mark whose triangle is walked from the wrong end is
+    /// a mark whose bar and triangle are the wrong distance apart and, once the walk runs past
+    /// the far edge of the button, a mark cut in half at one end and drawn twice at the other —
+    /// none of which a test on the boxes alone can see.
+    #[test]
+    fn the_two_steps_of_a_walk_are_mirrors_of_one_another() {
+        const W: i32 = 32;
+        const H: i32 = 24;
+        let centre = 16;
+        let span = 14;
+        let ink = [0u8, 0, 0];
+
+        // The rows drawn in one column. The buffer is filled with a colour first, so that a
+        // blank column reads as blank rather than as ink.
+        fn drawn(buffer: &[u8], x: i32) -> Vec<i32> {
+            (0..H)
+                .filter(|y| buffer[((*y * W + x) * 4) as usize] == 0)
+                .collect()
+        }
+
+        let mut on = vec![255u8; (W * H * 4) as usize];
+        draw_track_step(&mut on, W, centre, 12, span, ink, true);
+        let mut back = vec![255u8; (W * H * 4) as usize];
+        draw_track_step(&mut back, W, centre, 12, span, ink, false);
+
+        // The two are the same mark facing the other way, so what the back one draws in a column
+        // is what the on one draws in the column reflected about the centreline — which is the line
+        // between the two middle columns, a whole mark being an even number of columns wide. Two
+        // marks drawn the same way round would be equal column for column instead, and a mark drawn
+        // a column too wide would fail only on one of the two ends, and this is what catches that.
+        for x in 0..W {
+            let mirror = 2 * centre - 1 - x;
+            if !(0..W).contains(&mirror)
+                || (drawn(&back, x).is_empty() && drawn(&on, mirror).is_empty())
+            {
+                continue;
+            }
+            assert_eq!(
+                drawn(&back, x),
+                drawn(&on, mirror),
+                "the two steps are each other turned about at x={x}"
+            );
+        }
+
+        // And both are inside the button they are drawn in, which is what a walk past the far edge
+        // would otherwise have lost: neither mark is a column wider than the other, or wider than
+        // the button.
+        for (buffer, name) in [(&on, "the on one"), (&back, "the back one")] {
+            let mut columns = (0..W).filter(|x| !drawn(buffer, *x).is_empty());
+            assert_eq!(
+                columns.next(),
+                Some(centre - span / 2),
+                "{name} begins at its own near edge"
+            );
+            assert_eq!(
+                columns.next_back(),
+                Some(centre + span / 2 - 1),
+                "{name} ends at its own far one"
             );
         }
     }
