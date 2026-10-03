@@ -927,7 +927,7 @@ impl SuppressedHover {
         self.started_at = Some(Instant::now());
     }
 
-    fn matches(&self, path: &PathBuf) -> bool {
+    fn matches(&self, path: &Path) -> bool {
         self.file
             .as_ref()
             .map(|file| same_path(file, path))
@@ -5079,7 +5079,7 @@ impl PinUpdateWatch {
     /// was is returned, because the caller has to tell them apart: the first is the silence that a
     /// stale listing answers with (see `PinUpdateWatch::answer_click`) and the second is an answer
     /// (see `PinUpdateWatch::answer_click` again).
-    fn offer(&self, path: &PathBuf, showing: &PathBuf) -> bool {
+    fn offer(&self, path: &Path, showing: &Path) -> bool {
         if same_path(path, showing) {
             return false;
         }
@@ -5109,7 +5109,7 @@ impl PinUpdateWatch {
         &mut self,
         resolver: &mut ItemResolver,
         pointer: &PointerTick,
-        showing: &PathBuf,
+        showing: &Path,
         over_explorer: bool,
         clicked: bool,
     ) {
@@ -7720,7 +7720,6 @@ mod tests {
                 walked_by_key: true,
                 moved_otherwise: true,
                 clicked: false,
-                ..Default::default()
             },
             started + Duration::from_millis(1350),
         );
@@ -7747,13 +7746,14 @@ mod tests {
             view_hwnd: Some(0x1234),
         };
         let showing = Path::new("D:/Pictures/one.png");
-        let mut watch = PinUpdateWatch::default();
-
-        watch.pending = Some(PendingClick {
-            at: Instant::now(),
-            point: POINT { x: 10, y: 20 },
-            place: Some(here.clone()),
-        });
+        let mut watch = PinUpdateWatch {
+            pending: Some(PendingClick {
+                at: Instant::now(),
+                point: POINT { x: 10, y: 20 },
+                place: Some(here.clone()),
+            }),
+            ..Default::default()
+        };
         let first_at = watch.pending.as_ref().expect("a held click").at;
 
         // The second click is on the file the pin is already showing, which is the case that
@@ -8838,10 +8838,7 @@ mod tests {
         // A first sighting that is itself a miss leaves no baseline for the first file
         // to be mistaken for a change.
         let mut missed = PinUpdateWatch::default();
-        assert_eq!(
-            missed.note_selection(watched.clone(), None, false),
-            None
-        );
+        assert_eq!(missed.note_selection(watched.clone(), None, false), None);
         assert_eq!(
             missed.note_selection(watched.clone(), Some(one.clone()), false),
             None,

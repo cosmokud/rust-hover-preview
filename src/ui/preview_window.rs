@@ -16784,11 +16784,7 @@ enum PinSwapWait {
 /// very placeholder the hold exists to remove, which is the backdrop flash this was written to
 /// delete. A wait that has not ended yet costs the old picture for as long as it takes, which is
 /// the honest picture of a window still loading; what ends it is the engine's word, either way.
-fn pin_swap_wait(
-    frame_in_hand: bool,
-    playing: bool,
-    failing: bool,
-) -> Option<PinSwapWait> {
+fn pin_swap_wait(frame_in_hand: bool, playing: bool, failing: bool) -> Option<PinSwapWait> {
     if frame_in_hand {
         return Some(PinSwapWait::Arrived);
     }
@@ -21009,9 +21005,7 @@ fn resize_pinned_content(
 
     let left = if edge.left {
         content.2 - width
-    } else if edge.right {
-        content.0
-    } else if off_the_room_horizontally {
+    } else if edge.right || off_the_room_horizontally {
         content.0
     } else {
         (content.0 + (start_width - width) / 2)
@@ -21019,9 +21013,7 @@ fn resize_pinned_content(
     };
     let top = if edge.top {
         content.3 - height
-    } else if edge.bottom {
-        content.1
-    } else if off_the_room_vertically {
+    } else if edge.bottom || off_the_room_vertically {
         content.1
     } else {
         (content.1 + (start_height - height) / 2)
@@ -32206,11 +32198,13 @@ mod tests {
     /// level in hand, which is a different thing entirely from writing it down).
     #[test]
     fn a_remembered_level_is_written_even_where_the_configuration_already_holds_it() {
-        let mut config = AppConfig::default();
-        config.remember_audio_volume = true;
-        config.remember_video_volume = true;
-        config.audio_volume = 100;
-        config.video_volume = 0;
+        let mut config = AppConfig {
+            remember_audio_volume: true,
+            remember_video_volume: true,
+            audio_volume: 100,
+            video_volume: 0,
+            ..Default::default()
+        };
 
         assert!(
             put_remembered_pin_volume(&mut config, Some(MediaType::Audio), 100),

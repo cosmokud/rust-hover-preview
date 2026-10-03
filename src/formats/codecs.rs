@@ -26,15 +26,15 @@ use windows::Win32::Graphics::Imaging::{
     IWICBitmapCodecInfo, WICComponentEnumerateDefault, WICDecoder,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, MFMediaType_Audio, MFMediaType_Video, MFStartup, MFTEnumEx, MFVideoFormat_AV1,
-    MFVideoFormat_H264, MFVideoFormat_HEVC, MFVideoFormat_MP4V, MFVideoFormat_MPEG2,
-    MFVideoFormat_Theora, MFVideoFormat_VP90, MFVideoFormat_WMV3, MFAudioFormat_AAC,
-    MFAudioFormat_ADTS, MFAudioFormat_ALAC, MFAudioFormat_DTS, MFAudioFormat_Dolby_AC3,
-    MFAudioFormat_FLAC, MFAudioFormat_MP3, MFAudioFormat_Opus, MFAudioFormat_Vorbis,
-    MFAudioFormat_WMAudioV8, MFAudioFormat_WMAudioV9,
-    MFAudioFormat_WMAudio_Lossless, MFSTARTUP_FULL, MFT_CATEGORY_AUDIO_DECODER,
-    MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
-    MFT_ENUM_FLAG_LOCALMFT, MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO, MF_VERSION,
+    IMFActivate, MFAudioFormat_AAC, MFAudioFormat_ADTS, MFAudioFormat_ALAC, MFAudioFormat_DTS,
+    MFAudioFormat_Dolby_AC3, MFAudioFormat_FLAC, MFAudioFormat_MP3, MFAudioFormat_Opus,
+    MFAudioFormat_Vorbis, MFAudioFormat_WMAudioV8, MFAudioFormat_WMAudioV9,
+    MFAudioFormat_WMAudio_Lossless, MFMediaType_Audio, MFMediaType_Video, MFStartup, MFTEnumEx,
+    MFVideoFormat_AV1, MFVideoFormat_H264, MFVideoFormat_HEVC, MFVideoFormat_MP4V,
+    MFVideoFormat_MPEG2, MFVideoFormat_Theora, MFVideoFormat_VP90, MFVideoFormat_WMV3,
+    MFSTARTUP_FULL, MFT_CATEGORY_AUDIO_DECODER, MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG,
+    MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_LOCALMFT, MFT_ENUM_FLAG_SYNCMFT,
+    MFT_REGISTER_TYPE_INFO, MF_VERSION,
 };
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED,
