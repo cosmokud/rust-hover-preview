@@ -16,8 +16,8 @@ use crate::config::config::{
     DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML,
     DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
-    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME,
-    DEFAULT_WEBVIEW_IDLE_SECS, VOLUME_CHOICES,
+    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE,
+    DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS, VOLUME_CHOICES,
 };
 use crate::config::theme_files;
 use crate::engines::document_cache;
@@ -484,6 +484,10 @@ const ID_TRAY_AFK_TIMER_BASE: u16 = 1505;
 /// order those submenus are listed: `Microsoft Office TTL`, then `LibreOffice TTL`, then
 /// `WebView2 TTL`.
 const ID_TRAY_ENGINE_PERSISTENT_BASE: u16 = 1512;
+/// The `Performance → Hardware Acceleration` submenu's one row: whether a video is decoded on
+/// the graphics card. It sits in the slack past the three `Persistent` toggles, which end at
+/// 1515, so a click on it is never read as a toggle belonging to an engine's TTL submenu.
+const ID_TRAY_VIDEO_HW_ACCEL: u16 = 1516;
 /// The away times the `AFK Timer` submenu offers, in the order it lists them: an hour at the
 /// top and a quarter of a minute at the bottom, with the one that bounds an engine by
 /// default in the middle. There is no `Indefinitely` here — a time that never comes round is
@@ -817,6 +821,10 @@ unsafe extern "system" fn tray_window_proc(
                     {
                         toggle_engine_persistent(cmd - ID_TRAY_ENGINE_PERSISTENT_BASE)
                     }
+                    // Whether a video is decoded on the graphics card, which is the one row of
+                    // the `Hardware Acceleration` submenu and so has an id of its own rather than
+                    // a range.
+                    ID_TRAY_VIDEO_HW_ACCEL => toggle_video_hw_accel(),
                     // A cache size, by the position it was listed at. Each cache is bounded by the
                     // sizes it offers rather than by the base of the next one, so an item of a
                     // submenu added past these is not read as a cache size.
@@ -2134,6 +2142,39 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let tick_ms = CONFIG.lock().map(|c| c.tick_ms).unwrap_or(DEFAULT_TICK_MS);
 
     append_tick_menu(performance_menu, w!("Tick"), ID_TRAY_TICK_BASE, tick_ms);
+
+    // Add the "Hardware Acceleration" submenu: whether a video is decoded on the graphics card.
+    // It is a submenu of its own for the same reason the `Tick` row is one rather than a row of
+    // this block: the question is which parts of the app decode anything, and there is more than
+    // one part to name — today a video and nothing else, which is why the row inside it is the
+    // only one there is (see `video_hw_accel_device`).
+    let video_hw_accel = CONFIG
+        .lock()
+        .map(|c| c.video_hw_accel)
+        .unwrap_or(DEFAULT_VIDEO_HW_ACCEL);
+
+    let hardware_menu = unsafe { CreatePopupMenu() }.unwrap();
+    let _ = unsafe {
+        AppendMenuW(
+            hardware_menu,
+            MF_STRING
+                | if video_hw_accel {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                },
+            ID_TRAY_VIDEO_HW_ACCEL as usize,
+            w!("Video"),
+        )
+    };
+    let _ = unsafe {
+        AppendMenuW(
+            performance_menu,
+            MF_STRING | MF_POPUP,
+            hardware_menu.0 as usize,
+            w!("Hardware Acceleration"),
+        )
+    };
 
     let _ = AppendMenuW(
         menu,
@@ -3784,6 +3825,30 @@ fn toggle_engine_persistent(index: u16) {
     }
 
     config.save();
+}
+
+/// Whether a video is decoded on the graphics card, turned the other way round.
+///
+/// Nothing *already on screen* changes when this is switched: the setting is read when a player is
+/// launched and a film already playing was launched with the other answer, so it is kept playing
+/// rather than being relaunched under the user's feet. That is the same bargain every other switch
+/// in this menu makes, and it is why the row is a question about the next preview rather than about
+/// the one under the pointer.
+///
+/// The *next* preview, though, is the next one in this run of the app and not the next one after a
+/// restart, which is what the answer had to be told for it to be true: the device is found by a
+/// probe that asks FFmpeg to decode a tenth of a second of a synthetic pattern on each candidate in
+/// turn, and a probe that ran with the setting off names no device at all. So the answer found
+/// before the switch is an answer to the question as it stood then, and `forget` is what makes every
+/// answer so far one to a question no longer being asked. Without it this row would take effect on
+/// the next run of the app and its own note above would be quietly wrong.
+fn toggle_video_hw_accel() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.video_hw_accel = !config.video_hw_accel;
+        config.save();
+    }
+
+    crate::ui::preview_window::forget_video_hw_accel_answer();
 }
 
 /// The size an item of the `Cache` submenu stands for, by the position it was

@@ -1,14 +1,25 @@
 //! The media engine Windows has, for the previews it plays.
 //!
-//! A video is played by this where its decoders reach the file and by `ffplay` where they do
-//! not; a sound is played by this where its own decoders reach the format, and by that player
-//! where they do not — the same order for both, and the same question asked of both, which is
-//! whether this machine has a decoder for the file (see [`plays`] and [`audio_probe`]).
+//! **Where this runs at all.** A video is played by this only on a machine with no `ffplay`
+//! installed. Where FFmpeg's player *is* installed, that player plays every video, whatever its
+//! name and whatever this engine could decode — because on that machine this engine is not the
+//! fast path, it is the slow one: it decodes in software, and on a 1440p 144 fps HEVC file it
+//! spends several hundred percent of a core to deliver frames a hardware decoder delivers for
+//! nothing (see "Where the decoding happens" below). The engine is therefore the *fallback* for
+//! video, and it is reached only when there is no fallback but it.
 //!
-//! The order is the engine's first because of what only it can be asked: a pause, a seek and a
-//! position that are real rather than a player restarted at a second, and frames this app draws
-//! itself — which is what lets a pinned window of one be resized, and dragged by its picture.
-//! FFmpeg's player is what is left for the files the engine has no decoder for.
+//! A sound is a different question and keeps the order it always had: this plays a sound where
+//! its own decoders reach the format, and `ffplay` plays it where they do not — the same question
+//! asked of both, which is whether this machine has a decoder for the file (see [`plays`] and
+//! [`audio_probe`]).
+//!
+//! What this buys a video, now that it is the fallback rather than the default, is the ergonomics
+//! FFmpeg's player cannot report: a position that is real rather than a clock over a launch, a
+//! pause that is a pause rather than a process ended. What it costs is the thing the measurements
+//! below are about — speed, and hardware decoding — and that cost is what the ordering above
+//! accepts on a machine that has FFmpeg at all. The one thing FFmpeg's player still cannot be
+//! asked for is subtitles: it renders embedded and sidecar ones itself, while frame-server mode
+//! returns video frames and nothing else, so a film shown here has no subtitles on it.
 //!
 //! The two are the same preview to the rest of the app — the same window, the same
 //! placement, the same box — because what comes out of here is frames, drawn where every
@@ -900,6 +911,14 @@ pub fn failing_before_a_frame() -> Option<PathBuf> {
 /// Write a file down as one the media engine cannot draw, and let go of the session that was
 /// failing at it, so that what plays the file from here on is FFmpeg's player.
 ///
+/// On a machine that has FFmpeg's player this has almost nothing left to correct, because that
+/// player was already what the file was routed to: the engine is only playing a video there
+/// because it is not installed at all. What this still settles on such a machine is the audio,
+/// where the engine is asked first for a format it can decode and this is the correction when it
+/// then failed anyway — and it is the correction for a *video* on a machine with no FFmpeg, where
+/// the file stops having any preview rather than gaining one (see
+/// [`plays_video_natively`](crate::formats::codecs::plays_video_natively)).
+///
 /// The answer is held where the probe's own answer is held and the same way — per file and the
 /// version of it, in the same map — because it is the same question. What a probe answers yes to
 /// and the engine then fails at is that answer being wrong about this file, and a correction
@@ -1053,6 +1072,11 @@ pub fn can_play(path: &Path) -> bool {
 /// decoder chain for it, and a hover that asks twice — a measure and a render, a hover that comes
 /// back to a file — must not pay for that twice. A file that is written again is a file whose
 /// answer is asked again, because the version is part of the key.
+///
+/// On a machine with `ffplay` installed this is asked on the audio path and, for video, not at
+/// all: the router prefers FFmpeg's player for every video and only asks this when there is no
+/// player to prefer, which is precisely the case where the answer decides whether the file is
+/// shown at all (see [`plays_video_natively`](crate::formats::codecs::plays_video_natively)).
 pub fn plays(path: &Path) -> bool {
     let key = head::key(path);
 

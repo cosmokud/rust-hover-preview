@@ -219,6 +219,14 @@ fn main() {
                 // configuration, so a spelling that changed on disk is handed to it here
                 // — off the hook's own path, which may not take a lock.
                 shell::key_input::refresh();
+                // And the device a film is decoded on is an answer a probe found under the
+                // setting as it stood, so a hand-edited `video_hw_accel` is that answer's question
+                // no longer being asked — the same question the tray's own row asks when it
+                // toggles the setting, and the whole of what makes that row work within a session
+                // rather than only across restarts. Without it here, editing the file was a change
+                // that took effect on the next run of the app and editing it in the tray was not
+                // (see `forget_video_hw_accel_answer`).
+                ui::preview_window::forget_video_hw_accel_answer();
             }
         }
     });

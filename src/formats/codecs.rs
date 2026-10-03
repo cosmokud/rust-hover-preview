@@ -430,8 +430,15 @@ pub fn normalize_available() -> bool {
 /// machine with no FFmpeg the first answer settles it, which is why the two are asked in that
 /// order and why this asks about the machine rather than about a file.
 ///
-/// The layout and the renderer both have to agree about it: the one asks whether a video has a
-/// size to be placed at, and the other asks which of the two engines draws it.
+/// The direction of the preference is the other way round from what the name suggests, and worth
+/// stating once here because the whole of the routing follows from it: this is **not** "the engine
+/// plays video natively, so use it". Where FFmpeg *is* installed the router sends every video to
+/// FFmpeg regardless — hardware decode is worth more than the ergonomics of a pause this engine
+/// answers better — and this function is reached only on the machines where there is no choice.
+/// That makes it a statement about the machine's *lack* of a player rather than about the
+/// engine's ability, and it is why the layout and the renderer both have to agree about it: the
+/// one asks whether a video has a size to be placed at, and the other asks which of the two
+/// engines draws it.
 pub fn plays_video_natively() -> bool {
     !ffplay_available()
 }
