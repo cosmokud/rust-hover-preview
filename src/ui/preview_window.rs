@@ -25111,7 +25111,7 @@ mod tests {
     /// from a box alone is a drag from the wrong origin.
     #[test]
     fn a_press_takes_the_pointer_for_its_drag_and_a_drag_it_cannot_begin_lets_it_go() {
-        let _one = PIN_TESTS_ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
 
         let window = a_window_at((300, 200, 700, 600));
         let hwnd = HWND(0x1000 as *mut _);
@@ -25160,7 +25160,7 @@ mod tests {
     /// installed, and a refusal returns with nothing installed and nothing taken.
     #[test]
     fn a_press_that_cannot_be_measured_takes_nothing_at_all() {
-        let _one = PIN_TESTS_ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
 
         for window in [
             RecordedPinWindow::with(0x1000, None, Some((300, 200, 700, 600))),
@@ -25194,7 +25194,7 @@ mod tests {
     /// nothing said they had to agree about which window.
     #[test]
     fn a_drag_lets_go_of_the_pointer_it_took() {
-        let _one = PIN_TESTS_ONE_AT_A_TIME.lock();
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
 
         let window = a_window_at((300, 200, 700, 600));
         let hwnd = HWND(0x1000 as *mut _);
@@ -25659,9 +25659,44 @@ mod tests {
         }
     }
 
-    /// The lock the tests that share the pin's own state take, so that one of them runs at a
-    /// time: the pin is a process-wide value, so two of these at once is one test's press
-    /// answered by another's window (see `pin_window::tests::ONE_AT_A_TIME`).
+    /// The lock every test in this module that shares the preview's own state takes, so that one
+    /// of them runs at a time: what is shared is process-wide and there is one copy of it, so two
+    /// of these at once is one test's press answered by another's window.
+    ///
+    /// That state is the media the preview is showing (`CURRENT_MEDIA`), the pin's slot and the
+    /// published copy of whether one is up (`PIN_STATE` and `PIN_UP`, reached through `stand_pin`
+    /// and `pin_state`), and the press the Explorer hook publishes for the pin's drag
+    /// (`publish_pin_media_press`). A pin is the clearest case of what goes wrong without this. A
+    /// test stands a pin up through `stand_pin`, which writes the slot whole, and a second test
+    /// doing the same at the same moment does not merge with it — it replaces it, so the first
+    /// goes on to assert against the second's pin and is answered by it. There is no torn read to
+    /// appeal to here: both takes are whole, and both take the slot's own lock. Two tests each
+    /// holding a lock, and neither holding the other's answer.
+    ///
+    /// So the lock is wanted of every test that reaches that state and not only of the ones that
+    /// write it. A test that merely asks `pinned()`, or reads `CURRENT_MEDIA` to see what kind of
+    /// media is up, is still asserting on what it found, and what it found is whatever the test
+    /// beside it left standing: a hover asked while a pin is up is answered by `show_preview`'s
+    /// early return, and reports no hover at all rather than a wrong one. Reading is the half that
+    /// is easy to leave out, and it fails the same way writing does.
+    ///
+    /// The rule for a test written here, then: does it stand a pin up, take one down, write the
+    /// media, or ask any of the above? Take this lock on the first line of the body, before
+    /// anything touches that state. A test that touches none of it takes nothing — most of this
+    /// module is arithmetic over values handed to it — so the suite is not serialised, only the
+    /// part of it that shares a machine.
+    ///
+    /// A poisoned lock is read through rather than refused, which is the one thing here that
+    /// differs from `POINTER_STAND_IN` below. This mutex holds no state, only the order of the
+    /// tests around it, so a panic inside one of them leaves nothing behind to recover but that
+    /// order — and refusing the lock would turn one failed assertion into thirty-one, every later
+    /// test of this group turned away at the door over a hold it never needed. What is being
+    /// protected is the order, so the order is taken back.
+    ///
+    /// `pin_window`'s own tests keep their own lock over the same slot (`ONE_AT_A_TIME`), and the
+    /// two are not the same mutex, so a test here and a test there can still be at the pin at
+    /// once. One lock hoisted up beside `stand_pin`, which both modules can see, is the fix for
+    /// that; until it is done this one only orders the tests on this side of the wall.
     static PIN_TESTS_ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     /// A lock the tests that publish the pointer's own state take, so that one of them
@@ -25681,6 +25716,8 @@ mod tests {
     /// the pin that `Pin Mode → Update Preview` follows (see `left_button_down`).
     #[test]
     fn a_published_press_is_not_missed_by_a_slower_poll() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         // The two are one set for the whole process, so this test stands in with the others
         // that publish the machine's own state rather than racing them.
         let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
@@ -25922,6 +25959,8 @@ mod tests {
     /// `fs::metadata` calls those questions made, whatever the caches above it did.
     #[test]
     fn a_hover_reads_the_files_entry_once() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let folder = std::env::temp_dir().join("rust-hover-preview-one-probe");
         std::fs::create_dir_all(&folder).expect("a test folder");
 
@@ -26110,6 +26149,8 @@ mod tests {
     /// that would otherwise be drawn.
     #[test]
     fn a_box_follows_the_content_rather_than_the_name() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let folder = std::env::temp_dir().join("rust-hover-preview-content-box");
         std::fs::create_dir_all(&folder).expect("a test folder");
 
@@ -28227,6 +28268,8 @@ mod tests {
     #[test]
     #[ignore = "shows a preview window"]
     fn app_hover_probe() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let Ok(path) = std::env::var("RHP_APP_PROBE") else {
             println!("set RHP_APP_PROBE to a path");
             return;
@@ -28500,6 +28543,8 @@ mod tests {
     #[test]
     #[ignore = "drives the pointer over a pinned drawing"]
     fn pin_drawing_drag_probe() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let path = probe_document();
         let content = pin_a_document(&path);
         println!("drawing at {content:?}");
@@ -29387,6 +29432,8 @@ mod tests {
     #[test]
     #[ignore = "reads the files named in RHP_OFFICE_PROBE"]
     fn office_hover_probe() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         // The drawing half of the app runs in a multithreaded apartment.
         pdf_preview::initialize_apartment();
 
@@ -29505,6 +29552,8 @@ mod tests {
     #[test]
     #[ignore = "reads the files named in RHP_LIBRE_PROBE and starts the installed LibreOffice"]
     fn libre_hover_probe() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         pdf_preview::initialize_apartment();
 
         let Ok(list) = std::env::var("RHP_LIBRE_PROBE") else {
@@ -29671,6 +29720,8 @@ mod tests {
     #[test]
     #[ignore = "reads the files named in RHP_PEAZIP_PROBE and starts the installed PeaZip"]
     fn peazip_hover_probe() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let Ok(list) = std::env::var("RHP_PEAZIP_PROBE") else {
             println!("set RHP_PEAZIP_PROBE to one or more paths, separated by ';'");
             return;
@@ -29832,6 +29883,8 @@ mod tests {
     #[test]
     #[ignore = "reads the files named in RHP_COMIC_PROBE"]
     fn comic_hover_probe() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let Ok(list) = std::env::var("RHP_COMIC_PROBE") else {
             println!("set RHP_COMIC_PROBE to one or more paths, separated by ';'");
             return;
@@ -29962,6 +30015,8 @@ mod tests {
     #[test]
     #[ignore = "reads the files named in RHP_CALIBRE_PROBE and starts the installed Calibre"]
     fn calibre_hover_probe() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let Ok(list) = std::env::var("RHP_CALIBRE_PROBE") else {
             println!("set RHP_CALIBRE_PROBE to one or more paths, separated by ';'");
             return;
@@ -30638,6 +30693,8 @@ mod tests {
     /// `GetFocus` (see `pin_is_focused`), which is the one answer that cannot be wrong.
     #[test]
     fn the_keyboard_is_dropped_on_every_road_out_of_a_pin() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         install(PinnedPreview::for_test());
         assert!(
             !pin_holds_a_keyboard(),
@@ -30731,6 +30788,8 @@ mod tests {
     /// that was gone.
     #[test]
     fn no_road_out_of_a_pin_leaves_what_it_left_behind_standing() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         for reason in [
             Reason::Closed,
             Reason::Asked,
@@ -30888,6 +30947,8 @@ mod tests {
     /// answered by: what a hand lands on is the card's own row, which is the whole of the window.
     #[test]
     fn a_sound_with_no_caption_above_it_has_no_band_to_press_in() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_pin = take_pin_for_a_test();
 
         let mut pin = PinnedPreview {
@@ -30954,6 +31015,8 @@ mod tests {
     /// notices the pointer has gone has to ask for that card rather than for the window.
     #[test]
     fn a_hover_off_the_card_leaves_its_buttons_unlit() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_pin = take_pin_for_a_test();
         let pin = sound_pin();
         let (x, y) = sound_pin_volume_button(&pin);
@@ -31074,6 +31137,8 @@ mod tests {
     /// drawn smaller than the window that is showing it.
     #[test]
     fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-sound-relayout");
@@ -31246,6 +31311,8 @@ mod tests {
     /// the distinction is the whole of why a sound's buttons light up at all.
     #[test]
     fn the_card_asks_to_be_repainted_when_its_hover_changes() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_pin = take_pin_for_a_test();
         let pin = sound_pin();
         let (x, y) = sound_pin_volume_button(&pin);
@@ -31744,6 +31811,8 @@ mod tests {
     /// it afterwards is that window's own: nothing of it is written back to `Volume → Video`.
     #[test]
     fn a_level_moved_on_a_pin_is_the_pins_and_not_the_setting() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
 
@@ -31805,6 +31874,8 @@ mod tests {
     /// played at `Volume → Video` — silent, whatever the sound it replaces was at.
     #[test]
     fn a_film_stepped_onto_from_a_sound_is_played_at_the_films_own_level() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let _levels = PinLevels::set(0, 100);
         let previous_pin = take_pin_for_a_test();
 
@@ -31857,6 +31928,8 @@ mod tests {
     /// film a hand set the knob on is the one film it is kept for (see `set_pin_volume`).
     #[test]
     fn a_level_moved_on_a_films_bar_is_the_films_and_not_the_sounds() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let _levels = PinLevels::set(0, 100);
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
@@ -32137,6 +32210,8 @@ mod tests {
     /// because the maximize is a state about the room and was never given up.
     #[test]
     fn a_maximized_pin_walks_its_files_against_the_room_and_not_the_last_box() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-maximized");
         std::fs::create_dir_all(&folder).expect("a test folder");
 
@@ -32626,6 +32701,8 @@ mod tests {
     /// `pin_update_content` and `audio_box`).
     #[test]
     fn a_sound_picked_into_a_pin_is_the_wait_for_its_probe_until_that_has_answered() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-sound");
         std::fs::create_dir_all(&folder).expect("a test folder");
 
@@ -32767,6 +32844,8 @@ mod tests {
     /// it (see `pin_keeps_its_box`).
     #[test]
     fn a_text_file_picked_into_a_pin_is_laid_out_in_the_room_and_not_fitted_into_the_bound() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let folder = std::env::temp_dir().join("rust-hover-preview-pin-text");
         std::fs::create_dir_all(&folder).expect("a test folder");
         let path = folder.join("notes.txt");
@@ -33678,6 +33757,8 @@ mod tests {
     /// asking whether the player behind a pinned preview is still alive walks /// the media to reach it, so the media must not be held while the walk is made.
     #[test]
     fn asking_after_a_pinned_players_liveness_does_not_stall_on_the_media_it_asks_about() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
         let mut video = create_loading_media(8, 8);
@@ -33718,6 +33799,8 @@ mod tests {
     /// way took the window down a tick before the queued walk could be taken up.
     #[test]
     fn a_pinned_film_the_engine_failed_at_is_stepped_over_rather_than_closed() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
 
@@ -33771,6 +33854,8 @@ mod tests {
     /// a pin shown a document the browser has to *start* for.
     #[test]
     fn an_engine_coming_up_for_a_pinned_document_is_not_a_pin_that_came_apart() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
 
@@ -33818,6 +33903,8 @@ mod tests {
     /// a pin collapsed into its bubble whose player this app has parked, which /// is a player that is deliberately not running.
     #[test]
     fn a_player_the_bubble_parked_is_not_a_pin_that_came_apart() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
 
@@ -33852,6 +33939,8 @@ mod tests {
     /// a pinned window playing a sound, whose player plays the pass it was /// given and stops at the end of it.
     #[test]
     fn a_pinned_sound_is_not_a_pin_that_came_apart_between_passes() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
 
@@ -34027,6 +34116,8 @@ mod tests {
     /// a file the pin could not draw is shown as the mark rather than as the file it /// came from, and the mark is a live kind.
     #[test]
     fn a_failed_file_with_nowhere_to_step_to_is_left_standing_as_the_mark() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
 
@@ -34196,6 +34287,8 @@ mod tests {
     /// the four above it a real answer rather than an accident of where they are written.
     #[test]
     fn a_pin_being_shown_another_file_is_alive_whatever_is_on_screen() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
 
@@ -34574,6 +34667,8 @@ mod tests {
     /// a pinned video laid out again for the box its window was dragged to, which /// is where a resize used to flash a sheared picture for the moment before the engine handed /// the next frame over.
     #[test]
     fn a_resized_pinned_video_keeps_the_frame_its_pixels_are() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
         let mut video = create_loading_media(8, 4);
@@ -34614,6 +34709,8 @@ mod tests {
     /// a seek made while a pinned video is paused.
     #[test]
     fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
 
