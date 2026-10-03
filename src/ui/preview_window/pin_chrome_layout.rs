@@ -734,40 +734,59 @@ pub(super) fn put_remembered_pin_volume(
 /// What a level let go of on a pinned FFmpeg video is settled by.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum PinLevelSettling {
-    /// A player is behind the pin and takes a level only by being begun at one, so it is replaced:
-    /// begun at the pin's own level, and — where the file is held — begun holding it, because the
-    /// replacement is the player that will be asked to hold (see `restart_pinned_player`).
-    Relaunch { holding: bool },
+    /// A player is *playing* behind the pin and takes a level only by being begun at one, so it is
+    /// replaced: begun at the pin's own level, playing on from the second the hand let go of the
+    /// knob at (see `restart_pinned_player`).
+    Relaunch,
+    /// A player is behind the pin and it is *holding* the file, so it is left exactly where it is
+    /// and the level is owed to the player that begins when the file is let go of.
+    ///
+    /// Nothing is written for it here, and what is not written is the point: the claim of what the
+    /// running player was begun at stays standing, which is what says a level is owed and what
+    /// makes that player refuse a pause key until it has been replaced (see `ffplay_key_pause`).
+    OwedToTheNextPlayer,
     /// No player is behind the pin at all. Nothing is begun: the level is written down as the one
     /// playing, and the player that takes it is the one a later press begins at it.
     Recorded,
 }
 
-/// Whether a level moved on a pinned FFmpeg video is owed to a player replaced or written down, and
-/// whether that player is begun held.
+/// Whether a level moved on a pinned FFmpeg video costs a player, is left owed to the player that
+/// begins next, or is simply written down.
 ///
 /// The question is whether a *player* is behind the pin rather than whether the film is playing,
-/// which is what makes a held file owe the level at all: a held file is still a file playing at a
+/// which is what makes a held file a case of its own: a held file is still a file playing at a
 /// level, and the knob moved while it was held would otherwise reach a player that never learns of
 /// it — the film would go on at the level it was at when the hand stopped it while the bar claimed
 /// the level it was set to (see `settle_pin_volume`).
 ///
-/// The hold travels across the replacement rather than being dropped by it, so a level turned while
-/// the file was held does not hand the film back to the sound: the level and the hold are the same
-/// relaunch, and a player begun playing where the file was held is a file the bar says is held and
-/// the desk says is not.
+/// A held file is *not* given a replacement, and the reason is a measurement rather than a
+/// preference. FFmpeg's player cannot be started paused — its whole option list was read on
+/// 9.0.2 for one and there is none, so the only holds it takes are keys posted to its own window —
+/// and a relaunch of a held file is therefore a player that plays, audibly at the new level, from
+/// the second the hold was taken at, until the hold written beside it reaches it. That is one `P`
+/// on the first tick that finds a window there, which is a good few hundred milliseconds after the
+/// process was spawned, and what it sounds like is a held film answering a knob with a burst of its
+/// own soundtrack from the point it was stopped at, stopping again a fraction later.
+///
+/// So the level waits for the player that begins when the file is let go of. Nothing is relaunched
+/// for it, which is also the whole of what keeps a knob from arming the app's own loop: a launch
+/// named at a second is the launch this app has to loop itself (see `video_launch::loop_is_ours`),
+/// and its rewind is a relaunch at zero (see `video_loop_tick`).
 ///
 /// A player this app has lost the handle to is still a player while it is running, so a process
 /// behind a bar that has stopped claiming playback is still owed the level; only a pin with neither
-/// a claim nor a process is owed nothing.
+/// a claim nor a process is owed nothing, and a held pin with neither is owed nothing for the same
+/// reason — there is no player holding it to owe the level to.
 ///
-/// Both answers are taken before the decision rather than one short-circuiting the other, so a knob
-/// let go of on a playing film reconciles the player behind it exactly as one let go of on a held
-/// film does — and the lock that costs is one the relaunch is about to take anyway (see
+/// All three answers are taken before the decision rather than one short-circuiting another, so a
+/// knob let go of on a playing film reconciles the player behind it exactly as one let go of on a
+/// held film does — and the lock that costs is one the relaunch is about to take anyway (see
 /// `restart_pinned_player`).
 pub(super) fn pin_level_settled_by(playing: bool, running: bool, held: bool) -> PinLevelSettling {
-    if playing || running {
-        PinLevelSettling::Relaunch { holding: held }
+    if held && running {
+        PinLevelSettling::OwedToTheNextPlayer
+    } else if playing || running {
+        PinLevelSettling::Relaunch
     } else {
         PinLevelSettling::Recorded
     }
@@ -779,11 +798,15 @@ pub(super) fn pin_level_settled_by(playing: bool, running: bool, held: bool) -> 
 /// player begun at it — the same bargain a seek makes, and it is taken to the second the hand let
 /// go of the knob at rather than back to the beginning (see `pin_playhead`).
 ///
-/// A pin that is *held* owes it too, which it did not before a hold could be a running player, and
-/// what is asked in that arm is which of two things the level is settled by (see
-/// `pin_level_settled_by`). What is genuinely owed nothing is a pin whose player has gone, where the
-/// file is held because there is nothing holding it: the player that begins when the file is let go
-/// of is begun at the level this reads.
+/// A pin that is *held* owes it too, and what is asked in that arm is which of three things the
+/// level is settled by (see `pin_level_settled_by`). It is not settled by a player being replaced,
+/// because a replacement for a held film is a player that plays until the hold written beside it
+/// reaches it, and a knob is not worth handing a held film a burst of its own soundtrack for: the
+/// level is left owed to the player that begins when the file is let go of, which is what that
+/// player refuses a pause key until it has been replaced (see `ffplay_key_pause`). What is
+/// genuinely owed nothing is a pin whose player has gone, where the file is held because there is
+/// nothing holding it: the player that begins when the file is let go of is begun at the level this
+/// reads.
 ///
 /// A sound is the one kind whose settling is the loop's rather than this one's: the clock behind
 /// its card and the player a level is owed to are both the loop's, so the door is a flag rather
@@ -811,9 +834,14 @@ pub(super) fn settle_pin_volume() {
             is_video_process_running(),
             transport.paused_at.is_some(),
         ) {
-            PinLevelSettling::Relaunch { holding } => {
+            PinLevelSettling::Relaunch => {
                 let playhead = pin_playhead(&transport).unwrap_or(0.0);
-                restart_pinned_player(&path, content, playhead, holding);
+                restart_pinned_player(&path, content, playhead, false);
+            }
+            PinLevelSettling::OwedToTheNextPlayer => {
+                // Nothing is done, and nothing is written: the claim of what the running player
+                // was begun at stays standing, which is the whole of what says the level is owed
+                // (see `PinVolume::playing_at` and `ffplay_key_pause`).
             }
             PinLevelSettling::Recorded => {
                 with_pin(|pin| pin.volume.playing_at = pin.volume.level);

@@ -368,6 +368,49 @@ pub(super) fn video_window_for(pid: u32) -> Option<HWND> {
     }
 }
 
+/// Whether the player behind a pinned file is holding a level the pin no longer claims, and so is
+/// not the player a pause key may be posted to.
+///
+/// The level a running player is playing at cannot be changed: FFmpeg's player is told nothing
+/// once it is running, so a level is another player begun at it (see `restart_pinned_player`). So
+/// letting a film go of its hold with a key — which is the cheap way out, and the one that keeps the
+/// player that is already there — would start it at the level it was stopped at while the bar is
+/// drawn at the level the hand set. Answering that it cannot be done is what sends the caller to
+/// its own fallback, `restart_pinned_player`, which begins the file again at the second the hold
+/// was taken at, at the level the pin is holding (see `toggle_pinned_playback`).
+///
+/// Every fact it is refused over is a refusal rather than a permission, and each is a different
+/// mistake. A file that is not held is a file this key is being used to *stop*: ending its player
+/// would take a picture away to answer a pause, which is the fallback of last resort (see
+/// `hold_pinned_player_without_a_key`). A hold that has not reached its player yet is not a player
+/// holding at any level — it is a player that is playing, and the key owed it is the thing being
+/// delivered (see `settle_pending_hold`), which a level turned in the meantime does not cancel.
+/// And a hold that is a *gesture's* is the end of that gesture rather than a press of the pause
+/// button's: a window dragged for a second and released has to carry on from the second it was
+/// watching, which a player begun again is the one way not to do (see `video_drag_hold_apply`).
+pub(super) fn level_is_owed_to_the_next_player(
+    held: bool,
+    drag_held: bool,
+    hold_owed: bool,
+    playing_at: u32,
+    level: u32,
+) -> bool {
+    held && !drag_held && !hold_owed && playing_at != level
+}
+
+/// The same answer as `level_is_owed_to_the_next_player`, over the pin that is up.
+pub(super) fn pinned_level_is_owed_to_the_next_player() -> bool {
+    pinned_playback_state().is_some_and(|(_, _, transport, volume)| {
+        level_is_owed_to_the_next_player(
+            transport.paused_at.is_some(),
+            transport.drag_held,
+            transport.pending_hold,
+            volume.playing_at,
+            volume.level,
+        )
+    })
+}
+
 /// Whether a player's window is there to be told something, which is not the same question as
 /// whether a player is running (see `video_window_for`).
 ///
@@ -376,7 +419,17 @@ pub(super) fn video_window_for(pid: u32) -> Option<HWND> {
 /// answered (see `transport_playing`). All that is done here is put a key on the player's own
 /// message queue, which is a window's own business and is read off the handle already published
 /// for the rest of the window's handling (see `apply_noactivate_to_hwnd`).
+///
+/// One player is refused before any of that, and it is refused for the reason a key is the only
+/// thing a running player can be told: a player holding a film at a level the pin has moved on
+/// from cannot be let go of with a key, because the level cannot be given to it afterwards (see
+/// `level_is_owed_to_the_next_player`). A hold still owed to a player is the other case, and it is
+/// answered here rather than refused — the key is what it is waiting for.
 pub(super) fn ffplay_key_pause() -> bool {
+    if pinned_level_is_owed_to_the_next_player() {
+        return false;
+    }
+
     let Some(hwnd) = video_window_for(VIDEO_PID.load(Ordering::SeqCst)) else {
         return false;
     };
