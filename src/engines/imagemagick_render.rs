@@ -60,9 +60,8 @@ use crate::engines::document_cache::{self, PageKind};
 use crate::engines::supervisor::{self, Adapter, Worker};
 use once_cell::sync::Lazy;
 use std::io::Read;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -667,7 +666,7 @@ fn convert(program: &Path, source: &Path, room: (u32, u32)) -> Option<Vec<u8>> {
     };
 
     let geometry = format!("{}x{}>", room.0.max(1), room.1.max(1));
-    let mut child = Command::new(program);
+    let mut child = crate::app::engine_processes::hidden_command(program);
 
     if let Some(size) = dump.as_deref() {
         child.args(["-size", size, "-depth", "8"]);
@@ -687,7 +686,6 @@ fn convert(program: &Path, source: &Path, room: (u32, u32)) -> Option<Vec<u8>> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .creation_flags(crate::app::engine_processes::CREATE_NO_WINDOW)
         .spawn()
         .ok()?;
 
@@ -1071,7 +1069,7 @@ mod tests {
         let _in_flight = crate::engines::supervisor::IN_FLIGHT_TAKEN
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut engine = std::process::Command::new("ping")
+        let mut engine = crate::app::engine_processes::hidden_command("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
             .spawn()
@@ -1166,7 +1164,7 @@ mod tests {
         // conversion rather than the format it is asked about, and every format is asked
         // about the same way.
         let sample = folder.join("probe-source.png");
-        let made = Command::new(program)
+        let made = crate::app::engine_processes::hidden_command(program)
             .args(["-size", "1200x800", "gradient:red-blue"])
             .arg(format!("png:{}", sample.display()))
             .stdout(Stdio::null())

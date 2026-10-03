@@ -672,7 +672,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        let mut engine = std::process::Command::new("ping")
+        let mut engine = crate::app::engine_processes::hidden_command("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
             .spawn()
@@ -717,7 +717,7 @@ mod tests {
         let give_up = Duration::from_secs(30);
         let poll = Duration::from_millis(50);
 
-        let mut quick = std::process::Command::new("ping")
+        let mut quick = crate::app::engine_processes::hidden_command("ping")
             .args(["-n", "1", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
             .spawn()
@@ -728,7 +728,7 @@ mod tests {
             "a run that finishes inside its bound is answered as it always was"
         );
 
-        let mut engine = std::process::Command::new("ping")
+        let mut engine = crate::app::engine_processes::hidden_command("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(std::process::Stdio::null())
             .spawn()

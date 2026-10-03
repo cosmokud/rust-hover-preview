@@ -3724,19 +3724,58 @@ fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -> bool {
 }
 
 /// Whether a press read on this tick is one a listing can answer for: the window it landed
-/// on is Explorer's or this app's own, and it is still there.
+/// on is Explorer's or this app's own, it is still there, and it is not a popup covering the
+/// listing.
 ///
-/// The second half is what a flyout the press just dismissed fails: `View ▸ Tiles` and
-/// `Sort ▸ Name` are popups covering rows, they are destroyed by the press that clicked
-/// them, and the hand does not move — so by the tick that reads the press the point is back
-/// over the Explorer frame and the lookup answers with the row the popup was covering. A
-/// press aimed at a window that no longer exists is not a press on the listing behind it.
+/// The last half is what `View ▸ Tiles` and `Sort ▸ Name` fail: those are popups over rows,
+/// the press that picks one dismisses it, and the hand does not move — so the point is right
+/// back over the row the popup was covering and the lookup answers with a file the user never
+/// clicked. Whether the popup was destroyed by the press (`aimed_at_a_gone_window`) or merely
+/// hidden, which is what XAML popups do, it is chrome on one tick or the other: a press read
+/// while it is still up lands on it (`current_is_chrome`), and a press read on the poll after
+/// it closed finds the listing already there but was aimed at the popup
+/// (`previous_was_chrome`). Both are refused. Both ticks are asked because the press bit is
+/// read on whichever tick finds it, and a shell that shows the popup for one tick longer or
+/// takes it down sooner must not change what the press means.
 fn press_is_a_listing(
     over_explorer: bool,
     over_our_own: bool,
     aimed_at_a_gone_window: bool,
+    current_is_chrome: bool,
+    previous_was_chrome: bool,
 ) -> bool {
-    click_is_over_a_listing(over_explorer, over_our_own) && !aimed_at_a_gone_window
+    click_is_over_a_listing(over_explorer, over_our_own)
+        && !aimed_at_a_gone_window
+        && !current_is_chrome
+        && !previous_was_chrome
+}
+
+/// Whether a window under the pointer is a menu or flyout rather than anything a listing can
+/// be read under: the popups Explorer puts over its own files.
+///
+/// A popup is Explorer's own as far as `is_cursor_over_explorer_full` is concerned — its owner
+/// chain reaches the frame — so a press on it reads as a press on the listing. The class name is
+/// what says otherwise. Every one of them carries a substring of its own kind: the XAML shell
+/// hosts them in `Microsoft.UI.Content.PopupWindowSiteBridge` and
+/// `Microsoft.UI.Content.DesktopChildSiteBridge`, and a classic menu window is `#32768`. The
+/// three bare words are the older shells' naming, and none of the windows a listing is read
+/// under has one: the list is `SysListView32` under `DirectUIHWND`, the frame and the view are
+/// `ExplorerWClass` and `CabinetWClass`, and this app's own window is `RustHoverPreviewWindow`.
+///
+/// Read per call rather than cached: two `GetClassNameW` calls on every pinned tick.
+fn window_is_menu_popup_chrome(window: HWND) -> bool {
+    class_is_menu_popup_chrome(&window_class_of(window))
+}
+
+/// The matching half of `window_is_menu_popup_chrome`, on the class name rather than on the
+/// window, so that the list of what is and is not chrome is a fact about strings that can be
+/// written down rather than one that needs a window put on somebody's screen.
+fn class_is_menu_popup_chrome(class: &str) -> bool {
+    let class = class.to_ascii_lowercase();
+
+    ["#32768", "sitebridge", "popup", "flyout", "menu"]
+        .iter()
+        .any(|chrome| class.contains(chrome))
 }
 
 /// Whether the window under the pointer on the tick before has been destroyed. Nothing on the
@@ -4365,8 +4404,9 @@ struct PinUpdateWatch {
     /// measured since is how the hand has come.
     pointer: Option<POINT>,
     /// The window under the pointer as the tick before this one read it, or nothing on the
-    /// first tick. What a press is refused by when that window is gone: a flyout the press
-    /// dismissed is exactly that (see `press_is_a_listing`).
+    /// first tick. What a press is refused by when that window is gone or is a popup covering
+    /// the listing — a menu the press just dismissed, read on the tick it was up or on the tick
+    /// after it closed (see `press_is_a_listing`).
     window: Option<HWND>,
     /// When the pointer last moved, which is what a hover of what is under it is measured from.
     settled_at: Option<Instant>,
@@ -4547,10 +4587,24 @@ impl PinUpdateWatch {
         // says a listing is under it (see `press_is_a_listing`). It is asked *after* the
         // double-click rule rather than before, so a press refused for having landed somewhere
         // else still books its point and cannot make the next press its own second half.
+        //
+        // Both ticks are asked about chrome, and the tick before is kept for it because a press
+        // on a menu is read on whichever tick the shell spends the press bit on: while the popup
+        // is still up, or on the poll after it has closed and the point reads as the listing it
+        // was covering. The hand does not move for either, and the file under it is not one it
+        // picked (see `window_is_menu_popup_chrome`).
         let clicked = focus_move.clicked;
+        let current_is_chrome = window_is_menu_popup_chrome(pointer.window);
+        let previous_was_chrome = previous_window.is_some_and(window_is_menu_popup_chrome);
         let pick = clicked
             && self.press_is_a_pick(pointer.point, threshold)
-            && press_is_a_listing(over_explorer, over_our_own, window_is_gone(previous_window));
+            && press_is_a_listing(
+                over_explorer,
+                over_our_own,
+                window_is_gone(previous_window),
+                current_is_chrome,
+                previous_was_chrome,
+            );
 
         // Whether the press was read at all, before anything is decided about it, and where
         // the pointer was when it was. This is the one reading that says a click was lost
@@ -4558,13 +4612,15 @@ impl PinUpdateWatch {
         // below because every one of them is reached only where something else already held.
         if clicked {
             note_pin_click!(
-                "press read  fg {}  at {},{}  win {}  prev win {}  gone {}",
+                "press read  fg {}  at {},{}  win {}  prev win {}  gone {}  chrome {}/{}",
                 is_foreground_explorer() as u8,
                 pointer.point.x,
                 pointer.point.y,
                 window_class_of(pointer.window),
                 previous_window.map_or_else(|| "none".to_string(), window_class_of),
                 window_is_gone(previous_window) as u8,
+                current_is_chrome as u8,
+                previous_was_chrome as u8,
             );
         }
 
@@ -7215,36 +7271,73 @@ mod tests {
         );
     }
 
-    /// A press whose window was destroyed is not a press on the listing that took its place:
-    /// `View ▸ Tiles` and `Sort ▸ Name` are popups covering rows, and the press that picks one
-    /// destroys the popup without the hand moving. A press over a listing that is still there
-    /// is unchanged, and a press over nothing at all was already refused.
+    /// A press aimed at a menu popup is not a press on the listing that popup was covering:
+    /// `View ▸ Tiles` and `Sort ▸ Name` sit over rows, and the press that picks one dismisses
+    /// it without the hand moving. Which tick reads the press is the shell's choice and not the
+    /// rule's — it is up on one, down on the next, or down already on both — so all three are
+    /// refused. A press over a listing that was never a menu under it is unchanged.
     #[test]
     fn a_press_through_a_dismissed_popup_is_not_a_pick() {
         assert!(
-            press_is_a_listing(true, false, false),
+            press_is_a_listing(true, false, false, false, false),
             "a press on Explorer's own window, still there, is a pick"
         );
         assert!(
-            press_is_a_listing(false, true, false),
+            press_is_a_listing(false, true, false, false, false),
             "and a press on a pinned window standing over the listing is one too"
         );
         assert!(
-            press_is_a_listing(true, true, false),
+            press_is_a_listing(true, true, false, false, false),
             "and both at once is still one"
         );
         assert!(
-            !press_is_a_listing(true, false, true),
+            !press_is_a_listing(true, false, true, false, false),
             "a press that destroyed the window it landed on is a press on the popup, not the row behind it"
         );
         assert!(
-            !press_is_a_listing(false, true, true),
+            !press_is_a_listing(false, true, true, false, false),
             "and it is refused on a pinned window over the listing as well"
         );
         assert!(
-            !press_is_a_listing(false, false, false),
+            !press_is_a_listing(false, false, false, false, false),
             "a press on the desktop, or another program, has no listing behind it to read"
         );
+
+        // The popup is read on the tick the press bit is spent on, and a XAML popup hides rather
+        // than going away: `IsWindow` answers for it all the way through.
+        assert!(
+            !press_is_a_listing(true, false, false, true, false),
+            "a press read while the popup is still up is a press on the popup"
+        );
+
+        // The toolbar button that opened it is chrome by the same rule and reads the same way.
+        assert!(
+            !press_is_a_listing(true, false, false, true, true),
+            "and so is the press that opened it"
+        );
+
+        // The poll after it closed: the window under the point is the listing again, which is
+        // why only the tick before can tell this press from a click on that row.
+        assert!(
+            !press_is_a_listing(true, false, false, false, true),
+            "a press whose previous window was the popup is that popup's, not the row behind it"
+        );
+        assert!(
+            !press_is_a_listing(false, true, false, false, true),
+            "and it is refused over a pinned window as well"
+        );
+
+        // A hand that came from the desktop or from the pin itself is not a hand that just
+        // dismissed a menu, however few ticks apart the two ticks are.
+        assert!(
+            press_is_a_listing(true, false, false, false, false),
+            "a press whose previous window was merely somewhere else is a press on the listing"
+        );
+        assert!(
+            press_is_a_listing(false, true, false, false, false),
+            "and a flick from the pin back into the listing is one too"
+        );
+
         assert!(
             !window_is_gone(None),
             "nothing to have been destroyed on the first tick of a watch"
@@ -7253,6 +7346,46 @@ mod tests {
             !window_is_gone(Some(HWND(std::ptr::null_mut()))),
             "and a tick that named no window at all is a gap in the reading, not a window that went away"
         );
+    }
+
+    /// What the chrome rule refuses, and the windows it must leave alone: the class name is the
+    /// only thing that tells a popup from the listing it covers, and the listing's own windows
+    /// are the ones a press has to keep answering for.
+    #[test]
+    fn a_popup_class_is_chrome_and_a_listing_class_is_not() {
+        for chrome in [
+            "Microsoft.UI.Content.PopupWindowSiteBridge",
+            "Microsoft.UI.Content.DesktopChildSiteBridge",
+            "#32768",
+            "Xaml_WindowedPopupClass",
+            "Windows.UI.Core.CoreWindowFlyout",
+            "MenuHostWindow",
+        ] {
+            assert!(
+                class_is_menu_popup_chrome(chrome),
+                "{chrome} is a menu or a flyout"
+            );
+        }
+
+        for listing in [
+            // The view itself, and the DirectUI frame the toolbar and the rows are drawn in.
+            "SysListView32",
+            "DirectUIHWND",
+            // The frame and the file list, under whatever Explorer is showing.
+            "CabinetWClass",
+            "ExplorerWClass",
+            // This app's own, standing over the listing — a press on it *is* a press on the
+            // listing, so a name of our own must not be mistaken for a popup's.
+            "RustHoverPreviewWindow",
+            // What a tick that read no window, or could not read one, is logged as.
+            "none",
+            "unreadable",
+        ] {
+            assert!(
+                !class_is_menu_popup_chrome(listing),
+                "{listing} is a window a listing can be read under"
+            );
+        }
     }
 
     /// A search results view is not sorted by a column at all: it is ordered by how relevant
