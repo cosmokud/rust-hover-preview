@@ -470,8 +470,16 @@ mod tests {
             "VK_DOWN is the next file too"
         );
         assert_eq!(pin_key_command(0x1B), Some(2), "VK_ESCAPE closes the pin");
-        assert_eq!(pin_key_command(0x20), Some(3), "VK_SPACE holds the file or lets it go");
-        assert_eq!(pin_key_command(0x54), Some(4), "VK_T is the next subtitle track");
+        assert_eq!(
+            pin_key_command(0x20),
+            Some(3),
+            "VK_SPACE holds the file or lets it go"
+        );
+        assert_eq!(
+            pin_key_command(0x54),
+            Some(4),
+            "VK_T is the next subtitle track"
+        );
 
         // A key this app does not answer is passed on untouched, or the hook would eat a letter of a
         // file the user is renaming in the window behind the pin.

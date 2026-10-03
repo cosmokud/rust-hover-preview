@@ -60,8 +60,7 @@ fn keeps_reads_and_forgets_a_page() {
         "nothing is kept before anything is drawn"
     );
 
-    let kept =
-        store(&source, office(), PageKind::Pdf, b"%PDF-1.7 a page").expect("a kept page");
+    let kept = store(&source, office(), PageKind::Pdf, b"%PDF-1.7 a page").expect("a kept page");
     assert_eq!(kept.kind, PageKind::Pdf);
     assert_eq!(
         std::fs::read(&kept.path).expect("a page to read"),

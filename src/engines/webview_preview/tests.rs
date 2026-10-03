@@ -91,8 +91,7 @@ fn the_page_draws_the_font_with_its_own_lines_and_a_name() {
     );
 
     // The two backdrops the page owns: the squares, and the ink that reads on them.
-    let (page, _) =
-        font_page(&font, 7, TransparentBackground::Checkerboard, 0).expect("a page");
+    let (page, _) = font_page(&font, 7, TransparentBackground::Checkerboard, 0).expect("a page");
     let html = std::fs::read_to_string(&page).expect("a written page");
 
     assert!(html.contains("conic-gradient"));
@@ -230,8 +229,8 @@ fn a_document_is_drawn_in_a_page_that_cannot_be_dragged_or_pointed_at() {
     let page_file = folder.join("a page.html");
     std::fs::write(&page_file, "<!doctype html><title>a page</title>").expect("a written page");
 
-    let (page, _) = html_page(&page_file, 42, TransparentBackground::Black)
-        .expect("a page for a page of html");
+    let (page, _) =
+        html_page(&page_file, 42, TransparentBackground::Black).expect("a page for a page of html");
     let html = std::fs::read_to_string(&page).expect("a written page");
 
     assert!(
