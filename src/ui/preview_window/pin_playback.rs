@@ -863,12 +863,26 @@ pub(super) fn seek_press_hold() {
     }
 
     if ffplay_key_pause() {
-        let at = pin_playhead(&transport).unwrap_or(0.0);
-        update_pin_transport(|state| {
-            state.held(at);
-            state.drag_held = true;
-        });
+        seek_press_hold_apply(pin_playhead(&transport).unwrap_or(0.0));
     }
+}
+
+/// Record the hold a seek press's key has posted: the same write as a drag's,
+/// with the aim the press stored kept standing across it.
+///
+/// `held` clears `seeking`, and without the restore the scrub's own guard
+/// (`pinned_transport_drag` answers only while an aim is standing) refuses
+/// every step and the release finds nothing to take the file to — the cover
+/// the press parked stranded over a held film. So the aim is read back out of
+/// the same write rather than left to whatever `held` does with it, which
+/// keeps `held` the same answer for every other caller.
+pub(super) fn seek_press_hold_apply(at: f64) {
+    update_pin_transport(|state| {
+        let aim = state.seeking;
+        state.held(at);
+        state.seeking = aim;
+        state.drag_held = true;
+    });
 }
 
 /// Spend the stamp a scrub's ticks kept, so the swap bound runs from the

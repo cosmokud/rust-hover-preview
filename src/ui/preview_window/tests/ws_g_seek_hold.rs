@@ -387,3 +387,118 @@ fn a_press_with_no_second_to_seek_to_arms_nothing() {
          relaunch the release makes"
     );
 }
+
+/// Press→scrub→release down the real road: the aim the press stores survives
+/// the hold its key posts, so a scrub moves it and the release has both a
+/// second to take the file to and a hold to carry onto the relaunch.
+///
+/// The earlier tests set `seeking` and `drag_held` by hand, which is why the
+/// wipe went uncaught: `held` clears `seeking`, so the hold the press took
+/// refused every scrub step at the drag's own guard and left the release
+/// with nothing to relaunch — the press's cover stranded over a held film.
+#[test]
+fn press_scrub_release_keeps_the_aim_and_the_hold() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+
+    // A playing film with a known length, as the press finds it.
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.transport.begun(0.0, true, false);
+    pin.transport.duration = Some(200.0);
+    stand_pin(Some(pin));
+
+    // The press: an aimed second stored the way `pinned_transport_press`
+    // stores it, then the hold its key posts recorded the way
+    // `seek_press_hold` records it — one key for the whole gesture.
+    let aimed = pin_state()
+        .and_then(|pinned| {
+            pinned
+                .pin()
+                .and_then(|pin| pin_seconds_at(&pin.transport, 0.15))
+        })
+        .expect("a known length aims the press");
+    update_pin_transport(|transport| transport.seeking = Some(aimed));
+    seek_press_hold_apply(30.0);
+
+    let after_press = pin_state().and_then(|pinned| {
+        pinned.pin().map(|pin| {
+            (
+                pin.transport.seeking,
+                pin.transport.paused_at,
+                pin.transport.drag_held,
+            )
+        })
+    });
+    assert_eq!(
+        after_press,
+        Some((Some(aimed), Some(30.0), true)),
+        "the hold silences the film with the gesture's claim on it and leaves \
+         the aim standing, or the scrub has nothing to move and the release \
+         nothing to relaunch"
+    );
+
+    // The scrub: steps move the aim the way `pinned_transport_drag` moves
+    // it, and nothing else.
+    for share in [0.25, 0.5] {
+        update_pin_transport(|transport| {
+            transport.seeking = pin_seconds_at(transport, share);
+        });
+    }
+
+    let after_scrub = pin_state().and_then(|pinned| {
+        pinned.pin().map(|pin| {
+            (
+                pin.transport.seeking,
+                pin.transport.paused_at,
+                pin.transport.pending_hold,
+                pin.transport.drag_held,
+            )
+        })
+    });
+    assert_eq!(
+        after_scrub,
+        Some((Some(100.0), Some(30.0), false, true)),
+        "a scrub moves the aimed second and leaves the hold, the owed flag \
+         and the claim where the press put them"
+    );
+
+    // The release: reads the aim the way `pinned_transport_release` reads
+    // it, and the relaunch carries the hold the way `seek_pinned_playback`
+    // carries it.
+    let aim = pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.seeking));
+    assert_eq!(
+        aim,
+        Some(100.0),
+        "the release has a second to take the file to, or there is no \
+         relaunch and the press's cover stands over a held film"
+    );
+    assert!(
+        pinned_is_held(),
+        "and a hold to carry onto it, or the new player plays audibly over \
+         a bar drawn paused"
+    );
+    let holding = pinned_is_held();
+    update_pin_transport(|transport| transport.begun(100.0, true, holding));
+
+    let after_release = pin_state().and_then(|pinned| {
+        pinned.pin().map(|pin| {
+            (
+                pin.transport.seeking,
+                pin.transport.paused_at,
+                pin.transport.pending_hold,
+                pin.transport.drag_held,
+            )
+        })
+    });
+    assert_eq!(
+        after_release,
+        Some((None, Some(100.0), true, true)),
+        "the release relaunches once at the aimed second carrying the hold: \
+         the aim spent, the hold written down as owing with the gesture's \
+         claim on it"
+    );
+
+    stand_pin(previous_pin);
+}
