@@ -42,6 +42,15 @@
 //! and no picture at all — and which `-loglevel quiet` over a null stderr says nothing about (see
 //! `HWACCEL_DEVICES`, and the note on `video_playback::start_video_playback`).
 //!
+//! **That silence is the open item — propose-only, pending and not accepted.** The failure is
+//! unobservable where it happens: the launch is `-loglevel quiet` over a null stderr (the launch
+//! at `video_playback::start_video_playback`, a file another branch owns), so a dxva2 machine
+//! reads the fault as a spinner that times out and a frame that never comes, with nothing
+//! written to say why. The proposal, for whoever owns that launch: let the graph failure be
+//! heard — the player's stderr read through the window wait, or a device refused before the
+//! film is launched that cannot share a graph with `subtitles` at all — which is why it is
+//! written down here rather than fixed: the launch itself is that file's to make.
+//!
 //! - The loop's rewind. FFmpeg's player has no key that goes to the beginning of a file, so a loop
 //!   this app gives cannot be given by posting one (see `rewind_launch`).
 

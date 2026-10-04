@@ -470,8 +470,17 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     //
     // At the setting's own start (`Normalize` is off for videos) this is nothing at all, and it
     // stays nothing at every setting — which is what "no full-file decode on the way to a first
-    // frame" has to mean to be worth anything.
-    spawn_gain_scan(path);
+    // frame" has to mean to be worth anything. The gate is the setting's own — the one the
+    // launch reads too (see `normalizing_video` and `start_video_playback`) — and not ffmpeg's
+    // presence, which is all `spawn_gain_scan` asks of its own: a machine that could measure
+    // but a user who has not asked it to is a machine that measures nothing here. Nothing
+    // tests the gate: the spawn sits behind probes that need FFmpeg, and the one observable
+    // that tells a spawned scan from an unspawed one is the gain it leaves behind — readable
+    // only once the whole-file decode the scan is has run, which is a wall-clock assertion
+    // rather than a seam.
+    if normalizing_video() {
+        spawn_gain_scan(path);
+    }
 
     let crop = best_valid_crop(candidates, src_w, src_h);
 
