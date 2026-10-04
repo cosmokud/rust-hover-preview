@@ -249,8 +249,11 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
         }
         pin_chrome::TransportPart::Seek => {
             let share = pin_chrome::transport_share_at(x, bar.width, bar.dpi, bar.live);
-            let aim = pin_state()
-                .and_then(|pinned| pinned.pin().and_then(|pin| pin_seconds_at(&pin.transport, share)));
+            let aim = pin_state().and_then(|pinned| {
+                pinned
+                    .pin()
+                    .and_then(|pin| pin_seconds_at(&pin.transport, share))
+            });
 
             // **A press with no second to seek to claims nothing at all, and that is the whole of
             // what this arm refuses.** There is no aim to move and no film to hold, so nothing
@@ -946,12 +949,7 @@ pub(super) unsafe fn pinned_audio_control_release(
 /// A release on a pinned window, answering whether it was the pin's to act on: the button a press
 /// landed on is clicked if the pointer is still on it, and a drag — which is over wherever the
 /// pointer left it — asks for the media to be laid out again at the box the window ended up with.
-pub(super) unsafe fn pinned_release(
-    hwnd: HWND,
-    x: i32,
-    y: i32,
-    window: &dyn PinWindow,
-) -> bool {
+pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn PinWindow) -> bool {
     // A drag of the volume knob first, which is a hand on the level rather than on anything else:
     // it is the one press on a pinned window that is let go of somewhere other than where it began
     // (see `pinned_volume_press`).

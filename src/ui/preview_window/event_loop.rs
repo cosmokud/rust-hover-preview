@@ -3060,7 +3060,13 @@ pub fn run_preview_window() {
                                 // was below the lock before (see `default_app_name`).
                                 tooltip: PinTooltip::default(),
                                 dragging: None,
-                                parked: false,
+                                // A cover standing for the file this pin is being taken up with
+                                // comes with it: the swap armed it over the outgoing frame and
+                                // the settle is what takes it down, on the tick that finds the
+                                // incoming player's window. Written false here it would be given
+                                // up by the first tick that finds it, which is the hole the cover
+                                // was raised to close (see `pin_park_carried_forward`).
+                                parked: pin_park_carried_forward(),
                                 transport: PinTransport {
                                     // The length the probe read, and where a player this app
                                     // started has got to: a video FFmpeg plays has been running

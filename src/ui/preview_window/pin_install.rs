@@ -84,6 +84,18 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     //
     // The hold keeps the frame and nothing else: the player behind the standing file goes all the
     // same, and at once (see `stop_pinned_player`).
+    // The cover goes up before either take-down and not after it, because the take-down is what makes
+    // the hole: the player is killed on both branches below, the band's pixels are transparent ones
+    // for a video, and the file that replaces this one has no window of its own for the length of a
+    // decode — or, for the kind the engine plays, for the length of the wait for its first frame. So
+    // the outgoing frame is read off the screen, painted over the band and the player's window put
+    // away first, and the record is armed so the settle hands the band to the window that replaces
+    // it rather than to whatever merely exists (see `cover_step_swap_for_video`).
+    //
+    // **A file this app paints itself is not covered at all**: there is no player coming to be
+    // handed this band, so a cover here would only have to be taken down again over the picture that
+    // replaces the film (see `give_up_pinned_park`).
+    cover_step_swap_for_video(file.media.media_type == MediaType::Video);
     if file.media.media_type.is_native_video() {
         stop_pinned_player();
     } else {
@@ -177,6 +189,10 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             volume,
             video_subtitles(&file.path).chosen(),
         ) else {
+            // A cover standing over a player that was killed for a replacement that never came is
+            // a frozen frame nothing will ever end, so it is given up here rather than left for
+            // the walk's next file to inherit (see `give_up_pinned_park`).
+            give_up_pinned_park();
             return PinSwap::Refused {
                 path: file.path,
                 walk: file.walk,
@@ -378,6 +394,11 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
         walk,
     } = file;
     let PinUpdate { content, dpi, .. } = update;
+
+    // Everything a swap is taking up with, before this file's own facts are written over the
+    // loop's: a cover for this file's player is one of the things being carried (see
+    // `reconcile_swap_take_up`).
+    reconcile_swap_take_up(media.media_type == MediaType::Video);
 
     // The pin is not waiting for a file any more, whatever the file it was waiting for turned
     // out to be: an arc left up over a window showing a video is a spinner for a question nobody
@@ -769,14 +790,33 @@ pub(super) fn relayout_pinned_media(
         // was holding the film and was resized is a pin holding the film at a different size, not a
         // pin that has started playing it (see `restart_pinned_player`).
         Some(MediaType::Video) => {
+            // A box change is a player being ended and another begun, so it takes the press road
+            // first: the cover stands over the outgoing frame and the old player is killed before
+            // the replacement exists, which is what keeps the replacement's window — published
+            // within milliseconds and empty until the file is open and the first frame is decoded —
+            // from being raised over a transparent band (see `begin_covered_box_change`).
+            //
+            // A resize's own press has already run this road and left its cover standing, so the
+            // call answers false there and the relaunch below is the one the resize's release
+            // armed: one press, one player.
+            let covered = unsafe { begin_covered_box_change() };
             ensure_pinned_sibling_box(content);
-            if let Some((path, _)) = pinned_media_owner() {
-                restart_pinned_player(
-                    &path,
-                    content,
-                    pinned_playhead().unwrap_or(0.0),
-                    pinned_is_held(),
-                );
+            match pinned_media_owner() {
+                // The press's end: it takes the snapshot, so this is the one relaunch the box
+                // change owes — at the second the film had got to, and not twice across the
+                // release that re-enters behind the settle (see `relaunch_gesture_end_at`).
+                Some(_) if covered => {
+                    relaunch_gesture_end_at(content, None);
+                }
+                Some((path, _)) => {
+                    restart_pinned_player(
+                        &path,
+                        content,
+                        pinned_playhead().unwrap_or(0.0),
+                        pinned_is_held(),
+                    );
+                }
+                None => {}
             }
             None
         }

@@ -72,6 +72,40 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
     windows::Win32::Foundation::BOOL(1)
 }
 
+/// The extended styles this app asserts on a player's window every time it finds it.
+///
+/// One function because it is one list asserted on a window of another process
+/// from a thread of its own, about five times a millisecond for as long as a film
+/// plays, and a list written out twice is a list whose two copies drift: the
+/// second one silently drops whatever the first has learned (see
+/// `ensure_video_window_topmost`, which re-asserts only the three it also knows
+/// about and so preserves these rather than re-deciding them).
+///
+/// **`WS_EX_TRANSPARENT` is what makes a click on the band reach nothing of the
+/// player's own.** A video pin's band is alpha zero by design, so that the window
+/// underneath is both seen and clicked through it — which is FFmpeg's window, and
+/// its mouse bindings are not this app's to change: `left double-click toggle
+/// full screen` is compiled into the player and no option unbinds it (`-draw_mouse
+/// 0` hides the drawn pointer and leaves the binding live, verified against
+/// ffplay 9.0.2). So a hand on the band entered fullscreen and relative-mouse
+/// mode — the cursor warp and the flash — with no flag this app could pass to
+/// prevent it. Passing the click through the player's own window is the window
+/// property that does it, and it costs the player's own pointer bindings, which
+/// is the trade: the band is this app's chrome, and this app's bar already carries
+/// a seek that works.
+///
+/// `WS_EX_LAYERED` is deliberately *not* set with it: a layered window's contents
+/// come from `UpdateLayeredWindow`, and this one is SDL's, which paints and
+/// swaps its own surface. A video that stopped rendering would be a far worse
+/// answer than a click that falls through to the desktop.
+pub(super) fn player_ex_style(current: isize) -> isize {
+    current
+        | WS_EX_NOACTIVATE.0 as isize
+        | WS_EX_TOOLWINDOW.0 as isize
+        | WS_EX_TOPMOST.0 as isize
+        | WS_EX_TRANSPARENT.0 as isize
+}
+
 /// Style and raise a known ffplay window.
 pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // Store the video window HWND for cursor-over-preview detection
@@ -79,11 +113,7 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
 
     // Add WS_EX_NOACTIVATE and WS_EX_TOPMOST to its extended style
     let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    let new_style = current_style
-        | WS_EX_NOACTIVATE.0 as isize
-        | WS_EX_TOOLWINDOW.0 as isize
-        | WS_EX_TOPMOST.0 as isize;
-    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, player_ex_style(current_style));
 
     // The style is put on whatever else is happening, and the *raise* is not. This is the one
     // place every raise of the player's window goes through — the monitor thread calls it about

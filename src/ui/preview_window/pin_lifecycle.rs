@@ -705,6 +705,19 @@ pub(super) fn pinned_window_box() -> Option<(ScreenRegion, i32, i32)> {
     ))
 }
 
+/// The pin's own window, for a road that has no message in hand to name it.
+///
+/// The handle the window was created into, which is the same one
+/// [`PinWindow::hwnd`] reads and the same one `raise_pinned_window` is asked
+/// with from the loop's own tick. It is here for the two covers that run with no
+/// pointer message of their own — a box change and a file step are both the
+/// loop's work, and both owe a paint before a player is hidden — so the handle
+/// they paint through is read rather than carried down from a window procedure
+/// that is not on either road.
+pub(super) fn pinned_window() -> HWND {
+    HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _)
+}
+
 /// Put a pinned window up at the box its state says, painted before it is shown: what a layered
 /// window shows between one paint and the next is the surface it already has, stretched into
 /// whatever box the window has (see `show_loading_spinner`).
