@@ -400,9 +400,19 @@ impl PinWindow for Win32PinWindow {
         // for rather than held as a handle, so there is no dereference to justify and a window
         // that has since gone is found not to be there.
         match band {
-            // The place is the show — `ensure_pinned_sibling_box` puts the window up in the same
-            // `SetWindowPos` that moves it, so a band answered here is answered on screen at once.
-            Some(band) => ensure_pinned_sibling_box(band),
+            // The place is the show — the window goes up in the same `SetWindowPos` that moves
+            // it, so a band answered here is answered on screen at once. Placed directly rather
+            // than through `ensure_pinned_sibling_box`: that call is refused while a park stands,
+            // and the swap places the window BEFORE taking the flag down, so the cover is still up
+            // when the window goes back (see `unpark_pinned_player`).
+            Some(band) => {
+                let _ = ensure_video_window_topmost(
+                    band.0,
+                    band.1,
+                    (band.2 - band.0).max(1),
+                    (band.3 - band.1).max(1),
+                );
+            }
             // A pin with no band to go back into has no rect to be told, so only its hiddenness is
             // taken back (see `unpark_pinned_player`).
             None => show_pinned_player_window(),

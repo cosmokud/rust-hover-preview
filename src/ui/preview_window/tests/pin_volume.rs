@@ -275,6 +275,12 @@ fn a_level_moved_on_a_films_bar_is_the_films_and_not_the_sounds() {
 /// out of a card its own knob was left at 100%.
 #[test]
 fn a_sound_stepped_back_onto_from_a_film_is_at_the_level_its_own_card_was_left_at() {
+    // Serialized with the pin tests: this stands pins and takes the media, which unlocked is a
+    // window another test's pin is standing in.
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
     let mut levels = PinLevels::set(0, 10);
     levels.remembering(true, false);
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());

@@ -631,13 +631,17 @@ pub(super) const PIN_PARK_SWAP_TIMEOUT: Duration = Duration::from_millis(600);
 /// relaunch begun afterwards is a *fact* rather than a guess (see `player_replaced_since`).
 /// `replacing` is what a resize's park already knows: a move has no relaunch behind it, so the
 /// player standing in the band when the drag ends is the player that was playing all along, while a
-/// resize ends in one that has decoded nothing yet. `since` is left unset until the loop first asks
-/// for the band back — armed by the park so a tick in the middle of a drag cannot start the clock,
-/// stamped by the settle so a ten-second drag does not spend the budget of a one-tick wait.
+/// resize ends in one that has decoded nothing yet. `awaiting_relaunch` is what a seek's cover
+/// does not know yet: no relaunch has been begun behind it — the release makes it — so there is
+/// nothing to swap to and no bound to spend until one is (see `park_swap_arm_for_the_band`).
+/// `since` is left unset until the loop first asks for the band back — armed by the park so a tick
+/// in the middle of a drag cannot start the clock, stamped by the settle so a ten-second drag does
+/// not spend the budget of a one-tick wait.
 #[derive(Clone, Copy)]
 pub(super) struct PinParkSwap {
     pub(super) player: u32,
     pub(super) replacing: bool,
+    pub(super) awaiting_relaunch: bool,
     pub(super) since: Option<Instant>,
 }
 
@@ -810,16 +814,62 @@ pub(super) fn clear_park_trace() {
 /// three answer for a resize, which enters through the same call (see `begin_pin_drag`), which is why
 /// the flash at the start of a resize needed no mechanism of its own.
 pub(super) fn park_pinned_player(hwnd: HWND, at: (i32, i32), resizing: bool) -> bool {
-    let parked = pin_state().is_some_and(|mut pinned| {
-        let Some(pin) = pinned.pin_mut() else {
-            return false;
-        };
+    park_pinned_player_inner(hwnd, at, resizing, resizing, false)
+}
 
-        // A drag that parks twice is one drag, not two: a second call would hide a window that is
-        // already hidden and answer a question the first call has already answered — and write a
-        // second record for one park, which is the record the swap is answered from.
+/// Put a pinned video's player away for a seek taken from the transport bar.
+///
+/// The same cover a drag is given, without the two things a drag's cover carries: no hold —
+/// a scrub keeps playing, and pausing it is the defect rather than the fix — and no resume
+/// frame, because the playhead is moving and a frame rendered at the second the hand started
+/// from is a frame of the wrong second. The relaunch the release makes runs behind this cover
+/// and the settle swaps it once (see `settle_pinned_park`).
+pub(super) fn park_pinned_player_for_seek(hwnd: HWND, at: (i32, i32)) -> bool {
+    park_pinned_player_inner(hwnd, at, true, false, true)
+}
+
+/// What a park begins: a fresh park over a live window, or an extend over a standing one.
+///
+/// `replacing` is whether a relaunch is behind the cover, and `prepare` whether a frame for
+/// that relaunch is wanted off the gesture's own time: a resize's is, a seek's is not, and a
+/// move has no relaunch at all. `awaiting` is whether that relaunch is still to come: a seek
+/// parks before its release relaunches, so until one is begun there is nothing to swap to and
+/// no bound to spend (see `park_swap_arm_for_the_band`).
+fn park_pinned_player_inner(
+    hwnd: HWND,
+    at: (i32, i32),
+    replacing: bool,
+    prepare: bool,
+    awaiting: bool,
+) -> bool {
+    let begin = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+
+        // A begin over a standing park extends it rather than refusing it: a second gesture
+        // arriving before the first one's settle — a release-then-instant-regrab, or a second
+        // click on the bar — is the same cover held longer, not a second park. Refusing it leaves
+        // the in-flight settle's record superseded with nobody owning the swap, which is the
+        // frozen placeholder standing over a live player until the next release. So the record is
+        // kept current on the same generation chain, while the capture is kept from the first
+        // begin, which read the screen while the window was fully visible.
         if std::mem::replace(&mut pin.parked, true) {
-            return false;
+            if let Ok(mut swap) = PIN_PARK_SWAP.lock() {
+                match swap.as_mut() {
+                    Some(record) => {
+                        record.player = VIDEO_PID.load(Ordering::SeqCst);
+                        record.replacing = record.replacing || replacing;
+                    }
+                    None => {
+                        *swap = Some(PinParkSwap {
+                            player: VIDEO_PID.load(Ordering::SeqCst),
+                            replacing,
+                            awaiting_relaunch: awaiting,
+                            since: None,
+                        });
+                    }
+                }
+            }
+            return Some(true);
         }
 
         // **Written with the pin held, which is the whole of what keeps a park from being stranded.**
@@ -827,21 +877,37 @@ pub(super) fn park_pinned_player(hwnd: HWND, at: (i32, i32), resizing: bool) -> 
         // the flag by every paint and every raise, this record by the tick that ends the park. Two
         // locks and two writes leave a gap, and a park begun in it has its record taken away under
         // it — a band this app paints flat over a paused film, with nothing left that will ever
-        // write that record again, because the second write is the one a park that is already
-        // standing does not make (see `park_swap_arm_for_the_band`).
+        // write that record again. An extend over a standing park refreshes the record rather than
+        // replacing it, so the write a second begin would have made is still made (see
+        // `park_swap_arm_for_the_band`).
         PIN_PARK_SWAP
             .lock()
             .unwrap_or_else(|swap| swap.into_inner())
             .replace(PinParkSwap {
                 player: VIDEO_PID.load(Ordering::SeqCst),
-                replacing: resizing,
+                replacing,
+                awaiting_relaunch: awaiting,
                 since: None,
             });
 
-        true
+        Some(false)
     });
 
-    if parked {
+    let Some(extended) = begin else {
+        return false;
+    };
+
+    // An extend keeps the first begin's capture, paint and hide: the window was fully visible
+    // then and there is nothing to read once it has gone. Only the generation the settle drains
+    // is refreshed, above — and a resize arriving over a move still asks for the frame the
+    // replacement upgrades the band with, after giving up the one the first begin asked for.
+    if extended {
+        trace_park_step("extend");
+        if prepare {
+            forget_resume_frame();
+            prepare_resume_frame();
+        }
+    } else {
         forget_resume_frame();
 
         // Taken before the window is hidden, and only when this really is a park: it is a read of
@@ -853,9 +919,9 @@ pub(super) fn park_pinned_player(hwnd: HWND, at: (i32, i32), resizing: bool) -> 
         // Asked for here rather than at the end of the drag, because the drag is the only time
         // there is: the release has to hand the band back this tick (see `settle_pinned_park`), and
         // a render begun there is a tenth of a second of the frame the hand let go on being
-        // replaced by nothing. Only a resize asks, because only a resize ends in a player that has
-        // decoded nothing (see `spawn_video_resume_frame`).
-        if resizing {
+        // replaced by nothing. Only a relaunch asks, because only a relaunch ends in a player that
+        // has decoded nothing (see `spawn_video_resume_frame`).
+        if prepare {
             prepare_resume_frame();
         }
 
@@ -884,7 +950,7 @@ pub(super) fn park_pinned_player(hwnd: HWND, at: (i32, i32), resizing: bool) -> 
         hide_pinned_player_window();
     }
 
-    parked
+    true
 }
 
 /// Ask for the frame this park gives back, on the drag's own time.
@@ -1030,6 +1096,17 @@ fn park_swap_arm_for_the_band(window_up: bool) -> Option<(ParkSwap, Duration)> {
         .lock()
         .unwrap_or_else(|swap| swap.into_inner());
 
+    // A seek's cover is not a wait for a window yet: its release has not relaunched, so there is
+    // nothing to swap to — and the bound below runs from the relaunch, so a scrub held past it
+    // must neither spend it nor swap to the player the cover still stands over. Held until a
+    // relaunch is begun behind it, which the release does (see `seek_pinned_playback`).
+    if held
+        .as_ref()
+        .is_some_and(|swap| swap.awaiting_relaunch && !player_replaced_since(swap.player))
+    {
+        return None;
+    }
+
     // **A park with no record of itself is a park with no replacement to wait for**, and that is
     // what it is answered as: there is nothing behind it that this app began and nothing that is
     // going to arrive, so it is handed to whatever window is standing in the band on the first tick
@@ -1048,6 +1125,23 @@ fn park_swap_arm_for_the_band(window_up: bool) -> Option<(ParkSwap, Duration)> {
         .unwrap_or((false, Duration::ZERO));
 
     park_swap_arm(window_up, replaced, waited).map(|arm| (arm, waited))
+}
+
+/// Whether the standing park is a seek's cover still waiting for its release's relaunch.
+///
+/// A scrub aims without relaunching, so until one is begun behind the cover there is nothing
+/// for the settle to swap to; a gesture that ends without relaunching one — a move let go of, a
+/// capture stolen mid-aim — hands the band back to the player it covers instead of leaving a
+/// cover nothing ends (see `finish_pin_drag` and `pin_capture_lost`).
+pub(super) fn seek_cover_is_waiting() -> bool {
+    PIN_PARK_SWAP
+        .lock()
+        .ok()
+        .and_then(|held| {
+            held.as_ref()
+                .map(|swap| swap.awaiting_relaunch && !player_replaced_since(swap.player))
+        })
+        .unwrap_or(false)
 }
 
 /// Give up the record of a park there is no longer, with the pin held.

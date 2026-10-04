@@ -578,6 +578,8 @@ pub(super) fn begin_pin_drag(
 
     if installed {
         window.capture(hwnd);
+        // Traced so the order is answerable: the hold is taken before the park reads the frame.
+        trace_park_step("hold");
         // **The film's hold is taken before the park rather than on the tick after it, and the
         // order of the two is the point.** The hold is a pause key, so the film it stops keeps
         // playing until the key reaches a player that is decoding it — and the park below reads
@@ -625,6 +627,24 @@ pub(super) fn begin_pin_drag(
 /// It is asked of the pin and not of the player's window, because a pin taken down mid-drag has
 /// ended the player outright and there is no window of its own left to find (see `park_pinned_player`).
 pub(super) fn unpark_pinned_player(window: &dyn PinWindow) -> bool {
+    // Read as standing before anything is asked of the window: a park that is over is one fact
+    // with one writer, and the settle that decides when it is over has to be answerable by a test
+    // that goes through the same line this does (see `settle_pinned_park_onto`).
+    if !pin_player_is_parked() {
+        return false;
+    }
+
+    // The band is read before the flag goes down rather than with it: a hand that carried the
+    // window elsewhere left the player's window at the box the drag began from, and the place is
+    // part of putting it back. What follows is place, flag down, repaint — strictly ordered, in
+    // this same tick — because a band painted transparent with nothing behind it is the desktop,
+    // and the pixels the compositor is still holding are the placeholder until the repaint.
+    let band = pinned_content();
+
+    // Placed while the cover is still up rather than after it is down: the window goes back at
+    // the final box before the band is a hole again, so no paint can fall between the two.
+    window.unpark_player_window(band);
+
     // **The flag is taken back through the one function that takes it back**, rather than by
     // writing it here as well: a park that is over is one fact with one writer, and the settle
     // that decides when it is over has to be answerable by a test that goes through the same line
@@ -632,11 +652,6 @@ pub(super) fn unpark_pinned_player(window: &dyn PinWindow) -> bool {
     if !settle_pinned_park_onto(true) {
         return false;
     }
-
-    // The band is read after the flag rather than with it, and both are read before the window is
-    // asked for anything — the flag says the park is over and the band says where the window is
-    // to go, and a pin that has been taken down between the two has no band to go to.
-    window.unpark_player_window(pinned_content());
 
     // **And then the band is painted, in this same tick, which is the whole of what was left of the
     // release flash.** The flag going down changes what the *next* paint would draw; it changes
@@ -926,6 +941,12 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
                 *request = Some(content);
             }
         }
+    } else if seek_cover_is_waiting() {
+        // A seek's cover waited out by a gesture that relaunches nothing — a move let go of over
+        // a scrub in flight — is handed back to the player it covers: no relaunch is coming, so
+        // the settle would hold it for ever. A resize always relaunches below the cover and needs
+        // no such end (see `seek_cover_is_waiting`).
+        unpark_pinned_player(window);
     }
 
     // **The gesture's hold is let go of here, on the gesture's own message, and it is let go of
@@ -982,7 +1003,7 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
 /// band that is still this app's to fill, and both are settled by the tick, on the one fact neither
 /// of them can carry — whether a player is standing in the band to see through it (see
 /// `settle_pinned_park`).
-pub(super) fn pin_capture_lost(_window: &dyn PinWindow) {
+pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
     // **The gesture's hold is let go of here as well, and before the record is dropped rather than
     // on the tick that notices it is gone.** A capture taken from under a drag ends the drag, and a
     // claim left standing is a claim the next film to be dragged is answered with — so the drag
@@ -1002,5 +1023,11 @@ pub(super) fn pin_capture_lost(_window: &dyn PinWindow) {
             // finds the pointer away from it (see `refresh_pin_volume`).
             pin.volume.dragging = false;
         }
+    }
+
+    // A seek abandoned mid-aim never relaunches: hand the band back to the player the cover
+    // stands over rather than leaving a cover nothing ends (see `seek_cover_is_waiting`).
+    if seek_cover_is_waiting() {
+        unpark_pinned_player(window);
     }
 }
