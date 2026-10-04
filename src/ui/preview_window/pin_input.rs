@@ -256,15 +256,24 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             // old player is retired at relaunch with the hole transparent and the replacement up
             // later, which is the desktop flash. Only a player of this app's is parked — the
             // engine's draws into this app's own surface and has no window to put away, and a
-            // cover over one is a frozen frame nothing ends. No hold either: a scrub keeps
-            // playing, and the release relaunches once at the latest playhead (see
-            // `park_pinned_player_for_seek` and `seek_pinned_playback`).
-            if current_media_type() == Some(MediaType::Video) {
+            // cover over one is a frozen frame nothing ends. Only an aimed second arms the
+            // gesture at all: a press with no second to seek to parks nothing and holds nothing
+            // (see `seek_press_arms`). The film is held with the same gesture hold as a drag —
+            // audio with the picture, for the whole gesture — and the release carries it onto
+            // the relaunch, which the swap ends without a key (see `seek_press_hold` and
+            // `settle_seek_hold_after_swap`).
+            if current_media_type() == Some(MediaType::Video)
+                && seek_press_arms(
+                    pin_state()
+                        .and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.seeking)),
+                )
+            {
                 let at = window_origin(hwnd)
                     .map(|origin| (origin.0, origin.1))
                     .or_else(|| pinned_content().map(|content| (content.0, content.1)))
                     .unwrap_or((0, 0));
                 park_pinned_player_for_seek(hwnd, at);
+                seek_press_hold();
             }
         }
         // The volume button is held rather than acted on where it is pressed, like every button a
@@ -369,10 +378,14 @@ pub(super) unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> boo
     }
 
     // A drag of the bar: the file is taken to the second the hand stopped at, which is the one
-    // moment an FFmpeg player is ended and begun again (see `seek_pinned_playback`).
+    // moment an FFmpeg player is ended and begun again (see `seek_pinned_playback`). The relaunch
+    // runs behind the press's cover carrying the seek's hold, and the swap bound is re-armed onto
+    // it: the scrub's ticks spent the stamp the press took, and without this the first tick after
+    // the release swaps onto whatever window merely exists (see `rearm_seek_cover_for_relaunch`).
     if let Some(seconds) = seeking {
         if let Some((path, content, _, _)) = pinned_playback_state() {
             seek_pinned_playback(&path, content, seconds);
+            rearm_seek_cover_for_relaunch();
         }
     }
 
