@@ -90,6 +90,26 @@ pub(super) fn pinned_playback_state() -> Option<(PathBuf, ScreenRegion, PinTrans
     Some((pin.path.clone(), pin.content, pin.transport, pin.volume))
 }
 
+/// How many players `restart_pinned_player` has begun.
+///
+/// A test seam only: the re-entrant double this counts would otherwise spawn
+/// (or fail to spawn) identically twice, leaving no state behind to tell one
+/// relaunch from two.
+#[cfg(test)]
+pub(super) static RESTART_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// How many players have been begun (see `RESTART_COUNT`).
+#[cfg(test)]
+pub(super) fn restart_count() -> u64 {
+    RESTART_COUNT.load(Ordering::Acquire)
+}
+
+/// Forget how many players have been begun, so each test counts its own ends.
+#[cfg(test)]
+pub(super) fn clear_restart_count() {
+    RESTART_COUNT.store(0, Ordering::SeqCst);
+}
+
 /// End the player a pinned video is playing in and begin another one at a second of the file.
 ///
 /// It is what a seek and a resume from a pause both are with FFmpeg, whose player can be told
@@ -125,6 +145,9 @@ pub(super) fn restart_pinned_player(
     seconds: f64,
     holding: bool,
 ) {
+    #[cfg(test)]
+    RESTART_COUNT.fetch_add(1, Ordering::AcqRel);
+
     let width = (content.2 - content.0).max(1);
     let height = (content.3 - content.1).max(1);
     let volume = pinned_volume_level();
@@ -230,6 +253,170 @@ pub(super) fn pinned_is_held() -> bool {
     pin_state()
         .and_then(|pinned| pinned.pin().map(|pin| pin.transport.paused_at.is_some()))
         .unwrap_or(false)
+}
+
+/// What a gesture's press writes down before it kills the player: everything
+/// the end's one relaunch is made of, and the clock frozen at the second it
+/// resumes from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct GestureSnapshot {
+    /// The playhead second the press read: the relaunch's `-ss`, and what the
+    /// band is drawn at until the swap (see `pin_playhead`).
+    pub(super) seconds: f64,
+    /// The level the press found: kept for the record, while the relaunch
+    /// reads the latest — rapid steps are owed to the end, not the press.
+    pub(super) level: u32,
+    /// The subtitle track the press found: gestures never move it, so the
+    /// relaunch names what is still standing.
+    pub(super) subtitle: Option<usize>,
+    /// The content box the press found: the end relaunches at the final one,
+    /// this is what a press that never moves ends at.
+    pub(super) content: ScreenRegion,
+    /// The film was playing when the hand landed: the gesture's claim, and
+    /// what the swap releases without a key.
+    pub(super) was_playing: bool,
+    /// The film was already held when the hand landed: the end relaunch
+    /// carries it, and the loop delivers it through the new window.
+    pub(super) was_held: bool,
+}
+
+/// The press's snapshot, while a gesture owns the dead interval: set by
+/// `gesture_press_freeze`, taken once by the gesture's end.
+static GESTURE_SNAPSHOT: Lazy<Mutex<Option<GestureSnapshot>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether a gesture owns the dead interval: the press killed and the end has
+/// not relaunched yet. Every tick-side reconcile that would unfreeze the
+/// clock, take back the claim or move the aim answers out of the hand while
+/// this stands.
+pub(super) fn gesture_snapshot_active() -> bool {
+    GESTURE_SNAPSHOT
+        .lock()
+        .ok()
+        .and_then(|held| *held)
+        .is_some()
+}
+
+/// Take the press's snapshot, disarming the dead interval: the end's one
+/// relaunch owns what this answers, and a second end finds nothing.
+pub(super) fn take_gesture_snapshot() -> Option<GestureSnapshot> {
+    GESTURE_SNAPSHOT
+        .lock()
+        .ok()
+        .and_then(|mut held| held.take())
+}
+
+/// Whether the end relaunches held: a film the gesture held, or one the hand
+/// found held — the swap tells them apart afterwards, not the relaunch.
+pub(super) fn gesture_end_holding(was_playing: bool, was_held: bool) -> bool {
+    was_playing || was_held
+}
+
+/// Snapshot the playhead and freeze the clock: the press of every gesture
+/// that kills.
+///
+/// The write is `paused_at = snapshot`, `started = None`, `pending_hold =
+/// false`, the gesture's claim iff the film was playing — and the aim left
+/// standing, which is what a seek's scrub moves and `held` would clear. The
+/// clock reads the snapshot for the whole dead interval, because there is no
+/// start left to count one from.
+///
+/// Idempotent: a press over a standing snapshot stays on the kill road and
+/// writes nothing. A press with no player to kill, no pin up, or no second
+/// to read refuses: the legacy road owns those.
+pub(super) fn gesture_press_freeze() -> bool {
+    if gesture_snapshot_active() {
+        return true;
+    }
+    if current_media_type() != Some(MediaType::Video) {
+        return false;
+    }
+    if VIDEO_PID.load(Ordering::Acquire) == 0 {
+        return false;
+    }
+
+    let Some((_, content, transport, volume)) = pinned_playback_state() else {
+        return false;
+    };
+    let Some(seconds) = pin_playhead(&transport) else {
+        return false;
+    };
+    let was_playing = pin_is_playing(&transport);
+    let was_held = transport.paused_at.is_some();
+
+    update_pin_transport(|state| {
+        let aim = state.seeking;
+        state.started = None;
+        state.paused_at = Some(seconds);
+        state.pending_hold = false;
+        state.drag_held = was_playing;
+        state.seeking = aim;
+    });
+
+    GESTURE_SNAPSHOT
+        .lock()
+        .map(|mut held| {
+            held.replace(GestureSnapshot {
+                seconds,
+                level: volume.level,
+                subtitle: transport.subtitle,
+                content,
+                was_playing,
+                was_held,
+            })
+        })
+        .is_ok()
+}
+
+/// The end relaunch of a gesture that killed: exactly one
+/// `restart_pinned_player` at the snapshot second, the box the hand left
+/// behind, the latest level, the snapshot subtitle — carrying was-held or
+/// the gesture's hold for the swap to settle without a key.
+///
+/// The snapshot is *taken* here, not read: letting go of the pointer
+/// re-enters `pin_capture_lost` synchronously through `WM_CAPTURECHANGED`
+/// before the end that let go of it relaunches, so a read relaunches twice
+/// — once on the way in and once on the way out. The take makes the two ends
+/// one relaunch whichever order they run in: the first takes the snapshot
+/// and relaunches, the second finds nothing and no-ops.
+///
+/// Answers whether one was made: a press that never froze, or an end that
+/// lost the take to its own re-entrant twin, ends nothing here.
+pub(super) fn relaunch_gesture_kill_at(content: ScreenRegion) -> bool {
+    relaunch_gesture_end_at(content, None)
+}
+
+/// The end relaunch with the second it carries named: a seek's release names
+/// its aim, every other end the snapshot second.
+///
+/// Whichever end runs first — the capture-lost re-entered from the release,
+/// or the release itself — takes the snapshot and relaunches once at
+/// `aim.unwrap_or(snapshot.seconds)`; the other finds the take already spent
+/// and relaunches nothing. A single relaunch at the aimed second is what
+/// makes the order irrelevant: a stale snapshot second never reaches a
+/// player while an aim is standing.
+pub(super) fn relaunch_gesture_end_at(content: ScreenRegion, aim: Option<f64>) -> bool {
+    let Some(snapshot) = take_gesture_snapshot() else {
+        return false;
+    };
+    let Some((path, _, _, _)) = pinned_playback_state() else {
+        return false;
+    };
+
+    restart_pinned_player(
+        &path,
+        content,
+        aim.unwrap_or(snapshot.seconds),
+        gesture_end_holding(snapshot.was_playing, snapshot.was_held),
+    );
+    true
+}
+
+/// Give up the press's snapshot where no relaunch is behind the cover: the
+/// player the end just asked for never came up, so no swap will take it.
+pub(super) fn disarm_gesture_if_no_relaunch() {
+    if pending_pinned_relaunch().is_none() {
+        take_gesture_snapshot();
+    }
 }
 
 /// The subtitle track a pinned window is showing, out of what the probe read of the file on
@@ -1390,6 +1577,10 @@ pub(super) fn settle_pinned_park_where(window: &dyn PinWindow, window_up: bool) 
     // the gap between the flag going down and this write has written a record of its own, and this
     // must not take it away.
     forget_the_park_that_is_not();
+    // The dead interval ends with the band: a gesture that killed armed its
+    // end relaunch with the press's snapshot, and the swap just settled it —
+    // so the tick-side settles answer again from here on.
+    take_gesture_snapshot();
     note_park_swap(arm, waited);
     true
 }

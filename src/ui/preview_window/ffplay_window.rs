@@ -534,6 +534,38 @@ pub(super) fn terminate_ffplay_pid(pid: u32) {
     }
 }
 
+/// Kill the pinned player the way a gesture's press does: terminate, and reap
+/// where the death confirms — never a wait, never the UI thread.
+///
+/// A kill confirmed on the spot clears the pid with it, so `VIDEO_PID == 0`
+/// asserts silence for the whole dead interval. A kill not yet taken is
+/// handed to the orphan reaper that outlives every gesture, which asks again
+/// on every tick until the death confirms: never dropped, never waited on
+/// (see `retire_orphaned_player`).
+///
+/// Answers whether nothing is left: pid zero is already nothing, and a kill
+/// confirmed gone leaves nothing either.
+pub(super) fn kill_pinned_player_async() -> bool {
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if pid == 0 {
+        return true;
+    }
+
+    // The media's handle and background work belong to the player being
+    // killed: the only thing that can end it now is the pid, so nothing else
+    // may keep asking the handle. What the tick asks instead is the pid,
+    // which the reaper below retries to confirmation.
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        if let Some(media) = current.as_mut() {
+            media.cancel_background_work();
+            media.video_process = None;
+        }
+    }
+    retire_orphaned_player(pid);
+
+    VIDEO_PID.load(Ordering::SeqCst) != pid
+}
+
 /// Clear the recorded video process state once `pid` is confirmed gone.
 pub(super) fn clear_video_process_state(pid: u32) {
     if VIDEO_PID
