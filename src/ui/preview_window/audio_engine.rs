@@ -359,13 +359,6 @@ pub(super) fn measure_audio_gain(path: &Path) {
     measure_gain(path, normalizing_audio());
 }
 
-/// The same measurement for a video's soundtrack, where `Normalize` is on for videos: the audio of
-/// a film is asked for here as well, beside the geometry probe, because it is the same read of the
-/// same file on the same thread a hover is already waiting on (see `probe_video_geometry`).
-pub(super) fn measure_video_gain(path: &Path) {
-    measure_gain(path, normalizing_video());
-}
-
 /// The measurement itself, for whichever kind asked for it: one read per file, held whether or not
 /// it answered (see `finish_gain_scan`).
 pub(super) fn measure_gain(path: &Path, wanted: bool) {

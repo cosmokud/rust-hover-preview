@@ -28,6 +28,29 @@
 //!   file whose subtitle is the third stream of the container is `si=0`, and `si=2` is refused with
 //!   `Unable to locate subtitle stream` (see `subtitle_filter`).
 //!
+//! **And the filter is measured here to be nearly free, which is worth saying because it is the
+//! obvious suspect for a slow start.** Timed on this machine at first window: a 1080p MKV with an
+//! external sidecar came up in 303ms against 300ms for the same file with no filter at all, and a
+//! 2160p HEVC MKV with its own embedded track came up in 346ms against 342ms — noise, at both sizes,
+//! and the same for the bare spelling as for the `filename=` one, which are byte-identical frames.
+//! Subtitles are a per-frame cost, not a per-start one. The thing that *is* on the way to a first
+//! window is `-hwaccel`, measured at +330ms on its own — and, on a machine whose probe finds a
+//! device that survives, fatal beside this filter: `-hwaccel dxva2` hands the graph `dxva2_vld`
+//! frames, `subtitles` is software-only, and the graph fails to build with `Impossible to convert
+//! between the formats supported by the filter 'Parsed_setsar_0' and the filter 'auto_scale_0'`.
+//! The player then exits without ever putting a window up, which is a spinner to `VIDEO_START_WAIT_SECS`
+//! and no picture at all — and which `-loglevel quiet` over a null stderr says nothing about (see
+//! `HWACCEL_DEVICES`, and the note on `video_playback::start_video_playback`).
+//!
+//! **That silence is the open item — propose-only, pending and not accepted.** The failure is
+//! unobservable where it happens: the launch is `-loglevel quiet` over a null stderr (the launch
+//! at `video_playback::start_video_playback`, a file another branch owns), so a dxva2 machine
+//! reads the fault as a spinner that times out and a frame that never comes, with nothing
+//! written to say why. The proposal, for whoever owns that launch: let the graph failure be
+//! heard — the player's stderr read through the window wait, or a device refused before the
+//! film is launched that cannot share a graph with `subtitles` at all — which is why it is
+//! written down here rather than fixed: the launch itself is that file's to make.
+//!
 //! - The loop's rewind. FFmpeg's player has no key that goes to the beginning of a file, so a loop
 //!   this app gives cannot be given by posting one (see `rewind_launch`).
 
@@ -132,12 +155,74 @@ pub fn subtitle_filter(
 /// `episode.srt` is the arrangement every player and every tool on this machine reads, and one
 /// beside `episode.mkv.srt` is not read by any of them. The video's own extension is put back
 /// first, so `a.b.mkv` looks for `a.b.srt` rather than for `a.srt` beside `b.mkv`.
+///
+/// **Where the swap finds nothing, the folder is read once for a sidecar carrying a language in its
+/// own name** — `episode.en.srt`, `episode.eng.ass` — because that is the spelling a release
+/// actually ships and the plain swap never once looked at one. A release writes the language into
+/// the file precisely because there is more than one language in the folder, and a folder written
+/// that way was answered with the container's own track at best and with nothing at all where the
+/// container held none: a subtitle file sitting right there, spelled correctly, never opened.
+///
+/// The language is read off the name rather than off a list of codes, because the codes are
+/// unbounded — a release that writes `episode.en.srt` will as happily write `episode.eng.srt`, and
+/// both are the same arrangement — so guessing at a table would be a rule that quietly does not
+/// apply to the next folder. One read of the video's own folder is the whole of it, measured at
+/// 1.9ms over a folder of 1200 files against a player launch that costs 300ms, and it is reached
+/// only once the plain swap has already found nothing. There is no walk: a hover must not cost a
+/// tree, and a sidecar beside some *other* film is not this film's subtitles.
+///
+/// The appended spelling is refused even though it has the very shape this rule matches, and the
+/// video's own extension after the dot is what tells the two apart: `episode.mkv.srt` is read by no
+/// player, so drawing it would be drawing a file the user did not mean.
 fn sidecar_for(path: &Path) -> Option<std::path::PathBuf> {
     let stem = path.with_extension("");
-    SIDECAR_EXTENSIONS
+
+    if let Some(sidecar) = SIDECAR_EXTENSIONS
         .iter()
         .map(|extension| stem.with_extension(extension))
         .find(|candidate| candidate.is_file())
+    {
+        return Some(sidecar);
+    }
+
+    // Case-blind throughout, because a Windows path opens the file either way and a rule that only
+    // held for one spelling of a name would be a rule that stopped working when a folder was
+    // re-saved by something that title-cased it.
+    let own_extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase());
+    let prefix = format!("{}.", stem.file_name()?.to_string_lossy().to_lowercase());
+    let folder = path
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+
+    let mut named: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
+        .ok()?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                return None;
+            }
+
+            let candidate = entry.path();
+            let extension = candidate.extension()?.to_string_lossy().to_lowercase();
+            if !SIDECAR_EXTENSIONS.contains(&extension.as_str()) {
+                return None;
+            }
+
+            let stem = candidate.file_stem()?.to_string_lossy().to_lowercase();
+            let tag = stem.strip_prefix(&prefix)?;
+
+            (!tag.is_empty() && Some(tag) != own_extension.as_deref()).then_some(candidate)
+        })
+        .collect();
+
+    // Sorted, because a folder holding `episode.de.srt` and `episode.en.srt` has two right answers
+    // and no preference to choose between them: nothing here reads a language off a track, so the
+    // order is the one that does not change when the folder is read again.
+    named.sort();
+    named.into_iter().next()
 }
 
 /// The characters of a path that the filtergraph reads as its own punctuation, and which therefore
@@ -616,6 +701,131 @@ mod tests {
         assert!(
             filter.contains(":si=0"),
             "the first subtitle stream is `si=0` whatever the container numbers it at: {filter}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A sidecar named for the language it is in is drawn, which is the naming a release actually
+    /// ships and the one this used to walk straight past.
+    ///
+    /// `episode.en.srt` beside `episode.mkv` is how an anime release writes an external track: the
+    /// language is in the name because there is more than one of them, and the file beside it that
+    /// carries the picture says nothing about which language the words are in. This looked for
+    /// `episode.srt` and stopped there, so a folder written that way was answered with the
+    /// container's own track at best and with nothing at all where the container had none — which is
+    /// a sidecar sitting right there, spelled correctly, never once looked at.
+    ///
+    /// The directory is read rather than a list of language codes guessed at, because the codes are
+    /// unbounded and a release that writes `episode.en.srt` will as happily write `episode.eng.srt`
+    /// or a code this has never heard of. One read of the video's own folder is the whole of it:
+    /// measured at 1.9ms over a folder of 1200 files, against a player launch that costs 300ms, and
+    /// it is reached only once the plain swap has already found nothing.
+    #[test]
+    fn a_sidecar_named_for_its_language_is_drawn_rather_than_walked_past() {
+        let dir = std::env::temp_dir().join(format!("hl-lang-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+        let video = dir.join("episode.mkv");
+        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+        std::fs::write(dir.join("episode.en.srt"), b"1\n").expect("a stand-in sidecar is writable");
+
+        let filter = subtitle_filter(&video, 0, None)
+            .expect("a sidecar carrying the language in its own name is still a sidecar");
+
+        assert!(
+            filter.contains("episode.en.srt"),
+            "`episode.en.srt` is the spelling a release ships, and it has to reach the filter: \
+             {filter}"
+        );
+        assert!(
+            !filter.contains("si="),
+            "and it is still drawn as a whole file rather than as one of the video's own streams: \
+             {filter}"
+        );
+
+        // The longer code is the same arrangement, and pinning it here is what stops a fix for
+        // `en` from quietly being a fix for two letters only.
+        let video = dir.join("other.mkv");
+        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+        std::fs::write(dir.join("other.eng.ass"), b"1\n").expect("a stand-in sidecar is writable");
+
+        let filter = subtitle_filter(&video, 0, None)
+            .expect("a three-letter language code is the same case");
+
+        assert!(
+            filter.contains("other.eng.ass"),
+            "the code's length is not the question — whether the name carries one at all is: \
+             {filter}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The plain swap still wins over the named one, because it is the arrangement every tool reads.
+    ///
+    /// A folder can hold both, and the one every player would pick is `episode.srt` — so a second
+    /// rule added underneath must not take the first answer away, or the file that has worked for
+    /// years starts depending on which other files happen to be beside it.
+    #[test]
+    fn the_plain_sidecar_still_wins_over_one_named_for_its_language() {
+        let dir = std::env::temp_dir().join(format!("hl-lang-priority-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+        let video = dir.join("episode.mkv");
+        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+        std::fs::write(dir.join("episode.srt"), b"1\n").expect("a stand-in sidecar is writable");
+        std::fs::write(dir.join("episode.en.srt"), b"1\n").expect("a stand-in sidecar is writable");
+
+        let filter = subtitle_filter(&video, 0, None).expect("a sidecar is a sidecar");
+
+        assert!(
+            filter.contains("episode.srt") && !filter.contains("episode.en.srt"),
+            "`episode.srt` is the one every tool on this machine reads, so it is asked for first \
+             and the answer must not depend on what else is in the folder: {filter}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A sidecar that is not beside the video is not a sidecar, and a video's own name with an
+    /// extension appended is not one either — the two boundaries a broader rule has to keep.
+    ///
+    /// Both are pins on `sidecar_for` having been widened from three stats into a read of the
+    /// folder, which is the change that could plausibly have swallowed either: the folder of a film
+    /// is full of other films' subtitles, and `episode.mkv.srt` sits in the very shape the wider
+    /// rule matches. No player reads the appended form, so drawing it would be drawing a file the
+    /// user did not mean.
+    #[test]
+    fn a_sidecar_is_only_the_one_beside_the_video_and_never_the_video_s_own_name_appended() {
+        let dir = std::env::temp_dir().join(format!("hl-lang-bounds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+        let elsewhere = dir.join("other-folder");
+        std::fs::create_dir_all(&elsewhere).expect("a scratch folder is creatable");
+
+        // `episode.mkv.srt`: the appended spelling, in the very shape the wider rule matches.
+        let video = dir.join("episode.mkv");
+        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+        std::fs::write(dir.join("episode.mkv.srt"), b"1\n")
+            .expect("a stand-in sidecar is writable");
+
+        assert_eq!(
+            subtitle_filter(&video, 0, None),
+            None,
+            "`episode.mkv.srt` is not read by any player, so drawing it would be drawing a file \
+             the user did not mean — and the video's own extension after the dot is what tells the \
+             two apart"
+        );
+
+        // A sidecar in another folder, named for this video exactly. No walk: a hover must not
+        // cost a tree, and a sidecar beside some *other* film is not this film's subtitles.
+        let video = dir.join("lonely.mkv");
+        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+        std::fs::write(elsewhere.join("lonely.en.srt"), b"1\n").expect("a sidecar is writable");
+
+        assert_eq!(
+            subtitle_filter(&video, 0, None),
+            None,
+            "a subtitle file in a different folder is not this film's subtitles, and looking for one \
+             would put a directory walk on the thread that has to keep answering Explorer"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

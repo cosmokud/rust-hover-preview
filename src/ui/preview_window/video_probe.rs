@@ -452,11 +452,35 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         return ProbedGeometry::Unmeasurable;
     };
 
-    // The film's soundtrack is measured beside its geometry where `Normalize` is on for videos,
-    // which is the same arrangement the sound probe's own loudness is measured under: one read of the
-    // file, on the thread the hover is waiting on, held for every hover after this one (see
-    // `measure_video_gain`).
-    measure_video_gain(path);
+    // The film's soundtrack is measured beside its geometry where `Normalize` is on for videos —
+    // but on a thread of its own, and that is the whole of the change.
+    //
+    // **A gain measurement decodes every sample of the file, so its cost is the length of the
+    // film rather than anything about the film.** Measured: 828ms for a twenty-second 2160p HEVC
+    // clip, against 238ms for the cropdetect pass beside it and 31ms for the header read — and the
+    // clip is the short case, because the decoder is what is being waited on and a full-length
+    // episode is two orders of magnitude longer than that. It was being waited on *here*, on the
+    // thread the hover is waiting on, so a user who had turned `Normalize` on for videos paid a
+    // decode of the whole film before the first frame of it was asked for.
+    //
+    // Nothing is lost by moving it. `start_video_playback` already asks for the gain, and where
+    // nothing has measured it yet it starts the scan itself and plays the film as the file holds
+    // it — so this was a second measurement of the same thing, on the one thread that must not be
+    // waiting, for a gain the very next launch already knows how to do without.
+    //
+    // At the setting's own start (`Normalize` is off for videos) this is nothing at all, and it
+    // stays nothing at every setting — which is what "no full-file decode on the way to a first
+    // frame" has to mean to be worth anything. The gate is the setting's own — the one the
+    // launch reads too (see `normalizing_video` and `start_video_playback`) — and not ffmpeg's
+    // presence, which is all `spawn_gain_scan` asks of its own: a machine that could measure
+    // but a user who has not asked it to is a machine that measures nothing here. Nothing
+    // tests the gate: the spawn sits behind probes that need FFmpeg, and the one observable
+    // that tells a spawned scan from an unspawed one is the gain it leaves behind — readable
+    // only once the whole-file decode the scan is has run, which is a wall-clock assertion
+    // rather than a seam.
+    if normalizing_video() {
+        spawn_gain_scan(path);
+    }
 
     let crop = best_valid_crop(candidates, src_w, src_h);
 
