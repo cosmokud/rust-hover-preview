@@ -2884,230 +2884,36 @@ pub fn run_preview_window() {
                             }
                         }
 
-                        let kind = CURRENT_MEDIA
-                            .lock()
-                            .ok()
-                            .and_then(|media| media.as_ref().map(|media| media.media_type));
-                        let dpi = dpi_at(rect.0, rect.1);
-                        let transport_bar = pin_transport_kind(kind);
-                        let overlay = pin_overlay_chrome(kind);
-                        let hides_chrome = pin_hides_chrome(kind);
-                        let caption = pinned_caption_height(dpi, kind);
-
-                        // A sound's card is not the box its hover was: a hover's card carries no
-                        // controls — a hover's own window is a window nobody is in — and the row of
-                        // controls a pinned one carries is taller than the bar it stands in for, so
-                        // a pin that took the hover's box would be a window with the bottom of the
-                        // card cut off it (see `pinned_audio_card_box`).
-                        let rect = match kind {
-                            Some(MediaType::Audio) => pinned_audio_card_box(rect, &path, dpi),
-                            _ => rect,
-                        };
-
-                        // The window is the media's box with the chrome around it, and it is the
-                        // *window* that is held to the display rather than the media: a hover can
-                        // sit flush against the top of the screen — the placement above it has
-                        // nowhere else to go — and a caption drawn above that would be a caption
-                        // off the top of the screen, with the buttons that close the pin on it.
-                        // So the box the media is given is the media's box shifted back into the
-                        // display by however much of the chrome fell off it.
-                        let window = clamp_pinned_box(
-                            pinned_window_box_of(rect, dpi, transport_bar, overlay, caption),
-                            dpi,
-                            &DESKTOPS,
-                        );
-                        let content = content_box_of(window, dpi, transport_bar, overlay, caption);
-
-                        // Whether the file this pin is coming up on is a sound, which is what says
-                        // which of the tray's two level settings the level it plays at is read of:
-                        // `Volume → Audio` for a sound, because that is the setting its preview was
-                        // playing at, and `Volume → Video` for every other kind. From the moment the
-                        // pin is up the level is this window's own, so it is asked of the pin where
-                        // it is holding one and of the tray where it is not (see `pin_volume_taken_up`
-                        // and `PinVolume`).
-                        let audio_kind = matches!(kind, Some(MediaType::Audio));
-
-                        // A pin taken up over another one — the file it was showing was picked by
-                        // the pointer or the keyboard while it was up (see `PinUpdate`) — is the
-                        // same window showing another file, so what belongs to the window rather
-                        // than to the file is carried over: a maximized pin stays maximized and
-                        // restores to the box it would have restored to — a sound's card excepted,
-                        // which is shown no maximize to stay in and is given the state up as it
-                        // arrives (`pin_restore_after`) — a level moved on its own bar stays where
-                        // it was moved to, and chrome that is showing over a picture is not brought
-                        // back as if the window had just arrived. There is nothing to carry for a
-                        // first pin, which is why the take-up below reads exactly as it always did.
-
-                        // The length the probe read is asked before the pin's own lock is taken:
-                        // the answer comes from the geometry cache, which is a lock and the
-                        // file's own metadata besides, and a take-up is no place to hold the pin
-                        // across either (see `cached_video_geometry`).
-                        let duration = video_duration(&path);
-
-                        let carried = pin_state().and_then(|pinned| {
-                            pinned.pin().map(|pin| {
-                                (
-                                    pin.restore,
-                                    pin.chrome,
-                                    pin.volume,
-                                    pin.overlay,
-                                    pin.hides_chrome,
-                                    pin.bound,
-                                )
-                            })
-                        });
-
-                        // The three facts that have to be read before the pin's own lock is
-                        // taken, because each of them is a read of the machine rather than of
-                        // the state in hand: `pin_keeps_its_box` and `drawn_as_audio` are
-                        // answered by a content probe that takes `CONFIG` over a file read,
-                        // and the Shell's own answer to "which program opens this" is two
-                        // `AssocQueryStringW` calls. None of them belongs inside a guard
-                        // that the window procedure takes for every mouse move, press,
-                        // release and paint — a take-up holding `PINNED` across any of them
-                        // is a window whose buttons stop answering for as long as the disk
-                        // or the Shell takes. One that pumps or re-enters while the lock is
-                        // held is worse still: the window procedure would be asking for a
-                        // lock this thread already owns, which is not a wait but a stop (see
-                        // `pin_media_is_alive` for the same rule, written down for the media).
-                        //
-                        // A take-up runs for every file a walk lands on rather than once per
-                        // pin, so it is the arrow keys, the two step buttons and a pick in the
-                        // listing alike that pay it.
-                        let keeps_its_box = pin_keeps_its_box(&path);
-                        let card = drawn_as_audio(&path);
-
-                        // The name the hand-off button says is asked of the planner rather
-                        // than here, for the same reason and by the same rule: it is a
-                        // question about the machine's own associations, and the pin is
-                        // answered about the file it holds until it holds another one (see
-                        // `PinTooltip`). The button is drawn without a name until the
-                        // answer lands rather than the take-up waiting for it.
-                        ask_pin_open_with(path.clone());
-
                         // Whatever the pin was being pressed for, it is being pressed for no
                         // longer: the state below replaces it whole, and the pointer a press on
                         // this window took goes with the drag it was taken for. It is let go
                         // here rather than left to the release that is never coming, and it is
                         // let go before the pin's own lock is taken rather than inside it,
                         // because `ReleaseCapture` delivers `WM_CAPTURECHANGED` and the window
-                        // procedure asks for that same lock (see the note above, and
-                        // `pinned_release` for the release this stands in for).
+                        // procedure asks for that same lock (see the note in
+                        // `take_up_pinned_window`, and `pinned_release` for the release this
+                        // stands in for).
                         release_pin_capture(hwnd);
 
-                        {
-                            let now = Instant::now();
-                            let pin = PinnedPreview {
-                                path: path.clone(),
-                                content,
-                                // A pin taken up over another one keeps the bound the window has:
-                                // what a swap is measured against is the size the window was given
-                                // rather than the size the file it is showing came out at. A pin
-                                // without one keeps none while the file on screen is drawn to its
-                                // own box, and takes the longest side of the box the first file
-                                // with a shape of its own came out at — which is where a pin taken
-                                // up on a picture gets its bound too (see `pin_bound_after`).
-                                bound: pin_bound_after(
-                                    carried.and_then(|(.., bound)| bound),
-                                    keeps_its_box,
-                                    content,
-                                ),
-                                restore: pin_restore_after(
-                                    carried.and_then(|(restore, ..)| restore),
-                                    card,
-                                ),
-                                dpi,
-                                transport_bar,
-                                // Both kinds of video carry a bar that does something, and for
-                                // opposite reasons: the engine answers every question the bar asks,
-                                // and FFmpeg's player answers the two that are keys.
-                                transport_live: pin_transport_live(kind),
-                                frame: pin_frame(kind),
-                                overlay,
-                                hides_chrome,
-                                caption,
-                                chrome: match carried {
-                                    // Chrome belongs to the kind it was drawn over: one kind's
-                                    // strip has nothing to say about another's, so a swap that
-                                    // changes it arrives as the new kind's own does. What is
-                                    // compared is whether the kind draws its chrome over its
-                                    // media and whether it can hide it at all — a picture's
-                                    // arrived-and-gone title bar is a strip of chrome, and a kind
-                                    // that keeps its chrome in bands has never shown one (see
-                                    // `pin_hides_chrome`).
-                                    Some((_, chrome, _, was_overlay, was_hiding, _))
-                                        if was_overlay == overlay && was_hiding == hides_chrome =>
-                                    {
-                                        chrome
-                                    }
-                                    _ => {
-                                        if hides_chrome {
-                                            PinChrome::on_arrival(now)
-                                        } else {
-                                            PinChrome::always()
-                                        }
-                                    }
-                                },
-                                collapsed: false,
-                                bubble_pause: None,
-                                hovered: None,
-                                pressed: None,
-                                // The name the hand-off button says. It is left empty here
-                                // and filled in when the planner's answer lands, because
-                                // the Shell is asked on a thread of its own and this
-                                // take-up must not wait for it (see `ask_pin_open_with`).
-                                // The name is still asked once per format per run, as it
-                                // was below the lock before (see `default_app_name`).
-                                tooltip: PinTooltip::default(),
-                                dragging: None,
-                                // A cover standing for the file this pin is being taken up with
-                                // comes with it: the swap armed it over the outgoing frame and
-                                // the settle is what takes it down, on the tick that finds the
-                                // incoming player's window. Written false here it would be given
-                                // up by the first tick that finds it, which is the hole the cover
-                                // was raised to close (see `pin_park_carried_forward`).
-                                parked: pin_park_carried_forward(),
-                                transport: PinTransport {
-                                    // The length the probe read, and where a player this app
-                                    // started has got to: a video FFmpeg plays has been running
-                                    // since before the pin existed, and its own clock starts
-                                    // here — which is the best that can be said about a player
-                                    // that reports nothing at all (see `PinTransport`).
-                                    duration,
-                                    started: (kind == Some(MediaType::Video))
-                                        .then_some((Instant::now(), 0.0)),
-                                    // Which subtitle track this pin opens on, which is the
-                                    // player's own choice for the file until a key says
-                                    // otherwise — written down rather than left unnamed, so that
-                                    // the first seek does not quietly replace it (see
-                                    // `video_subtitles`).
-                                    subtitle: video_subtitles(&path).chosen(),
-                                    ..Default::default()
-                                },
-                                // A level carried onto a file of the same kind is that file's
-                                // own and is carried; one carried onto a file of another kind
-                                // is that other kind's bar having been turned, and is not
-                                // carried — the file arrives at the level the tray names for
-                                // it, and the level walked off is kept so that walking back is
-                                // answered by the pin rather than by the setting (see
-                                // `pin_volume_taken_up`).
-                                volume: match carried {
-                                    Some((_, _, volume, ..)) if volume.audio == audio_kind => {
-                                        volume
-                                    }
-                                    carried => pin_volume_taken_up(
-                                        carried.map(|(_, _, volume, ..)| volume),
-                                        audio_kind,
-                                    ),
-                                },
-                                audio_hovered: None,
-                                audio_pressed: None,
-                            };
+                        // The pin itself, built whole — including the caption's own room, the
+                        // frame, and the transport the new file is to be played by. Both roads
+                        // that reach this arm reach it through the same call, so a window shown
+                        // another file is the same window as one shown its first (see
+                        // `take_up_pinned_window`).
+                        let pin = take_up_pinned_window(&path, rect);
+                        let content = pin.content;
 
-                            // The pin is published as up inside this, after the state it publishes
-                            // is written (see `pin_window::install`).
-                            install(pin);
-                        }
+                        // The kind on screen, read back rather than carried out of the take-up:
+                        // it is the two kinds below whose media has to be laid out again now
+                        // that the pin is up, and it is the kind that file was installed as.
+                        let kind = CURRENT_MEDIA
+                            .lock()
+                            .ok()
+                            .and_then(|media| media.as_ref().map(|media| media.media_type));
+
+                        // The pin is published as up inside this, after the state it publishes
+                        // is written (see `pin_window::install`).
+                        install(pin);
 
                         // A pin comes up under a pointer that may be anywhere, including inside a
                         // name being renamed, so it may take the focus but is not given it until
