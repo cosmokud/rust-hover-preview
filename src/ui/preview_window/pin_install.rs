@@ -253,13 +253,18 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 /// Whether a file of this kind is one a player of this app's is going to be put up for.
 ///
 /// **A video, and only where FFmpeg is on this machine.** FFmpeg's player draws it in a window of
-/// its own, so a file it would not play has no player at all — which is why this is asked once and
-/// the answer given to both roads that depend on it: the cover a step raises over the outgoing
-/// frame, and the start a step makes. Asked twice, the two drift, and the drift is a cover standing
-/// over the film being left behind for the life of a pin whose player is never begun: nothing is
-/// behind the band to hand it back to, so the cover never comes down, and `pin_media_is_alive` reads
-/// its own record as a player still on its way (see `give_up_pinned_park` and
-/// `reconcile_swap_take_up`).
+/// its own, so a file it would not play has no player at all — which is why every road that depends
+/// on the answer asks this rather than the kind on its own: the cover a step raises over the
+/// outgoing frame, the start a step makes, and the give-up a take-up owes a cover already standing.
+///
+/// It is asked once per road rather than carried across the ticks between them, so the two readings
+/// that must agree are the two sides of one decision — the cover and the start — made together in
+/// `swap_pinned_media`. The drift the reader of this is warned about is not two reads racing inside
+/// one swap; it is a later tick asking again (`install_pinned_media`) and getting a different answer,
+/// which is a cover standing over the film being left behind for the life of a pin whose player is
+/// never begun: nothing is behind the band to hand it back to, so the cover never comes down, and
+/// `pin_media_is_alive` reads its own record as a player still on its way (see `give_up_pinned_park`
+/// and `reconcile_swap_take_up`). The later tick therefore answers the give-up, not the cover.
 pub(super) fn pinned_player_is_coming(media_type: MediaType) -> bool {
     media_type == MediaType::Video && ffplay_is_here()
 }
