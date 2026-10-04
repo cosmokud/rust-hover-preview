@@ -179,7 +179,17 @@ pub(super) fn restart_pinned_player(
     // The window the new player puts up is placed by the tick, which re-asserts it every two
     // hundred milliseconds; a seek is one window gone and another arriving, so it is asked for
     // now rather than at the next of those.
-    let _ = ensure_video_window_topmost(content.0, content.1, width, height);
+    //
+    // **But not while a park stands, and that is the second flash this WS is about.** The call is a
+    // show as well as a place (see `ensure_video_window_topmost`), and a replacement that has not
+    // opened its file yet has a window within milliseconds of being begun — so a relaunch behind a
+    // resize's park put an empty window in front of the placeholder for the whole of the decode,
+    // and the band was opaque for every one of those milliseconds and did not matter. The settle
+    // is what puts a replacement up, in the same tick it takes the flag down (see
+    // `settle_pinned_park`), so nothing is left on screen but the frame the drag was holding.
+    if !pin_player_is_parked() {
+        let _ = ensure_video_window_topmost(content.0, content.1, width, height);
+    }
 
     update_pin_transport(|transport| transport.begun(seconds, pid != 0, holding));
     with_pin(|pin| pin.volume.playing_at = volume);
@@ -589,6 +599,138 @@ pub(super) fn pinned_audio_duration(path: &Path) -> Option<f64> {
     audio_clock(path, None, 0.0, None).1
 }
 
+/// How long the stale frame may stand in the band before the park is taken back whatever has and
+/// has not presented.
+///
+/// **It is a bound on a wait, not a delay, and the difference is the whole of what makes it safe.**
+/// A park that only ever swapped on a player presenting would hold the placeholder for ever on a
+/// file whose player dies mid-relaunch, on a machine with no decoder, and behind a modal somebody
+/// else owns — a black band that never becomes a picture and never becomes a hole either. The bound
+/// ends that, and it is read from the moment the park was *asked to give the band back* rather than
+/// from the park itself, because a hand can rest on an edge for minutes (see `PinParkSwap`).
+///
+/// 600 ms is the width of what it covers rather than a round number: a player begun on a resize
+/// release has to open the file, seek, decode hardware and present, and on a 1440p HEVC that is
+/// the few hundred milliseconds the placeholder is held for. Holding the frame the user was already
+/// looking at for that long is not a cost — it is the same picture, and it is the alternative to a
+/// black band in front of the desktop for exactly as long.
+pub(super) const PIN_PARK_SWAP_TIMEOUT: Duration = Duration::from_millis(600);
+
+/// What a park is holding, and since when it was asked to let it go.
+///
+/// `player` is the process the band was captured for, read once on the pointer message so that a
+/// relaunch begun afterwards is a *fact* rather than a guess (see `player_replaced_since`).
+/// `replacing` is what a resize's park already knows: a move has no relaunch behind it, so the
+/// player standing in the band when the drag ends is the player that was playing all along, while a
+/// resize ends in one that has decoded nothing yet. `since` is left unset until the loop first asks
+/// for the band back — armed by the park so a tick in the middle of a drag cannot start the clock,
+/// stamped by the settle so a ten-second drag does not spend the budget of a one-tick wait.
+#[derive(Clone, Copy)]
+pub(super) struct PinParkSwap {
+    pub(super) player: u32,
+    pub(super) replacing: bool,
+    pub(super) since: Option<Instant>,
+}
+
+/// The one park's bookkeeping, behind a lock because the two ends are not the same thread: it is
+/// written on the pointer message that begins a drag and read by every tick of the loop after it.
+pub(super) static PIN_PARK_SWAP: Lazy<Mutex<Option<PinParkSwap>>> = Lazy::new(|| Mutex::new(None));
+
+/// Which of the two arms a park's end was taken on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ParkSwap {
+    /// The player in the band is the one the park captured for, so it has a decoded frame of its
+    /// own and there is nothing to wait for.
+    Presented,
+    /// The wait is up and the band is handed back regardless — there is nothing better to show, and
+    /// a placeholder held for ever is a black band that is never a picture.
+    TimedOut,
+}
+
+/// What the band is handed back on, from the two facts that can be read of a player and the one
+/// that can only be waited for.
+///
+/// **The `Presented` arm is a fact about the process rather than a guess about the pixels**, and the
+/// reason is the one that made this WS necessary: a player that has just been begun publishes its
+/// window within a few milliseconds, and that window is visible, correctly sized, and *empty* — so
+/// "visible and correctly sized" is true for the whole of the decode and answers nothing. What is
+/// not true for the whole of the decode is the process behind it: a move's park is answered by the
+/// player that was playing before the pointer went down, which has been decoding all along and has
+/// a frame to present the instant it is shown, and a resize's park is answered by a player that
+/// opened the file after the drag began.
+///
+/// **The pixel sample the timeout is paired with is not in here, and cannot be.** It has to be read
+/// off the screen inside the player's rect, and the placeholder is what stands there — a layered
+/// window's own pixels are what the band is, and the player behind them is not on the screen to be
+/// read until the band goes transparent. Reading the player's own DC instead does not work either:
+/// FFmpeg's window draws through D3D, whose contents are not in the window's DC at all, which is
+/// the same reason `hold_video_window_frame` reads the desktop with `BitBlt` rather than asking the
+/// window with `PrintWindow`. So the honest form of "presented or wait" is "the player that was
+/// playing is back, or the wait is up" — and the wait is what bounds a replacement, which is the
+/// only case there was ever anything to wait for.
+pub(super) fn park_swap_arm(window_up: bool, replaced: bool, waited: Duration) -> Option<ParkSwap> {
+    if window_up && !replaced {
+        return Some(ParkSwap::Presented);
+    }
+    (waited >= PIN_PARK_SWAP_TIMEOUT).then_some(ParkSwap::TimedOut)
+}
+
+/// The arm a park's end was taken on, and how long it was waited for.
+///
+/// It is written down rather than printed because this app has no log: it is a tray application
+/// built as `windows_subsystem`, so a `println!` goes nowhere and `OutputDebugStringW` would want a
+/// `Win32_System_Diagnostics_Debug` feature this crate does not enable. What the arm is for is the
+/// next person to tune `PIN_PARK_SWAP_TIMEOUT` on a machine with a real film on screen, and this is
+/// where they read it from — a test asserts on it, and printing it is one line from here.
+pub(super) static PIN_PARK_LAST_ARM: Lazy<Mutex<Option<(ParkSwap, Duration)>>> =
+    Lazy::new(|| Mutex::new(None));
+
+/// Write the arm down (see [`PIN_PARK_LAST_ARM`]).
+fn note_park_swap(arm: ParkSwap, waited: Duration) {
+    PIN_PARK_LAST_ARM
+        .lock()
+        .unwrap_or_else(|slot| slot.into_inner())
+        .replace((arm, waited));
+}
+
+/// What a park did, in the order it did it.
+///
+/// It exists because the order is the whole of what this WS fixes and nothing else about a park is
+/// observable on a machine with no player of this app's: `hide_pinned_player_window` and the paint
+/// before it are both calls out of the preview thread with nothing to stand in for them, so a test
+/// that wants to know which came first has to be told (see `park_pinned_player`).
+#[cfg(test)]
+pub(super) static PARK_TRACE: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+/// Record one step of a park, in the order it happened.
+#[cfg(test)]
+pub(super) fn trace_park_step(step: &'static str) {
+    if let Ok(mut trace) = PARK_TRACE.lock() {
+        trace.push(step);
+    }
+}
+
+/// The same call, and nothing to do: the trace is a test's seam and this build has no tests in it.
+#[cfg(not(test))]
+pub(super) fn trace_park_step(_step: &'static str) {}
+
+/// What the last park did, in order.
+#[cfg(test)]
+pub(super) fn park_trace() -> Vec<&'static str> {
+    PARK_TRACE
+        .lock()
+        .map(|trace| trace.clone())
+        .unwrap_or_default()
+}
+
+/// Forget the last park's steps, so a park is read from its own first message.
+#[cfg(test)]
+pub(super) fn clear_park_trace() {
+    if let Ok(mut trace) = PARK_TRACE.lock() {
+        trace.clear();
+    }
+}
+
 /// Put a pinned video's player away for as long as a drag lasts.
 ///
 /// The reason is a measurement rather than a guess. A video pin's picture is FFmpeg's own window
@@ -608,10 +750,17 @@ pub(super) fn pinned_audio_duration(path: &Path) -> Option<f64> {
 /// message the hand sent, not on the tick after it — and the two halves cannot disagree about
 /// whether a drag is in flight, because both are asked of `pin.dragging`.
 ///
+/// **The hide is the last of three steps here, and the order is the point rather than the tidiness.**
 /// The band is painted flat while the picture is away rather than left transparent, so the desktop
-/// does not show through a window that has been hidden: the paint reads this flag (see
-/// `paint.parked`) and fills the band with the last frame the player had on screen.
-pub(super) fn park_pinned_player() -> bool {
+/// does not show through a window that has been hidden — but a layered window is only changed by an
+/// `UpdateLayeredWindow`, so a hide that came before that paint spent the gap between the two with
+/// the band's *last painted* pixels on screen, and for a film playing those are transparent ones. The
+/// three are therefore capture, paint, hide, all on the message that begins the drag: the capture is
+/// a read of what is on screen and there is nothing to read once the window has gone, the paint is
+/// what the compositor is handed next, and only then is the window behind it taken away. The same
+/// three answer for a resize, which enters through the same call (see `begin_pin_drag`), which is why
+/// the flash at the start of a resize needed no mechanism of its own.
+pub(super) fn park_pinned_player(hwnd: HWND, at: (i32, i32), resizing: bool) -> bool {
     let parked = pin_state().is_some_and(|mut pinned| {
         let Some(pin) = pinned.pin_mut() else {
             return false;
@@ -627,14 +776,77 @@ pub(super) fn park_pinned_player() -> bool {
     });
 
     if parked {
+        PIN_PARK_SWAP
+            .lock()
+            .unwrap_or_else(|swap| swap.into_inner())
+            .replace(PinParkSwap {
+                player: VIDEO_PID.load(Ordering::SeqCst),
+                replacing: resizing,
+                since: None,
+            });
+        forget_resume_frame();
+
         // Taken before the window is hidden, and only when this really is a park: it is a read of
         // what is on screen, so there is nothing to read once the window has gone (see
         // `hold_video_window_frame`).
+        trace_park_step("capture");
         hold_video_window_frame();
+
+        // Asked for here rather than at the end of the drag, because the drag is the only time
+        // there is: the release has to hand the band back this tick (see `settle_pinned_park`), and
+        // a render begun there is a tenth of a second of the frame the hand let go on being
+        // replaced by nothing. Only a resize asks, because only a resize ends in a player that has
+        // decoded nothing (see `spawn_video_resume_frame`).
+        if resizing {
+            prepare_resume_frame();
+        }
+
+        // **Painted before the window is hidden, and this is the whole of the first flash.** A
+        // layered window is drawn from its own surface and that surface is only replaced by an
+        // `UpdateLayeredWindow`, so a park that hid the player and left the paint to the next
+        // repaint spent the gap between the two with the band's last painted pixels still on
+        // screen — which, for a film playing, are transparent ones. A transparent band with nothing
+        // behind it is the desktop: the window the user was dragging out of is what they see, for
+        // as long as the compositor takes to get to the next repaint, and a move answers none of
+        // them at all until the transport bar's own (see `compose_parked_band`).
+        trace_park_step("paint");
+        // SAFETY: the handle is the pin's own window, from the same call the pointer message that
+        // began this drag arrived on, and the paint is a layered-window blit out of a surface this
+        // thread drew for exactly this window. `GdiFlush` is in the same block because what it is
+        // waiting on is the same surface.
+        unsafe {
+            render_pinned_preview_at(hwnd, at.0, at.1);
+            // GDI batches, and what reads the surface next is not a GDI call: the compositor has to
+            // have the pixels before the window behind them is taken away, or the band that was
+            // opaque a frame ago is transparent again.
+            let _ = GdiFlush();
+        }
+
+        trace_park_step("hide");
         hide_pinned_player_window();
     }
 
     parked
+}
+
+/// Ask for the frame this park gives back, on the drag's own time.
+///
+/// It is asked of the pin rather than of the media because the media's own background work belongs
+/// to the player being parked and was stopped when the park began (see `restart_pinned_player`).
+fn prepare_resume_frame() {
+    let Some((path, content, transport, _)) = pinned_playback_state() else {
+        return;
+    };
+    let Some(at) = pin_playhead(&transport) else {
+        return;
+    };
+
+    spawn_video_resume_frame(
+        path,
+        at,
+        (content.2 - content.0).max(0) as u32,
+        (content.3 - content.1).max(0) as u32,
+    );
 }
 
 /// Take a park back, answering whether there was one to take.
@@ -646,14 +858,21 @@ pub(super) fn park_pinned_player() -> bool {
 /// wait for its replacement, because the flag was written down the moment the replacement was
 /// begun rather than the moment it had a window of its own (see `restart_pinned_player`).
 ///
-/// So the window is the whole of the question and the flag answers nothing: a player that is still
-/// starting, a player that is being replaced and has not put its window up yet, and a player whose
-/// process died on the way are all one answer, which is that the band is still this app's to fill.
+/// **And it does not end one moment after either, which is the other half of the flash this settle
+/// used to leave.** Being visible is not having presented: a replacement's window is on screen and
+/// correctly sized within a few milliseconds of being begun, and empty until the file is open, the
+/// seek is done and the first frame is decoded — which on a 1440p HEVC is long enough to read as a
+/// black band over the desktop at the exact moment the hand let go. So the flag stays down while
+/// there is nothing behind it, and what it is waiting for is the process rather than the window
+/// (see `park_swap_arm`).
 ///
-/// **Being on screen is the whole of the answer too, and existing is not it.** A window this app
-/// found for the player has been found by a monitor thread whose raise is answered by the same
-/// flag — so a window found while the park stands has been styled and published and left exactly
-/// where it was, and the band is a hole the moment the flag goes down over it.
+/// **Nothing here goes looking for a window, and the reason is worth stating because it looks like
+/// a missing step.** A window of this app's player is published by a monitor thread that walks the
+/// desktop and *skips every window it cannot see* (see `enum_windows_callback`), and it refuses to
+/// raise at all while a park stands (see `apply_noactivate_to_hwnd`). So a replacement that is
+/// being kept off the screen is a window nothing will ever find — which is the point: it is found
+/// and shown by the swap below, in the tick the flag comes down, and every tick before that the
+/// band is the frame the drag took rather than a window that has decoded nothing.
 ///
 /// The window is put in the band before the flag goes down rather than after it, which is why this
 /// is not `ensure_pinned_sibling_box` on its own: that call is answered out of the hand for as long
@@ -661,27 +880,65 @@ pub(super) fn park_pinned_player() -> bool {
 /// so the tick that takes the park back is the one that has to place the window.
 pub(super) fn settle_pinned_park() -> bool {
     if !pin_player_is_parked() {
+        forget_pin_park_swap();
         return false;
     }
 
-    let Some(hwnd) = video_window_for(VIDEO_PID.load(Ordering::SeqCst)) else {
+    // A drag in flight is a park doing its job, not a park waiting to be ended: the clock below is
+    // stamped by the first tick that finds the drag gone, and a hand resting on an edge for ten
+    // seconds must not spend the budget of a one-tick wait.
+    if pin_is_dragging() {
+        return false;
+    }
+
+    let window_up = video_window_for(VIDEO_PID.load(Ordering::SeqCst)).is_some();
+
+    let Some((arm, waited)) = park_swap_arm_for_the_band(window_up) else {
+        install_resume_frame();
         return false;
     };
-    // SAFETY: `hwnd` came out of `video_window_for`, which settles `IsWindow` on the handle it
-    // publishes before handing it over, and `IsWindowVisible` reports rather than faults for a
-    // window on its way out.
-    if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+
+    // The swap itself: the flag and the window go in the same tick and there is no repaint between
+    // them, so the band is never a moment of nothing with a player behind it (see
+    // `unpark_pinned_player`).
+    if !unpark_pinned_player(&Win32PinWindow) {
         return false;
     }
 
-    if !settle_pinned_park_onto(true) {
-        return false;
-    }
-
-    if let Some(content) = pinned_content() {
-        ensure_pinned_sibling_box(content);
-    }
+    forget_pin_park_swap();
+    note_park_swap(arm, waited);
     true
+}
+
+/// The arm this band's park is to be taken on, and how long it has been waiting for one — or
+/// nothing at all while it is still to be waited for.
+fn park_swap_arm_for_the_band(window_up: bool) -> Option<(ParkSwap, Duration)> {
+    // Read through a poisoned lock rather than refused by it: this is the function that decides
+    // whether the band is ever handed back, and a park that no tick will end is a black band for
+    // the rest of the pin's life.
+    let mut held = PIN_PARK_SWAP
+        .lock()
+        .unwrap_or_else(|swap| swap.into_inner());
+    let swap = held.as_mut()?;
+    let since = *swap.since.get_or_insert_with(Instant::now);
+    let waited = since.elapsed();
+
+    park_swap_arm(
+        window_up,
+        swap.replacing || player_replaced_since(swap.player),
+        waited,
+    )
+    .map(|arm| (arm, waited))
+}
+
+/// Put down everything a park was holding: its bookkeeping, and the frame the background was
+/// preparing for it.
+pub(super) fn forget_pin_park_swap() {
+    PIN_PARK_SWAP
+        .lock()
+        .unwrap_or_else(|swap| swap.into_inner())
+        .take();
+    forget_resume_frame();
 }
 
 /// The park taken back when `player_up` says the player's own window is standing in the band, or

@@ -291,6 +291,172 @@ pub(super) fn spawn_video_probe(path: PathBuf, generation: u64) {
     });
 }
 
+/// Whether the park that asked for a resume frame has been given back while it was still being
+/// rendered.
+///
+/// It is the one thing the thread rendering that frame cannot be told by the loop, because the loop
+/// is what answers the park — so the answer is written down here and the render reads it between
+/// its reads, which is the only moment it can be read at without holding a pipe open past the end
+/// (see `spawn_video_resume_frame`).
+pub(super) static RESUME_FRAME_CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// Write the refusal down (see [`RESUME_FRAME_CANCEL`]).
+pub(super) fn resume_frame_cancelled() {
+    RESUME_FRAME_CANCEL.store(true, Ordering::Release);
+}
+
+/// Take the refusal back, for the next park's frame (see [`RESUME_FRAME_CANCEL`]).
+pub(super) fn resume_frame_uncancelled() {
+    RESUME_FRAME_CANCEL.store(false, Ordering::Release);
+}
+
+/// How long a resume frame may take before it is not worth the drag it is for.
+///
+/// A drag is over in about a second, and this is a whole extra FFmpeg pass over a file — open, seek,
+/// decode one frame — so a render slower than the drag it is preparing for has nothing to prepare.
+/// The bound is what makes the wait safe to leave on a thread of its own: a render that overruns is
+/// killed and reaped rather than left reading a file for a park that ended long ago.
+pub(super) const RESUME_FRAME_WAIT: Duration = Duration::from_millis(1200);
+
+/// Render the frame a resize's park will give back, on a thread of its own.
+///
+/// **It is spawned at the park rather than asked for at the release, because the release is the one
+/// moment there is no time.** A drag holds the pointer's own thread for its whole length, and the
+/// work is two external processes — open the file, seek to the second the film will go on from,
+/// decode one frame — which is the hundred-millisecond class on any file a preview can be played
+/// for. Spawned at the park it overlaps the drag the hand is already spending; asked for at the
+/// release it would be the release that waits, which is the frame the hand let go on being replaced
+/// by nothing at all for a tenth of a second.
+///
+/// It is asked for on a **resize** and not on a move, which is the whole of what makes it worth
+/// doing at all: a move has no relaunch behind it, so the player standing in the band when the drag
+/// ends is the player that was playing all along and has a decoded frame of its own to show (see
+/// `park_swap_arm`). A resize ends in a relaunch, and the placeholder is standing in for a window
+/// that has decoded nothing — which is the whole of the case this frame is for.
+///
+/// Nothing is waited for and nothing is asked of the loop: the answer is left in its own slot and
+/// taken up by the next settle (see `install_resume_frame`), so an overrun is a park that keeps its
+/// stale frame rather than a band that goes blank. And the process is ended on every path out of
+/// here — the park's end, the bound, or a panic — because it is this app's own child and Windows
+/// does not end it for us.
+pub(super) fn spawn_video_resume_frame(path: PathBuf, at: f64, width: u32, height: u32) {
+    // FFmpeg's chroma planes want even dimensions, and a band of one pixel is not a frame anyway.
+    let (width, height) = (width & !1, height & !1);
+    if width < 2 || height < 2 || !at.is_finite() || at < 0.0 {
+        return;
+    }
+
+    resume_frame_uncancelled();
+
+    std::thread::spawn(move || {
+        // A panic in here would take the thread down before the cancel write and leave the child
+        // running, and this is a thread nobody is waiting on: the same reason the probe above
+        // catches its own unwind (see `spawn_video_probe`).
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_video_resume_frame(&path, at, width, height);
+        }));
+    });
+}
+
+/// The render itself: one frame of the file at one second, into the slot the settle takes it from.
+///
+/// The child is polled rather than waited on because the pipe it writes to is this thread's to
+/// drain, and a `wait_with_output` has no moment in it at which a park that has ended can be
+/// noticed — so the drain is a thread of its own and the wait is this loop, which is where the
+/// cancel and the bound are both read.
+fn render_video_resume_frame(path: &Path, at: f64, width: u32, height: u32) {
+    use std::io::Read;
+
+    let seconds = format!("{at:.3}");
+    let size = format!("{width}x{height}");
+
+    let Ok(mut child) = engine_processes::hidden_command("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-ss"])
+        .arg(&seconds)
+        .arg("-i")
+        .arg(path)
+        .args([
+            "-frames:v",
+            "1",
+            "-s",
+            &size,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgra",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let pid = child.id();
+    engine_processes::adopt(pid);
+
+    let wanted = width as usize * height as usize * 4;
+    let Some(pipe) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        engine_processes::forget(pid);
+        return;
+    };
+
+    let collected: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&collected);
+    let drain = std::thread::spawn(move || {
+        let mut all = Vec::new();
+        let mut pipe = pipe;
+        let _ = pipe.read_to_end(&mut all);
+        if let Ok(mut sink) = sink.lock() {
+            *sink = all;
+        }
+    });
+
+    let deadline = Instant::now() + RESUME_FRAME_WAIT;
+    while !drain.is_finished() {
+        if RESUME_FRAME_CANCEL.load(Ordering::Acquire) || Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(8));
+    }
+
+    // Reaped on every path out, and bounded even on the path where nothing went wrong: the same
+    // helper the probes use, for the same reason — a child still writing into a pipe nobody is
+    // draining is a child that never finishes, and a child that is killed is waited for rather
+    // than left for the next drag to find (see `wait_bounded`).
+    let _ = wait_bounded(child, Duration::from_millis(250));
+    let _ = drain.join();
+    engine_processes::forget(pid);
+
+    if RESUME_FRAME_CANCEL.load(Ordering::Acquire) {
+        return;
+    }
+
+    // A short read is a frame that was not written whole, which is answered with nothing rather
+    // than with the part of it that was: a band filled from half a frame is a band of garbage.
+    let mut pixels = match collected.lock() {
+        Ok(all) if all.len() == wanted => all.clone(),
+        _ => return,
+    };
+    // GDI is not what wrote this, but a layered window is composited from premultiplied coverage,
+    // and this frame is opaque everywhere for the same reason the captured one is (see
+    // `hold_video_window_frame`).
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel[3] = 255;
+    }
+
+    if let Ok(mut prepared) = RESUME_VIDEO_FRAME.lock() {
+        *prepared = Some(HeldVideoFrame {
+            pixels,
+            width,
+            height,
+        });
+    }
+}
+
 /// Screen-space box of the preview surface that is on screen right now, if any.
 /// The Explorer hook uses it to decide whether a keyboard preview was placed
 /// over the parked pointer, so a pointer sitting under the preview cannot drive

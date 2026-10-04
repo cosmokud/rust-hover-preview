@@ -169,6 +169,28 @@ pub(super) fn retirement_after_relaunch(
     )
 }
 
+/// Whether the player standing in the band is a different process from the one a park captured its
+/// frame for — which is the whole of what "the replacement has not put a frame up yet" can be asked
+/// of anything this app knows.
+///
+/// **It is asked of the pids and not of the window, because a window says nothing about whether the
+/// process behind it has decoded anything.** A player that has just been begun has a window of its
+/// own within a few milliseconds — SDL makes it before it opens the file — and that window is
+/// visible, correctly sized and empty: which is exactly the state a park that hands the band back
+/// on visibility alone leaves the desktop behind for as long as the decode takes (see
+/// `park_swap_arm`). A pid is the one fact that tells a player carrying the picture the park
+/// captured from a player that has not opened the file yet, and it is a fact this app wrote down
+/// itself rather than read out of a process of somebody else's.
+///
+/// A pid of zero on either side is not a replacement but a player that is not there: `VIDEO_PID` is
+/// cleared by every path that ends a player, so a cleared one says the pin has nothing playing
+/// rather than that something new has taken its place — and a park whose player has gone has no
+/// replacement to wait for (see `PIN_PARK_SWAP_TIMEOUT`).
+pub(super) fn player_replaced_since(parked: u32) -> bool {
+    let now = VIDEO_PID.load(Ordering::Acquire);
+    parked != 0 && now != 0 && parked != now
+}
+
 /// Whether a player being replaced can be ended now, or is still the one on screen.
 ///
 /// Everything in this is about not ending the only picture there is: a replacement with a

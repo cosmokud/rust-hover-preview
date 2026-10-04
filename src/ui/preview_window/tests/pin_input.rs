@@ -659,7 +659,7 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
     let window = RecordedPinWindow::new(0x1000);
 
     assert!(
-        park_pinned_player(),
+        park_pinned_player(HWND(0x1000 as *mut _), (0, 0), false),
         "the first pointer message of a drag hides the player's window, which is the half of \
              the stutter that is the compositor's and the half this app can answer on the message"
     );
@@ -671,7 +671,7 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
              be a toggle out of the hold rather than into it"
     );
     assert!(
-        !park_pinned_player(),
+        !park_pinned_player(HWND(0x1000 as *mut _), (0, 0), false),
         "a drag that parks twice is one drag, not two: the second call would hide a window that \
              is already hidden and answer a question the first has already answered"
     );
@@ -693,16 +693,17 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
              is still being resized"
     );
 
+    // The swap is the settle's and not this test's, and it is driven through the same line either
+    // way (see `settle_pinned_park`): the band is opaque until there is a player to see through
+    // it, and this machine has none.
     assert!(
         unpark_pinned_player(&window),
-        "the release puts the player's window back before the tick lets the film go, which is \
-             the order worth having — a player resumed into a hidden window decodes into nothing, \
-             so the first frame the hand sees is whichever one it decodes afterwards"
+        "the swap puts the player's window back at the band in the same tick the flag goes down"
     );
     assert!(
         !unpark_pinned_player(&window),
-        "and a release that has already put it back has nothing left to put back, so a pin \
-             taken down mid-drag cannot put up a window that no longer exists"
+        "and a swap that has already happened has nothing left to put back, so a pin taken down \
+             mid-drag cannot put up a window that no longer exists"
     );
 
     // The park is not a hide and no re-show: every place that would put the player's window
@@ -711,7 +712,7 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
     // park stands, so the film stays away for the whole of the drag rather than for the one
     // pointer message it was hidden on (see `pin_player_is_parked`).
     assert!(
-        park_pinned_player() && pin_player_is_parked(),
+        park_pinned_player(HWND(0x1000 as *mut _), (0, 0), false) && pin_player_is_parked(),
         "a parked player is a parked pin as far as every raise is concerned, which is what makes \
              the park hold for a hand that has stopped moving as well as one that has not"
     );
@@ -744,8 +745,8 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
     );
     assert!(
         pin_player_is_parked(),
-        "and that notice leaves the park standing, because the road that let go of the pointer \
-             is the one holding it off for the relaunch that undoes it"
+        "and the band is left to the settle either way: the park stands until there is a player to \
+             see through it, which for a resize is the replacement the release has just asked for"
     );
     assert!(
         !releasing
@@ -758,15 +759,13 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
     // The relayout this release asked for is not asserted on: the slot it is written to is a
     // machine value the loop drains on its next turn and several tests here write, so what is
     // in it while this test runs belongs to whoever gets there. It is taken so that a resize's
-    // end leaves nothing behind. The hold-off itself is the assertion above — a park still
-    // standing can only be a resize's, since a move's own release puts the picture back.
+    // end leaves nothing behind.
     let _relayout_on_its_way_to_the_loop = take_relayout_request();
 
-    // The other end of a drag is the capture going to another window, and it ends everything the
-    // drag was doing — the park above included, which the release above deliberately left
-    // standing. It used to end the drag record alone, which the tick reads and lets the film go
-    // by, so the picture came back to a band still painted flat over a window that stayed hidden
-    // for the rest of the pin's life (see `pin_capture_lost`).
+    // The other end of a drag is the capture going to another window, and it ends the drag's
+    // record — which is all it ends. The park stands for the settle, exactly as it does after this
+    // app's own release, because a stolen capture and a release leave the same thing behind: a
+    // drag that has ended and a band that is still this app's to fill (see `pin_capture_lost`).
     let stolen = RecordedPinWindow::new(0x1000);
     with_pin(|pin| {
         pin.dragging = Some(PinDrag {
@@ -791,31 +790,31 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
     pin_capture_lost(&stolen);
 
     assert!(
-        !pin_is_dragging() && !pin_player_is_parked(),
-        "a capture stolen mid-gesture ends the drag and the park with it: the film goes back to \
-             playing because the tick watches the gesture, and a park left standing would leave the \
-             band opaque over a window that is not there for the rest of the pin's life"
+        !pin_is_dragging() && pin_player_is_parked(),
+        "a capture stolen mid-gesture ends the drag and nothing else: the park is the settle's to \
+             take back, and the tick watching the gesture lets the film go either way"
     );
     assert_eq!(
         parked(),
-        Some((false, false, None)),
-        "and the pair is back where the release leaves it, so the picture behind the band is the \
-             player's own window again rather than black"
+        Some((true, false, None)),
+        "so the pair is where a release leaves it, and the band is still filled with the frame \
+             rather than being a hole in the desktop over a window that is not there"
     );
-    // The band read at the assertion rather than spelled out, for the reason the drag test above
-    // gives: what matters is that the picture is put back at the band and not merely shown.
-    assert_eq!(
-        stolen.calls(),
-        vec![PinWindowCall::UnparkPlayerWindow(pinned_content())],
-        "put back once and at the band as it stands, rather than merely shown and left for the \
-             tick to find a couple of hundred milliseconds later"
+    assert!(
+        stolen.calls().is_empty(),
+        "with nothing asked of the player's window: a swap is the settle's, on the tick that finds \
+             a player to make it against"
+    );
+    assert!(
+        unpark_pinned_player(&stolen),
+        "which is the settle's line, reached here by hand because the loop is not running"
     );
 
     // With no pin up there is no flag to write and no transport to reconcile, so a drag that
     // ends over nothing at all is answered by neither half.
     stand_pin(None);
     assert!(
-        !park_pinned_player(),
+        !park_pinned_player(HWND(0x1000 as *mut _), (0, 0), false),
         "a drag over no pin at all has no picture to park and nothing to hold"
     );
     assert!(
@@ -868,7 +867,7 @@ fn a_park_is_taken_back_only_once_the_players_own_window_is_there() {
     }
 
     assert!(
-        park_pinned_player(),
+        park_pinned_player(HWND(0x1000 as *mut _), (0, 0), false),
         "a drag puts the player's window away, which is the half of the band that is then this \
              app's to fill"
     );
