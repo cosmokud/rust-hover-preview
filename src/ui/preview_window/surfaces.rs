@@ -116,6 +116,91 @@ pub(super) fn stand_video_frame_for_a_test(pixels: Vec<u8>, width: u32, height: 
     }
 }
 
+/// The frame a park has *asked* for while it lasts: the file's own picture at the second the film
+/// will go on from, rendered off the drag's own time (see `spawn_video_resume_frame`).
+///
+/// It is a slot of its own rather than the held frame's because the two answer different questions
+/// and arrive in the wrong order for each other: the stale frame is what the band is painted from
+/// on the pointer message that begins the drag, and this one lands later and *upgrades* it. Writing
+/// it into the held frame's place from the thread that rendered it would put a display's worth of
+/// pixels into the surface a paint is reading, at whatever moment the render finished — which is
+/// the one thing a drag's own repaints cannot be asked to wait for (see `install_resume_frame`).
+pub(super) static RESUME_VIDEO_FRAME: Lazy<Mutex<Option<HeldVideoFrame>>> =
+    Lazy::new(|| Mutex::new(None));
+
+/// Whether a prepared frame may be put in place of the stale one, and the whole of why.
+///
+/// Two facts and both are refusals. **A park that has ended has a player of its own in the band**,
+/// so the prepared frame is a decode nothing is waiting for and is dropped rather than kept for the
+/// next drag — which would show the second a *previous* drag let go at. And **a park that took no
+/// frame at all has nothing to upgrade**: the flat fill the band falls back to is opaque and is
+/// what is standing in for the picture, and putting a frame under nothing would leave the band
+/// reading a frame it is no longer painting from.
+///
+/// Every other answer is the upgrade: the background landed inside the drag, the stale frame is
+/// still the one being scaled, and the band gets the picture at the second the film resumes from.
+pub(super) fn resume_frame_upgrades(prepared: bool, park_standing: bool, held: bool) -> bool {
+    prepared && park_standing && held
+}
+
+/// Put the frame the background prepared in place of the stale one, answering whether the band was
+/// upgraded.
+///
+/// It is asked of the loop rather than answered by the thread that rendered the frame, because
+/// installing one is a paint's decision: the stale frame is read by every repaint of the drag, and
+/// swapping it under a paint is a display's worth of pixels changed while a paint is compositing
+/// them (see `held_video_frame`). The park is read here rather than taken on trust from the caller,
+/// because this is the one place the slot is emptied and a frame left in it is a frame the *next*
+/// drag's band would open with (see `resume_frame_upgrades`).
+pub(super) fn install_resume_frame() -> bool {
+    let Ok(mut prepared) = RESUME_VIDEO_FRAME.lock() else {
+        return false;
+    };
+    let Some(frame) = prepared.take() else {
+        return false;
+    };
+
+    let Ok(mut held) = HELD_VIDEO_FRAME.lock() else {
+        return false;
+    };
+    if !resume_frame_upgrades(true, pin_player_is_parked(), held.is_some()) {
+        return false;
+    }
+
+    *held = Some(frame);
+    true
+}
+
+/// Give up a frame that was being prepared for a park, and ask for the process preparing it to stop.
+///
+/// It is the park's other end: a park that has been given back has a player in the band and no use
+/// for a decode, and the process doing that decode is this app's own child rather than one Windows
+/// ends for us — so it is ended here rather than left reading a file for a drag that is over (see
+/// `spawn_video_resume_frame`).
+///
+/// The refusal is the park itself rather than a flag of its own, because a render is up to
+/// `RESUME_FRAME_WAIT` from answering and a second park begun inside that window must not be told
+/// the first render is still the one it is waiting for (see `abandon_resume_frame`).
+pub(super) fn forget_resume_frame() {
+    if let Ok(mut prepared) = RESUME_VIDEO_FRAME.lock() {
+        *prepared = None;
+    }
+    abandon_resume_frame();
+}
+
+/// Stand a prepared frame in, for a test about what a park does with one that landed rather than
+/// about the render that produced it — which is a whole FFmpeg pass, and a slow one.
+#[cfg(test)]
+pub(super) fn stand_resume_frame_for_a_test(pixels: Vec<u8>, width: u32, height: u32) {
+    if let Ok(mut prepared) = RESUME_VIDEO_FRAME.lock() {
+        *prepared = Some(HeldVideoFrame {
+            pixels,
+            width,
+            height,
+        });
+    }
+}
+
 /// Give the held frame up: the player's own window is on screen again, so the band's picture is
 /// that window's rather than anything kept here.
 pub(super) fn forget_video_frame() {
