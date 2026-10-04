@@ -314,11 +314,19 @@ fn the_release_relaunch_re_arms_the_swap_bound() {
     stand_pin(previous_pin);
 }
 
-/// A seek cover with no window behind it holds past its bound: the band is
-/// opaque and there is nothing to hand it to, so the placeholder stands and
-/// the wait extends rather than restarts.
+/// A seek cover with no window behind it, and nothing in flight that can put
+/// one there, holds while it is still inside the cover's own bound and is
+/// given up once it is not.
+///
+/// **The second half is WS-L and it overturns what this test used to say.** Such a cover used to
+/// stand for ever, because `awaiting_relaunch` was an expectation nobody ever checked: the release
+/// had already come, and if its relaunch got no player there was nothing left to satisfy it. An
+/// opaque band is not a picture that is merely stale — its pixels are claimed by this app's own
+/// window at the compositor's hit test, so every click in the video area was answered here rather
+/// than by the player. A cover with a scrub still held is a different thing entirely and is held
+/// for as long as the hand stays down (see `cover_relaunch_is_still_possible`).
 #[test]
-fn a_seek_cover_with_no_window_holds_past_its_bound() {
+fn a_seek_cover_with_nothing_in_flight_is_given_up_by_the_cover_bound() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -339,15 +347,15 @@ fn a_seek_cover_with_no_window_holds_past_its_bound() {
     );
     if let Ok(mut held) = PIN_PARK_SWAP.lock() {
         if let Some(swap) = held.as_mut() {
-            swap.since = Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT * 4);
+            swap.since = Some(Instant::now());
         }
     }
 
     let window = RecordedPinWindow::new(0x1000);
     assert!(
         !settle_pinned_park_where(&window, false),
-        "four times the bound with no window behind the band is not a band \
-         to hand back"
+        "a bound is a bound on a wait, not a delay: nothing has been waited for \
+         yet, and the cover holds"
     );
     assert!(
         pin_player_is_parked(),
@@ -363,6 +371,29 @@ fn a_seek_cover_with_no_window_holds_past_its_bound() {
         park_swap_last_arm(),
         None,
         "no arm was taken for a park that is still standing"
+    );
+
+    // Past the cover's own bound there is nothing behind the band, nothing in flight that can put
+    // a window there — no scrub, no snapshot, no relaunch begun — and so nothing left to wait for.
+    // The cover is given up rather than held, which is the whole of what WS-L changed here: an
+    // opaque band this app's own window hit-tests is not a picture that is merely stale.
+    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
+        if let Some(swap) = held.as_mut() {
+            swap.since = Some(Instant::now() - PIN_PARK_COVER_TIMEOUT * 2);
+        }
+    }
+    assert!(
+        settle_pinned_park_where(&window, false),
+        "four times the cover's own bound with nothing behind the band and nothing \
+         in flight gives the cover up"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "so no cover stands for ever over a player nothing is going to put there"
+    );
+    assert!(
+        matches!(park_swap_last_arm(), Some((ParkSwap::Abandoned, _))),
+        "and the arm is the one the cover's own bound ends on"
     );
 
     forget_pin_park_swap();

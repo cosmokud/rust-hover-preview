@@ -2208,6 +2208,11 @@ fn a_seek_cover_waits_for_its_relaunch_rather_than_spending_its_bound() {
         park_pinned_player_for_seek(hwnd, (100, 80)),
         "a seek parks its cover at seek-start"
     );
+    // The scrub itself, which is what this test is about: the hold below is a tick *mid-scrub*, so
+    // the aim the press stored has to be standing. A cover with no scrub in flight is a cover whose
+    // release has already come, and the tick does not hold that one (see
+    // `cover_relaunch_is_still_possible`).
+    update_pin_transport(|transport| transport.seeking = Some(90.0));
     assert!(
         seek_cover_is_waiting(),
         "which waits for the release's relaunch: no player has been begun behind it yet"

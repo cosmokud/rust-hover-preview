@@ -848,6 +848,44 @@ pub(super) const PIN_PARK_SWAP_TIMEOUT: Duration = Duration::from_millis(600);
 /// player fills the moment it has one, rather than an opaque rectangle nothing will.
 pub(super) const PIN_PARK_COVER_TIMEOUT: Duration = Duration::from_millis(1200);
 
+/// Whether the relaunch a cover is holding for can still arrive, which is what decides between
+/// holding the cover and giving it up.
+///
+/// **An expectation is not a fact, and this is the question that tells them apart.**
+/// `awaiting_relaunch` says a relaunch was *supposed* to be begun by a release that has not arrived.
+/// That is true for a scrub the pointer is still down on — and equally true for the residue of one
+/// whose release came, relaunched, and got no pid at all, or whose release road refused because a
+/// volume popup was in the way of the raise. Nothing will ever satisfy the second, so a cover held
+/// on it is opaque for the life of the pin: the band belongs to this app's own window at the
+/// compositor's hit test, and no press of the user's reaches a road that could end it.
+///
+/// Three things, and every one of them is read off state rather than inferred from the record:
+///
+/// * **the press's own dead-interval arm** (`gesture_snapshot_active`), which is the release's
+///   permission to relaunch and is taken by whichever end runs first — so it stands for the whole
+///   of a gesture and is gone the moment the relaunch has been made, however it turned out;
+/// * **a scrub's aim**, which is the one cover whose end relaunches without a snapshot to say so:
+///   a press on the bar takes the legacy road when there is no player to kill, and then the aim is
+///   the only thing standing between the cover and its relaunch. **This is what keeps a ten-second
+///   scrub from being cut off** — the longest gesture a user spends, and one whose cover is holding
+///   a frame of the film at the second the hand started from;
+/// * **a relaunch genuinely in flight**, which the pending record names by pid. A relaunch that got
+///   no pid writes no record at all (`note_pinned_relaunch`), so an absent record is the honest
+///   answer here rather than a gap.
+///
+/// A pid standing in the band is deliberately *not* one of them: a player with nothing in flight is
+/// not a relaunch still coming, and the arms below are the right answer for it — a window up hands
+/// the band over at once, and a window that never arrives comes down by the cover's own bound.
+fn cover_relaunch_is_still_possible() -> bool {
+    gesture_snapshot_active()
+        || pin_state().is_some_and(|pinned| {
+            pinned
+                .pin()
+                .is_some_and(|pin| pin.transport.seeking.is_some())
+        })
+        || pending_pinned_relaunch().is_some_and(|pending| pending.pid != 0)
+}
+
 /// Which road raised a cover: the arm that owns the record, and the only one that may say
 /// anything about how the record ends.
 ///
@@ -2008,6 +2046,11 @@ fn upgrade_the_parked_band(window: &dyn PinWindow) -> bool {
 /// it arrives a millisecond after the bound or a second after it, and the ticks in between cost
 /// one comparison (see `park_swap_arm`).
 fn park_swap_arm_for_the_band(window_up: bool) -> Option<(ParkSwap, Duration)> {
+    // Read before the park's own lock is taken, and not inside the guard below: that guard asks
+    // the pin, and the park's record is written with the pin held, so holding the park while asking
+    // it is the wrong way round for two locks (see `park_pinned_player_inner`).
+    let expectation_live = cover_relaunch_is_still_possible();
+
     // Read through a poisoned lock rather than refused by it: this is the function that decides
     // whether the band is ever handed back, and a park that no tick will end is a black band for
     // the rest of the pin's life.
@@ -2015,14 +2058,16 @@ fn park_swap_arm_for_the_band(window_up: bool) -> Option<(ParkSwap, Duration)> {
         .lock()
         .unwrap_or_else(|swap| swap.into_inner());
 
-    // A seek's cover is not a wait for a window yet: its release has not relaunched, so there is
-    // nothing to swap to — and the bound below runs from the relaunch, so a scrub held past it
-    // must neither spend it nor swap to the player the cover still stands over. Held until a
-    // relaunch is begun behind it, which the release does (see `seek_pinned_playback`).
-    if held
-        .as_ref()
-        .is_some_and(|swap| swap.awaiting_relaunch && !player_replaced_since(swap.player))
-    {
+    // A cover that expects a relaunch is held for it only while that relaunch can still arrive: a
+    // scrub the pointer is still down on is not a wait with no end, and neither is the press's own
+    // dead interval or a replacement that has already been begun. An expectation nothing can satisfy
+    // is not a wait — it is the residue of a release that came and got no player, or of one the
+    // release road refused — and holding a cover on it is the opaque band nothing ends. So it falls
+    // through to the arms below, which hand the band back on a window or give the cover up on its
+    // own bound (see `cover_relaunch_is_still_possible`).
+    if held.as_ref().is_some_and(|swap| {
+        swap.awaiting_relaunch && !player_replaced_since(swap.player) && expectation_live
+    }) {
         return None;
     }
 
@@ -2046,12 +2091,19 @@ fn park_swap_arm_for_the_band(window_up: bool) -> Option<(ParkSwap, Duration)> {
     park_swap_arm(window_up, replaced, waited).map(|arm| (arm, waited))
 }
 
-/// Whether the standing park is a seek's cover still waiting for its release's relaunch.
+/// Whether the standing park is a cover that was waiting for a relaunch.
 ///
 /// A scrub aims without relaunching, so until one is begun behind the cover there is nothing
 /// for the settle to swap to; a gesture that ends without relaunching one — a move let go of, a
 /// capture stolen mid-aim — hands the band back to the player it covers instead of leaving a
 /// cover nothing ends (see `finish_pin_drag` and `pin_capture_lost`).
+///
+/// **This asks whether the cover was waiting, and not whether it still should be** — and the two
+/// are different questions because both of its callers *are* the release: each has just dropped the
+/// pointer's own record and is the moment the relaunch would have been made, so a cover that was
+/// waiting is exactly what they are here to hand back. Whether the tick should go on *holding* for
+/// a relaunch is the other question, and it is asked where the hold is (see
+/// `cover_relaunch_is_still_possible`).
 pub(super) fn seek_cover_is_waiting() -> bool {
     PIN_PARK_SWAP
         .lock()
