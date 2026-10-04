@@ -415,6 +415,7 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
                 pressed: None,
             }),
         }),
+        PinRelayoutRoad::TakeUp,
     );
 
     let frame = CURRENT_MEDIA

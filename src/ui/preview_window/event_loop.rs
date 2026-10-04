@@ -3130,7 +3130,13 @@ pub fn run_preview_window() {
                                 // A take-up is a box this window has not been given before, so
                                 // the relayout asked for here is asked for the file the pin is
                                 // now showing, and any older one is dropped with it.
-                                pin_relayout = relayout_pinned_media(&path, content, dpi, None);
+                                pin_relayout = relayout_pinned_media(
+                                    &path,
+                                    content,
+                                    dpi,
+                                    None,
+                                    PinRelayoutRoad::TakeUp,
+                                );
                             }
                         } else if kind == Some(MediaType::Audio) {
                             let card = AudioCardClock {
@@ -3150,6 +3156,7 @@ pub fn run_preview_window() {
                                     content,
                                     audio_card_dpi,
                                     Some(card),
+                                    PinRelayoutRoad::TakeUp,
                                 );
                             }
                         }
@@ -3185,7 +3192,13 @@ pub fn run_preview_window() {
                             // starts — and where an older one is dropped: the newest box is the
                             // only one worth decoding for, and the frame already decoded is
                             // drawn scaled into this one meanwhile.
-                            pin_relayout = relayout_pinned_media(&path, content, dpi, Some(card));
+                            pin_relayout = relayout_pinned_media(
+                                &path,
+                                content,
+                                dpi,
+                                Some(card),
+                                PinRelayoutRoad::BoxChange,
+                            );
                         }
                         show_pinned_window(hwnd);
                         place_pinned_siblings();

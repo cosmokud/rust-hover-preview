@@ -137,10 +137,124 @@ fn armed() -> (bool, Option<f64>, bool, bool) {
         .unwrap_or((false, None, false, false))
 }
 
+/// A window of this thread's own to hold the pointer, because the last-resort
+/// release is guarded by `GetCapture` and nothing less than a real window is ever
+/// named by that.
+///
+/// It is never shown, and the class it is made under is the system's own procedure,
+/// so it takes nothing onto the screen. The class is registered once for the process
+/// because a second registration of the same name is refused and every test that
+/// wants one of these wants the same one.
+fn a_real_hidden_window() -> HWND {
+    use windows::Win32::UI::WindowsAndMessaging::{RegisterClassExW, WINDOW_EX_STYLE, WNDCLASSEXW};
+
+    static CLASS: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    CLASS.get_or_init(|| unsafe {
+        let _ = RegisterClassExW(&WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(a_procedure_of_its_own),
+            hInstance: GetModuleHandleW(None).unwrap_or_default().into(),
+            lpszClassName: w!("RustHoverPreviewTestWindow"),
+            ..Default::default()
+        });
+    });
+
+    unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("RustHoverPreviewTestWindow"),
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            4,
+            4,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a window of this thread's own")
+}
+
+/// The procedure the class above is registered under: the system's own, because
+/// this window exists to be named by `GetCapture` and to be let go of, and nothing
+/// is ever dispatched to it.
+unsafe extern "system" fn a_procedure_of_its_own(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+/// K2 RELEASE at the seam: the procedure's own last resort is what gives the pointer
+/// back where no arm owns it, and it is the only writer on this road — a pin that is
+/// not up is not asked anything, so nothing between the message arriving and this
+/// call can let the pointer go.
+///
+/// This is the only test here that stands a real window, because it is the only one
+/// that has to: the arm is guarded by `GetCapture`, so anything less than a real
+/// window would be testing the guard rather than the release.
+#[test]
+fn a_release_no_arm_owns_gives_the_pointer_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    // No pin: the state the watchdog and a teardown leave this window in, with a press of
+    // its own still standing. No arm of a pinned window's release is even asked, and no
+    // text selection and no scroll drag is in flight (see `reconcile_swap_take_up` for the
+    // take-down that discards the state a press was written into).
+    stand_pin(None);
+    take_gesture_snapshot();
+    forget_pin_park_swap();
+    set_text_scroll_dragging(false);
+    let _ = end_text_selection();
+
+    let hwnd = a_real_hidden_window();
+    unsafe {
+        SetCapture(hwnd);
+        assert_eq!(
+            GetCapture(),
+            hwnd,
+            "this window is holding the pointer before the release: every mouse message on the \
+             desktop is arriving here rather than at whatever it was aimed at"
+        );
+
+        window_proc(hwnd, WM_LBUTTONUP, WPARAM(0), LPARAM(0));
+
+        assert_eq!(
+            GetCapture().0,
+            std::ptr::null_mut(),
+            "and it is holding nothing after it: a release no arm owns is still the end of a \
+             press, and the pointer goes back to the desktop"
+        );
+
+        // And the guard is still a guard, which is what makes this safe to leave in the
+        // procedure rather than in an arm: a window that is not the one holding the pointer
+        // does not take it from whoever is.
+        SetCapture(hwnd);
+        window_proc(hwnd, WM_LBUTTONUP, WPARAM(0), LPARAM(0));
+        assert_eq!(
+            GetCapture().0,
+            std::ptr::null_mut(),
+            "and a release that finds nothing owned takes nothing, having already let go"
+        );
+    }
+
+    stand_pin(previous_pin);
+    restore_media(previous_media);
+}
+
 /// K1 PRESS: a seek press with no second to seek to arms nothing — no aim, no
 /// button, no cover, and no capture, because every release arm answers out of
-/// what the press armed and a press that armed nothing left the window holding
-/// the pointer for the rest of the process (the state a pin is in between a
+/// what the press armed and a press that armed nothing left the window holding the
+/// pointer for the rest of the process (the state a pin is in between a
 /// file step and the probe that answers for the file in it).
 #[test]
 fn a_seek_press_with_no_second_to_seek_to_claims_nothing() {
@@ -562,6 +676,208 @@ fn a_step_onto_a_picture_raises_no_cover() {
         VIDEO_PID.load(Ordering::SeqCst),
         101,
         "and the outgoing player is left to the take-down that always killed it"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// K4 ARM: the cover is armed for a player that is going to be put up, and a film
+/// nothing on this machine will play is not one. The two roads that depend on the
+/// answer - the cover and the start - are given the same one fact, because a cover
+/// armed for a player that is never begun is a frozen frame of the film being left
+/// behind standing in the band for the life of the pin: nothing is behind the band
+/// to hand it back to, so it never comes down, and `pin_media_is_alive` reads its
+/// own record as a player still on its way.
+#[test]
+fn a_step_onto_a_film_no_player_can_play_raises_no_cover() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    stand_pin(Some(playing_pin((100, 80, 420, 320), 30.0)));
+    forget_pin_park_swap();
+    forget_video_frame();
+
+    // The machine's own answer cannot be asked for here: the arm is the one a machine with
+    // FFmpeg never takes, so both answers are stood in rather than one of them read off
+    // whatever machine this is running on.
+    stand_ffplay_in(Some(true));
+    assert!(
+        pinned_player_is_coming(MediaType::Video),
+        "a film on a machine with FFmpeg is a player coming"
+    );
+    stand_ffplay_in(Some(false));
+    assert!(
+        !pinned_player_is_coming(MediaType::Video),
+        "and a film on a machine without one is not: there is no window to put it in"
+    );
+    assert!(
+        !pinned_player_is_coming(MediaType::StaticImage),
+        "nor is a file this app paints itself, which is the other half of the same answer"
+    );
+
+    assert!(
+        !cover_step_swap_for_video(pinned_player_is_coming(MediaType::Video)),
+        "so the step covers nothing"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "and no cover stands over the film it is leaving"
+    );
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        101,
+        "and the outgoing player is left to the take-down that always killed it"
+    );
+
+    // A cover already standing — a drag's, a seek's — is given up rather than carried onto a
+    // pin whose player is never going to be begun, which is the arm the take-up reads this
+    // through and the one the sibling refusal already takes for a start that failed. Raised on a
+    // machine that has FFmpeg, because that is the machine a standing cover can only be left by.
+    stand_ffplay_in(Some(true));
+    assert!(
+        cover_step_swap_for_video(pinned_player_is_coming(MediaType::Video)),
+        "a cover stands over the outgoing film"
+    );
+    assert!(
+        pin_player_is_parked(),
+        "and the band is holding a picture, not the desktop"
+    );
+
+    stand_ffplay_in(Some(false));
+    reconcile_swap_take_up(pinned_player_is_coming(MediaType::Video));
+    assert!(
+        !pin_player_is_parked(),
+        "and it is given up where no player is coming: nothing is going to be handed this band"
+    );
+    assert!(
+        !pin_park_carried_forward(),
+        "no record is left for a settle to answer"
+    );
+    assert!(
+        !pin_media_is_alive(false),
+        "so the pin is a pin onto nothing rather than one waiting for a player that is never \
+         coming: the cover's record is not the player's, and reading it as one kept the outgoing \
+         frame on screen for the life of the pin"
+    );
+
+    stand_ffplay_in(None);
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// K5 ROAD: which of the two roads a relayout was asked on decides a video's
+/// answer, and the answer is not the same for both. A box change is a player being
+/// ended and begun again, so it presses; a take-up has pressed nothing, so it
+/// relaunches the film that is there and reads the hold out of the pin's own
+/// transport.
+#[test]
+fn a_take_up_relaunches_a_film_without_pressing_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+    clear_restart_count();
+
+    let content = (100, 80, 420, 320);
+    stand_pin(Some(playing_pin(content, 30.0)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        101,
+        "a player is behind the band"
+    );
+    assert!(
+        !pinned_is_held(),
+        "and the film is playing rather than held"
+    );
+
+    relayout_pinned_media(
+        &PathBuf::from("ws-k-chrome-nav.mkv"),
+        content,
+        96,
+        None,
+        PinRelayoutRoad::TakeUp,
+    );
+
+    assert_eq!(
+        restart_count(),
+        1,
+        "one relaunch: the film is begun again in the box it is being shown in"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "and no cover stands over it. A take-up has pressed nothing, so there is no dead interval \
+         to cover - and a cover raised here would be carried onto the pin this take-up is building \
+         (see `pin_park_carried_forward`), which is a frame held for the length of a wait nothing \
+         is ever going to end"
+    );
+    assert!(
+        !gesture_snapshot_active(),
+        "and no snapshot armed behind a road with no press in it: a snapshot nothing takes answers \
+         `video_drag_hold_apply` false for the rest of the run"
+    );
+    assert!(
+        !pinned_is_held(),
+        "the hold is the pin's own transport, read as it was before this WS: a film that was \
+         playing is playing on, not frozen under a cover no hand asked for"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// K5 ROAD, the other half: the box change is the one road that does press, and its
+/// relaunch carries the press's own answer rather than whatever the frozen transport
+/// happens to say - which is what keeps a maximized film from coming back paused.
+#[test]
+fn a_box_change_presses_the_film_and_relaunches_it_behind_the_cover() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+    clear_restart_count();
+
+    let content = (100, 80, 420, 320);
+    stand_pin(Some(playing_pin(content, 30.0)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    relayout_pinned_media(
+        &PathBuf::from("ws-k-chrome-nav.mkv"),
+        content,
+        96,
+        None,
+        PinRelayoutRoad::BoxChange,
+    );
+
+    assert!(
+        pin_player_is_parked(),
+        "the cover stands over the outgoing frame: a replacement's window is on screen within \
+         milliseconds and empty until the file is open"
+    );
+    assert_eq!(
+        restart_count(),
+        1,
+        "exactly one relaunch, and it is the press's own end that makes it"
+    );
+    assert!(
+        pinned_is_held(),
+        "and it is begun held. The film was playing when the change began it, so the press's \
+         snapshot is what says so - not the frozen transport, which says held for every film a \
+         press has touched, playing or not"
+    );
+    assert!(
+        !gesture_snapshot_active(),
+        "and the snapshot is spent: the press's end has taken the one relaunch it owed"
     );
 
     restore(previous_pin, previous_pid, previous_media);

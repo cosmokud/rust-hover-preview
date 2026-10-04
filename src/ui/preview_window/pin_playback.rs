@@ -1302,14 +1302,14 @@ pub(super) unsafe fn begin_covered_box_change() -> bool {
 /// record is armed so the settle hands the band to the window that replaces it
 /// rather than to whatever merely exists.
 ///
-/// **And a file that paints itself is given the band back at once.** There is
-/// nothing here to hand this cover to: a picture, a page or a document's own
-/// window fills the band itself a tick or two from now, and a frozen frame of a
-/// film left standing over it is a worse answer than the momentary hole the
-/// cover would have hidden — so the cover is not raised at all rather than
-/// raised and taken down.
-pub(super) fn cover_step_swap_for_video(incoming_is_video: bool) -> bool {
-    if !incoming_is_video
+/// **And a file no player of this app's is coming for is given the band back at once.** There is
+/// nothing here to hand this cover to: a picture, a page or a document's own window fills the band
+/// itself a tick or two from now, and a frozen frame of a film left standing over it is a worse
+/// answer than the momentary hole the cover would have hidden — so the cover is not raised at all
+/// rather than raised and taken down. A film on a machine FFmpeg is not on is the same case, and is
+/// asked through the same flag rather than through the kind alone (see `pinned_player_is_coming`).
+pub(super) fn cover_step_swap_for_video(player_coming: bool) -> bool {
+    if !player_coming
         || current_media_type() != Some(MediaType::Video)
         || VIDEO_PID.load(Ordering::Acquire) == 0
     {
@@ -1403,7 +1403,7 @@ fn take_the_park_down() -> bool {
 /// letting go of a capture answers that window procedure synchronously — so a
 /// snapshot still standing here would relaunch the outgoing film during the
 /// reconcile, from inside it (see `release_the_pointer`).
-pub(super) fn reconcile_swap_take_up(incoming_is_video: bool) {
+pub(super) fn reconcile_swap_take_up(player_coming: bool) {
     take_gesture_snapshot();
 
     if pending_pinned_relaunch().is_some() {
@@ -1419,7 +1419,7 @@ pub(super) fn reconcile_swap_take_up(incoming_is_video: bool) {
     // `video_drag_hold_apply`).
     video_drag_hold_set(false);
 
-    if !incoming_is_video {
+    if !player_coming {
         give_up_pinned_park();
     }
 }
