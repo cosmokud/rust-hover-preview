@@ -187,6 +187,14 @@ pub(super) fn video_drag_hold_claim(dragging: bool, ours: bool) -> bool {
 /// a player with no window is holding nothing — so the claim goes whether or not the key lands,
 /// because leaving it standing would refuse every *later* gesture the film for the rest of the run.
 pub(super) fn video_drag_hold_apply(dragging: bool) -> bool {
+    // A gesture that killed owns the dead interval: the frozen hold, the
+    // claim and the stopped clock are the press's to write and the end's to
+    // take back, so the tick's settle answers out of the hand — and no key is
+    // ever posted onto a player that is gone.
+    if gesture_snapshot_active() {
+        return false;
+    }
+
     // The film in front of the window — in flight, or the one the last gesture was over — read
     // before anything is refused below, because the claim has to be reconciled whether or not there
     // is still a film of its own to reconcile it in. A pin that is not up has taken the claim with
@@ -585,18 +593,45 @@ pub(super) fn begin_pin_drag(
                                  // the picture off the screen, so a hold that lands a tick later is a band holding a frame
                                  // the player has already moved on from, which is the frozen-image flash at the start of a
                                  // drag that no ordering of the paint can explain (see `settle_video_drag_hold`).
-        settle_video_drag_hold(true);
-        // The box the window is standing at, and not the one the pin remembers, for the same reason
-        // the drag is begun from it: the park paints the placeholder into this window at the place
-        // it is actually at, so the paint and the `SetWindowPos` the first move makes are two
-        // answers about one box and must not be two different ones. A resize is told apart from a
-        // move because only a resize ends in a relaunch, and only a relaunch leaves the band
-        // wanting a frame of its own (see `park_pinned_player`).
-        park_pinned_player(
-            HWND(hwnd as *mut _),
-            (window_box.0, window_box.1),
-            matches!(action, PinDragAction::Resize(_)),
-        );
+                                 //
+                                 // A video FFmpeg plays takes the kill road instead of the key: the
+                                 // press snapshots the playhead and freezes the clock, the park
+                                 // captures the frame and stands the cover, and only then is the
+                                 // player killed — silence by construction, and no blind toggle
+                                 // anywhere on the gesture (see `gesture_press_freeze`).
+        let killed_road =
+            current_media_type() == Some(MediaType::Video) && gesture_press_freeze() && {
+                park_pinned_player(
+                    HWND(hwnd as *mut _),
+                    (window_box.0, window_box.1),
+                    matches!(action, PinDragAction::Resize(_)),
+                );
+                // A relaunch is coming at the release, behind this cover: the
+                // record waits on it rather than on a player standing in the
+                // band.
+                if let Ok(mut swap) = PIN_PARK_SWAP.lock() {
+                    if let Some(record) = swap.as_mut() {
+                        record.replacing = true;
+                        record.awaiting_relaunch = true;
+                    }
+                }
+                kill_pinned_player_async();
+                true
+            };
+        if !killed_road {
+            settle_video_drag_hold(true);
+            // The box the window is standing at, and not the one the pin remembers, for the same reason
+            // the drag is begun from it: the park paints the placeholder into this window at the place
+            // it is actually at, so the paint and the `SetWindowPos` the first move makes are two
+            // answers about one box and must not be two different ones. A resize is told apart from a
+            // move because only a resize ends in a relaunch, and only a relaunch leaves the band
+            // wanting a frame of its own (see `park_pinned_player`).
+            park_pinned_player(
+                HWND(hwnd as *mut _),
+                (window_box.0, window_box.1),
+                matches!(action, PinDragAction::Resize(_)),
+            );
+        }
         // A newer gesture supersedes whatever relaunch is still in flight behind the cover: the
         // bump kills it before it can publish. After the park rather than before it — the fresh
         // park's capture reads the live window, and there is nothing to read once it has gone.
@@ -956,11 +991,22 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
 
     release_the_pointer(window, hwnd.0 as isize);
 
-    // A resize relaunches at the size the drag settled on (see `relayout_pinned_media`), and a
-    // relaunch is a player being ended and another begun — so it is the relaunch that puts the
-    // parked window back, and putting it back here would show a window that is about to be taken
-    // down again, for as long as the relaunch takes.
-    if matches!(drag.action, PinDragAction::Resize(_)) {
+    // A gesture that killed ends in the one relaunch its press armed: at the
+    // snapshot second, the box the hand left behind, the latest level —
+    // carrying was-held or the gesture's hold for the swap to settle without
+    // a key. A resize takes this road rather than the box request below,
+    // which would relaunch a second player behind the first.
+    if gesture_snapshot_active() {
+        if let Some(content) = pinned_content() {
+            relaunch_gesture_kill_at(content);
+        } else {
+            take_gesture_snapshot();
+        }
+    } else if matches!(drag.action, PinDragAction::Resize(_)) {
+        // A resize relaunches at the size the drag settled on (see `relayout_pinned_media`), and a
+        // relaunch is a player being ended and another begun — so it is the relaunch that puts the
+        // parked window back, and putting it back here would show a window that is about to be taken
+        // down again, for as long as the relaunch takes.
         if let Some(content) = pinned_content() {
             if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
                 *request = Some(content);
@@ -1059,7 +1105,17 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
     // stands over rather than leaving a cover nothing ends (see `seek_cover_is_waiting`).
     // Stranded first: a cover whose player was killed has no player to hand back, so the
     // release relaunches one at the box the pin stands at now.
-    if park_stranded_without_a_player() {
+    //
+    // A gesture that killed never takes those roads: its press armed one
+    // relaunch at the snapshot second, and an aborted gesture is still owed
+    // it — or the cover stands over a dead band no settle will ever end.
+    if gesture_snapshot_active() {
+        if let Some(content) = pinned_content() {
+            relaunch_gesture_kill_at(content);
+        } else {
+            take_gesture_snapshot();
+        }
+    } else if park_stranded_without_a_player() {
         relaunch_stranded_park();
     } else if seek_cover_is_waiting() {
         unpark_pinned_player(window);

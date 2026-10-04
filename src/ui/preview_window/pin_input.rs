@@ -272,8 +272,17 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
                     .map(|origin| (origin.0, origin.1))
                     .or_else(|| pinned_content().map(|content| (content.0, content.1)))
                     .unwrap_or((0, 0));
+                // The kill road freezes the clock before the park reads the
+                // frame, and kills only after the cover stands: silence by
+                // construction, and no blind toggle anywhere on the gesture.
+                // A press the kill road refuses — no player to kill, or one
+                // already dead — keeps the legacy hold.
                 park_pinned_player_for_seek(hwnd, at);
-                seek_press_hold();
+                if gesture_press_freeze() {
+                    kill_pinned_player_async();
+                } else {
+                    seek_press_hold();
+                }
                 // A newer gesture supersedes whatever relaunch is still in flight behind the
                 // cover: the bump kills it before it can publish. After the hold rather than
                 // before it — the key is posted to the live player, and there is no window
@@ -391,6 +400,9 @@ pub(super) unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> boo
         if let Some((path, content, _, _)) = pinned_playback_state() {
             seek_pinned_playback(&path, content, seconds);
             rearm_seek_cover_for_relaunch();
+            // A relaunch that never came up leaves no swap to disarm the
+            // dead interval: the press's snapshot goes with it instead.
+            disarm_gesture_if_no_relaunch();
         }
     }
 
@@ -514,6 +526,26 @@ pub(super) unsafe fn pinned_volume_press(hwnd: HWND, x: i32, y: i32) -> bool {
 
     let _ = SetCapture(hwnd);
     with_pin(|pin| pin.volume.dragging = true);
+    // The kill road, once at the first step iff a player lives: the press
+    // snapshots the playhead and freezes the clock, the park captures the
+    // frame and stands the cover, and only then is the player killed. Rapid
+    // steps find the snapshot standing and rewrite the owed level only — one
+    // relaunch at the settle, at the latest level.
+    if current_media_type() == Some(MediaType::Video) && gesture_press_freeze() {
+        let at = window_origin(hwnd)
+            .map(|origin| (origin.0, origin.1))
+            .or_else(|| pinned_content().map(|content| (content.0, content.1)))
+            .unwrap_or((0, 0));
+        park_pinned_player(hwnd, at, false);
+        if let Ok(mut swap) = PIN_PARK_SWAP.lock() {
+            if let Some(record) = swap.as_mut() {
+                record.replacing = true;
+                record.awaiting_relaunch = true;
+            }
+        }
+        kill_pinned_player_async();
+        bump_pinned_generation();
+    }
     set_pin_volume((pin_chrome::volume_share_at(y, popup.track) * 100.0).round() as u32);
     render_layered_preview(hwnd);
     true
@@ -555,6 +587,21 @@ pub(super) unsafe fn pinned_volume_release(hwnd: HWND) -> bool {
     }
 
     let _ = ReleaseCapture();
+    // A gesture that killed settles in the one relaunch its press armed: at
+    // the snapshot second, the box the hand left behind, the latest level —
+    // carrying was-held or the gesture's hold for the swap to settle without
+    // a key. The remembered level is still written once, where the knob was
+    // let go of.
+    if gesture_snapshot_active() {
+        if let Some((_, content, _, volume)) = pinned_playback_state() {
+            save_remembered_pin_volume(volume.level);
+            relaunch_gesture_kill_at(content);
+        } else {
+            take_gesture_snapshot();
+        }
+        render_layered_preview(hwnd);
+        return true;
+    }
     settle_pin_volume();
     render_layered_preview(hwnd);
     true

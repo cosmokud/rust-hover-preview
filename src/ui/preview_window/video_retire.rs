@@ -438,6 +438,13 @@ pub(super) fn settle_pinned_transport() {
         return;
     }
 
+    // A gesture that killed owns the dead interval: the frozen hold, the
+    // claim and the stopped clock are the press's to write and the end's to
+    // take back, so a player nothing is behind reconciles nothing here.
+    if gesture_snapshot_active() {
+        return;
+    }
+
     if is_video_process_running() {
         return;
     }

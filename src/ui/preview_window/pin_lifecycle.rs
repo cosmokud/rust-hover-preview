@@ -468,6 +468,14 @@ pub(super) fn end_pin_beside_the_state() {
     // `compose_parked_band`).
     forget_video_frame();
 
+    // And the gesture that killed with its end still to come. A pin taken
+    // down mid-dead-band never reaches its relaunch, and the snapshot left
+    // behind is a resume for a pin that has gone: no end will ever take it,
+    // and the next gesture would relaunch at a stale second. Given up with
+    // the pin — the player is already dead or riding the orphan reaper, so
+    // there is nothing here left to kill.
+    take_gesture_snapshot();
+
     // And the relaunch that never landed: a pin taken down with one in flight behind its cover —
     // a walk stepping off, the watchdog — leaves a player nothing will ever show. It dies
     // unpublished rather than lingering, and reaped rather than orphaned. Only a confirmed kill
@@ -555,6 +563,12 @@ pub(super) fn pin_media_is_alive(navigating: bool) -> bool {
 
     match kind {
         MediaType::Video => {
+            // A gesture that killed leaves the player gone with its end
+            // relaunch still to come: the cover stands over a dead band, and
+            // that is not a pin that came apart.
+            if gesture_snapshot_active() {
+                return true;
+            }
             // A supersede-kill leaves the player gone with its replacement on its way — the
             // cover standing over a relaunch still to come, or one still in flight. That is not
             // a pin that came apart: the release relaunches, the in-flight one lands, and the
