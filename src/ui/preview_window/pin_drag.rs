@@ -637,12 +637,25 @@ pub(super) fn unpark_pinned_player(window: &dyn PinWindow) -> bool {
         return false;
     }
 
+    // Re-checked at the show site itself, under no lock but immediately before the show: a bump
+    // on the window thread may have superseded after the settle's own gate, and a condemned
+    // player is never placed nor shown. The kill is retried rather than dropped, and the cover
+    // holds for the next tick to ask again.
+    if !pending_relaunch_is_current() {
+        let _ = reap_superseded_relaunch();
+        return false;
+    }
+
     // The band is read before the flag goes down rather than with it: a hand that carried the
     // window elsewhere left the player's window at the box the drag began from, and the place is
     // part of putting it back. What follows is place, flag down, repaint — strictly ordered, in
     // this same tick — because a band painted transparent with nothing behind it is the desktop,
     // and the pixels the compositor is still holding are the placeholder until the repaint.
-    let band = pinned_content();
+    //
+    // A pin with no media band — collapsed, with no hole for anybody else's window — is still
+    // placed, at the box it stands at now: a show without a place would leave the window at
+    // whatever rect it happens to be at, which is the stale-box defect in miniature.
+    let band = pinned_content().or_else(pinned_media_box_now);
 
     // Placed while the cover is still up rather than after it is down: the window goes back at
     // the final box before the band is a hole again, so no paint can fall between the two.
@@ -668,6 +681,15 @@ pub(super) fn unpark_pinned_player(window: &dyn PinWindow) -> bool {
     // the desktop, for as long as the compositor takes to reach the raise above.
     window.repaint();
     true
+}
+
+/// The media box the pin stands at now, band or no band.
+///
+/// `pinned_content` answers nothing for a collapsed pin — it has no bands for anybody else's
+/// window to stand in — but its box is still the final one, so an unpark that would otherwise
+/// show without placing places there instead (see `unpark_pinned_player`).
+fn pinned_media_box_now() -> Option<ScreenRegion> {
+    pin_state()?.pin().map(|pin| pin.content)
 }
 
 /// Let go of the pointer a drag took.

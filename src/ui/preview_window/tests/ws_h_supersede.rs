@@ -384,3 +384,273 @@ fn generations_tag_relaunches_and_move_only_on_bump() {
     );
     clear_pending_pinned_relaunch();
 }
+
+// WS-H Phase 2 (review blockers 1-6): the races the first pass left.
+//
+// RED (pre-fix): the seams below do not exist, so this section does not
+// compile — the same red Phase 1 started from. Behavioural red through the
+// old fns is impossible where noted: a single test thread cannot interleave
+// a window-thread bump between two adjacent lines, and a fake pid is never
+// a live ffplay, so an unconfirmed kill is unrepresentable without the seam.
+
+/// Blocker 1, confirmed path: a teardown with an in-flight relaunch reaps it —
+/// killed, pid cleared, record forgotten — rather than clearing the record
+/// from under a kill.
+#[test]
+fn teardown_reaps_a_confirmed_in_flight_relaunch() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let _window = parked_pin(content);
+    fake_relaunch(101, 10.0, false);
+    assert_eq!(
+        pending_pinned_relaunch().map(|pending| pending.pid),
+        Some(101),
+        "the relaunch is in flight behind the standing cover"
+    );
+
+    end_pin_beside_the_state();
+
+    assert_eq!(
+        pending_pinned_relaunch(),
+        None,
+        "the confirmed kill takes the record with it"
+    );
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        0,
+        "and its pid: no orphan ffplay, no zombie audio, nothing to publish"
+    );
+
+    restore(previous_pin, previous_pid);
+}
+
+/// Blocker 1, unconfirmed path: a kill not yet taken is handed to the orphan
+/// reaper that outlives the pin, and the loop's settle retries it to
+/// confirmation. A fake pid is never alive, so the stranded half is stood by
+/// hand: what the test proves is the reaper half — nothing parked there is
+/// ever dropped.
+#[test]
+fn orphan_reaper_retries_to_confirmation() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+
+    // A confirmed kill never reaches the list: reaped on the spot.
+    retire_orphaned_player(101);
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        0,
+        "a kill confirmed on the spot clears the pid with it"
+    );
+    assert!(
+        orphaned_video_kills().is_empty(),
+        "so nothing stranded is parked"
+    );
+
+    // A kill still dying is owned by the list, and the loop's settle — which
+    // runs with no pin up — drains it once the death confirms.
+    orphaned_video_kills_push_for_test(101);
+    settle_video_retirement();
+    assert!(
+        orphaned_video_kills().is_empty(),
+        "the reaper drops only confirmed-gone kills, and only by reaping them"
+    );
+
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+}
+
+/// Blocker 5: the supersede-kill is one helper so the relaunch calls it
+/// *before* spawning — a stale player must be dying before its replacement
+/// exists, never published in the start-to-kill window. The helper clears the
+/// record the spawn would otherwise stack behind.
+#[test]
+fn superseded_kill_clears_the_record_for_the_next_spawn() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let _window = parked_pin(content);
+    fake_relaunch(101, 10.0, false);
+
+    assert_eq!(
+        reap_superseded_relaunch(),
+        Some(101),
+        "the unpublished relaunch dies before any replacement is spawned"
+    );
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        0,
+        "its pid goes with it, so the spawn starts from nothing published"
+    );
+    assert_eq!(
+        pending_pinned_relaunch(),
+        None,
+        "and the record is forgotten rather than left for the spawn to stack on"
+    );
+
+    restore(previous_pin, previous_pid);
+}
+
+/// Blockers 2 and 6: the restart's gate-to-show is one helper — stale refuses
+/// the show and retries the kill, current shows and revalidates. A stale
+/// generation never places anything.
+#[test]
+fn gated_show_refuses_a_superseded_generation() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let _window = parked_pin(content);
+    fake_relaunch(101, 10.0, false);
+    // The bump's terminate is still in flight: the generation moved on without
+    // reaping, which is what a slow death looks like.
+    PIN_PLAYER_GENERATION.fetch_add(1, Ordering::AcqRel);
+    assert!(
+        !pending_relaunch_is_current(),
+        "the in-flight relaunch is superseded but not yet reaped"
+    );
+
+    show_current_replacement(101, content);
+
+    assert_eq!(
+        pending_pinned_relaunch(),
+        None,
+        "the refused show retries the kill rather than dropping it"
+    );
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        0,
+        "and reaps its pid with it"
+    );
+
+    restore(previous_pin, previous_pid);
+}
+
+/// Blocker 2, second half: a bump landing between the gate and the show cannot
+/// abort the single `SetWindowPos` that is both — so the show is revalidated
+/// after it, and a condemned window is hidden again rather than left
+/// published. Stood by hand: the stale generation with the pid still naming
+/// the shown player is exactly what that interleave leaves behind.
+#[test]
+fn revalidation_hides_a_player_condemned_mid_show() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let _window = parked_pin(content);
+    fake_relaunch(101, 10.0, false);
+    PIN_PLAYER_GENERATION.fetch_add(1, Ordering::AcqRel);
+
+    revalidate_shown_replacement(101);
+
+    assert_eq!(
+        pending_pinned_relaunch(),
+        None,
+        "the condemned show retries the kill rather than leaving it published"
+    );
+    assert_eq!(
+        VIDEO_PID.load(Ordering::SeqCst),
+        0,
+        "its pid goes with it: hidden (a no-op with no window up) and reaped"
+    );
+
+    restore(previous_pin, previous_pid);
+}
+
+/// Blocker 3: the settle's swap re-checks currency at the show site — a bump
+/// landing between the gate and the unpark refuses the swap rather than
+/// placing and showing a condemned player.
+#[test]
+fn unpark_refuses_a_generation_superseded_after_the_gate() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let window = parked_pin(content);
+    fake_relaunch(101, 10.0, false);
+    // A window-thread bump between the settle's gate and its unpark: the
+    // generation moved on, the kill not yet confirmed.
+    PIN_PLAYER_GENERATION.fetch_add(1, Ordering::AcqRel);
+    assert!(
+        !pending_relaunch_is_current(),
+        "the in-flight relaunch is superseded but not yet reaped"
+    );
+
+    assert!(
+        !unpark_pinned_player(&window),
+        "a condemned player is never placed nor shown"
+    );
+    assert!(
+        pin_player_is_parked(),
+        "so the cover holds instead of handing the band to it"
+    );
+    assert_eq!(
+        window.calls(),
+        Vec::<PinWindowCall>::new(),
+        "shown nowhere, placed nowhere"
+    );
+    assert_eq!(
+        pending_pinned_relaunch(),
+        None,
+        "the refused swap retries the kill rather than dropping it"
+    );
+
+    restore(previous_pin, previous_pid);
+}
+
+/// Blocker 4: the place-before-show exception is closed — a pin with no media
+/// band (collapsed) is still placed, at the box it stands at now, rather than
+/// shown at whatever rect its window happens to be at.
+#[test]
+fn unpark_places_a_pin_with_no_media_band_at_its_current_box() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let window = parked_pin(content);
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
+            pin.collapsed = true;
+        }
+    }
+    assert!(
+        pinned_content().is_none(),
+        "a collapsed pin has no media band to place into"
+    );
+
+    assert!(
+        unpark_pinned_player(&window),
+        "the park still ends: placement was the missing half, not the show"
+    );
+    assert_eq!(
+        window.calls(),
+        vec![
+            PinWindowCall::UnparkPlayerWindow(Some(content)),
+            PinWindowCall::Repaint,
+        ],
+        "placed at the box the pin stands at now, before shown and repainted"
+    );
+
+    restore(previous_pin, previous_pid);
+}

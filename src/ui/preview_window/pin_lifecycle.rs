@@ -470,11 +470,18 @@ pub(super) fn end_pin_beside_the_state() {
 
     // And the relaunch that never landed: a pin taken down with one in flight behind its cover —
     // a walk stepping off, the watchdog — leaves a player nothing will ever show. It dies
-    // unpublished rather than lingering, and reaped rather than orphaned.
-    if let Some(stale) = pending_pinned_relaunch() {
-        kill_superseded_player(stale.pid);
+    // unpublished rather than lingering, and reaped rather than orphaned. Only a confirmed kill
+    // forgets the record; a kill not yet taken stays pending — and the pin is going away, so no
+    // settle will ever retry it. That half is handed to the orphan reaper that outlives the pin,
+    // which asks again on every tick until the death confirms: never dropped, never waited on
+    // (see `retire_orphaned_player`).
+    if pending_pinned_relaunch().is_some() {
+        let _ = reap_superseded_relaunch();
+        if let Some(still) = pending_pinned_relaunch() {
+            retire_orphaned_player(still.pid);
+            clear_pending_pinned_relaunch();
+        }
     }
-    clear_pending_pinned_relaunch();
 
     // And the cover a seek of this pin was aiming under. A pin taken down
     // mid-aim — a walk stepping off, the watchdog — never reaches its swap,

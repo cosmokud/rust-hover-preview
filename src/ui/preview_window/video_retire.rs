@@ -288,6 +288,76 @@ pub(super) fn kill_superseded_player(pid: u32) -> bool {
     true
 }
 
+/// Players a pin's teardown asked to die whose kill is not yet confirmed.
+///
+/// A teardown cannot wait — termination is a request, not a wait — and the pin
+/// is going away, so no settle will ever retry the pending record it leaves
+/// behind. Clearing that record from under an unconfirmed kill loses the only
+/// retry the kill had: an orphan ffplay with zombie audio. So an unconfirmed
+/// kill is parked here instead, owned by this list rather than by any pin, and
+/// retried to confirmation by the loop's own settle, which runs with no pin up
+/// (see `settle_video_retirement`).
+pub(super) static ORPHANED_VIDEO_KILLS: Lazy<Mutex<Vec<u32>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Park an unconfirmed kill where the loop retries it to confirmation.
+///
+/// A kill confirmed on the spot is reaped here instead and never parked: its
+/// record forgotten and `VIDEO_PID` cleared where it still names it, the same
+/// bookkeeping `kill_superseded_player` does. Only a player still dying after
+/// being asked is owned by the list — never dropped, never waited on.
+pub(super) fn retire_orphaned_player(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    if end_retired_player(pid) == RetireEnd::Gone {
+        clear_video_process_state(pid);
+        return;
+    }
+    if let Ok(mut held) = ORPHANED_VIDEO_KILLS.lock() {
+        if !held.contains(&pid) {
+            held.push(pid);
+        }
+    }
+}
+
+/// Retry every orphaned kill, keeping only the ones still dying.
+///
+/// Only confirmed-gone kills leave the list, and only by being reaped — the
+/// same terminate-confirm-forget as every other kill path (see
+/// `end_retired_player`).
+fn settle_orphaned_video_kills() {
+    let Ok(mut held) = ORPHANED_VIDEO_KILLS.lock() else {
+        return;
+    };
+    held.retain(|&pid| {
+        if end_retired_player(pid) != RetireEnd::Gone {
+            return true;
+        }
+        // Confirmed gone: its pid goes with it where it still names it, so no
+        // show path can find a dead player after its pin has gone.
+        clear_video_process_state(pid);
+        false
+    });
+}
+
+#[cfg(test)]
+pub(super) fn orphaned_video_kills() -> Vec<u32> {
+    ORPHANED_VIDEO_KILLS
+        .lock()
+        .map(|held| held.clone())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(super) fn orphaned_video_kills_push_for_test(pid: u32) {
+    if let Ok(mut held) = ORPHANED_VIDEO_KILLS.lock() {
+        if !held.contains(&pid) {
+            held.push(pid);
+        }
+    }
+}
+
 /// A player that a relaunch has taken the place of, ended now that there is a window to replace
 /// it with, and a player that died being settled in the bar that was drawn against it.
 ///
@@ -310,6 +380,11 @@ pub(super) fn kill_superseded_player(pid: u32) -> bool {
 /// with, and every path here is a handful of non-blocking Windows calls, so the wait a relaunch
 /// asks on this thread is a wait measured in microseconds.
 pub(super) fn settle_video_retirement() {
+    // The orphan reaper runs with no pin up: a teardown hands unconfirmed
+    // kills here precisely because no settle will retry them afterwards, so
+    // this must not wait on the retirement below having anything to do.
+    settle_orphaned_video_kills();
+
     let Ok(mut held) = VIDEO_RETIREMENT.lock() else {
         return;
     };
