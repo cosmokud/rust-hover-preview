@@ -337,7 +337,12 @@ pub(super) unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
 
 /// What a release on the transport bar does: a click on the button pauses or resumes, and a drag
 /// that has let go of the bar takes the file to where the hand stopped.
-pub(super) unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> bool {
+pub(super) unsafe fn pinned_transport_release(
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    window: &dyn PinWindow,
+) -> bool {
     let (part, seeking, transport) = {
         let Some(mut pinned) = pin_state() else {
             return false;
@@ -355,7 +360,13 @@ pub(super) unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> boo
         return false;
     }
 
-    let _ = ReleaseCapture();
+    // The kill road the press may have armed, read before the pointer is let
+    // go of: the release below re-enters `pin_capture_lost` synchronously
+    // through `WM_CAPTURECHANGED`. Through the window seam rather than a bare
+    // `ReleaseCapture` so a test can stand in that re-entrancy; on the machine
+    // the two are the same release, the press having taken the capture.
+    let kill_road = gesture_snapshot_active();
+    release_the_pointer(window, hwnd.0 as isize);
 
     if let Some(part) = part {
         // A button is clicked where the pointer is still on it, which is the rule every caption
@@ -397,7 +408,16 @@ pub(super) unsafe fn pinned_transport_release(hwnd: HWND, x: i32, y: i32) -> boo
     // it: the scrub's ticks spent the stamp the press took, and without this the first tick after
     // the release swaps onto whatever window merely exists (see `rearm_seek_cover_for_relaunch`).
     if let Some(seconds) = seeking {
-        if let Some((path, content, _, _)) = pinned_playback_state() {
+        // The kill road owns the gesture's one relaunch, at the aimed second
+        // rather than the press's: the take inside `relaunch_gesture_end_at`
+        // makes it the only one across the capture-lost re-entered above and
+        // this release, whichever runs first.
+        if kill_road {
+            if let Some((_, content, _, _)) = pinned_playback_state() {
+                relaunch_gesture_end_at(content, Some(seconds));
+                rearm_seek_cover_for_relaunch();
+            }
+        } else if let Some((path, content, _, _)) = pinned_playback_state() {
             seek_pinned_playback(&path, content, seconds);
             rearm_seek_cover_for_relaunch();
             // A relaunch that never came up leaves no swap to disarm the
@@ -568,7 +588,7 @@ pub(super) unsafe fn pinned_volume_drag(hwnd: HWND, y: i32) -> bool {
 
 /// A release on the volume popup: the knob is let go, and the player that takes a level only by
 /// being started at one is settled with it (see `settle_pin_volume`).
-pub(super) unsafe fn pinned_volume_release(hwnd: HWND) -> bool {
+pub(super) unsafe fn pinned_volume_release(hwnd: HWND, window: &dyn PinWindow) -> bool {
     let dragging = {
         let Some(mut pinned) = pin_state() else {
             return false;
@@ -586,13 +606,24 @@ pub(super) unsafe fn pinned_volume_release(hwnd: HWND) -> bool {
         return false;
     }
 
-    let _ = ReleaseCapture();
+    // The kill road the press may have armed, read before the pointer is let
+    // go of: the release below re-enters `pin_capture_lost` synchronously
+    // through `WM_CAPTURECHANGED`, and that road relaunches — so the check
+    // after it would find the take already spent and settle the level a
+    // second time behind the first relaunch. Through the window seam rather
+    // than a bare `ReleaseCapture` so a test can stand in that re-entrancy;
+    // on the machine the two are the same release, the press having taken the
+    // capture.
+    let kill_road = gesture_snapshot_active();
+    release_the_pointer(window, hwnd.0 as isize);
     // A gesture that killed settles in the one relaunch its press armed: at
     // the snapshot second, the box the hand left behind, the latest level —
     // carrying was-held or the gesture's hold for the swap to settle without
-    // a key. The remembered level is still written once, where the knob was
-    // let go of.
-    if gesture_snapshot_active() {
+    // a key. The take inside `relaunch_gesture_kill_at` makes it the only one
+    // across the capture-lost re-entered above and this release, whichever
+    // runs first. The remembered level is still written once, where the knob
+    // was let go of.
+    if kill_road {
         if let Some((_, content, _, volume)) = pinned_playback_state() {
             save_remembered_pin_volume(volume.level);
             relaunch_gesture_kill_at(content);
@@ -884,13 +915,13 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
     // A drag of the volume knob first, which is a hand on the level rather than on anything else:
     // it is the one press on a pinned window that is let go of somewhere other than where it began
     // (see `pinned_volume_press`).
-    if pinned_volume_release(hwnd) {
+    if pinned_volume_release(hwnd, &Win32PinWindow) {
         return true;
     }
 
     // The transport bar next: a bar a press has taken hold of is the bar's pointer until it lets
     // go, whatever else is under it.
-    if pinned_transport_release(hwnd, x, y) {
+    if pinned_transport_release(hwnd, x, y, &Win32PinWindow) {
         return true;
     }
 

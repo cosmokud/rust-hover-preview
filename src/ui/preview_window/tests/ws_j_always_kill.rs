@@ -64,6 +64,7 @@ fn restore(
     forget_resume_frame();
     clear_pending_pinned_relaunch();
     clear_park_swap_arm();
+    clear_restart_count();
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     restore_media(previous_media);
@@ -744,6 +745,345 @@ fn swap_regressions_hold_without_a_window_and_never_twice() {
             PinWindowCall::Repaint,
         ],
         "one place-before-show, one repaint"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// A window that hands the pointer back the way the machine does: letting go
+/// of it delivers `WM_CAPTURECHANGED` synchronously, so the capture-lost road
+/// runs *inside* the release that caused it.
+///
+/// The twin of `CapturingWindow` in pin_input's tests, kept beside the counts
+/// it exists to pin down: a recorder alone never re-enters, so a release
+/// driven through one relaunches once even where the machine relaunches
+/// twice — and the double passes the suite unheard.
+struct ReentrantWindow {
+    inner: RecordedPinWindow,
+}
+
+impl ReentrantWindow {
+    fn around(inner: RecordedPinWindow) -> Self {
+        Self { inner }
+    }
+}
+
+impl PinWindow for ReentrantWindow {
+    fn hwnd(&self) -> isize {
+        self.inner.hwnd()
+    }
+
+    fn pointer(&self) -> Option<(i32, i32)> {
+        self.inner.pointer()
+    }
+
+    fn window_box(&self, hwnd: isize) -> Option<ScreenRegion> {
+        self.inner.window_box(hwnd)
+    }
+
+    fn capture(&self, hwnd: isize) {
+        self.inner.capture(hwnd)
+    }
+
+    fn release_capture(&self, hwnd: isize) {
+        self.inner.release_capture(hwnd);
+        // On the machine this is `ReleaseCapture` sending `WM_CAPTURECHANGED`
+        // back into this thread's own window procedure — still inside the
+        // release that caused it — which is where `pin_capture_lost` runs.
+        pin_capture_lost(self);
+    }
+
+    fn set_focusable(&self, hwnd: isize, focusable: bool) {
+        self.inner.set_focusable(hwnd, focusable)
+    }
+
+    fn set_focus(&self, hwnd: isize) {
+        self.inner.set_focus(hwnd)
+    }
+
+    fn set_foreground(&self, hwnd: isize) {
+        self.inner.set_foreground(hwnd)
+    }
+
+    fn hide_pin_windows(&self) {
+        self.inner.hide_pin_windows()
+    }
+
+    fn hide_pin_bubble(&self) {
+        self.inner.hide_pin_bubble()
+    }
+
+    fn unpark_player_window(&self, band: Option<ScreenRegion>) {
+        self.inner.unpark_player_window(band)
+    }
+
+    fn repaint(&self) {
+        self.inner.repaint()
+    }
+
+    fn post(&self, hwnd: isize, message: u32) {
+        self.inner.post(hwnd, message)
+    }
+}
+
+/// A resize drag in flight, as an end finds it.
+fn resize_drag() -> PinDrag {
+    PinDrag {
+        from: (0, 0),
+        window: (0, 0, 640, 480),
+        action: PinDragAction::Resize(PinResize {
+            left: false,
+            top: false,
+            right: true,
+            bottom: true,
+        }),
+        delivered: true,
+        carried: (i32::MIN, i32::MIN),
+    }
+}
+
+/// A kill-road gesture standing: a playing pin, its cover parked, its player
+/// killed — the dead interval armed with the end's one relaunch still to
+/// come. `resizing` is what the cover was parked for, the way each press
+/// parks its own.
+fn stand_kill_road(content: ScreenRegion, from: f64, resizing: bool) {
+    stand_pin(Some(playing_pin(content, from)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    assert!(gesture_press_freeze(), "the press snapshots");
+    assert!(
+        park_pinned_player(HWND(0x1000 as *mut _), (content.0, content.1), resizing),
+        "the cover stands"
+    );
+    assert!(kill_pinned_player_async(), "the press kills");
+    clear_restart_count();
+}
+
+/// The frozen second the press wrote down: what every end relaunches at
+/// unless a seek names its aim.
+fn frozen_second() -> f64 {
+    pin_state()
+        .and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.paused_at))
+        .expect("the press freezes the clock")
+}
+
+/// A drag end through the machine's own re-entrancy relaunches exactly once:
+/// the release re-enters capture-lost inside itself, and the take inside the
+/// end relaunch makes the two ends one player at the final box.
+#[test]
+fn drag_end_through_a_reentrant_capture_relaunches_once() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    stand_kill_road(content, 30.0, true);
+    with_pin(|pin| pin.dragging = Some(resize_drag()));
+    let frozen = frozen_second();
+
+    let window = ReentrantWindow::around(a_window_at(content));
+    assert!(
+        finish_pin_drag(HWND(0x1000 as *mut _), &window),
+        "the drag ends"
+    );
+    assert_eq!(
+        restart_count(),
+        1,
+        "one relaunch across the re-entered capture-lost and the release: \
+         the first end takes the snapshot and the second no-ops"
+    );
+    assert!(
+        !gesture_snapshot_active(),
+        "the take disarms the dead interval"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport))),
+        Some(frozen),
+        "the one player is at the snapshot second"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.content)),
+        Some(content),
+        "and at the final box"
+    );
+
+    assert!(
+        !finish_pin_drag(HWND(0x1000 as *mut _), &window),
+        "a second end is nothing: no drag, no snapshot, no relaunch"
+    );
+    assert_eq!(restart_count(), 1, "still exactly one player");
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// A capture lost first, then the release: the aborted gesture is owed its
+/// one relaunch, and the release afterwards relaunches nothing.
+#[test]
+fn drag_capture_lost_then_end_relaunches_once() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    stand_kill_road(content, 30.0, true);
+    with_pin(|pin| pin.dragging = Some(resize_drag()));
+    let frozen = frozen_second();
+
+    pin_capture_lost(&RecordedPinWindow::new(0x1000));
+    assert_eq!(
+        restart_count(),
+        1,
+        "the aborted gesture is owed its one relaunch"
+    );
+    assert!(
+        !gesture_snapshot_active(),
+        "the take disarms the dead interval"
+    );
+
+    let window = ReentrantWindow::around(a_window_at(content));
+    assert!(
+        !finish_pin_drag(HWND(0x1000 as *mut _), &window),
+        "the drag went with the capture: nothing left to end"
+    );
+    assert_eq!(
+        restart_count(),
+        1,
+        "the release after a lost capture relaunches nothing"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport))),
+        Some(frozen),
+        "the one player is at the snapshot second"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// A volume release through the machine's own re-entrancy relaunches exactly
+/// once, at the latest level: rapid steps are owed to the end, not the press.
+#[test]
+fn volume_release_through_a_reentrant_capture_relaunches_once() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    stand_kill_road(content, 30.0, false);
+    with_pin(|pin| pin.volume.dragging = true);
+    set_pin_volume(70);
+    let frozen = frozen_second();
+
+    let window = ReentrantWindow::around(a_window_at(content));
+    assert!(
+        unsafe { pinned_volume_release(HWND(0x1000 as *mut _), &window) },
+        "the knob is let go of"
+    );
+    assert_eq!(
+        restart_count(),
+        1,
+        "one relaunch across the re-entered capture-lost and the release"
+    );
+    assert!(
+        !gesture_snapshot_active(),
+        "the take disarms the dead interval"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned
+            .pin()
+            .map(|pin| (pin.volume.level, pin.volume.playing_at))),
+        Some((70, 70)),
+        "the single relaunch is at the latest level"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport))),
+        Some(frozen),
+        "and at the snapshot second"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// A seek release through the machine's own re-entrancy relaunches exactly
+/// once, at the aimed second: whichever end runs first takes the snapshot
+/// with the current aim, and the second no-ops.
+#[test]
+fn seek_release_through_a_reentrant_capture_relaunches_once_at_the_aim() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    stand_kill_road(content, 30.0, false);
+    let aimed = 100.0;
+    update_pin_transport(|transport| transport.seeking = Some(aimed));
+
+    let window = ReentrantWindow::around(a_window_at(content));
+    assert!(
+        unsafe { pinned_transport_release(HWND(0x1000 as *mut _), 0, 0, &window) },
+        "the bar is let go of"
+    );
+    assert_eq!(
+        restart_count(),
+        1,
+        "one relaunch across the re-entered capture-lost and the release"
+    );
+    assert!(
+        !gesture_snapshot_active(),
+        "the take disarms the dead interval"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport))),
+        Some(aimed),
+        "the single relaunch carries the aimed second, never the press's stale one"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// A seek abandoned mid-aim relaunches once, at the aim: the cover's player
+/// is already dead, so the band is owed the file at the second the hand left
+/// it at rather than the one it started from.
+#[test]
+fn seek_capture_lost_relaunches_once_at_the_aim() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    stand_kill_road(content, 30.0, false);
+    let aimed = 100.0;
+    update_pin_transport(|transport| transport.seeking = Some(aimed));
+
+    pin_capture_lost(&RecordedPinWindow::new(0x1000));
+    assert_eq!(
+        restart_count(),
+        1,
+        "the abandoned seek is owed its one relaunch"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport))),
+        Some(aimed),
+        "at the aimed second, never the press's stale one"
+    );
+    assert!(
+        !gesture_snapshot_active(),
+        "the take disarms the dead interval"
     );
 
     restore(previous_pin, previous_pid, previous_media);

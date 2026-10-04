@@ -90,6 +90,26 @@ pub(super) fn pinned_playback_state() -> Option<(PathBuf, ScreenRegion, PinTrans
     Some((pin.path.clone(), pin.content, pin.transport, pin.volume))
 }
 
+/// How many players `restart_pinned_player` has begun.
+///
+/// A test seam only: the re-entrant double this counts would otherwise spawn
+/// (or fail to spawn) identically twice, leaving no state behind to tell one
+/// relaunch from two.
+#[cfg(test)]
+pub(super) static RESTART_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// How many players have been begun (see `RESTART_COUNT`).
+#[cfg(test)]
+pub(super) fn restart_count() -> u64 {
+    RESTART_COUNT.load(Ordering::Acquire)
+}
+
+/// Forget how many players have been begun, so each test counts its own ends.
+#[cfg(test)]
+pub(super) fn clear_restart_count() {
+    RESTART_COUNT.store(0, Ordering::SeqCst);
+}
+
 /// End the player a pinned video is playing in and begin another one at a second of the file.
 ///
 /// It is what a seek and a resume from a pause both are with FFmpeg, whose player can be told
@@ -125,6 +145,9 @@ pub(super) fn restart_pinned_player(
     seconds: f64,
     holding: bool,
 ) {
+    #[cfg(test)]
+    RESTART_COUNT.fetch_add(1, Ordering::AcqRel);
+
     let width = (content.2 - content.0).max(1);
     let height = (content.3 - content.1).max(1);
     let volume = pinned_volume_level();
@@ -349,15 +372,30 @@ pub(super) fn gesture_press_freeze() -> bool {
 /// behind, the latest level, the snapshot subtitle — carrying was-held or
 /// the gesture's hold for the swap to settle without a key.
 ///
-/// The snapshot is only *read* here, not taken: it arms the dead interval
-/// until the swap, so the tick-side settles keep answering out of the hand
-/// and the gesture's claim rides the relaunch untouched. The swap takes it
-/// once the band is handed back; a relaunch that never came up disarms it
-/// here instead, because no swap is coming for that one.
+/// The snapshot is *taken* here, not read: letting go of the pointer
+/// re-enters `pin_capture_lost` synchronously through `WM_CAPTURECHANGED`
+/// before the end that let go of it relaunches, so a read relaunches twice
+/// — once on the way in and once on the way out. The take makes the two ends
+/// one relaunch whichever order they run in: the first takes the snapshot
+/// and relaunches, the second finds nothing and no-ops.
 ///
-/// Answers whether one was made: a press that never froze ends nothing here.
+/// Answers whether one was made: a press that never froze, or an end that
+/// lost the take to its own re-entrant twin, ends nothing here.
 pub(super) fn relaunch_gesture_kill_at(content: ScreenRegion) -> bool {
-    let Some(snapshot) = GESTURE_SNAPSHOT.lock().ok().and_then(|held| *held) else {
+    relaunch_gesture_end_at(content, None)
+}
+
+/// The end relaunch with the second it carries named: a seek's release names
+/// its aim, every other end the snapshot second.
+///
+/// Whichever end runs first — the capture-lost re-entered from the release,
+/// or the release itself — takes the snapshot and relaunches once at
+/// `aim.unwrap_or(snapshot.seconds)`; the other finds the take already spent
+/// and relaunches nothing. A single relaunch at the aimed second is what
+/// makes the order irrelevant: a stale snapshot second never reaches a
+/// player while an aim is standing.
+pub(super) fn relaunch_gesture_end_at(content: ScreenRegion, aim: Option<f64>) -> bool {
+    let Some(snapshot) = take_gesture_snapshot() else {
         return false;
     };
     let Some((path, _, _, _)) = pinned_playback_state() else {
@@ -367,10 +405,9 @@ pub(super) fn relaunch_gesture_kill_at(content: ScreenRegion) -> bool {
     restart_pinned_player(
         &path,
         content,
-        snapshot.seconds,
+        aim.unwrap_or(snapshot.seconds),
         gesture_end_holding(snapshot.was_playing, snapshot.was_held),
     );
-    disarm_gesture_if_no_relaunch();
     true
 }
 

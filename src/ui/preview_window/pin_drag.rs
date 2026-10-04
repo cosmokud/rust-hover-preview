@@ -989,14 +989,23 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
         return false;
     };
 
+    // The kill road the press may have armed, read before the pointer is let
+    // go of: the release below re-enters `pin_capture_lost` synchronously
+    // through `WM_CAPTURECHANGED`, and that road relaunches — so the check
+    // after it would find the take already spent and fall through to a second
+    // relaunch below.
+    let kill_road = gesture_snapshot_active();
     release_the_pointer(window, hwnd.0 as isize);
 
     // A gesture that killed ends in the one relaunch its press armed: at the
     // snapshot second, the box the hand left behind, the latest level —
     // carrying was-held or the gesture's hold for the swap to settle without
-    // a key. A resize takes this road rather than the box request below,
-    // which would relaunch a second player behind the first.
-    if gesture_snapshot_active() {
+    // a key. The take inside `relaunch_gesture_kill_at` makes it the only
+    // one: the re-entered capture-lost relaunches and this no-ops, or this
+    // relaunches and a stolen capture afterwards finds nothing. A resize
+    // takes this road rather than the box request below, which would relaunch
+    // a second player behind the first.
+    if kill_road {
         if let Some(content) = pinned_content() {
             relaunch_gesture_kill_at(content);
         } else {
@@ -1087,6 +1096,10 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
     // stopped (see `settle_video_drag_hold`).
     settle_video_drag_hold(false);
 
+    // The seek's aim, read before the record goes: a kill-road seek ended or
+    // abandoned here relaunches at the aimed second rather than the press's,
+    // and the clearing below would leave nothing to aim it with.
+    let aim = pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.seeking));
     if let Some(mut pinned) = pin_state() {
         if let Some(pin) = pinned.pin_mut() {
             pin.dragging = None;
@@ -1107,11 +1120,13 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
     // release relaunches one at the box the pin stands at now.
     //
     // A gesture that killed never takes those roads: its press armed one
-    // relaunch at the snapshot second, and an aborted gesture is still owed
-    // it — or the cover stands over a dead band no settle will ever end.
+    // relaunch at the snapshot second — at the aim where a seek is standing —
+    // and an aborted gesture is still owed it, or the cover stands over a
+    // dead band no settle will ever end. The take inside makes it the only
+    // one across this road and the release's own.
     if gesture_snapshot_active() {
         if let Some(content) = pinned_content() {
-            relaunch_gesture_kill_at(content);
+            relaunch_gesture_end_at(content, aim);
         } else {
             take_gesture_snapshot();
         }
