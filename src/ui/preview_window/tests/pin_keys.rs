@@ -152,19 +152,23 @@ fn a_drag_lets_go_of_the_pointer_it_took() {
              holding it after the drag has gone eats every mouse message on the desktop"
     );
 
-    // And a second end has nothing to release: the drag is taken out of the pin by the first,
-    // so the second road finds nothing rather than releasing a pointer for a drag that has
-    // already been let go of.
+    // And a second end has nothing to *repaint*: the drag is taken out of the pin by the first,
+    // so the second road finds nothing rather than drawing for a drag that has already been let go
+    // of. It does still hand the pointer back, because that is the one thing a road cannot know it
+    // has no business doing — a capture taken from under a drag is Windows' to report and nobody
+    // else's to reason about, so every end lets go of it (see `release_the_pointer`). On the
+    // machine that release finds no capture to give back, which is the answer the recorder records
+    // rather than the absence of one.
     let after_the_first_end = window.calls().len();
     assert!(
         !finish_pin_drag(hwnd, &window),
         "a drag that is over is not ended twice"
     );
     assert_eq!(
-        window.calls().len(),
-        after_the_first_end,
-        "and the second end asks the window for nothing at all — a release and a repaint for a \
-             drag that has already been let go of would repaint a window nobody is carrying"
+        window.calls()[after_the_first_end..],
+        vec![PinWindowCall::ReleaseCapture],
+        "and the second end asks the window for nothing but the pointer — a repaint for a drag \
+             that has already been let go of would draw a window nobody is carrying"
     );
 }
 

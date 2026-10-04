@@ -249,8 +249,28 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
         }
         pin_chrome::TransportPart::Seek => {
             let share = pin_chrome::transport_share_at(x, bar.width, bar.dpi, bar.live);
+            let aim = pin_state()
+                .and_then(|pinned| pinned.pin().and_then(|pin| pin_seconds_at(&pin.transport, share)));
+
+            // **A press with no second to seek to claims nothing at all, and that is the whole of
+            // what this arm refuses.** There is no aim to move and no film to hold, so nothing
+            // below has anything to arm — but the capture at the end of this function is taken by
+            // the press whatever the arm decided, and every release arm answers out of what the
+            // press armed. A press that armed nothing therefore left the window holding the
+            // pointer for the rest of the process, and every mouse message on the desktop arrived
+            // here instead of at whatever it was aimed at: a pin whose title bar, edges and bar had
+            // gone dead and whose cursor kept the last edge's shape, until the app was closed.
+            //
+            // Which is what a pin is between a file step and the probe that answers for the file in
+            // it: the bar is drawn before the length is known, so the band is seekable and the file
+            // has no second in it yet. Answering the press rather than refusing it is what made
+            // that window unusable (see `release_the_pointer`, which every arm now calls on the
+            // way out, and `release_pin_capture`).
+            if !seek_press_arms(aim) {
+                return false;
+            }
             update_pin_transport(|transport| {
-                transport.seeking = pin_seconds_at(transport, share);
+                transport.seeking = aim;
             });
             // Parked at seek-start, so the relaunch the release makes runs behind a cover: the
             // old player is retired at relaunch with the hole transparent and the replacement up
@@ -262,12 +282,7 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             // audio with the picture, for the whole gesture — and the release carries it onto
             // the relaunch, which the swap ends without a key (see `seek_press_hold` and
             // `settle_seek_hold_after_swap`).
-            if current_media_type() == Some(MediaType::Video)
-                && seek_press_arms(
-                    pin_state()
-                        .and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.seeking)),
-                )
-            {
+            if current_media_type() == Some(MediaType::Video) {
                 let at = window_origin(hwnd)
                     .map(|origin| (origin.0, origin.1))
                     .or_else(|| pinned_content().map(|content| (content.0, content.1)))
@@ -345,9 +360,11 @@ pub(super) unsafe fn pinned_transport_release(
 ) -> bool {
     let (part, seeking, transport) = {
         let Some(mut pinned) = pin_state() else {
+            release_the_pointer(window, hwnd.0 as isize);
             return false;
         };
         let Some(pin) = pinned.pin_mut() else {
+            release_the_pointer(window, hwnd.0 as isize);
             return false;
         };
 
@@ -357,6 +374,11 @@ pub(super) unsafe fn pinned_transport_release(
     };
 
     if part.is_none() && seeking.is_none() {
+        // Nothing armed is a road this arm cannot answer, and it is answered by letting go of the
+        // pointer rather than by returning: the press that armed nothing took the capture on its
+        // way in, and this is the only thing between that and a window that holds every mouse
+        // message on the desktop for the rest of the process (see `release_the_pointer`).
+        release_the_pointer(window, hwnd.0 as isize);
         return false;
     }
 
@@ -591,9 +613,11 @@ pub(super) unsafe fn pinned_volume_drag(hwnd: HWND, y: i32) -> bool {
 pub(super) unsafe fn pinned_volume_release(hwnd: HWND, window: &dyn PinWindow) -> bool {
     let dragging = {
         let Some(mut pinned) = pin_state() else {
+            release_the_pointer(window, hwnd.0 as isize);
             return false;
         };
         let Some(pin) = pinned.pin_mut() else {
+            release_the_pointer(window, hwnd.0 as isize);
             return false;
         };
 
@@ -603,6 +627,11 @@ pub(super) unsafe fn pinned_volume_release(hwnd: HWND, window: &dyn PinWindow) -
     };
 
     if !dragging {
+        // The knob was taken hold of by a press and let go of again by whatever stood between that
+        // press and this release — the swap's own reconcile above all, which drops the drag state
+        // so a dead aim cannot answer (see `reconcile_swap_take_up`). The pointer is not something
+        // that press may be left holding (see `release_the_pointer`).
+        release_the_pointer(window, hwnd.0 as isize);
         return false;
     }
 
@@ -875,9 +904,15 @@ pub(super) unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> b
 /// The two ends of the walk are the caption's own walk rather than this card's: `PinCommand::
 /// Previous` and `PinCommand::Next` are what the caption's arrows ask for, so a step from a button
 /// on the card and a step from a button on the caption are one walk and not two.
-pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) -> bool {
+pub(super) unsafe fn pinned_audio_control_release(
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    window: &dyn PinWindow,
+) -> bool {
     let Some(pressed) = pin_state().and_then(|mut pinned| pinned.pin_mut()?.audio_pressed.take())
     else {
+        release_the_pointer(window, hwnd.0 as isize);
         return false;
     };
 
@@ -911,23 +946,28 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
 /// A release on a pinned window, answering whether it was the pin's to act on: the button a press
 /// landed on is clicked if the pointer is still on it, and a drag — which is over wherever the
 /// pointer left it — asks for the media to be laid out again at the box the window ended up with.
-pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
+pub(super) unsafe fn pinned_release(
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    window: &dyn PinWindow,
+) -> bool {
     // A drag of the volume knob first, which is a hand on the level rather than on anything else:
     // it is the one press on a pinned window that is let go of somewhere other than where it began
     // (see `pinned_volume_press`).
-    if pinned_volume_release(hwnd, &Win32PinWindow) {
+    if pinned_volume_release(hwnd, window) {
         return true;
     }
 
     // The transport bar next: a bar a press has taken hold of is the bar's pointer until it lets
     // go, whatever else is under it.
-    if pinned_transport_release(hwnd, x, y, &Win32PinWindow) {
+    if pinned_transport_release(hwnd, x, y, window) {
         return true;
     }
 
     // And then the four buttons a sound's card carries, which are the same rule and the same
     // order: a press that has taken hold of one is that button's until it lets go.
-    if pinned_audio_control_release(hwnd, x, y) {
+    if pinned_audio_control_release(hwnd, x, y, window) {
         return true;
     }
 
@@ -936,6 +976,8 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
     // a message ends here, and one read off the hook's published button state is ended by the
     // tick instead (see `settle_pinned_engine_drag`). A window's own press does not press a
     // caption button and drag the window at once, so the two are not in competition.
+    // No pin at all is the tail's own answer rather than this gate's: `finish_pin_drag` below is
+    // reached either way, and it lets the pointer go of a capture it cannot find a drag for.
     let (pressed, caption_height, dpi, width, framed) = {
         let Some(mut pinned) = pin_state() else {
             return false;
@@ -1013,5 +1055,5 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
-    finish_pin_drag(hwnd, &Win32PinWindow)
+    finish_pin_drag(hwnd, window)
 }
