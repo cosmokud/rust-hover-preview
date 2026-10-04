@@ -582,6 +582,7 @@ fn a_band_is_handed_back_on_a_player_or_on_a_wait_and_never_on_neither() {
 #[test]
 fn a_park_waited_out_with_no_window_standing_holds_the_placeholder_until_one_is() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    clear_park_swap_arm();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
 
@@ -677,9 +678,12 @@ fn a_park_waited_out_with_no_window_standing_holds_the_placeholder_until_one_is(
         vec![
             PinWindowCall::Repaint,
             PinWindowCall::UnparkPlayerWindow(Some((100, 80, 420, 320))),
+            PinWindowCall::Repaint,
         ],
         "and the player's window is put up at where the band is, rather than at where the drag \
-         began"
+         began, and the band is painted through it in the same tick — the window first, because a \
+         paint with nothing behind it is the desktop, and the paint at all because the pixels the \
+         compositor is holding are still the placeholder this park went on holding"
     );
     assert!(
         matches!(
@@ -876,6 +880,429 @@ fn a_render_answers_only_the_park_that_asked_for_it() {
     assert!(
         resume_frame_asked_for(begin_resume_frame()),
         "and the next park's render is wanted again — a refusal is a park's end, not a stop"
+    );
+}
+
+/// **The flash that is left after the swap, and it is not an ordering between the two ends of a
+/// drag: it is a paint that never happens.** The swap takes the parked flag down and puts the
+/// player's window up in one tick, and both of those are right — but a layered window is drawn
+/// from the surface it was last painted into, and the last paint was the one `park_pinned_player`
+/// made with the band held flat under the frozen frame. The flag going down changes what the
+/// *next* paint would draw; it changes nothing about the pixels the compositor is already holding.
+///
+/// So the frame the drag was holding stays composited over the player's window until something
+/// paints the band transparent again, and for a pinned video the only thing that does is the
+/// transport bar's own quarter-of-a-second cadence: a flash of exactly the frozen image on every
+/// release, for as long as that cadence is owed rather than a frame.
+///
+/// The paint belongs inside the swap, after the window is up — in that order, because a repaint
+/// with nothing behind the band is the hole this whole arrangement exists not to leave.
+#[test]
+fn a_swap_repaints_the_band_it_hands_back_in_the_same_tick() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    clear_park_swap_arm();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("repainted-as-it-is-handed-back.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let hwnd = HWND(0x1000 as *mut _);
+    assert!(
+        park_pinned_player(hwnd, (100, 80), false),
+        "a move's park stands, and the band is holding the frame the drag took"
+    );
+    stand_video_frame_for_a_test([0u8, 0, 255, 255].repeat(64), 8, 8);
+
+    let window = RecordedPinWindow::new(0x1000);
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "the same player is standing in the band, so there is nothing to wait for and the swap is \
+         taken on the first tick that asks"
+    );
+    assert_eq!(
+        window.calls(),
+        vec![
+            PinWindowCall::UnparkPlayerWindow(Some((100, 80, 420, 320))),
+            PinWindowCall::Repaint,
+        ],
+        "the player's window is put up at where the band is and the band is then painted through it \
+         — in that order, and in the same tick, because a paint before the window is up is the \
+         desktop showing through a band that has nothing in it, and a paint in a later tick leaves \
+         the frame the drag was holding composited over the window for as long as the next repaint \
+         is owed"
+    );
+
+    // And a park that has already been handed back is not a park: the second settle has nothing to
+    // do and must not put a window up or paint a band that is no longer this app's.
+    assert!(
+        !settle_pinned_park_where(&window, true),
+        "a swap that has happened has nothing left to swap"
+    );
+    assert_eq!(
+        window.calls().len(),
+        2,
+        "and it neither raises the player's window again nor repaints a band that is transparent now"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// The same repaint on the arm a resize settles on — the swap a replacement is waited for, which is
+/// the one a relaunch is behind and therefore the one whose band has most to be repainted.
+///
+/// It is the same two calls in the same order; it is driven separately because the two arms are
+/// driven by two different facts and a test of one says nothing about the other.
+#[test]
+fn a_swap_onto_a_replacement_repaints_the_band_too() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    clear_park_swap_arm();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("repainted-as-a-replacement-takes-it.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let hwnd = HWND(0x1000 as *mut _);
+    assert!(
+        park_pinned_player(hwnd, (100, 80), true),
+        "a resize's park stands with a replacement behind it"
+    );
+    stand_video_frame_for_a_test([0u8, 0, 255, 255].repeat(64), 8, 8);
+    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
+        if let Some(swap) = held.as_mut() {
+            swap.since = Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT);
+        }
+    }
+
+    let window = RecordedPinWindow::new(0x1000);
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "and the bound spent with a window standing in the band hands it the band"
+    );
+    assert_eq!(
+        window.calls(),
+        vec![
+            PinWindowCall::UnparkPlayerWindow(Some((100, 80, 420, 320))),
+            PinWindowCall::Repaint,
+        ],
+        "with the same repaint in the same tick: the placeholder this park was holding is opaque \
+         pixels on the band's own surface, and they are still there whatever replaced the window \
+         behind them"
+    );
+    assert!(
+        matches!(
+            park_swap_last_arm(),
+            Some((ParkSwap::TimedOut, waited)) if waited >= PIN_PARK_SWAP_TIMEOUT
+        ),
+        "and it is the timeout arm that took it, which is where the next person reads the bound from"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// **A park with no record of itself is still a park, and it is the one that must never be held for
+/// ever.** The flag and the record that says what to wait for are two facts written under two locks
+/// on two threads — the flag on the pointer message that begins a drag, the record read by the tick
+/// that ends it — and a settle that has already read "no park standing" can give the record up
+/// afterwards, after a drag has begun and written its own. The park that begins in that gap has its
+/// record taken away under it, and nothing will ever write it again: `park_pinned_player` answers
+/// false to a park that is already standing, so the second write it would have made is the one it
+/// does not make.
+///
+/// What is left is a band this app is painting flat for ever, over a film the drag's hold put on
+/// pause, with no tick that will ever hand it back. So the arm that answers is the one that needs
+/// nothing: a park this app cannot account for is handed back on the first tick that finds a window
+/// standing in the band, because the alternative is the picture staying behind an opaque rectangle
+/// for the life of the pin.
+#[test]
+fn a_park_that_lost_its_record_is_handed_back_rather_than_held_for_ever() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("left-standing-with-nothing-to-settle-it.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let hwnd = HWND(0x1000 as *mut _);
+    assert!(
+        park_pinned_player(hwnd, (100, 80), false),
+        "the drag's park stands"
+    );
+    stand_video_frame_for_a_test([0u8, 0, 255, 255].repeat(64), 8, 8);
+
+    // The record goes, under the flag: what a settle that has already read the flag as down and
+    // then given the record up on its own leaves behind. Nothing in the code may produce it after
+    // this WS — the flag and the record are written in one critical section — and a park that has
+    // it anyway is the stuck placeholder this arm answers.
+    forget_pin_park_swap();
+    assert!(
+        pin_player_is_parked(),
+        "which is a band painted flat over a film nothing is going to be shown behind"
+    );
+
+    let window = RecordedPinWindow::new(0x1000);
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "a park with nothing left to wait for is handed back on the first tick that finds a window \
+         standing in the band — there is no replacement it is waiting for and no bound that has \
+         anything to do with it"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "and the flag goes down with it, rather than a band this app is painting flat staying up \
+         over a paused film for the rest of the pin's life"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// **A park and its record are one fact, and this walks every write of either to say so.** They are
+/// a flag on the pin and a slot behind a lock of their own, and the tick that ends a park and the
+/// pointer message that begins one are two threads — so the only thing that keeps a stuck
+/// placeholder out is that no read of one can be answered without the other, which means both are
+/// written with the pin held.
+///
+/// Each step below is one of those writes, in the order the loop and the window procedure make
+/// them, and the assertion after each is the whole of what the invariant is: a band this app is
+/// painting flat is a park there is a record of, and a park with no record is not one this app is
+/// painting.
+#[test]
+fn a_park_and_its_record_are_never_one_without_the_other() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("a-park-and-its-record.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let hwnd = HWND(0x1000 as *mut _);
+    let recorded = || {
+        PIN_PARK_SWAP
+            .lock()
+            .map(|held| held.is_some())
+            .unwrap_or(false)
+    };
+    let agrees = || pin_player_is_parked() == recorded();
+
+    assert!(
+        !pin_player_is_parked() && !recorded(),
+        "a pin at rest has no park and no record"
+    );
+
+    // The pointer message: flag up and record written in the same breath, or the swap has nothing
+    // to answer with the moment the flag stops being true.
+    assert!(park_pinned_player(hwnd, (100, 80), false));
+    assert!(agrees(), "the park writes both or neither");
+
+    // A tick that finds the drag still in flight is a park doing its job, and it writes nothing.
+    assert!(!settle_pinned_park_where(
+        &RecordedPinWindow::new(0x1000),
+        false
+    ));
+    assert!(agrees(), "and a settle with nowhere to go changes neither");
+
+    // The swap: flag down and record given up together.
+    assert!(settle_pinned_park_where(
+        &RecordedPinWindow::new(0x1000),
+        true
+    ));
+    assert!(
+        agrees(),
+        "and the swap takes both down, because a record left behind is the next park's `since` and \
+         its `replacing` — a resize that inherited a move's record would wait 600 ms for a \
+         replacement that was never begun"
+    );
+
+    // And a settle of a pin with nothing parked is a no-op rather than a write.
+    assert!(!settle_pinned_park_where(
+        &RecordedPinWindow::new(0x1000),
+        true
+    ));
+    assert!(
+        agrees(),
+        "and a settle with no park standing changes neither"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// **A gesture ends its own hold, on its own message, and the two halves of it are what a relaunch
+/// behind it has to be told.** The hold is what stops the film for the length of a drag, and it was
+/// both begun and ended by the tick — the press on one tick and the release on another, so the film
+/// played on for the whole of the tick between the hand going down and the tick noticing.
+///
+/// The cost is not the tick. It is the resize: the release asks for its media to be laid out again
+/// at the box it settled on, the relaunch begins a player that is owed the hold, and the hold the
+/// gesture took is still standing — so the tick that delivers the owed hold and the tick that lets
+/// the gesture go of it are the same tick, and a pause key is a toggle. Two of them is a film
+/// playing over a bar with a pause glyph on it.
+///
+/// So the claim a gesture took is given back by the gesture's own end, and the film's state at that
+/// end is the state the relaunch reads: a film that was playing is playing, so nothing is owed it,
+/// and a film the user had paused is owed one hold by the player that replaced it and by nothing
+/// else.
+#[test]
+fn a_release_ends_the_hold_its_own_gesture_took() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let mut transport = PinTransport::default();
+    transport.begun(3.0, true, false);
+    // The hold a tick has taken, stood in: the key it posted cannot land on this machine, but the
+    // claim and the second are what every later reader — the relayout included — goes by. The flag
+    // beside it is stood with it because the two are written by one call (see `settle_video_drag_hold`),
+    // and a half of that pair is a state no gesture has ever produced.
+    transport.drag_held = true;
+    transport.held(3.0);
+    video_drag_hold_set(true);
+
+    stand_pin(Some(PinnedPreview {
+        path: PathBuf::from("a-gesture-that-ended-its-own-hold.mkv"),
+        transport,
+        ..PinnedPreview::for_test()
+    }));
+
+    let mut media = create_loading_media(320, 240);
+    media.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    let window = RecordedPinWindow::new(0x1000);
+    assert!(
+        park_pinned_player(HWND(0x1000 as *mut _), (0, 0), false),
+        "the drag's park stands and the film is held for the length of the gesture. It is not \
+         parked as a resize's is: that asks for a frame to be rendered off the drag's own time \
+         (see `prepare_resume_frame`), which is two external processes a test has no business \
+         starting — and the resize is in the *drag*, which is what the release below reads"
+    );
+    with_pin(|pin| {
+        pin.dragging = Some(PinDrag {
+            from: (0, 0),
+            window: (0, 0, 320, 240),
+            action: PinDragAction::Resize(PinResize {
+                left: false,
+                top: false,
+                right: true,
+                bottom: false,
+            }),
+            delivered: true,
+            carried: (i32::MIN, i32::MIN),
+        });
+    });
+    assert!(
+        finish_pin_drag(HWND(0x1000 as *mut _), &window),
+        "and the release is a resize's, which is the one that asks for its media again"
+    );
+    if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
+        *request = None;
+    }
+
+    let claim = || {
+        pin_state().and_then(|pinned| {
+            pinned
+                .pin()
+                .map(|pin| (pin.transport.drag_held, pin.transport.pending_hold))
+        })
+    };
+    assert_eq!(
+        claim(),
+        Some((false, false)),
+        "the release gives the claim back, and it does so on its own message rather than on the next \
+         tick: a claim a gesture has ended and nothing else has is a claim the next film to be \
+         dragged is answered with — so that drag refuses the hold it exists for, and its release \
+         posts the toggle onto a film nobody stopped"
+    );
+    assert!(
+        !video_drag_holding(),
+        "and the flag beside it agrees, or the tick would find a gesture it believes it has already \
+         let go of and answer it a second time"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    video_drag_hold_set(false);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// **A hold a relaunch owes is delivered by the relaunch's own player, and never twice.** The two
+/// keys are the same key: the gesture's hold is the hold, and a replacement that begins under it is
+/// owed it — so a tick that finds both the owed hold and a gesture still holding the film delivers
+/// nothing, because the gesture's own end is the delivery and posting both is two toggles on one
+/// player, which is a film playing over a bar with a pause glyph on it.
+///
+/// The claim is the one fact that tells the two apart, and it is the transport's own rather than a
+/// flag beside it, which is what makes every path that ends the player it was made against take it
+/// along.
+#[test]
+fn a_hold_a_gesture_is_still_owing_is_not_delivered_a_second_time() {
+    assert!(
+        pending_hold_delivers(true, false),
+        "a hold owed to a replacement with no gesture over it is what the settle exists for: the \
+         player that has just begun has no window to be given a key through yet"
+    );
+    assert!(
+        !pending_hold_delivers(true, true),
+        "and a gesture that is still holding the film delivers it instead — the gesture's own end is \
+         the one key this hold is waiting for, and a second one toggles the player back into playing"
+    );
+    assert!(
+        !pending_hold_delivers(false, true),
+        "a claim over a hold that is not owed is a claim over nothing, and it delivers nothing"
+    );
+    assert!(
+        !pending_hold_delivers(false, false),
+        "and there is no hold to deliver"
     );
 }
 

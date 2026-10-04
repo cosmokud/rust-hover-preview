@@ -504,7 +504,7 @@ pub(super) fn settle_pending_hold() {
     let Some((_, _, transport, _)) = pinned_playback_state() else {
         return;
     };
-    if !transport.pending_hold {
+    if !pending_hold_delivers(transport.pending_hold, transport.drag_held) {
         return;
     }
 
@@ -515,4 +515,22 @@ pub(super) fn settle_pending_hold() {
         let at = transport_clock(&transport).unwrap_or(0.0);
         update_pin_transport(|state| state.held(at));
     }
+}
+
+/// Whether a hold a relaunch wrote down as owed is this tick's to deliver.
+///
+/// **A gesture that is still holding the film delivers it instead, and the two are the same key.**
+/// A hold is the pause key, and the pause key is a toggle: a relaunch begun under a gesture's hold
+/// — which is what a resize's settle is, and a seek taken from a hand that is still down — writes
+/// the hold down as owed because the player it has just begun has no window to post it through yet.
+/// The tick that delivers it and the tick that lets the gesture go of it are the same tick, so both
+/// post, and two toggles on one player is a film playing over a bar with a pause glyph on it — which
+/// is what a paused video did on a resize and did not do on a move, the whole difference being that
+/// a move has no relaunch behind it to owe anything.
+///
+/// The claim is the transport's own rather than a flag beside it, because it is the one fact that
+/// reconciles the two: every path that begins, holds, lets go of or loses a player takes it with
+/// them (see `video_drag_hold_claim`).
+pub(super) fn pending_hold_delivers(owed: bool, gesture_held: bool) -> bool {
+    owed && !gesture_held
 }
