@@ -1,5 +1,9 @@
 use super::*;
 
+// The stand-in for the machine's own `ReleaseCapture` re-entrancy and the one reader of the
+// relayout slot, shared with the tests about the roads a release ends (see `pin_input`).
+use super::pin_input::{take_relayout_request, CapturingWindow};
+
 // WS-K Phase 1: the capture discipline (a press that arms nothing must claim
 // nothing), the swap's reconcile (a take-up carries no gesture), the two
 // covers (a file step and a box change), and the player's own mouse.
@@ -251,6 +255,406 @@ fn a_release_no_arm_owns_gives_the_pointer_back() {
     restore_media(previous_media);
 }
 
+/// A banded video pin wide enough for its caption to carry the whole of its row.
+///
+/// The walk of four is dropped whole from a caption too narrow for it rather than half of
+/// it, so a pin 320 across has no `Next` on it at all, and every question about a caption
+/// button would be about the three that are a window's own.
+fn wide_banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
+    banded_video_pin((content.0, content.1, content.0 + 700, content.3), from)
+}
+
+/// A point on a named button of the caption above the pin that is up.
+///
+/// Found by asking the caption rather than by reproducing its arithmetic, and filtered
+/// down to a point that is not also on a resize edge — because the frame is asked about
+/// before the caption is (see `pinned_press`), so the two share the three places a window
+/// can be resized from and only the caption keeps the rest.
+fn a_caption_button_point(kind: pin_chrome::CaptionButton) -> (i32, i32) {
+    let caption = pinned_caption_geometry().expect("a pin with a caption above it");
+    let framed = caption.frame != PinFrame::None;
+
+    (0..caption.height)
+        .flat_map(|y| (0..caption.width).map(move |x| (x, y)))
+        .find(|(x, y)| {
+            pin_chrome::button_at(*x, *y, caption.width, caption.height, caption.dpi, framed)
+                == Some(kind)
+                && !pin_state().is_some_and(|pinned| {
+                    pinned
+                        .pin()
+                        .is_some_and(|pin| pin.resize_edge(*x, *y).is_some())
+                })
+        })
+        .unwrap_or_else(|| panic!("this caption draws no {kind:?} a hand can reach"))
+}
+
+/// A point on a named part of the transport bar of the pin that is up: the volume
+/// button is the one the caption's own arm is not reached from, and it is a bar's
+/// part rather than a caption's, so it is found the same way the seek's is.
+fn a_transport_part_point(part: pin_chrome::TransportPart) -> (i32, i32) {
+    let bar = pinned_transport_geometry().expect("a banded pin has a bar");
+    let y = bar.top + bar.height / 2;
+
+    (0..bar.width)
+        .map(|x| (x, y))
+        .find(|(x, y)| {
+            pin_chrome::transport_part_at(
+                *x,
+                *y - bar.top,
+                bar.width,
+                bar.height,
+                bar.dpi,
+                bar.live,
+            ) == Some(part)
+        })
+        .unwrap_or_else(|| panic!("this bar draws no {part:?} to press"))
+}
+
+/// What a press left armed on the pin: the caption's own button.
+fn the_pressed_button() -> Option<pin_chrome::CaptionButton> {
+    pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.pressed))
+}
+
+/// K2 AT THE CAPTION: every button on a pinned window's caption is a press that arms
+/// it and a release that asks its command, with the capture taken on the way in and
+/// given back on the way out.
+///
+/// The release is driven through the machine's own re-entrancy (`CapturingWindow`),
+/// because that is the whole of what went wrong: an arm before the caption's own that
+/// lets go of the pointer re-enters `pin_capture_lost` before the caption has read what
+/// the press armed, and that road drops the pressed button — so the caption finds
+/// nothing pressed, and every button on a pinned window is a button that does nothing,
+/// from the file walk to the maximize. A recorder that merely recorded the release would
+/// hide all of it.
+#[test]
+fn every_caption_button_asks_its_command_on_a_press_and_a_release() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    for (kind, command) in [
+        (pin_chrome::CaptionButton::Previous, PinCommand::Previous),
+        (pin_chrome::CaptionButton::Next, PinCommand::Next),
+        (pin_chrome::CaptionButton::Minimize, PinCommand::Minimize),
+        (pin_chrome::CaptionButton::Maximize, PinCommand::Maximize),
+        (pin_chrome::CaptionButton::Close, PinCommand::Close),
+    ] {
+        stand_pin(Some(wide_banded_video_pin((100, 80, 420, 320), 30.0)));
+        forget_pin_park_swap();
+        forget_video_frame();
+        take_gesture_snapshot();
+        take_pin_command();
+
+        let (x, y) = a_caption_button_point(kind);
+        assert!(
+            unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+            "a hand on {kind:?} is the caption's to act on"
+        );
+        assert_eq!(
+            the_pressed_button(),
+            Some(kind),
+            "so the press armed it, and took the capture with it"
+        );
+
+        let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
+        assert!(
+            unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+            "and the pointer is still on it, so the release is the caption's own to answer"
+        );
+        assert_eq!(
+            take_pin_command(),
+            Some(command),
+            "which asks for the command that button exists to ask for"
+        );
+    }
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// K2 AT THE CAPTION, for the restore-down: a maximized pin remembers the box it had,
+/// and the caption draws a restore glyph where it drew the maximize — the same button,
+/// so the restore-down is dead or alive with the maximize rather than beside it.
+#[test]
+fn a_restore_down_button_asks_its_command_too() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    // A maximized pin is one that remembers the box it had, and the caption draws a
+    // restore glyph where it drew the maximize.
+    let mut pin = wide_banded_video_pin((100, 80, 420, 320), 30.0);
+    pin.restore = Some((100, 80, 420, 320));
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    take_gesture_snapshot();
+    let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Maximize);
+    take_pin_command();
+
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a restore-down is a caption button like any other"
+    );
+    assert_eq!(
+        the_pressed_button(),
+        Some(pin_chrome::CaptionButton::Maximize),
+        "and the press armed it"
+    );
+
+    let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
+    assert!(
+        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "so the release is the caption's own to answer"
+    );
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::Maximize),
+        "and it asks for the same command the maximize does — the loop is what reads the \
+         remembered box and puts it back (see `toggle_pin_maximized`)"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// K2 AT THE CAPTION: the volume button is the one button of a pinned window's
+/// chrome that is not on the caption, and it is dead for the same reason: the bar
+/// armed it on the press, and every arm before the bar's own had something to decline.
+#[test]
+fn the_volume_button_opens_and_closes_its_popup() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    stand_pin(Some(banded_video_pin((100, 80, 420, 320), 30.0)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    take_gesture_snapshot();
+
+    let (x, y) = a_transport_part_point(pin_chrome::TransportPart::Volume);
+    let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
+
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on the level is the bar's to act on"
+    );
+    assert!(
+        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "and the release is the bar's to answer"
+    );
+    assert!(
+        pin_volume_open(),
+        "so the popup is open, which is what a click on the button does"
+    );
+
+    // And the other click puts it away, which is the same press and the same release
+    // read out of the state the first one left.
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a second hand on the level is the same button"
+    );
+    assert!(
+        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "and the same release"
+    );
+    assert!(!pin_volume_open(), "so the popup is put away again");
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// K2 AT THE CAPTION, for the two hand-offs: the same press arms them and the same
+/// release reaches their arm, which takes the button off the pin and hands the file to
+/// the Shell. The Shell itself is not called from here — it starts a program, and a
+/// test that starts one is a test that leaves a window on the user's desktop — so what
+/// is read is the arm being reached: a decline by any arm before it leaves the button
+/// on the pin, and the release falls out of the road as a release nothing answered.
+#[test]
+fn the_two_hand_offs_reach_their_arm_on_a_press_and_a_release() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    stand_pin(Some(wide_banded_video_pin((100, 80, 420, 320), 30.0)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    take_gesture_snapshot();
+
+    for kind in [
+        pin_chrome::CaptionButton::OpenWith,
+        pin_chrome::CaptionButton::OpenWithList,
+    ] {
+        let (x, y) = a_caption_button_point(kind);
+        assert!(
+            unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+            "a hand on {kind:?} is the caption's to act on"
+        );
+        assert_eq!(the_pressed_button(), Some(kind), "so the press armed it");
+
+        // Released off the button, so the arm is reached and declines the hand-off rather
+        // than answering it: the Shell is what this arm would call, and a test must not
+        // start one. The button still has to come off the pin, which is what says the arm
+        // was reached at all.
+        let (away_x, away_y) = (0, caption_height_of_the_pin());
+        let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
+        assert!(
+            unsafe { pinned_release(HWND(0x1000 as *mut _), away_x, away_y, &window) },
+            "so the release is the caption's own to answer"
+        );
+        assert_eq!(
+            the_pressed_button(),
+            None,
+            "and the button came off the pin rather than being left for a release nothing owned"
+        );
+    }
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
+/// The height of the strip above the media of the pin that is up, which is where every
+/// point outside it is: a caption button is answered only of a point on it (see
+/// `pinned_release`), so this is how a release says "not on the button" without leaving
+/// the window.
+fn caption_height_of_the_pin() -> i32 {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.caption))
+        .unwrap_or(0)
+}
+
+/// K2 DRAG after a step: the cover a file step raises is still standing when the hand
+/// goes on to carry the window or pull its edge, and the gesture must neither strand it
+/// nor leave it standing for want of the relayout that ends it.
+///
+/// A placeholder left in the video area is that cover: a band painted with the outgoing
+/// frame, held until there is a player's own window in it to see through. Both ways it can
+/// be stranded are read here — `park_stranded_without_a_player` and `seek_cover_is_waiting`
+/// — and so is the relayout, because a drag whose own end never runs leaves a standing
+/// cover with nothing behind it to be handed, which is the cover the user was left looking
+/// at. And a button afterwards, because a window whose caption has stopped answering is the
+/// other half of the same report.
+///
+/// The resize's park is armed rather than begun, and that is not a shortcut: a begun
+/// resize asks for the frame it hands the band back and spawns a player to render it,
+/// which a test must not do. Its end is the same arm either way (see `finish_pin_drag`).
+#[test]
+fn a_drag_after_a_file_step_strands_no_cover_and_no_park() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    stand_pin(Some(wide_banded_video_pin(content, 30.0)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    take_gesture_snapshot();
+    take_relayout_request();
+
+    assert!(
+        cover_step_swap_for_video(true),
+        "a step onto a video raises the cover it hands to the incoming player"
+    );
+    // A player standing behind the cover, published without arming a relaunch of its own:
+    // the cover is waiting for a window to see through it, not for a process to begin. A
+    // process id no machine hands out, so nothing here is ever a process to end.
+    VIDEO_PID.store(u32::MAX, Ordering::SeqCst);
+
+    let window = CapturingWindow::around(a_window_at(content));
+    begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
+    assert!(pin_is_dragging(), "the hand is carrying the window");
+
+    let bar = pinned_transport_geometry().expect("a banded pin has a bar");
+    assert!(
+        unsafe {
+            pinned_release(
+                HWND(0x1000 as *mut _),
+                content.0 + 10,
+                bar.top - 10,
+                &window,
+            )
+        },
+        "and the release is the drag's own to answer: the three arms before it each had nothing \
+         armed and each declined in silence, so the drag's record was still on the pin to read"
+    );
+    assert!(!pin_is_dragging(), "so the drag is over");
+    assert!(
+        !park_stranded_without_a_player() && !seek_cover_is_waiting(),
+        "and the cover is not left standing over a band nothing is going to hand back — which is \
+         what a placeholder in the video area is"
+    );
+    assert!(
+        take_relayout_request().is_none(),
+        "and a move asked for no relayout of its own"
+    );
+
+    // The edge, which is the one drag that ends in a relaunch.
+    with_pin(|pin| {
+        pin.dragging = Some(PinDrag {
+            from: (0, 0),
+            window: content,
+            action: PinDragAction::Resize(PinResize {
+                left: false,
+                top: false,
+                right: true,
+                bottom: true,
+            }),
+            delivered: true,
+            carried: (i32::MIN, i32::MIN),
+        });
+    });
+    assert!(pin_is_dragging(), "and the hand is on the corner");
+    assert!(
+        unsafe {
+            pinned_release(
+                HWND(0x1000 as *mut _),
+                content.0 + 10,
+                bar.top - 10,
+                &window,
+            )
+        },
+        "so the resize's release is its own too"
+    );
+    assert!(
+        take_relayout_request().is_some(),
+        "and the resize asked for its media at the box the hand settled on"
+    );
+    assert!(
+        !park_stranded_without_a_player() && !seek_cover_is_waiting(),
+        "with a relaunch of its own behind it, so nothing is stranded either"
+    );
+
+    // And the window is still a window a hand can use: the whole of the report was that
+    // the caption had stopped answering.
+    let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::Next);
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a button is still a button after a step and a drag"
+    );
+    assert!(
+        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "and its release is still the caption's own"
+    );
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::Next),
+        "so the walk still moves a file along"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
 /// K1 PRESS: a seek press with no second to seek to arms nothing — no aim, no
 /// button, no cover, and no capture, because every release arm answers out of
 /// what the press armed and a press that armed nothing left the window holding the
@@ -322,12 +726,14 @@ fn a_seek_press_with_a_second_still_arms_the_scrub() {
     restore(previous_pin, previous_pid, previous_media);
 }
 
-/// K2 RELEASE: an arm that finds nothing to answer for still lets go of the
-/// pointer. The transport arm is the one the leak was actually found in: a
-/// press with no second to aim armed nothing, and this arm's own early return
-/// stood between that and the release of the capture.
+/// K2 RELEASE: an arm that finds nothing to answer for leaves the pointer
+/// exactly as it found it. The transport arm is the one the leak was actually
+/// found in, and it is asked of every release on a pinned window that is not a
+/// knob and not the bar: a press on a caption button is a hand on a title bar,
+/// and the bar declining it must cost nothing — the capture that press took
+/// belongs to the caption's own arm, which has not been asked yet.
 #[test]
-fn a_transport_release_with_nothing_armed_gives_the_pointer_back() {
+fn a_transport_release_with_nothing_armed_leaves_the_pointer_alone() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -347,17 +753,20 @@ fn a_transport_release_with_nothing_armed_gives_the_pointer_back() {
     );
     assert_eq!(
         window.calls(),
-        vec![PinWindowCall::ReleaseCapture],
-        "and the pointer is let go of through the seam before this returns"
+        Vec::new(),
+        "and the pointer is not touched: a release raised by an arm with nothing to say \
+         re-enters `pin_capture_lost` before the caption's arm has read what the press armed, \
+         and that road drops the pressed button out from under it"
     );
 
     restore(previous_pin, previous_pid, previous_media);
 }
 
 /// K2 RELEASE for the card's own buttons, which a rebuilt pin can empty out
-/// from under a press the same way.
+/// from under a press the same way — and which are asked of every release that
+/// is not a knob, the bar, or a caption button.
 #[test]
-fn a_card_release_with_no_button_held_gives_the_pointer_back() {
+fn a_card_release_with_no_button_held_leaves_the_pointer_alone() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -369,13 +778,13 @@ fn a_card_release_with_no_button_held_gives_the_pointer_back() {
     let (x, y) = seek_track_point();
     let window = RecordedPinWindow::new(0x1000);
     assert!(
-        !unsafe { pinned_audio_control_release(HWND(0x1000 as *mut _), x, y, &window) },
+        !unsafe { pinned_audio_control_release(HWND(0x1000 as *mut _), x, y) },
         "no button of the card was held"
     );
     assert_eq!(
         window.calls(),
-        vec![PinWindowCall::ReleaseCapture],
-        "so the pointer is let go of"
+        Vec::new(),
+        "so this arm declines in silence, leaving the capture to whichever arm did take it"
     );
 
     stand_pin(previous_pin);
@@ -383,8 +792,13 @@ fn a_card_release_with_no_button_held_gives_the_pointer_back() {
 }
 
 /// K2 RELEASE for the road as a whole: a release whose every arm finds nothing
-/// armed is still the end of a press somewhere, so the umbrella hands the
-/// pointer back rather than answering nothing at all.
+/// armed still ends with no capture held, because the drag's own arm is the last
+/// one asked and it lets go of a capture it cannot find a drag for — and on the
+/// machine, the procedure's last resort after it (see `release_pin_capture`).
+///
+/// Every arm declining must still add up to one release rather than to four, which is
+/// what the recorder below reads: four arms each letting go of the pointer they were
+/// lent is four re-entered capture-lost roads for one press.
 #[test]
 fn a_release_with_nothing_armed_anywhere_gives_the_pointer_back() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -404,26 +818,24 @@ fn a_release_with_nothing_armed_anywhere_gives_the_pointer_back() {
         !unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
         "nothing anywhere is armed"
     );
-    // One release per arm, which is the rule each arm keeps on its own: the first of them is the
-    // capture going back and the rest are the machine saying it has none, and what must not appear
-    // among them is any other window work — a refused release ends here and does nothing else.
+    // One release, from the arm that owns the pointer — the drag's, which is the last arm
+    // asked and so cannot preempt any other. What must not appear is any other window work: a
+    // refused release ends here and does nothing else.
     let calls = window.calls();
-    assert!(
-        !calls.is_empty()
-            && calls
-                .iter()
-                .all(|call| *call == PinWindowCall::ReleaseCapture),
-        "the road lets the pointer go and does nothing else (got {calls:?})"
+    assert_eq!(
+        calls,
+        vec![PinWindowCall::ReleaseCapture],
+        "the road lets the pointer go once and does nothing else (got {calls:?})"
     );
 
     restore(previous_pin, previous_pid, previous_media);
 }
 
 /// K2 RELEASE for the knob's own arm: a press the swap disarmed under the
-/// hand leaves `dragging` standing nowhere, and this arm's early return is
-/// then the last thing between that and a window that holds the pointer.
+/// hand leaves `dragging` standing nowhere, and this arm is the very first of
+/// them to be asked — so a release it declines must cost nothing at all.
 #[test]
-fn a_volume_release_with_no_knob_held_gives_the_pointer_back() {
+fn a_volume_release_with_no_knob_held_leaves_the_pointer_alone() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -440,8 +852,9 @@ fn a_volume_release_with_no_knob_held_gives_the_pointer_back() {
     );
     assert_eq!(
         window.calls(),
-        vec![PinWindowCall::ReleaseCapture],
-        "and the pointer goes back rather than staying for the rest of the run"
+        Vec::new(),
+        "and this arm says nothing about the pointer: it is asked of every release on a pinned \
+         window, so a release here means the pointer belongs to an arm further down"
     );
 
     restore(previous_pin, previous_pid, previous_media);
