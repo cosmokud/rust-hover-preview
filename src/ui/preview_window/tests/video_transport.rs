@@ -447,27 +447,83 @@ fn a_retired_players_id_is_given_up_only_once_the_end_is_confirmed() {
     );
 }
 
-/// The knob let go of on a pinned FFmpeg video: whether the level costs a player, and whether a
-/// file that was held is held again afterwards.
+/// The knob let go of on a pinned FFmpeg video: whether the level costs a player at all.
+///
+/// A film that is *playing* owes the level to a player, because FFmpeg's player takes one only by
+/// being started at it, and that player is begun playing (see `restart_pinned_player`).
+///
+/// A film that is *held* owes it to nobody yet, and the reason is a measurement rather than a
+/// preference: ffplay 9.0.2 has no way to be started paused — its whole option list was read for
+/// one and there is none — so a relaunch of a held film is a player that plays, audibly at the new
+/// level, from the second it was begun at, until the hold written beside it reaches it. That is one
+/// `P` posted on the first tick that finds a window there, which is hundreds of milliseconds after
+/// the process was spawned: a held film answers a knob with a burst of its own soundtrack at the
+/// second the hand stopped it at, and it stops again a fraction later. The level is therefore
+/// written down against the player that *begins when the file is let go of*, which is the same
+/// answer a pin with no player behind it has always had, and the player that is holding now is left
+/// alone — which also leaves the app's own loop record alone, so a knob can no longer arm the
+/// rewind that is a relaunch at zero (see `note_video_loop`).
 #[test]
-fn a_level_is_owed_to_a_player_replaced_and_travels_with_the_hold_it_was_turned_during() {
+fn pin_level_settled_by_owes_a_level_to_a_playing_player_only() {
     assert_eq!(
         pin_level_settled_by(true, false, false),
-        PinLevelSettling::Relaunch { holding: false },
+        PinLevelSettling::Relaunch,
         "a player that is playing takes a level only by being begun at one, so it is replaced, \
              and a file that was not held is begun playing"
     );
     assert_eq!(
         pin_level_settled_by(false, true, true),
-        PinLevelSettling::Relaunch { holding: true },
-        "a held file still owes the level, and it is owed to the player that replaces it — begun \
-             holding, or a film the bar says is held would be heard playing on"
+        PinLevelSettling::OwedToTheNextPlayer,
+        "a held file must not be relaunched for a level: the replacement cannot be started paused, \
+             so it plays audibly at the new level from the second the hold was taken at until the \
+             hold reaches it — the loop-back a knob on a held film used to answer with"
     );
     assert_eq!(
         pin_level_settled_by(false, false, true),
         PinLevelSettling::Recorded,
-        "but a pin with neither a claim nor a player behind it is owed nothing: the level is \
-             written down and the player that begins when the file is let go of takes it then"
+        "and a pin with neither a claim nor a player behind it is owed nothing, held or not: the \
+             level is written down and the player that begins when the file is let go of takes it \
+             then"
+    );
+}
+
+/// The other half of the same fix: a level left owed to the player that begins next is worth
+/// nothing unless that player refuses a pause key, because a key is the cheap way to let a film go
+/// of its hold and it keeps the player that is at the level the hand moved away from.
+///
+/// The facts it is refused over are refusals rather than permissions, and each is a different
+/// mistake. A file that is playing is a file the key is being used to stop, where ending its player
+/// instead would take a picture away to answer a pause. A hold that has not reached its player yet
+/// is a key that is *being delivered*, which a level turned in the meantime must not cancel. And a
+/// hold that is a gesture's is the end of that gesture rather than a press of the pause button's.
+#[test]
+fn a_held_player_at_a_level_the_pin_has_moved_on_from_cannot_be_let_go_of_with_a_key() {
+    assert!(
+        level_is_owed_to_the_next_player(true, false, false, 40, 80),
+        "a held file whose player was begun at 40 with the bar drawn at 80 owes the level to the \
+             player that begins when the file is let go of — and letting it go of the hold with a \
+             key would start the film at 40, which is the level the hand moved away from"
+    );
+    assert!(
+        !level_is_owed_to_the_next_player(true, false, false, 80, 80),
+        "a held file whose player was begun at the level the bar is drawn at is owed nothing, and \
+             the key is the whole of letting it go of the hold: the player that never stopped stays"
+    );
+    assert!(
+        !level_is_owed_to_the_next_player(false, false, false, 40, 80),
+        "a file that is not held has this key pressed on it to stop it, so the answer has to be \
+             there: ending the player instead would leave the pin's band showing the desktop"
+    );
+    assert!(
+        !level_is_owed_to_the_next_player(true, false, true, 40, 80),
+        "and a hold that has not reached its player yet is not a player holding at any level: it is \
+             a player playing, waiting for exactly this key, which is what delivers it"
+    );
+    assert!(
+        !level_is_owed_to_the_next_player(true, true, false, 40, 80),
+        "a hold that is a gesture's is the end of that gesture rather than a press of the pause \
+             button's: a window dragged for a second and released has to carry on from the second \
+             it was watching, and a player begun again is the one way not to do that"
     );
 }
 
