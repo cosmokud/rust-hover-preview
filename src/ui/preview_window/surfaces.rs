@@ -177,11 +177,15 @@ pub(super) fn install_resume_frame() -> bool {
 /// for a decode, and the process doing that decode is this app's own child rather than one Windows
 /// ends for us — so it is ended here rather than left reading a file for a drag that is over (see
 /// `spawn_video_resume_frame`).
+///
+/// The refusal is the park itself rather than a flag of its own, because a render is up to
+/// `RESUME_FRAME_WAIT` from answering and a second park begun inside that window must not be told
+/// the first render is still the one it is waiting for (see `abandon_resume_frame`).
 pub(super) fn forget_resume_frame() {
     if let Ok(mut prepared) = RESUME_VIDEO_FRAME.lock() {
         *prepared = None;
     }
-    resume_frame_cancelled();
+    abandon_resume_frame();
 }
 
 /// Stand a prepared frame in, for a test about what a park does with one that landed rather than

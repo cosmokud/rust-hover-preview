@@ -919,9 +919,9 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
 /// on screen — over a band the flag had already stopped painting flat, for as long as the relaunch
 /// took. The park's end is not asked of a message any more, so there is nothing left to keep off
 /// and nothing to tell apart: both leave the same thing behind, which is a drag that has ended and a
-/// band that is still this app's to fill, and both are settled by the tick that finds a player to
-/// see through it (see `pin_capture_is_ours`, whose marking is still what tells a release here from
-/// a loss for the roads that do care).
+/// band that is still this app's to fill, and both are settled by the tick, on the one fact neither
+/// of them can carry — whether a player is standing in the band to see through it (see
+/// `settle_pinned_park`).
 pub(super) fn pin_capture_lost(_window: &dyn PinWindow) {
     if let Some(mut pinned) = pin_state() {
         if let Some(pin) = pinned.pin_mut() {

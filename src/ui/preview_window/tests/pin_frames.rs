@@ -493,16 +493,23 @@ fn a_drag_that_ends_leaves_the_frame_standing_for_the_settle_to_answer() {
     }
 }
 
-/// The two arms a park's end can be taken on, and the one thing that is not one of them.
+/// The two arms a park's end can be taken on, and the answer that is not one of them.
 ///
 /// **Visible is not presented, and that is the whole of the end-of-drag flash.** A replacement's
 /// window is on screen and correctly sized within a few milliseconds of being begun — SDL makes it
 /// before it opens the file — and it is empty until the seek is done and the first frame is
 /// decoded. So the arm that swaps at once is not "the window is up" but "the player standing in
-/// the band is the one that was playing before the pointer went down", which has been decoding the
-/// whole time and has a frame to present the instant it is shown. Everything else waits, and the
-/// wait is bounded — a dark scene, a player that died mid-relaunch, or a machine with no decoder
-/// must not be able to hold a black band for ever.
+/// the band is the one that was playing before the pointer went down", which a drag holds at its
+/// first pointer message and which therefore has the very frame the band is holding to show again
+/// the instant it is shown. Everything else waits, and the wait is bounded — a dark scene, a
+/// player that died mid-relaunch, or a machine with no decoder must not be able to hold a black
+/// band against a window for ever.
+///
+/// **And no window at all is not a third arm, which is the hole this whole arrangement exists not
+/// to leave.** The band is transparent because a player's window stands in it, so a band handed
+/// back with nothing behind it is the desktop — and a replacement within its bound of publishing a
+/// window is answered out of the hand by every place that could put it up, so swapping on the bound
+/// alone would take the parked flag down and show nothing.
 #[test]
 fn a_band_is_handed_back_on_a_player_or_on_a_wait_and_never_on_neither() {
     // The player that was playing is back, and it is the same process: nothing to wait for, at any
@@ -510,7 +517,7 @@ fn a_band_is_handed_back_on_a_player_or_on_a_wait_and_never_on_neither() {
     assert_eq!(
         park_swap_arm(true, false, Duration::ZERO),
         Some(ParkSwap::Presented),
-        "a move's park is answered by the player that never stopped decoding"
+        "a move's park is answered by the player that is holding the frame the band is showing"
     );
     assert_eq!(
         park_swap_arm(true, false, PIN_PARK_SWAP_TIMEOUT * 2),
@@ -532,14 +539,13 @@ fn a_band_is_handed_back_on_a_player_or_on_a_wait_and_never_on_neither() {
     assert_eq!(
         park_swap_arm(true, true, PIN_PARK_SWAP_TIMEOUT),
         Some(ParkSwap::TimedOut),
-        "and the bound hands the band back rather than holding a placeholder for ever — which is \
-         what stops a dark scene, a dead player or a missing decoder from being a black band that \
-         never becomes a picture"
+        "and the bound hands the band back rather than holding a placeholder against an empty \
+         window for ever — which is what stops a dark scene, a dead player or a missing decoder \
+         from being a black band that never becomes a picture"
     );
 
-    // No window at all is the case the bound exists for as much as the replaced one is: a
-    // replacement that never comes up leaves nothing to see through the band, and a hole in the
-    // desktop is worse than the frame being held.
+    // No window at all is the case the bound does *not* cover, and the one it most certainly must
+    // not: there is nothing to hand the band to, and the placeholder it is holding is opaque.
     assert_eq!(
         park_swap_arm(false, false, Duration::ZERO),
         None,
@@ -547,15 +553,160 @@ fn a_band_is_handed_back_on_a_player_or_on_a_wait_and_never_on_neither() {
     );
     assert_eq!(
         park_swap_arm(false, true, PIN_PARK_SWAP_TIMEOUT),
-        Some(ParkSwap::TimedOut),
-        "and a player that never gets one is answered by the bound like any other"
+        None,
+        "and the bound is not a reason to swap one that never published a window: the swap takes \
+         the parked flag down and the window up together, and with no window up it is the desktop"
     );
+    assert_eq!(
+        park_swap_arm(false, true, PIN_PARK_SWAP_TIMEOUT * 4),
+        None,
+        "nor is four times the bound — the placeholder stands until there is a player to see \
+         through it, and the wait is extended rather than restarted so that a window arriving late \
+         is handed the band on the first tick that finds it"
+    );
+}
+
+/// **The settle itself, on the arm the table above refuses: a park that has waited out its bound
+/// with nothing behind the band.** The arm is a table, and a table is the place a defect like this
+/// hides — the swap reads as being about *when* and is in fact about *whether there is anything to
+/// show*: `unpark_pinned_player` takes the parked flag down through the one writer that takes it,
+/// and every place that could put a replacement's window up is answered out of the hand while the
+/// park stands, so a swap with no window in the band leaves the band transparent over the desktop,
+/// for as long as the user looks at the window they were dragging.
+///
+/// So the bound with no window holds, and this drives the whole settle rather than the arm alone:
+/// a park held past its bound keeps the placeholder and asks nothing of the player's window; a
+/// frame a background rendered for it is installed and painted, because a park that is standing has
+/// no drag in flight to repaint it; and the tick that finds a window up hands it the band at once,
+/// the wait having been extended rather than restarted (see `settle_pinned_park_where`).
+#[test]
+fn a_park_waited_out_with_no_window_standing_holds_the_placeholder_until_one_is() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("waited-out-with-nothing-behind-it.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    // A resize's park, because that is the one with a replacement to wait for. Nothing is prepared
+    // for it: the media is taken out above, so there is no playhead to render a frame at (see
+    // `prepare_resume_frame`).
+    assert!(
+        park_pinned_player(HWND(0x1000 as *mut _), (100, 80), true),
+        "the park stands, with a replacement behind it and the band holding what the drag took"
+    );
+    stand_video_frame_for_a_test([0u8, 0, 255, 255].repeat(64), 8, 8);
+
+    // The bound spent: the stamp the settle takes is put back where a drag of a real length would
+    // have put it, which is the only part of a park a test has to supply by hand (see
+    // `park_swap_arm_for_the_band`).
+    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
+        if let Some(swap) = held.as_mut() {
+            swap.since = Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT);
+        }
+    }
+
+    // And a frame a background finished inside the drag, which is what a park waiting on a window
+    // is most likely to be upgraded by.
+    let prepared = [255u8, 0, 0, 255].repeat(64);
+    stand_resume_frame_for_a_test(prepared.clone(), 8, 8);
+
+    let window = RecordedPinWindow::new(0x1000);
+    assert!(
+        !settle_pinned_park_where(&window, false),
+        "a bound spent with no window behind the band is not a band to hand back"
+    );
+    assert!(
+        pin_player_is_parked(),
+        "so the flag stays down, which is the whole of what makes the band this app's picture rather \
+         than a hole in the desktop"
+    );
+    assert_eq!(
+        held_video_frame().as_ref().map(|held| held.pixels.clone()),
+        Some(prepared),
+        "and the frame the background rendered for this park is put in place of the one the drag \
+         took: the same picture at the second the film goes on from"
+    );
+    assert_eq!(
+        window.calls(),
+        vec![PinWindowCall::Repaint],
+        "and nothing else is asked of the window — the player's own is not put up, and the band is \
+         painted because an upgrade nothing repaints is a frame that is held and never shown"
+    );
+    assert_eq!(
+        park_swap_last_arm(),
+        None,
+        "no arm was taken, so there is nothing to read back about a park that is still standing"
+    );
+
+    // Asked again with nothing new to install, which is what the tick does while it waits: the
+    // frame is already in place, so there is nothing to paint and nothing to swap.
+    assert!(
+        !settle_pinned_park_where(&window, false),
+        "and a park still waiting is asked again with the same answer"
+    );
+    assert_eq!(
+        window.calls(),
+        vec![PinWindowCall::Repaint],
+        "without repainting a band that is already showing the frame in place"
+    );
+    assert!(
+        pin_player_is_parked() && held_video_frame().is_some(),
+        "and still holding it"
+    );
+
+    // The tick that finds a window: the wait was extended by the hold rather than restarted, so a
+    // replacement that publishes its window late is handed the band on the first tick that sees it.
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "a window standing in the band is the thing the settle was waiting for, and the flag and \
+         the window go in one tick"
+    );
+    assert!(
+        !pin_player_is_parked() && held_video_frame().is_none(),
+        "which puts the flag down and gives the frame up together: a band with a window of \
+         somebody else's in it needs nothing kept behind it"
+    );
+    assert_eq!(
+        window.calls(),
+        vec![
+            PinWindowCall::Repaint,
+            PinWindowCall::UnparkPlayerWindow(Some((100, 80, 420, 320))),
+        ],
+        "and the player's window is put up at where the band is, rather than at where the drag \
+         began"
+    );
+    assert!(
+        matches!(
+            park_swap_last_arm(),
+            Some((ParkSwap::TimedOut, waited)) if waited >= PIN_PARK_SWAP_TIMEOUT
+        ),
+        "and the arm is written down with the wait that was actually spent, which is where the next \
+         person tuning the bound reads it from"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
 }
 
 /// What the pid comparison is actually for: telling a player carrying the captured picture from one
 /// that opened the file after the drag began, which a window's own facts cannot do.
+///
+/// It takes the same lock its siblings do, because `VIDEO_PID` is one slot for the whole process
+/// and this test writes a pid into it rather than standing a pin and giving it back.
 #[test]
 fn a_replacement_is_told_from_the_process_and_not_from_the_window() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
     let previous = VIDEO_PID.swap(4242, Ordering::SeqCst);
     assert!(
         !player_replaced_since(4242),
@@ -679,6 +830,53 @@ fn a_prepared_frame_is_installed_only_while_its_park_is_standing() {
     forget_video_frame();
     forget_resume_frame();
     stand_pin(previous_pin);
+}
+
+/// **A render belongs to the park that asked for it, and a park is not the only one that can be in
+/// flight.** A park's end gives up its frame and the background rendering it is up to
+/// `RESUME_FRAME_WAIT` of FFmpeg away from answering — so a second park begun inside that window
+/// has a render already running for the first one. With one flag between them the second park took
+/// the refusal back down, the first render read a park that had ended as one that had not, and put
+/// a frame taken at the second the *previous* drag let go at into the band the new park was
+/// holding for a picture of its own.
+///
+/// So a render is opened for a named park and asks twice whether that is still the park this app
+/// is waiting for, which two overlapping parks can never both be. The two asks are the same fact
+/// read at the two moments it matters: once between the render's reads, so a park that ended is not
+/// waited out to the bound, and once with the frame in hand, so a stale render cannot fill the slot
+/// a later park installs from (see `resume_frame_asked_for`).
+#[test]
+fn a_render_answers_only_the_park_that_asked_for_it() {
+    let first = begin_resume_frame();
+    assert!(
+        resume_frame_asked_for(first),
+        "a render that has just been opened is the one this app is waiting for"
+    );
+
+    // A second park, opened while the first is still decoding — the overlap the flag could not
+    // carry, because a flag says whether *some* park has ended and this is a park that has begun.
+    let second = begin_resume_frame();
+    assert!(
+        !resume_frame_asked_for(first),
+        "so the first render finds out that its park is not the current one, and drops what it has \
+         rather than putting it where a band is waiting for it"
+    );
+    assert!(
+        resume_frame_asked_for(second),
+        "and the render the second park opened is the one it is waiting for"
+    );
+
+    // And the other end of the first park: its frame is given up rather than wanted.
+    abandon_resume_frame();
+    assert!(
+        !resume_frame_asked_for(second),
+        "a park that has been given back has a player in the band and no use for a decode, so the \
+         render it opened finds out too"
+    );
+    assert!(
+        resume_frame_asked_for(begin_resume_frame()),
+        "and the next park's render is wanted again — a refusal is a park's end, not a stop"
+    );
 }
 
 #[test]
