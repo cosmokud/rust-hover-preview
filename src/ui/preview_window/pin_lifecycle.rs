@@ -468,6 +468,14 @@ pub(super) fn end_pin_beside_the_state() {
     // `compose_parked_band`).
     forget_video_frame();
 
+    // And the relaunch that never landed: a pin taken down with one in flight behind its cover —
+    // a walk stepping off, the watchdog — leaves a player nothing will ever show. It dies
+    // unpublished rather than lingering, and reaped rather than orphaned.
+    if let Some(stale) = pending_pinned_relaunch() {
+        kill_superseded_player(stale.pid);
+    }
+    clear_pending_pinned_relaunch();
+
     // And the cover a seek of this pin was aiming under. A pin taken down
     // mid-aim — a walk stepping off, the watchdog — never reaches its swap,
     // and the record left behind is a cover over a pin that has gone: no park
@@ -539,7 +547,16 @@ pub(super) fn pin_media_is_alive(navigating: bool) -> bool {
     }
 
     match kind {
-        MediaType::Video => is_video_process_running(),
+        MediaType::Video => {
+            // A supersede-kill leaves the player gone with its replacement on its way — the
+            // cover standing over a relaunch still to come, or one still in flight. That is not
+            // a pin that came apart: the release relaunches, the in-flight one lands, and the
+            // cover holds until one of them does.
+            if pin_park_covers_a_relaunch() {
+                return true;
+            }
+            is_video_process_running()
+        }
         // A card is this app's own text and a player this app started, and the player is
         // between passes rather than gone — the whole of what is asked about here is above.
         MediaType::Audio => true,

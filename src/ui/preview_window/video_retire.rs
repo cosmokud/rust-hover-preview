@@ -255,6 +255,39 @@ pub(super) fn end_retired_player(pid: u32) -> RetireEnd {
     end
 }
 
+/// End a player a newer gesture has superseded, before it can publish:
+/// kill-on-supersede rather than land-and-retire.
+///
+/// A relaunch that a second gesture strands behind a standing cover must
+/// never be shown nor placed — at a stale box it lingers outside the preview,
+/// playing, until the next release. So the superseded player is terminated
+/// here, while the cover is still up, and reaped where that can be confirmed:
+/// its record forgotten and `VIDEO_PID` cleared where it still names it, so
+/// no show path can find it and no audio survives it.
+///
+/// Returns whether nothing is left: pid zero is already nothing, and a kill
+/// that is confirmed gone leaves nothing either. A kill not yet confirmed
+/// answers false, and the settle asks again on the next tick — termination is
+/// a request, not a wait.
+pub(super) fn kill_superseded_player(pid: u32) -> bool {
+    if pid == 0 {
+        return true;
+    }
+
+    terminate_ffplay_pid(pid);
+
+    if is_ffplay_pid_alive(pid) {
+        return false;
+    }
+
+    // Confirmed gone, so the record of it goes with it rather than being left
+    // for the next run to look for — the same bookkeeping a settled
+    // retirement does (see `end_retired_player`).
+    engine_processes::forget(pid);
+    clear_video_process_state(pid);
+    true
+}
+
 /// A player that a relaunch has taken the place of, ended now that there is a window to replace
 /// it with, and a player that died being settled in the bar that was drawn against it.
 ///
