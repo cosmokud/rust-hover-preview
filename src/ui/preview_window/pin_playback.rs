@@ -1230,6 +1230,200 @@ pub(super) fn park_pinned_player_for_seek(hwnd: HWND, at: (i32, i32)) -> bool {
     park_pinned_player_inner(hwnd, at, true, false, true)
 }
 
+/// Put a pinned video's player away for a file step.
+///
+/// The same cover a seek is given and for the same reason — the take-down that
+/// follows kills the player, and a band with no player behind it is a hole in
+/// the desktop shaped like a film — with two differences, both of them about
+/// what the step is rather than about the kill. There is no gesture behind it,
+/// so there is no resume: the file that replaces this one starts at zero
+/// whatever the film on screen had got to, and nothing is owed a second. And
+/// the relaunch is not waiting for a release to begin it — the swap begins the
+/// next player a few lines later — so the record is not held back for one.
+///
+/// `replacing` rather than `awaiting` is what makes the settle wait for that
+/// player's window rather than hand the band to whatever window happens to
+/// exist, which for a replacement is the one the bound was written for (see
+/// `park_swap_arm`).
+pub(super) fn park_pinned_player_for_step(hwnd: HWND, at: (i32, i32)) -> bool {
+    park_pinned_player_inner(hwnd, at, true, false, false)
+}
+
+/// The press half of a box change: freeze the clock, park the cover over the
+/// outgoing frame and kill the player it covers.
+///
+/// WS-J's press road at the box the window now stands at rather than at a
+/// gesture's, and for the same reason a drag and a seek take it: the relaunch
+/// this box change is about to make is a player ending and another beginning,
+/// and a replacement's window is on screen within milliseconds of being begun
+/// and empty until the file is open and the first frame is decoded. Without the
+/// cover the band is transparent for all of that — the old window is raised
+/// away by the park, the new one arrives behind a band nothing is painting, and
+/// what shows through is the desktop.
+///
+/// **The cover is read out of the pin rather than passed in, and that is what
+/// makes it the new box.** A maximize writes the new box into the pin before it
+/// asks for the relayout, so the cover is painted where the band now is; a cover
+/// painted at the box the press found is a pre-maximize-sized frame stretched
+/// across a maximized band, which reads as a second defect rather than as none.
+///
+/// Two refusals, and both of them are roads that already have their cover. A
+/// cover already standing means this relayout's press has been run — a resize's
+/// drag parked it and killed for it, and the release is what relaunches (see
+/// `finish_pin_drag`) — and running it twice would kill the replacement the
+/// first one is waiting for. A press with no player to kill, no second to read
+/// or no pin up is the legacy road, which relaunches under whatever cover or
+/// transparency it finds (see `gesture_press_freeze`).
+pub(super) unsafe fn begin_covered_box_change() -> bool {
+    if pin_player_is_parked() || !gesture_press_freeze() {
+        return false;
+    }
+
+    if let Some(content) = pinned_content() {
+        park_pinned_player_for_seek(pinned_window(), (content.0, content.1));
+    }
+    kill_pinned_player_async();
+    bump_pinned_generation();
+    true
+}
+
+/// Cover the band for a file step, and kill the player the cover stands over.
+///
+/// One call rather than three at the swap's one road, because the order is the
+/// whole of it: the frame is read and painted before the window is hidden and
+/// before the kill, which is the cover's own order (see `park_pinned_player`),
+/// and every road that ends a player owes that order or owes a hole.
+///
+/// **No gesture snapshot and no resume second**, which is the whole difference
+/// from a press: the file arriving starts at zero whatever this one had got to,
+/// so there is nothing for a snapshot to carry and nothing for a hold to be
+/// owed. What there is instead is the gap this covers — the take-down kills the
+/// player and the new one has no window for the length of a decode — and the
+/// record is armed so the settle hands the band to the window that replaces it
+/// rather than to whatever merely exists.
+///
+/// **And a file no player of this app's is coming for is given the band back at once.** There is
+/// nothing here to hand this cover to: a picture, a page or a document's own window fills the band
+/// itself a tick or two from now, and a frozen frame of a film left standing over it is a worse
+/// answer than the momentary hole the cover would have hidden — so the cover is not raised at all
+/// rather than raised and taken down. A film on a machine FFmpeg is not on is the same case, and is
+/// asked through the same flag rather than through the kind alone (see `pinned_player_is_coming`).
+pub(super) fn cover_step_swap_for_video(player_coming: bool) -> bool {
+    if !player_coming
+        || current_media_type() != Some(MediaType::Video)
+        || VIDEO_PID.load(Ordering::Acquire) == 0
+    {
+        return false;
+    }
+
+    let Some(content) = pinned_content() else {
+        return false;
+    };
+    if !park_pinned_player_for_step(pinned_window(), (content.0, content.1)) {
+        return false;
+    }
+
+    kill_pinned_player_async();
+    bump_pinned_generation();
+    true
+}
+
+/// Whether the standing cover is owed to a file on its way in, and so is to be
+/// carried onto the pin that file is taken up in.
+///
+/// Asked at the take-up, which builds the pin whole and would otherwise write
+/// "no cover" over a cover that is standing for the player it is about to
+/// publish. The record and the flag are one fact (see `park_pinned_player`), so
+/// both halves are asked: a cover over a file nothing is replacing has no
+/// replacement to wait for, and that one is given up rather than carried (see
+/// `give_up_pinned_park`).
+pub(super) fn pin_park_carried_forward() -> bool {
+    pin_player_is_parked() && park_record_expects_a_player()
+}
+
+/// Give a standing cover up where nothing is going to be handed this band.
+///
+/// The flag and the record are written together under the pin's lock wherever a
+/// park is begun, so they are given up together here and through the same writer
+/// that takes the flag down (see `settle_pinned_park_onto`). The frame goes with
+/// them: it is the band's picture only for as long as the band has no window in
+/// it, and the file that replaces this one paints the band itself.
+pub(super) fn give_up_pinned_park() -> bool {
+    if !take_the_park_down() {
+        return false;
+    }
+    forget_pin_park_swap();
+    true
+}
+
+/// Take the flag down and forget the frame the cover was holding, whoever is
+/// behind the band.
+///
+/// The one writer of the flag, asked for with a player standing in the band
+/// (`settle_pinned_park_onto`) or with nothing coming to stand there
+/// (`give_up_pinned_park`) — both of which are the same write, because a park
+/// that is over is one fact with one writer however it came to be over.
+fn take_the_park_down() -> bool {
+    let down = pin_state().is_some_and(|mut pinned| {
+        pinned
+            .pin_mut()
+            .is_some_and(|pin| std::mem::replace(&mut pin.parked, false))
+    });
+
+    if down {
+        forget_video_frame();
+    }
+
+    down
+}
+
+/// Settle what a swap is taking up with: every piece of WS-J state that outlives
+/// the file it was made against.
+///
+/// The take-up builds the pin whole, so the old pin's own drag, aim and hold go
+/// with it and need nothing said here. These four are beside the pin rather than
+/// in it, and a swap reconciles none of them — which is what left a file step with
+/// a gesture still standing against the film before it:
+///
+/// * the snapshot, which nothing would ever take. Left standing it answers
+///   `video_drag_hold_apply` false for the rest of the run, and the take-up's own
+///   `release_pin_capture` re-enters `pin_capture_lost`, whose `gesture_snapshot_active`
+///   arm then relaunches — the file the pin had *left* at the second and the box it
+///   had left behind, over the player the swap had just begun for the file that
+///   replaced it (see `pin_capture_lost` and `restart_pinned_player`);
+/// * the in-flight relaunch, whose player is left behind a cover nothing will hand
+///   the band to, and is reaped rather than left for the next run's sweep;
+/// * the claim on the film the gesture was holding, which the next film to be
+///   dragged would be answered with;
+/// * and the cover itself, which is carried onto the incoming pin where a player is
+///   coming to be handed this band and given up where one is not.
+///
+/// **The snapshot is given up first, before the pointer is.** It is what
+/// `pin_capture_lost` reads to decide whether a gesture is owed a relaunch, and
+/// letting go of a capture answers that window procedure synchronously — so a
+/// snapshot still standing here would relaunch the outgoing film during the
+/// reconcile, from inside it (see `release_the_pointer`).
+pub(super) fn reconcile_swap_take_up(player_coming: bool) {
+    take_gesture_snapshot();
+
+    if pending_pinned_relaunch().is_some() {
+        let _ = reap_superseded_relaunch();
+        if let Some(still) = pending_pinned_relaunch() {
+            retire_orphaned_player(still.pid);
+            clear_pending_pinned_relaunch();
+        }
+    }
+
+    // The claim rather than the hold's own end: the film behind it is being
+    // killed, so there is no player to post a key to and nothing is owed one (see
+    // `video_drag_hold_apply`).
+    video_drag_hold_set(false);
+
+    if !player_coming {
+        give_up_pinned_park();
+    }
+}
+
 /// Whether a press on the seekbar arms the gesture: only an aimed second does.
 /// A press with no second to seek to (an unknown length) parks nothing and
 /// holds nothing, or the cover stands over a playing film with no relaunch
@@ -1746,14 +1940,7 @@ pub(super) fn forget_pin_park_swap() {
 /// The frame goes with the park rather than with the drag, because it is the band's picture for as
 /// long as the band has no window in it and not one tick longer (see `forget_video_frame`).
 pub(super) fn settle_pinned_park_onto(player_up: bool) -> bool {
-    let settled = pin_state().is_some_and(|mut pinned| {
-        pinned.pin_mut().is_some_and(|pin| {
-            pin.parked && player_up && {
-                pin.parked = false;
-                true
-            }
-        })
-    });
+    let settled = player_up && take_the_park_down();
 
     if settled {
         forget_video_frame();

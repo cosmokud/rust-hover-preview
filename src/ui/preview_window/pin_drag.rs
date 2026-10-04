@@ -986,6 +986,12 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
     let drag =
         pin_state().and_then(|mut pinned| pinned.pin_mut().and_then(|pin| pin.dragging.take()));
     let Some(drag) = drag else {
+        // A drag the pin was rebuilt over is a drag that is not coming back, and the capture its
+        // press took is not something this window may keep: a pinned window holding the pointer
+        // eats every mouse message on the desktop and keeps whichever shape the last edge gave the
+        // cursor, for the rest of the process (see `release_the_pointer`, and
+        // `reconcile_swap_take_up` for the rebuild that takes the drag away).
+        release_the_pointer(window, hwnd.0 as isize);
         return false;
     };
 

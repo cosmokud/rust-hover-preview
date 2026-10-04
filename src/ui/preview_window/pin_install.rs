@@ -84,6 +84,20 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     //
     // The hold keeps the frame and nothing else: the player behind the standing file goes all the
     // same, and at once (see `stop_pinned_player`).
+    // The cover goes up before either take-down and not after it, because the take-down is what makes
+    // the hole: the player is killed on both branches below, the band's pixels are transparent ones
+    // for a video, and the file that replaces this one has no window of its own for the length of a
+    // decode — or, for the kind the engine plays, for the length of the wait for its first frame. So
+    // the outgoing frame is read off the screen, painted over the band and the player's window put
+    // away first, and the record is armed so the settle hands the band to the window that replaces
+    // it rather than to whatever merely exists (see `cover_step_swap_for_video`).
+    //
+    // **A file no player of this app's is coming for is not covered at all**: a picture paints
+    // itself, so a cover here would only have to be taken down again over the picture that replaces
+    // the film (see `give_up_pinned_park`) — and neither is a film on a machine FFmpeg is not on,
+    // which is answered the same way for the same reason (see `pinned_player_is_coming`).
+    let player_coming = pinned_player_is_coming(file.media.media_type);
+    cover_step_swap_for_video(player_coming);
     if file.media.media_type.is_native_video() {
         stop_pinned_player();
     } else {
@@ -154,7 +168,7 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
         return PinSwap::Holding(PinSwapHold { file, arc });
     }
 
-    if file.media.media_type == MediaType::Video && codecs::ffplay_available() {
+    if player_coming {
         // FFmpeg's player draws it in a window of its own, which the take-up puts in the pin's
         // media band — and a player that would not start is the same answer an engine that will not
         // play gets: there is nothing of the file to show, so the pin keeps the file it has. The
@@ -177,6 +191,10 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             volume,
             video_subtitles(&file.path).chosen(),
         ) else {
+            // A cover standing over a player that was killed for a replacement that never came is
+            // a frozen frame nothing will ever end, so it is given up here rather than left for
+            // the walk's next file to inherit (see `give_up_pinned_park`).
+            give_up_pinned_park();
             return PinSwap::Refused {
                 path: file.path,
                 walk: file.walk,
@@ -231,6 +249,64 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 
     PinSwap::Ready(file)
 }
+
+/// Whether a file of this kind is one a player of this app's is going to be put up for.
+///
+/// **A video, and only where FFmpeg is on this machine.** FFmpeg's player draws it in a window of
+/// its own, so a file it would not play has no player at all — which is why every road that depends
+/// on the answer asks this rather than the kind on its own: the cover a step raises over the
+/// outgoing frame, the start a step makes, and the give-up a take-up owes a cover already standing.
+///
+/// It is asked once per road rather than carried across the ticks between them, so the two readings
+/// that must agree are the two sides of one decision — the cover and the start — made together in
+/// `swap_pinned_media`. The drift the reader of this is warned about is not two reads racing inside
+/// one swap; it is a later tick asking again (`install_pinned_media`) and getting a different answer,
+/// which is a cover standing over the film being left behind for the life of a pin whose player is
+/// never begun: nothing is behind the band to hand it back to, so the cover never comes down, and
+/// `pin_media_is_alive` reads its own record as a player still on its way (see `give_up_pinned_park`
+/// and `reconcile_swap_take_up`). The later tick therefore answers the give-up, not the cover.
+pub(super) fn pinned_player_is_coming(media_type: MediaType) -> bool {
+    media_type == MediaType::Video && ffplay_is_here()
+}
+
+/// Whether FFmpeg's player is on this machine, which is the half of [`pinned_player_is_coming`]
+/// that is about the machine rather than about the file.
+///
+/// It is asked through here rather than inline so that a test can stand an answer in for it, and it
+/// has to be: the arm this exists for is one a machine with no FFmpeg takes every time and a machine
+/// with one never takes at all, so nothing on a machine this is developed on can reach it (see
+/// `stand_ffplay_in`).
+pub(super) fn ffplay_is_here() -> bool {
+    #[cfg(test)]
+    if let Some(answer) = ffplay_stand_in() {
+        return answer;
+    }
+
+    codecs::ffplay_available()
+}
+
+/// The answer [`ffplay_is_here`] is given while a test stands one in, read under the slot's lock.
+#[cfg(test)]
+fn ffplay_stand_in() -> Option<bool> {
+    FFPLAY_STAND_IN.lock().ok().and_then(|held| *held)
+}
+
+/// Stand an answer for [`ffplay_is_here`] in place of the machine's own, or give the machine's own
+/// answer back with `None`.
+///
+/// One slot for the whole process, so it is put back by the tests that set it rather than left to
+/// whichever test the runner reaches next — the rule a park's own one slot keeps (see
+/// `clear_park_swap_arm`).
+#[cfg(test)]
+pub(super) fn stand_ffplay_in(answer: Option<bool>) {
+    if let Ok(mut held) = FFPLAY_STAND_IN.lock() {
+        *held = answer;
+    }
+}
+
+/// The answer [`ffplay_is_here`] is given while a test stands one in (see `stand_ffplay_in`).
+#[cfg(test)]
+static FFPLAY_STAND_IN: Mutex<Option<bool>> = Mutex::new(None);
 
 /// Where the player a sound's card is drawn against was started, read by the caller into the clock
 /// the loop draws that card from — the instant a player this app started began, the second of the
@@ -378,6 +454,13 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
         walk,
     } = file;
     let PinUpdate { content, dpi, .. } = update;
+
+    // Everything a swap is taking up with, before this file's own facts are written over the
+    // loop's: a cover for this file's player is one of the things being carried, and the player
+    // this is asked about is the one that is actually going to be begun — a film nothing will play
+    // is given the cover up rather than handed it (see `reconcile_swap_take_up` and
+    // `pinned_player_is_coming`).
+    reconcile_swap_take_up(pinned_player_is_coming(media.media_type));
 
     // The pin is not waiting for a file any more, whatever the file it was waiting for turned
     // out to be: an arc left up over a window showing a video is a spinner for a question nobody
@@ -718,11 +801,17 @@ pub(super) fn take_pin_load(pin_load: &mut Option<PinLoad>) -> Option<PinAnswer>
 /// changes, because the band is already filled from the frame that *is* there and scaled into the
 /// new box — the same answer a resized video is given for as long as the engine's next frame is
 /// on its way (see `compose_media_into_band`).
+///
+/// **`road` is what tells the one kind whose answer differs which of the two roads is asking**
+/// (see `PinRelayoutRoad`): every other kind lays its media out again wherever the box came from,
+/// but a video's box change is a player being ended and begun again, and that is the one thing a
+/// take-up is not doing.
 pub(super) fn relayout_pinned_media(
     path: &Path,
     content: ScreenRegion,
     dpi: u32,
     card: Option<AudioCardClock>,
+    road: PinRelayoutRoad,
 ) -> Option<PinRelayout> {
     let width = (content.2 - content.0).max(1) as u32;
     let height = (content.3 - content.1).max(1) as u32;
@@ -769,14 +858,48 @@ pub(super) fn relayout_pinned_media(
         // was holding the film and was resized is a pin holding the film at a different size, not a
         // pin that has started playing it (see `restart_pinned_player`).
         Some(MediaType::Video) => {
+            // **A box change is a player being ended and another begun, so it takes the press road
+            // first**: the cover stands over the outgoing frame and the old player is killed before
+            // the replacement exists, which is what keeps the replacement's window — published within
+            // milliseconds and empty until the file is open and the first frame is decoded — from
+            // being raised over a transparent band (see `begin_covered_box_change`).
+            //
+            // **And nothing else does.** A take-up has pressed nothing: it builds the pin whole
+            // for a file this window has not stood on before, with no hand in it and no player
+            // behind it to kill. Asking the press road anyway is not harmless even so — it is silent
+            // about the absence of a press, not deaf to it. A press snapshots the film it found and
+            // freezes the clock (`gesture_press_freeze`), and the relaunch below reads its hold out
+            // of that snapshot, so a road with no press in it has no snapshot to read: what it gets
+            // is either no relaunch at all (the end finds nothing to take) or the second and the
+            // hold of a press belonging to some other road — with a cover left standing over the
+            // frame and nothing in the pin's own state to end it (see `relaunch_gesture_end_at` and
+            // `pin_park_carried_forward`).
+            //
+            // A resize's own press has already run this road and left its cover standing, so on that
+            // box change the call answers false too, and the relaunch below is the one the resize's
+            // release armed: one press, one player.
+            let covered =
+                matches!(road, PinRelayoutRoad::BoxChange) && unsafe { begin_covered_box_change() };
             ensure_pinned_sibling_box(content);
-            if let Some((path, _)) = pinned_media_owner() {
-                restart_pinned_player(
-                    &path,
-                    content,
-                    pinned_playhead().unwrap_or(0.0),
-                    pinned_is_held(),
-                );
+            match pinned_media_owner() {
+                // The press's end: it takes the snapshot, so this is the one relaunch the box
+                // change owes — at the second the film had got to, and not twice across the
+                // release that re-enters behind the settle (see `relaunch_gesture_end_at`).
+                Some(_) if covered => {
+                    relaunch_gesture_end_at(content, None);
+                }
+                Some((path, _)) => {
+                    // And with no press behind it the hold is the pin's own: what the transport says
+                    // the film is doing now, which for a take-up is the transport that take-up built
+                    // rather than one a press has frozen (see `pinned_is_held`).
+                    restart_pinned_player(
+                        &path,
+                        content,
+                        pinned_playhead().unwrap_or(0.0),
+                        pinned_is_held(),
+                    );
+                }
+                None => {}
             }
             None
         }
@@ -837,6 +960,26 @@ pub(super) fn relayout_pinned_media(
         }),
         None => None,
     }
+}
+
+/// Which of the two roads asked for a relayout, for the one kind of media whose answer differs.
+///
+/// Every kind lays its media out again in whatever box it is given, so the road is a fact only a
+/// video needs — and a video needs it because a box change for one is a player being ended and
+/// another begun, which is the WS-J press road: freeze the clock, cover the outgoing frame, kill
+/// the old player before the replacement's window is on screen to be seen empty over a transparent
+/// band (see `begin_covered_box_change`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum PinRelayoutRoad {
+    /// A take-up: the pin is being built whole for a file this window has not stood on before. No
+    /// hand is in it, no player was killed, and nothing is owed a resume — so this road relaunches
+    /// the film that is there, at the second it is at, in whatever state the transport the take-up
+    /// just built says it is in (see `pinned_is_held`).
+    TakeUp,
+    /// A box change: the window the player is standing in has been given another box, so the
+    /// player is ended and begun again in it. The press road, and the relaunch the press's own end
+    /// makes (see `begin_covered_box_change` and `relaunch_gesture_end_at`).
+    BoxChange,
 }
 
 /// A relayout of a pinned window's own media, waited for on a thread of its own.

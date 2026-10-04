@@ -319,12 +319,21 @@ pub(super) unsafe extern "system" fn window_proc(
         }
         WM_LBUTTONUP => {
             let (x, y) = message_point(lparam);
-            if pinned() && pinned_release(hwnd, x, y) {
+            if pinned() && pinned_release(hwnd, x, y, &Win32PinWindow) {
                 return LRESULT(0);
             }
             if set_text_scroll_dragging(false) || end_text_selection() {
                 let _ = ReleaseCapture();
             }
+            // **The last resort, and the one that makes the rule hold whatever the arms above did.**
+            // Every arm of a pinned window's release now lets go of the pointer on the way out
+            // whether or not it had anything to answer (see `release_the_pointer`), so a press this
+            // window took is given back by the arm that owns it. This is for a press none of them
+            // owns: it is guarded by `GetCapture`, so it is a no-op unless this window really is
+            // holding the pointer — and if it is, every mouse message on the desktop is arriving
+            // here instead of at whatever it was aimed at, which is the dead window a leaked
+            // capture looks like (see `release_pin_capture`).
+            release_pin_capture(hwnd);
             LRESULT(0)
         }
         windows::Win32::UI::WindowsAndMessaging::WM_CAPTURECHANGED => {

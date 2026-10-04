@@ -3060,7 +3060,13 @@ pub fn run_preview_window() {
                                 // was below the lock before (see `default_app_name`).
                                 tooltip: PinTooltip::default(),
                                 dragging: None,
-                                parked: false,
+                                // A cover standing for the file this pin is being taken up with
+                                // comes with it: the swap armed it over the outgoing frame and
+                                // the settle is what takes it down, on the tick that finds the
+                                // incoming player's window. Written false here it would be given
+                                // up by the first tick that finds it, which is the hole the cover
+                                // was raised to close (see `pin_park_carried_forward`).
+                                parked: pin_park_carried_forward(),
                                 transport: PinTransport {
                                     // The length the probe read, and where a player this app
                                     // started has got to: a video FFmpeg plays has been running
@@ -3124,7 +3130,13 @@ pub fn run_preview_window() {
                                 // A take-up is a box this window has not been given before, so
                                 // the relayout asked for here is asked for the file the pin is
                                 // now showing, and any older one is dropped with it.
-                                pin_relayout = relayout_pinned_media(&path, content, dpi, None);
+                                pin_relayout = relayout_pinned_media(
+                                    &path,
+                                    content,
+                                    dpi,
+                                    None,
+                                    PinRelayoutRoad::TakeUp,
+                                );
                             }
                         } else if kind == Some(MediaType::Audio) {
                             let card = AudioCardClock {
@@ -3144,6 +3156,7 @@ pub fn run_preview_window() {
                                     content,
                                     audio_card_dpi,
                                     Some(card),
+                                    PinRelayoutRoad::TakeUp,
                                 );
                             }
                         }
@@ -3179,7 +3192,13 @@ pub fn run_preview_window() {
                             // starts — and where an older one is dropped: the newest box is the
                             // only one worth decoding for, and the frame already decoded is
                             // drawn scaled into this one meanwhile.
-                            pin_relayout = relayout_pinned_media(&path, content, dpi, Some(card));
+                            pin_relayout = relayout_pinned_media(
+                                &path,
+                                content,
+                                dpi,
+                                Some(card),
+                                PinRelayoutRoad::BoxChange,
+                            );
                         }
                         show_pinned_window(hwnd);
                         place_pinned_siblings();

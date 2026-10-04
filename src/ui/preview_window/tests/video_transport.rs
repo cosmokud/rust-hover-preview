@@ -20,7 +20,13 @@ fn a_resized_pinned_video_keeps_the_frame_its_pixels_are() {
         .join("resized-pin.mp4");
 
     // A box far larger than the frame, which is what a window dragged out to the screen is.
-    relayout_pinned_media(&path, (0, 0, 800, 600), 96, None);
+    relayout_pinned_media(
+        &path,
+        (0, 0, 800, 600),
+        96,
+        None,
+        PinRelayoutRoad::BoxChange,
+    );
 
     let frame = {
         let media = CURRENT_MEDIA
