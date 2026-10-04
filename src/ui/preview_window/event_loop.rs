@@ -845,11 +845,13 @@ pub fn run_preview_window() {
             // messages, and doing that to a film that is also decoding is what makes a drag stutter;
             // every other kind of pinned window does the same work out of a surface it owns and is
             // not troubled (see `video_drag_hold`).
-            let dragging = pin_is_dragging();
-            if dragging != video_drag_holding() {
-                video_drag_hold_set(dragging);
-                let _ = video_drag_hold_apply(dragging);
-            }
+            //
+            // **The gesture's own two ends settle this, so on a gesture of this window's own there
+            // is nothing left for the tick to do** — it is here for the gestures that are not: one
+            // begun off the hook's published press count is carried on from the pointer's position
+            // rather than from a release message, so the tick is what finds it ended (see
+            // `settle_pinned_engine_drag`).
+            settle_video_drag_hold(pin_is_dragging());
 
             // Advance animation frames if needed
             let mut needs_repaint = false;

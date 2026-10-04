@@ -730,6 +730,18 @@ pub(super) fn park_swap_last_arm() -> Option<(ParkSwap, Duration)> {
     PIN_PARK_LAST_ARM.lock().ok().and_then(|arm| *arm)
 }
 
+/// Forget the arm a previous test's swap wrote down.
+///
+/// It is one slot for the whole process, so a test that asserts *no* arm was taken can be answered
+/// by a swap that ran before it, and the assertion is then about the order the runner happened to
+/// use. Cleared by the tests that read it rather than left to a race.
+#[cfg(test)]
+pub(super) fn clear_park_swap_arm() {
+    if let Ok(mut arm) = PIN_PARK_LAST_ARM.lock() {
+        *arm = None;
+    }
+}
+
 /// What a park did, in the order it did it.
 ///
 /// It exists because the order is the whole of what this WS fixes and nothing else about a park is
@@ -804,15 +816,19 @@ pub(super) fn park_pinned_player(hwnd: HWND, at: (i32, i32), resizing: bool) -> 
         };
 
         // A drag that parks twice is one drag, not two: a second call would hide a window that is
-        // already hidden and answer a question the first call has already answered.
+        // already hidden and answer a question the first call has already answered — and write a
+        // second record for one park, which is the record the swap is answered from.
         if std::mem::replace(&mut pin.parked, true) {
             return false;
         }
 
-        true
-    });
-
-    if parked {
+        // **Written with the pin held, which is the whole of what keeps a park from being stranded.**
+        // The flag and this record are one fact about one park, and they are read on two threads:
+        // the flag by every paint and every raise, this record by the tick that ends the park. Two
+        // locks and two writes leave a gap, and a park begun in it has its record taken away under
+        // it — a band this app paints flat over a paused film, with nothing left that will ever
+        // write that record again, because the second write is the one a park that is already
+        // standing does not make (see `park_swap_arm_for_the_band`).
         PIN_PARK_SWAP
             .lock()
             .unwrap_or_else(|swap| swap.into_inner())
@@ -821,6 +837,11 @@ pub(super) fn park_pinned_player(hwnd: HWND, at: (i32, i32), resizing: bool) -> 
                 replacing: resizing,
                 since: None,
             });
+
+        true
+    });
+
+    if parked {
         forget_resume_frame();
 
         // Taken before the window is hidden, and only when this really is a park: it is a read of
@@ -939,7 +960,7 @@ pub(super) fn settle_pinned_park() -> bool {
 /// state, which a test stands (see `stand_pin`).
 pub(super) fn settle_pinned_park_where(window: &dyn PinWindow, window_up: bool) -> bool {
     if !pin_player_is_parked() {
-        forget_pin_park_swap();
+        forget_the_park_that_is_not();
         return false;
     }
 
@@ -958,14 +979,18 @@ pub(super) fn settle_pinned_park_where(window: &dyn PinWindow, window_up: bool) 
         return false;
     };
 
-    // The swap itself: the flag and the window go in the same tick and there is no repaint between
-    // them, so the band is never a moment of nothing with a player behind it (see
-    // `unpark_pinned_player`).
+    // The swap itself: the flag goes down and the window goes up in the same tick, and the band is
+    // painted through the window in that same tick and not before — so the band is never a moment of
+    // nothing with a player behind it, and never a frame of the drag's own picture still composited
+    // over one (see `unpark_pinned_player`).
     if !unpark_pinned_player(window) {
         return false;
     }
 
-    forget_pin_park_swap();
+    // Given up through the same helper the other end uses, and for the same reason: a park begun in
+    // the gap between the flag going down and this write has written a record of its own, and this
+    // must not take it away.
+    forget_the_park_that_is_not();
     note_park_swap(arm, waited);
     true
 }
@@ -1004,20 +1029,55 @@ fn park_swap_arm_for_the_band(window_up: bool) -> Option<(ParkSwap, Duration)> {
     let mut held = PIN_PARK_SWAP
         .lock()
         .unwrap_or_else(|swap| swap.into_inner());
-    let swap = held.as_mut()?;
-    let since = *swap.since.get_or_insert_with(Instant::now);
-    let waited = since.elapsed();
 
-    park_swap_arm(
-        window_up,
-        swap.replacing || player_replaced_since(swap.player),
-        waited,
-    )
-    .map(|arm| (arm, waited))
+    // **A park with no record of itself is a park with no replacement to wait for**, and that is
+    // what it is answered as: there is nothing behind it that this app began and nothing that is
+    // going to arrive, so it is handed to whatever window is standing in the band on the first tick
+    // that finds one. The alternative — the refusal a missing record used to be — is the stuck
+    // placeholder: the band stays painted flat over a film nothing is going to be shown behind, and
+    // nothing will ever write the record that could have ended it.
+    let (replaced, waited) = held
+        .as_mut()
+        .map(|swap| {
+            let since = *swap.since.get_or_insert_with(Instant::now);
+            (
+                swap.replacing || player_replaced_since(swap.player),
+                since.elapsed(),
+            )
+        })
+        .unwrap_or((false, Duration::ZERO));
+
+    park_swap_arm(window_up, replaced, waited).map(|arm| (arm, waited))
+}
+
+/// Give up the record of a park there is no longer, with the pin held.
+///
+/// **The pin is held across the write, and that is the other half of the park and its record being
+/// one fact.** A park writes the flag and the record together under the pin's lock (see
+/// `park_pinned_player`), so a park begun while this is deciding has either written both already —
+/// and this sees the flag up and leaves the record alone — or writes both after this has released
+/// the lock. Read without it, a park begun in the gap between the read and the write loses the
+/// record it had just written, and a park that has lost its record is a placeholder nothing ends.
+fn forget_the_park_that_is_not() {
+    let Some(mut pinned) = pin_state() else {
+        return;
+    };
+    let Some(pin) = pinned.pin_mut() else {
+        return;
+    };
+    if pin.parked {
+        return;
+    }
+
+    forget_pin_park_swap();
 }
 
 /// Put down everything a park was holding: its bookkeeping, and the frame the background was
 /// preparing for it.
+///
+/// **Given up with the pin held wherever it is asked for from the loop**, which is what
+/// `forget_the_park_that_is_not` is for; it is this function because a test standing a park needs to
+/// give it up without a pin's lock in the way.
 pub(super) fn forget_pin_park_swap() {
     PIN_PARK_SWAP
         .lock()
