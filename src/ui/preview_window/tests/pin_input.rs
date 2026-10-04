@@ -671,9 +671,10 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
              be a toggle out of the hold rather than into it"
     );
     assert!(
-        !park_pinned_player(HWND(0x1000 as *mut _), (0, 0), false),
-        "a drag that parks twice is one drag, not two: the second call would hide a window that \
-             is already hidden and answer a question the first has already answered"
+        park_pinned_player(HWND(0x1000 as *mut _), (0, 0), false),
+        "a begin over a standing park extends it rather than refusing it: the second call keeps \
+             the first call's capture and keeps the settle's record current, and the detail is \
+             answered where parks are settled (see `pin_frames`)"
     );
 
     // The tick's half of the pair, asked with the gesture in flight. It stops before the key —

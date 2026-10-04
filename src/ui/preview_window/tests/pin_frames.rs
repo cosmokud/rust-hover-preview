@@ -1036,7 +1036,9 @@ fn a_swap_onto_a_replacement_repaints_the_band_too() {
 /// pause, with no tick that will ever hand it back. So the arm that answers is the one that needs
 /// nothing: a park this app cannot account for is handed back on the first tick that finds a window
 /// standing in the band, because the alternative is the picture staying behind an opaque rectangle
-/// for the life of the pin.
+/// for the life of the pin. (An extend over a standing park refreshes the record rather than
+/// replacing it, so a park begun in the gap still writes — this arm answers the park that has
+/// lost its record anyway.)
 #[test]
 fn a_park_that_lost_its_record_is_handed_back_rather_than_held_for_ever() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
@@ -1687,4 +1689,662 @@ fn a_pinned_sound_is_not_a_pin_that_came_apart_between_passes() {
         *media = previous_media;
     }
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// WS-F R2: a begin over a standing park extends it rather than orphaning the settle.
+///
+/// Release-then-instant-regrab sticks the frozen placeholder while audio and video play
+/// underneath: the second `begin` while a park stands is refused, while the in-flight
+/// settle's record is superseded — nobody owns the swap. A second begin must extend the
+/// standing park (same generation chain, record kept current, capture kept from the first
+/// begin) and the settle must drain whatever generation is current, exactly once.
+#[test]
+fn a_begin_over_a_standing_park_extends_it_rather_than_orphaning_the_settle() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    clear_park_swap_arm();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_pid = VIDEO_PID.swap(4242, Ordering::SeqCst);
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("extended-rather-than-orphaned.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    clear_park_trace();
+
+    let hwnd = HWND(0x1000 as *mut _);
+    assert!(
+        park_pinned_player(hwnd, (100, 80), true),
+        "a resize's park stands with a replacement behind it"
+    );
+
+    // The release's relaunch, stood in for: the replacement is begun behind the cover, so the
+    // pid the park captured for is no longer the player on screen.
+    VIDEO_PID.store(4243, Ordering::SeqCst);
+    clear_park_trace();
+
+    assert!(
+        park_pinned_player(hwnd, (100, 80), false),
+        "a begin over a standing park extends it: refusing it leaves the in-flight settle's \
+         record superseded with nobody owning the swap, which is the frozen placeholder standing \
+         over a live player until the next release"
+    );
+    assert_eq!(
+        park_trace(),
+        vec!["extend"],
+        "and the extend keeps the first begin's capture: the window was fully visible then and \
+         there is nothing to read once it has gone, so a second capture, paint and hide would \
+         only re-hide a window that is already hidden"
+    );
+    assert!(
+        PIN_PARK_SWAP.lock().is_ok_and(|held| held
+            .map(|swap| swap.player == 4243 && swap.replacing)
+            .unwrap_or(false)),
+        "and the record is kept current: the player named is the one the relaunch began, with the \
+         replacement still awaited — a record left naming the retired player is a swap nobody owns"
+    );
+
+    // The final release's settle: whatever generation is current drains, exactly once.
+    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
+        if let Some(swap) = held.as_mut() {
+            swap.since = Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT);
+        }
+    }
+    let window = RecordedPinWindow::new(0x1000);
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "the settle drains the current generation once the replacement's window is standing in \
+         the band"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "so no placeholder is left standing over the live player"
+    );
+    assert_eq!(
+        window.calls(),
+        vec![
+            PinWindowCall::UnparkPlayerWindow(Some((100, 80, 420, 320))),
+            PinWindowCall::Repaint,
+        ],
+        "with the window put up at the final box and the band painted through it in the same tick"
+    );
+    assert!(
+        !settle_pinned_park_where(&window, true),
+        "and a second settle swaps nothing: one cover, one swap"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// WS-F R3: what the swap is watched for — whether the cover was still up when the player's
+/// window was put back, and at what box. No call list can show it: the recorder records the
+/// place either way, so the witness reads the flag from inside the place itself.
+struct CoverOrderWindow {
+    parked_when_placed: Mutex<Option<bool>>,
+    placed_band: Mutex<Option<Option<ScreenRegion>>>,
+    parked_when_repainted: Mutex<Option<bool>>,
+    calls: Mutex<Vec<&'static str>>,
+}
+
+impl CoverOrderWindow {
+    fn new() -> Self {
+        Self {
+            parked_when_placed: Mutex::new(None),
+            placed_band: Mutex::new(None),
+            parked_when_repainted: Mutex::new(None),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn record(&self, call: &'static str) {
+        if let Ok(mut calls) = self.calls.lock() {
+            calls.push(call);
+        }
+    }
+}
+
+impl PinWindow for CoverOrderWindow {
+    fn hwnd(&self) -> isize {
+        0x1000
+    }
+
+    fn pointer(&self) -> Option<(i32, i32)> {
+        None
+    }
+
+    fn window_box(&self, _hwnd: isize) -> Option<ScreenRegion> {
+        None
+    }
+
+    fn capture(&self, _hwnd: isize) {}
+
+    fn release_capture(&self, _hwnd: isize) {}
+
+    fn set_focusable(&self, _hwnd: isize, _focusable: bool) {}
+
+    fn set_focus(&self, _hwnd: isize) {}
+
+    fn set_foreground(&self, _hwnd: isize) {}
+
+    fn hide_pin_windows(&self) {}
+
+    fn hide_pin_bubble(&self) {}
+
+    fn unpark_player_window(&self, band: Option<ScreenRegion>) {
+        if let Ok(mut parked) = self.parked_when_placed.lock() {
+            *parked = Some(pin_player_is_parked());
+        }
+        if let Ok(mut placed) = self.placed_band.lock() {
+            *placed = Some(band);
+        }
+        self.record("unpark");
+    }
+
+    fn repaint(&self) {
+        if let Ok(mut parked) = self.parked_when_repainted.lock() {
+            *parked = Some(pin_player_is_parked());
+        }
+        self.record("repaint");
+    }
+
+    fn post(&self, _hwnd: isize, _message: u32) {}
+}
+
+/// WS-F R3, same-player exit: the unpark places the player at the final box before the flag
+/// goes down, and repaints in the same tick.
+#[test]
+fn an_unpark_places_the_player_before_it_drops_the_flag_on_the_same_player() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    clear_park_swap_arm();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_pid = VIDEO_PID.swap(4242, Ordering::SeqCst);
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("placed-before-it-is-dropped.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let hwnd = HWND(0x1000 as *mut _);
+    assert!(
+        park_pinned_player(hwnd, (100, 80), false),
+        "a move's park stands over the player that was playing"
+    );
+    // The hand carries the window elsewhere while the park stands; every place that would
+    // have told the player is answered out of the hand, so the final box is read at uncover.
+    with_pin(|pin| pin.content = (200, 160, 520, 400));
+
+    let window = CoverOrderWindow::new();
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "the same player is standing in the band, so the swap is taken at once"
+    );
+    assert_eq!(
+        window
+            .parked_when_placed
+            .lock()
+            .ok()
+            .and_then(|parked| *parked),
+        Some(true),
+        "the player's window is put back while the cover is still up: dropping the flag first \
+         leaves a transparent band over a window whose first composited frame has not landed"
+    );
+    assert_eq!(
+        window.placed_band.lock().ok().and_then(|band| *band),
+        Some(Some((200, 160, 520, 400))),
+        "at the final box the drag settled on, not at the box the drag began from"
+    );
+    assert_eq!(
+        window
+            .parked_when_repainted
+            .lock()
+            .ok()
+            .and_then(|parked| *parked),
+        Some(false),
+        "and the band is repainted after the flag goes down, in the same tick: the pixels the \
+         compositor is holding are still the placeholder"
+    );
+    assert_eq!(
+        window.calls.lock().ok().map(|calls| calls.clone()),
+        Some(vec!["unpark", "repaint"]),
+        "place, flag down, repaint — strictly ordered, same tick"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// WS-F R3, replacement exit: the same order when the swap hands the band to a relaunch.
+#[test]
+fn an_unpark_places_the_player_before_it_drops_the_flag_on_a_replacement() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    clear_park_swap_arm();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_pid = VIDEO_PID.swap(4242, Ordering::SeqCst);
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("placed-before-it-is-dropped-behind-a-relaunch.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let hwnd = HWND(0x1000 as *mut _);
+    assert!(
+        park_pinned_player(hwnd, (100, 80), true),
+        "a resize's park stands with a replacement behind it"
+    );
+    with_pin(|pin| pin.content = (200, 160, 560, 430));
+
+    // The release's relaunch, stood in for, and the bound spent waiting for its window.
+    VIDEO_PID.store(4243, Ordering::SeqCst);
+    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
+        if let Some(swap) = held.as_mut() {
+            swap.since = Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT);
+        }
+    }
+
+    let window = CoverOrderWindow::new();
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "the bound spent with a window standing in the band hands it the band"
+    );
+    assert_eq!(
+        window
+            .parked_when_placed
+            .lock()
+            .ok()
+            .and_then(|parked| *parked),
+        Some(true),
+        "the replacement's window is put up while the cover is still up, on this exit too"
+    );
+    assert_eq!(
+        window.placed_band.lock().ok().and_then(|band| *band),
+        Some(Some((200, 160, 560, 430))),
+        "at the final box the resize settled on"
+    );
+    assert_eq!(
+        window
+            .parked_when_repainted
+            .lock()
+            .ok()
+            .and_then(|parked| *parked),
+        Some(false),
+        "and the repaint follows the flag down in the same tick"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// WS-F R4: the gesture's hold is taken before the park it belongs to, on both entries.
+///
+/// The hold is a pause key and the park below reads the picture off the screen, so a hold
+/// that lands a tick later is a band holding a frame the player has already moved on from.
+/// Both entries go through one call, and the trace is the seam that says which came first.
+#[test]
+fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let holding = video_drag_holding();
+
+    for (name, action) in [
+        ("move", PinDragAction::Move),
+        (
+            "resize",
+            PinDragAction::Resize(PinResize {
+                left: false,
+                top: false,
+                right: true,
+                bottom: true,
+            }),
+        ),
+    ] {
+        let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+        pin.path = PathBuf::from("hold-before-capture.mkv");
+        pin.dpi = 96;
+        stand_pin(Some(pin));
+        forget_pin_park_swap();
+        forget_video_frame();
+        forget_resume_frame();
+        clear_park_trace();
+
+        let window = a_window_at((100, 80, 420, 320));
+        begin_pin_drag(HWND(0x1000 as *mut _), &window, action, true);
+        assert_eq!(
+            park_trace(),
+            vec!["hold", "capture", "paint", "hide"],
+            "a {name}'s hold is taken before the park reads the frame it is going to hold"
+        );
+
+        video_drag_hold_set(false);
+    }
+
+    video_drag_hold_set(holding);
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// WS-F R1: a seek parks the stale frame it is about to replace.
+///
+/// The seekbar seek flashes desktop because the seek relaunch runs with no park cover: the
+/// old player is parked for retirement at relaunch with the hole transparent and the
+/// replacement up later. Parking the stale frame at seek-start puts the relaunch behind a
+/// cover for its single swap — while the film keeps playing (no hold: a scrub is not a drag
+/// and pausing it is the defect rather than the fix), and with no resume render asked (the
+/// playhead is moving, so a frame rendered at the second the hand started from is a frame of
+/// the wrong second).
+#[test]
+fn a_seek_parks_the_stale_frame_it_is_about_to_replace() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    clear_park_swap_arm();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_pid = VIDEO_PID.swap(4242, Ordering::SeqCst);
+
+    let mut transport = PinTransport::default();
+    transport.begun(3.0, true, false);
+    stand_pin(Some(PinnedPreview {
+        path: PathBuf::from("parked-for-a-seek.mkv"),
+        transport,
+        ..PinnedPreview::for_test()
+    }));
+
+    let mut media = create_loading_media(320, 240);
+    media.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    let playing = || {
+        pin_state().and_then(|state| {
+            state.pin().map(|pin| {
+                (
+                    pin.transport.paused_at,
+                    pin.transport.pending_hold,
+                    pin.transport.drag_held,
+                    pin.transport.started.is_some(),
+                )
+            })
+        })
+    };
+    assert_eq!(
+        playing(),
+        Some((None, false, false, true)),
+        "the premise: the film is playing and held by nothing"
+    );
+
+    clear_park_trace();
+    let hwnd = HWND(0x1000 as *mut _);
+    assert!(
+        park_pinned_player_for_seek(hwnd, (100, 80)),
+        "a seek parks the stale frame at seek-start, so the relaunch the release makes runs \
+         behind a cover rather than through a transparent hole"
+    );
+    assert_eq!(
+        park_trace(),
+        vec!["capture", "paint", "hide"],
+        "with the same three steps a drag's park takes, in the same order"
+    );
+    assert!(
+        PIN_PARK_SWAP.lock().is_ok_and(|held| held
+            .map(|swap| swap.player == 4242 && swap.replacing)
+            .unwrap_or(false)),
+        "and the record awaits a replacement: the seek ends in a player that has decoded nothing"
+    );
+    assert_eq!(
+        playing(),
+        Some((None, false, false, true)),
+        "while the film keeps playing: the cover carries no hold, so a scrub never pauses"
+    );
+    assert!(
+        !video_drag_holding(),
+        "and the gesture flag is untouched for the same reason"
+    );
+
+    // A scrub aims without relaunching: rapid steps coalesce into the one relaunch the release
+    // makes at the latest playhead, so intermediate seconds cost no player.
+    update_pin_transport(|transport| transport.seeking = Some(90.0));
+    update_pin_transport(|transport| transport.seeking = Some(95.0));
+    assert!(
+        pin_player_is_parked()
+            && VIDEO_PID.load(Ordering::SeqCst) == 4242
+            && playing() == Some((None, false, false, true)),
+        "aiming moves only the second under the hand: no relaunch, no hold, cover standing"
+    );
+
+    // A second press over the standing seek cover extends rather than re-captures.
+    clear_park_trace();
+    assert!(
+        park_pinned_player_for_seek(hwnd, (100, 80)),
+        "a second seek press extends the standing cover"
+    );
+    assert_eq!(
+        park_trace(),
+        vec!["extend"],
+        "keeping the first press's capture rather than reading the screen with nothing behind it"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// WS-F R1, scrub: a seek's cover waits for its relaunch rather than spending its bound.
+///
+/// A scrub aims without relaunching, and a slow hand holds past the swap bound — so the bound
+/// cannot run from the press. Until the release relaunches behind the cover there is nothing to
+/// swap to: the settle holds even with a window standing in the band, stamps no budget, and
+/// drains once the relaunch is begun.
+#[test]
+fn a_seek_cover_waits_for_its_relaunch_rather_than_spending_its_bound() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    clear_park_swap_arm();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_pid = VIDEO_PID.swap(4242, Ordering::SeqCst);
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("waiting-for-its-relaunch.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let hwnd = HWND(0x1000 as *mut _);
+    assert!(
+        park_pinned_player_for_seek(hwnd, (100, 80)),
+        "a seek parks its cover at seek-start"
+    );
+    assert!(
+        seek_cover_is_waiting(),
+        "which waits for the release's relaunch: no player has been begun behind it yet"
+    );
+
+    let window = RecordedPinWindow::new(0x1000);
+    assert!(
+        !settle_pinned_park_where(&window, true),
+        "so a tick mid-scrub holds even with a window standing in the band: there is nothing to \
+         swap to, and swapping to the player the cover stands over would spend the cover before \
+         the relaunch it was parked for"
+    );
+    assert!(
+        pin_player_is_parked() && window.calls().is_empty(),
+        "and the hold asks nothing of any window and paints nothing: a scrub held past the bound \
+         must neither spend it nor show the player it is still aiming over"
+    );
+    assert!(
+        PIN_PARK_SWAP
+            .lock()
+            .is_ok_and(|held| held.as_ref().is_some_and(|swap| swap.since.is_none())),
+        "with the bound left unstamped: it runs from the relaunch, not from the press"
+    );
+    // The release's relaunch, stood in for, and the bound spent waiting for its window.
+    VIDEO_PID.store(4243, Ordering::SeqCst);
+    assert!(
+        !seek_cover_is_waiting(),
+        "a relaunch begun behind the cover ends the wait"
+    );
+    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
+        if let Some(swap) = held.as_mut() {
+            swap.since = Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT);
+        }
+    }
+    assert!(
+        settle_pinned_park_where(&window, true),
+        "and the bound spent with the replacement's window standing in the band hands it the band"
+    );
+    assert!(!pin_player_is_parked(), "exactly once: one cover, one swap");
+    assert_eq!(
+        window.calls(),
+        vec![
+            PinWindowCall::UnparkPlayerWindow(Some((100, 80, 420, 320))),
+            PinWindowCall::Repaint,
+        ],
+        "with the window put up at the final box and the band painted through it in the same tick"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// WS-F R1, abandon: a seek's cover ended without a relaunch is handed back, not held.
+///
+/// A scrub that never releases — a capture stolen mid-aim, a move let go of over it — begins
+/// no player behind the cover, so the settle would hold it for ever. Both ends hand the band
+/// back to the player the cover stands over instead.
+#[test]
+fn a_seek_cover_ended_without_a_relaunch_is_handed_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    clear_park_swap_arm();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_pid = VIDEO_PID.swap(4242, Ordering::SeqCst);
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("handed-back-without-a-relaunch.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let hwnd = HWND(0x1000 as *mut _);
+    assert!(
+        park_pinned_player_for_seek(hwnd, (100, 80)),
+        "a seek parks its cover at seek-start"
+    );
+    update_pin_transport(|transport| transport.seeking = Some(90.0));
+
+    // The capture stolen mid-aim: the aim goes with it, and the cover with the aim.
+    let stolen = RecordedPinWindow::new(0x1000);
+    pin_capture_lost(&stolen);
+    assert!(
+        !pin_player_is_parked(),
+        "a seek abandoned mid-aim never relaunches, so the cover is handed back rather than held \
+         for a player that is never begun"
+    );
+    assert_eq!(
+        stolen.calls(),
+        vec![
+            PinWindowCall::UnparkPlayerWindow(Some((100, 80, 420, 320))),
+            PinWindowCall::Repaint,
+        ],
+        "to the player it covers, at the band it stands in, painted through in the same tick"
+    );
+
+    // The move let go of over a scrub: a gesture that relaunches nothing ends the wait the same
+    // way. A resize always relaunches below the cover and needs no such end.
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.path = PathBuf::from("handed-back-by-a-move.mkv");
+    pin.dpi = 96;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    assert!(
+        park_pinned_player_for_seek(hwnd, (100, 80)),
+        "and the cover stands again over the next seek"
+    );
+    update_pin_transport(|transport| transport.seeking = Some(95.0));
+    with_pin(|pin| {
+        pin.dragging = Some(PinDrag {
+            from: (0, 0),
+            window: (100, 80, 420, 320),
+            action: PinDragAction::Move,
+            delivered: true,
+            carried: (i32::MIN, i32::MIN),
+        });
+    });
+
+    let released = RecordedPinWindow::new(0x1000);
+    assert!(
+        finish_pin_drag(hwnd, &released),
+        "a move is let go of through its release"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "which hands a waiting seek cover back: a move relaunches nothing, so nothing is coming \
+         for the settle to swap to"
+    );
+    assert!(
+        released
+            .calls()
+            .contains(&PinWindowCall::UnparkPlayerWindow(Some((
+                100, 80, 420, 320
+            )))),
+        "at the band the move left behind"
+    );
+
+    forget_video_frame();
+    forget_resume_frame();
+    forget_pin_park_swap();
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
 }

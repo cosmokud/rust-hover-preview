@@ -252,6 +252,20 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             update_pin_transport(|transport| {
                 transport.seeking = pin_seconds_at(transport, share);
             });
+            // Parked at seek-start, so the relaunch the release makes runs behind a cover: the
+            // old player is retired at relaunch with the hole transparent and the replacement up
+            // later, which is the desktop flash. Only a player of this app's is parked — the
+            // engine's draws into this app's own surface and has no window to put away, and a
+            // cover over one is a frozen frame nothing ends. No hold either: a scrub keeps
+            // playing, and the release relaunches once at the latest playhead (see
+            // `park_pinned_player_for_seek` and `seek_pinned_playback`).
+            if current_media_type() == Some(MediaType::Video) {
+                let at = window_origin(hwnd)
+                    .map(|origin| (origin.0, origin.1))
+                    .or_else(|| pinned_content().map(|content| (content.0, content.1)))
+                    .unwrap_or((0, 0));
+                park_pinned_player_for_seek(hwnd, at);
+            }
         }
         // The volume button is held rather than acted on where it is pressed, like every button a
         // window has: what a click does is open the popup or put it away, and that is a release
