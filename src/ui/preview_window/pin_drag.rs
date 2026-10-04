@@ -74,6 +74,10 @@ pub(super) fn pin_player_is_parked() -> bool {
 pub(super) static VIDEO_DRAG_HOLDING: AtomicBool = AtomicBool::new(false);
 
 /// Whether the player on screen is being held for the length of a gesture.
+///
+/// Read by the tests rather than by the loop, which is answered by the comparison `settle_video_drag_hold`
+/// makes itself (see `video_drag_hold_set`).
+#[cfg(test)]
 pub(super) fn video_drag_holding() -> bool {
     VIDEO_DRAG_HOLDING.load(Ordering::Acquire)
 }
@@ -183,6 +187,14 @@ pub(super) fn video_drag_hold_claim(dragging: bool, ours: bool) -> bool {
 /// a player with no window is holding nothing — so the claim goes whether or not the key lands,
 /// because leaving it standing would refuse every *later* gesture the film for the rest of the run.
 pub(super) fn video_drag_hold_apply(dragging: bool) -> bool {
+    // A gesture that killed owns the dead interval: the frozen hold, the
+    // claim and the stopped clock are the press's to write and the end's to
+    // take back, so the tick's settle answers out of the hand — and no key is
+    // ever posted onto a player that is gone.
+    if gesture_snapshot_active() {
+        return false;
+    }
+
     // The film in front of the window — in flight, or the one the last gesture was over — read
     // before anything is refused below, because the claim has to be reconciled whether or not there
     // is still a film of its own to reconcile it in. A pin that is not up has taken the claim with
@@ -237,6 +249,36 @@ pub(super) fn video_drag_hold_apply(dragging: bool) -> bool {
             update_pin_transport(|state| state.released(pin_playhead(&transport).unwrap_or(0.0)));
             true
         }
+    }
+}
+
+/// Bring the film's hold into line with whether a gesture is in flight — the one place that does it,
+/// and the tick is only one of its callers.
+///
+/// **It is called by the gesture's own two ends rather than by the tick alone, and the whole of what
+/// that buys is the tick between them.** A hold is a pause key and a pause key is a toggle, so the
+/// film used to go on playing for the length of the tick after the hand went down — long enough to
+/// decode into a window nothing was showing, and on a resize long enough to be answered twice:
+///
+/// * the release asks for its media to be laid out again at the box it settled on, which relaunches
+///   the player and writes the hold down as owed (see `PinTransport::begun`);
+/// * the tick that delivers the owed hold and the tick that lets the gesture go of it are then the
+///   same tick, so both post — and two toggles on one player is a film playing over a bar with a
+///   pause glyph on it, which is what a paused video did on a resize and did not do on a move, the
+///   whole difference being that a move has no relaunch behind it to owe anything.
+///
+/// Doing it at the ends makes the film's state at the release the state the relaunch reads: a film
+/// that was playing is playing and owes nothing, and a film the user had paused is owed one hold by
+/// the player that replaced it and by nothing else. It also puts the hold *before* the park, which
+/// is what makes the frame the band holds the frame the film was last at rather than one the tick
+/// after the pointer went down.
+///
+/// The flag beside the hold is written here too, and only on a change, so the tick's own call costs
+/// one comparison for a gesture this one has already settled — which is what keeps the two callers
+/// from answering the same press and the same release twice.
+pub(super) fn settle_video_drag_hold(dragging: bool) {
+    if video_drag_hold_set(dragging) {
+        let _ = video_drag_hold_apply(dragging);
     }
 }
 
@@ -544,7 +586,50 @@ pub(super) fn begin_pin_drag(
 
     if installed {
         window.capture(hwnd);
-        park_pinned_player();
+        // Traced so the order is answerable: the hold is taken before the park reads the frame.
+        trace_park_step("hold"); // **The film's hold is taken before the park rather than on the tick after it, and the
+                                 // order of the two is the point.** The hold is a pause key, so the film it stops keeps
+                                 // playing until the key reaches a player that is decoding it — and the park below reads
+                                 // the picture off the screen, so a hold that lands a tick later is a band holding a frame
+                                 // the player has already moved on from, which is the frozen-image flash at the start of a
+                                 // drag that no ordering of the paint can explain (see `settle_video_drag_hold`).
+                                 //
+                                 // A video FFmpeg plays takes the kill road instead of the key: the
+                                 // press snapshots the playhead and freezes the clock, the park
+                                 // captures the frame and stands the cover, and only then is the
+                                 // player killed — silence by construction, and no blind toggle
+                                 // anywhere on the gesture (see `gesture_press_freeze`).
+        let killed_road =
+            current_media_type() == Some(MediaType::Video) && gesture_press_freeze() && {
+                // The record the cover's own end will wait on, written by the road that raised
+                // it — including where this press only extends a cover another road began, in
+                // which case that road's record is left as it was found (see `ParkArm`).
+                park_pinned_player_for_gesture(
+                    HWND(hwnd as *mut _),
+                    (window_box.0, window_box.1),
+                    matches!(action, PinDragAction::Resize(_)),
+                );
+                kill_pinned_player_async();
+                true
+            };
+        if !killed_road {
+            settle_video_drag_hold(true);
+            // The box the window is standing at, and not the one the pin remembers, for the same reason
+            // the drag is begun from it: the park paints the placeholder into this window at the place
+            // it is actually at, so the paint and the `SetWindowPos` the first move makes are two
+            // answers about one box and must not be two different ones. A resize is told apart from a
+            // move because only a resize ends in a relaunch, and only a relaunch leaves the band
+            // wanting a frame of its own (see `park_pinned_player`).
+            park_pinned_player(
+                HWND(hwnd as *mut _),
+                (window_box.0, window_box.1),
+                matches!(action, PinDragAction::Resize(_)),
+            );
+        }
+        // A newer gesture supersedes whatever relaunch is still in flight behind the cover: the
+        // bump kills it before it can publish. After the park rather than before it — the fresh
+        // park's capture reads the live window, and there is nothing to read once it has gone.
+        bump_pinned_generation();
     } else {
         window.release_capture(hwnd);
     }
@@ -574,53 +659,81 @@ pub(super) fn begin_pin_drag(
 /// It is asked of the pin and not of the player's window, because a pin taken down mid-drag has
 /// ended the player outright and there is no window of its own left to find (see `park_pinned_player`).
 pub(super) fn unpark_pinned_player(window: &dyn PinWindow) -> bool {
-    let unparked = pin_state().is_some_and(|mut pinned| {
-        pinned
-            .pin_mut()
-            .is_some_and(|pin| std::mem::take(&mut pin.parked))
-    });
-
-    if !unparked {
+    // Read as standing before anything is asked of the window: a park that is over is one fact
+    // with one writer, and the settle that decides when it is over has to be answerable by a test
+    // that goes through the same line this does (see `settle_pinned_park_onto`).
+    if !pin_player_is_parked() {
         return false;
     }
 
-    // The band is read after the flag rather than with it, and both are read before the window is
-    // asked for anything — the flag says the park is over and the band says where the window is
-    // to go, and a pin that has been taken down between the two has no band to go to.
-    window.unpark_player_window(pinned_content());
+    // Re-checked at the show site itself, under no lock but immediately before the show: a bump
+    // on the window thread may have superseded after the settle's own gate, and a condemned
+    // player is never placed nor shown. The kill is retried rather than dropped, and the cover
+    // holds for the next tick to ask again.
+    if !pending_relaunch_is_current() {
+        let _ = reap_superseded_relaunch();
+        return false;
+    }
+
+    // The band is read before the flag goes down rather than with it: a hand that carried the
+    // window elsewhere left the player's window at the box the drag began from, and the place is
+    // part of putting it back. What follows is place, flag down, repaint — strictly ordered, in
+    // this same tick — because a band painted transparent with nothing behind it is the desktop,
+    // and the pixels the compositor is still holding are the placeholder until the repaint.
+    //
+    // A pin with no media band — collapsed, with no hole for anybody else's window — is still
+    // placed, at the box it stands at now: a show without a place would leave the window at
+    // whatever rect it happens to be at, which is the stale-box defect in miniature.
+    let band = pinned_content().or_else(pinned_media_box_now);
+
+    // Placed while the cover is still up rather than after it is down: the window goes back at
+    // the final box before the band is a hole again, so no paint can fall between the two.
+    window.unpark_player_window(band);
+
+    // **The flag is taken back through the one function that takes it back**, rather than by
+    // writing it here as well: a park that is over is one fact with one writer, and the settle
+    // that decides when it is over has to be answerable by a test that goes through the same line
+    // this does (see `settle_pinned_park_onto`).
+    if !settle_pinned_park_onto(true) {
+        return false;
+    }
+
+    // **And then the band is painted, in this same tick, which is the whole of what was left of the
+    // release flash.** The flag going down changes what the *next* paint would draw; it changes
+    // nothing about the pixels the compositor is already holding, and what it is holding is the
+    // opaque placeholder `park_pinned_player` painted with the frozen frame — so without this the
+    // film is put up behind a rectangle of its own last frame for as long as the next repaint is
+    // owed, which for a pinned video is the transport bar's quarter-of-a-second cadence.
+    //
+    // **After the window is up and not before**, because the order the other way is the hole this
+    // whole arrangement exists not to leave: a band painted transparent with nothing behind it is
+    // the desktop, for as long as the compositor takes to reach the raise above.
+    window.repaint();
     true
 }
 
-/// Whether the capture being lost is one this app asked for, which Windows itself will not say.
+/// The media box the pin stands at now, band or no band.
 ///
-/// `WM_CAPTURECHANGED` is delivered to the window that lost the capture whether it released it or
-/// another window took it, and by the time a window procedure is looking at it, `GetCapture()`
-/// gives the same answer either way: not this window. Only this app's own record of what it asked
-/// for can tell the two ends apart, and a drag's end needs them apart — its own release is a moment
-/// the road that let go of the pointer is already handling, and a capture stolen is a drag that is
-/// not coming back (see `pin_capture_lost`).
-///
-/// A static rather than a field of anything, because the writer and the reader are not the same
-/// function: the release is asked of a window and the notice is answered inside the call it raises.
-pub(super) static PIN_CAPTURE_OURS: AtomicBool = AtomicBool::new(false);
-
-/// Let go of the pointer, marking the notice the release raises as one this app asked for.
-///
-/// The marking is around the call and not after it, because the notice arrives *inside* it:
-/// `ReleaseCapture` sends `WM_CAPTURECHANGED` back into this same thread's own window procedure
-/// before it returns (see `release_pin_capture`), so the window procedure answering one has to be
-/// able to see that this app is the one who let go. Unmarked, the two ends of a drag are one end,
-/// and the notice this app raised itself is answered by a road with no relaunch decision in hand —
-/// which puts a player that is about to be taken down back on screen at the box its drag began at.
-pub(super) fn release_the_pointer(window: &dyn PinWindow, hwnd: isize) {
-    PIN_CAPTURE_OURS.store(true, Ordering::Release);
-    window.release_capture(hwnd);
-    PIN_CAPTURE_OURS.store(false, Ordering::Release);
+/// `pinned_content` answers nothing for a collapsed pin — it has no bands for anybody else's
+/// window to stand in — but its box is still the final one, so an unpark that would otherwise
+/// show without placing places there instead (see `unpark_pinned_player`).
+fn pinned_media_box_now() -> Option<ScreenRegion> {
+    pin_state()?.pin().map(|pin| pin.content)
 }
 
-/// Whether the capture being lost is one this app released on purpose.
-pub(super) fn pin_capture_is_ours() -> bool {
-    PIN_CAPTURE_OURS.load(Ordering::Acquire)
+/// Let go of the pointer a drag took.
+///
+/// It used to mark the notice the release raises as one this app asked for, and the marking is
+/// gone with the road that read it: `WM_CAPTURECHANGED` arrives inside this call, and the window
+/// procedure answering one used to have to tell this app's own release from a capture somebody else
+/// took — because a release was a moment the road letting go of the pointer was already handling,
+/// and a stolen capture was not. The park's end is asked of a player rather than of a message now
+/// (see `settle_pinned_park`), so the two ends of a capture settle identically and there is nothing
+/// left for the marking to keep apart. What the call still has to be is the one place the pointer
+/// is let go of: `ReleaseCapture` answers a window procedure on this same thread before it returns
+/// (see `release_pin_capture`), so a drag's record is dropped from inside this call either way.
+pub(super) fn release_the_pointer(window: &dyn PinWindow, hwnd: isize) {
+    window.release_capture(hwnd);
 }
 
 /// Hide or show the window FFmpeg is drawing the picture into.
@@ -867,28 +980,73 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
     let drag =
         pin_state().and_then(|mut pinned| pinned.pin_mut().and_then(|pin| pin.dragging.take()));
     let Some(drag) = drag else {
+        // A drag the pin was rebuilt over is a drag that is not coming back, and the capture its
+        // press took is not something this window may keep: a pinned window holding the pointer
+        // eats every mouse message on the desktop and keeps whichever shape the last edge gave the
+        // cursor, for the rest of the process (see `release_the_pointer`, and
+        // `reconcile_swap_take_up` for the rebuild that takes the drag away).
+        release_the_pointer(window, hwnd.0 as isize);
         return false;
     };
 
+    // The kill road the press may have armed, read before the pointer is let
+    // go of: the release below re-enters `pin_capture_lost` synchronously
+    // through `WM_CAPTURECHANGED`, and that road relaunches — so the check
+    // after it would find the take already spent and fall through to a second
+    // relaunch below.
+    let kill_road = gesture_snapshot_active();
     release_the_pointer(window, hwnd.0 as isize);
 
-    // A resize relaunches at the size the drag settled on (see `relayout_pinned_media`), and a
-    // relaunch is a player being ended and another begun — so it is the relaunch that puts the
-    // parked window back, and putting it back here as well would show a window that is about to be
-    // taken down again, for as long as the relaunch takes. A move has no relaunch, so it is the
-    // move's own release, which is also the drag that has to place the picture rather than only
-    // show it (see `unpark_pinned_player`).
-    let relaunching = matches!(drag.action, PinDragAction::Resize(_))
-        && pinned_content().is_some_and(|content| {
+    // A gesture that killed ends in the one relaunch its press armed: at the
+    // snapshot second, the box the hand left behind, the latest level —
+    // carrying was-held or the gesture's hold for the swap to settle without
+    // a key. The take inside `relaunch_gesture_kill_at` makes it the only
+    // one: the re-entered capture-lost relaunches and this no-ops, or this
+    // relaunches and a stolen capture afterwards finds nothing. A resize
+    // takes this road rather than the box request below, which would relaunch
+    // a second player behind the first.
+    if kill_road {
+        if let Some(content) = pinned_content() {
+            relaunch_gesture_kill_at(content);
+        } else {
+            take_gesture_snapshot();
+        }
+    } else if matches!(drag.action, PinDragAction::Resize(_)) {
+        // A resize relaunches at the size the drag settled on (see `relayout_pinned_media`), and a
+        // relaunch is a player being ended and another begun — so it is the relaunch that puts the
+        // parked window back, and putting it back here would show a window that is about to be taken
+        // down again, for as long as the relaunch takes.
+        if let Some(content) = pinned_content() {
             if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
                 *request = Some(content);
             }
-            true
-        });
-    if !relaunching {
+        }
+    } else if park_stranded_without_a_player() {
+        // The begin killed the in-flight relaunch and this move brings no player of its own:
+        // relaunch at the box the hand left behind rather than leaving a cover nothing ends.
+        // Only then — a live player behind the cover is left for the settle to hand the band to.
+        relaunch_stranded_park();
+    } else if seek_cover_is_waiting() {
+        // A seek's cover waited out by a gesture that relaunches nothing — a move let go of over
+        // a scrub in flight — is handed back to the player it covers: no relaunch is coming, so
+        // the settle would hold it for ever. A resize always relaunches below the cover and needs
+        // no such end (see `seek_cover_is_waiting`).
         unpark_pinned_player(window);
     }
 
+    // **The gesture's hold is let go of here, on the gesture's own message, and it is let go of
+    // before the relaunch above is asked for rather than after it.** What the relayout reads is
+    // `pinned_is_held`, so a claim left standing here is a hold the player about to be begun is
+    // told it is owed — and a hold already owed is a second key for one gesture, which is a film
+    // playing over a bar with a pause glyph on it (see `settle_video_drag_hold`).
+    settle_video_drag_hold(false);
+
+    // **The band is not handed back here, by either kind of drag.** It is handed back by the settle,
+    // on the tick that finds a player to see through the band — which is the only place that can
+    // tell a player that has a frame from one that has a window (see `settle_pinned_park`). A move
+    // used to show the player's window from here, and the show is the second half of the flash the
+    // drag's end used to have: the flag goes down, the band is transparent, and what is behind it is
+    // a window whose first composited frame has not landed yet.
     window.repaint();
     true
 }
@@ -912,25 +1070,36 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
 /// to fix a window that has gone black.
 ///
 /// So this is the release's work without the release's moment: the pointer's own facts are dropped,
-/// the picture is put back before the tick lets the film go — that order being the one worth having
-/// for the same reason it is there (see `finish_pin_drag`) — and the band is transparent again
-/// because the flag it reads is down. What there is no `hwnd` for is a capture this app has already
+/// and the band is left to the settle that a release would have reached — which is the same road and
+/// answers the same way, because the park's end is asked of a player rather than of a message
+/// (see `settle_pinned_park`). What there is no `hwnd` for is a capture this app has already
 /// lost: Windows has taken it, and releasing it would be a courtesy owed to nobody.
 ///
-/// **Only a capture somebody else took gives the park up, and that is the whole of what this path
-/// gets wrong by not saying.** Windows delivers `WM_CAPTURECHANGED` to the window that lost the
-/// capture whether it released it or another window took it, and it says in no way the two can be
-/// told apart afterwards — `GetCapture()` answers the same thing for both, which is that this
-/// window is not the one holding anything. But this app's own `ReleaseCapture` is how a drag ends,
-/// and the road letting go of the pointer is already deciding on the way out what happens to the
-/// park: a resize is a relaunch, and a relaunch is a player with a window of its own that puts
-/// that window up and takes the flag down (see `restart_pinned_player`). A capture-loss answering
-/// its own app's release by putting the parked window back undoes that deliberate hold-off — the
-/// outgoing player comes up at the box the drag began at, over a band the flag has already stopped
-/// painting flat, for as long as the relaunch takes. So a notice this app raised itself is answered
-/// as a notice and not as a loss: the pointer's facts still go, and the park is left standing for
-/// the road that let go of it to take back (see `release_the_pointer`).
+/// **A capture somebody else took and this app's own release are now one thing rather than two, and
+/// the difference that used to separate them was about the park and nothing else.** Windows
+/// delivers `WM_CAPTURECHANGED` to the window that lost the capture whether it released it or
+/// another window took it, and it says in no way the two can be told apart afterwards —
+/// `GetCapture()` answers the same thing for both, which is that this window is not the one holding
+/// anything. What could tell them apart was this app's own `ReleaseCapture`, and what that answer
+/// was used for was keeping a resize's release from putting the player it was about to replace back
+/// on screen — over a band the flag had already stopped painting flat, for as long as the relaunch
+/// took. The park's end is not asked of a message any more, so there is nothing left to keep off
+/// and nothing to tell apart: both leave the same thing behind, which is a drag that has ended and a
+/// band that is still this app's to fill, and both are settled by the tick, on the one fact neither
+/// of them can carry — whether a player is standing in the band to see through it (see
+/// `settle_pinned_park`).
 pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
+    // **The gesture's hold is let go of here as well, and before the record is dropped rather than
+    // on the tick that notices it is gone.** A capture taken from under a drag ends the drag, and a
+    // claim left standing is a claim the next film to be dragged is answered with — so the drag
+    // refuses the hold it exists for and its own release posts the toggle onto a film nobody
+    // stopped (see `settle_video_drag_hold`).
+    settle_video_drag_hold(false);
+
+    // The seek's aim, read before the record goes: a kill-road seek ended or
+    // abandoned here relaunches at the aimed second rather than the press's,
+    // and the clearing below would leave nothing to aim it with.
+    let aim = pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.seeking));
     if let Some(mut pinned) = pin_state() {
         if let Some(pin) = pinned.pin_mut() {
             pin.dragging = None;
@@ -945,15 +1114,25 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
         }
     }
 
-    // This app's own release, and the road that asked for it is still inside the call: the park is
-    // that road's to take back, with the relaunch decision in hand that a release delivered to a
-    // window procedure has not got (see `finish_pin_drag`).
-    if pin_capture_is_ours() {
-        return;
+    // A seek abandoned mid-aim never relaunches: hand the band back to the player the cover
+    // stands over rather than leaving a cover nothing ends (see `seek_cover_is_waiting`).
+    // Stranded first: a cover whose player was killed has no player to hand back, so the
+    // release relaunches one at the box the pin stands at now.
+    //
+    // A gesture that killed never takes those roads: its press armed one
+    // relaunch at the snapshot second — at the aim where a seek is standing —
+    // and an aborted gesture is still owed it, or the cover stands over a
+    // dead band no settle will ever end. The take inside makes it the only
+    // one across this road and the release's own.
+    if gesture_snapshot_active() {
+        if let Some(content) = pinned_content() {
+            relaunch_gesture_end_at(content, aim);
+        } else {
+            take_gesture_snapshot();
+        }
+    } else if park_stranded_without_a_player() {
+        relaunch_stranded_park();
+    } else if seek_cover_is_waiting() {
+        unpark_pinned_player(window);
     }
-
-    // Asked of the pin rather than taken from the lock above, because putting another process's
-    // window up is not work to be done while this app's own lock is held — the same seam
-    // `finish_pin_drag` keeps its `ReleaseCapture` outside of, for the same reason.
-    unpark_pinned_player(window);
 }

@@ -237,6 +237,27 @@ pub(super) fn pin_update_content(
     bounds: ScreenBounds,
     dpi: u32,
 ) -> Option<PinBox> {
+    // Measured first and kept on the display afterwards, so that the one box this
+    // answers is the box the take-up will install the file in: the swap begins a
+    // player in this box before the take-up runs, and a box the take-up then
+    // moves is a player and a band that never meet (see `pin_swap_content`).
+    Some(
+        match pin_update_content_measured(space, path, bounds, dpi)? {
+            PinBox::Measured(content) => PinBox::Measured(pin_swap_content(content, space, dpi)),
+            PinBox::Waiting => PinBox::Waiting,
+        },
+    )
+}
+
+/// The box a swap measures its incoming file out in, before anything is kept on
+/// the display: see [`pin_update_content`] for the whole of why that is a
+/// separate step.
+fn pin_update_content_measured(
+    space: PinSwapSpace,
+    path: &PathBuf,
+    bounds: ScreenBounds,
+    dpi: u32,
+) -> Option<PinBox> {
     // A sound is the one kind drawn to its box whose media is not in hand until a probe has
     // answered: the card is built from what the machine has for the file, and that verdict is a
     // read of it — a source reader, or an `ffprobe` run — which is felt, so it is taken where a
@@ -435,6 +456,56 @@ pub(super) fn pin_update_box(
     let centre = ((room.0 + room.2) / 2, (room.1 + room.3) / 2);
 
     centred_at((width, height), centre)
+}
+
+/// The media box a swap lays its incoming file out in, kept on the display the
+/// way the take-up that installs it keeps the window *around* it.
+///
+/// **The two have to be one box, and they were two.** A swap begins the player
+/// for the incoming file *before* the take-up runs — the player is this thread's
+/// and cannot wait for a tick (see `swap_pinned_media`) — and the take-up clamps
+/// the window box onto the display (see `take_up_pinned_window`). So a file laid
+/// out near the edge of a display was handed to a player at one box and shown in
+/// another, by however far the window had to move to stay on screen: `clamp` moves
+/// a box that overhangs as far as it takes, not by the sixty-four pixels it keeps
+/// on the display, so the gap is not a hair's breadth.
+///
+/// **And that gap is the whole of what a swapped window looks like.** A video's
+/// band is transparent — the picture is the player's own window standing in it —
+/// so a band and a player that disagree leave the backdrop standing where the film
+/// should be and the film drawn over the caption above it, and every press inside
+/// the picture is answered by whichever of the two windows is under the pointer at
+/// that row, which for a player sitting a caption's height too high is the caption.
+/// The pin's own window claims the rest of the band, and an opaque band over a
+/// video area answers every click in it (see `park_swap_arm`).
+///
+/// A box change has no such gap, which is why it is the oracle: `toggle_pin_maximized`
+/// clamps *first* and writes the clamped box into the pin, so the relayout behind
+/// it begins the replacement in exactly the box the window is standing at. This is
+/// that clamp, asked of the box before anything is begun in it rather than after.
+///
+/// The chrome measured against is the pin's own, because that is the chrome the
+/// room above was measured with. A swap that changes the kind is laid out against
+/// the chrome it is leaving, and the take-up's own clamp — which knows the kind
+/// arriving — is the one place that can do better.
+fn pin_swap_content(content: ScreenRegion, space: PinSwapSpace, dpi: u32) -> ScreenRegion {
+    content_box_of(
+        clamp_pinned_box(
+            pinned_window_box_of(
+                content,
+                dpi,
+                space.transport_bar,
+                space.overlay,
+                space.caption,
+            ),
+            dpi,
+            &DESKTOPS,
+        ),
+        dpi,
+        space.transport_bar,
+        space.overlay,
+        space.caption,
+    )
 }
 
 /// Whether a preview of this file is drawn to the box it is given rather than scaled into it by a

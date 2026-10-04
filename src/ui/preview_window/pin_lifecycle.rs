@@ -400,9 +400,19 @@ impl PinWindow for Win32PinWindow {
         // for rather than held as a handle, so there is no dereference to justify and a window
         // that has since gone is found not to be there.
         match band {
-            // The place is the show — `ensure_pinned_sibling_box` puts the window up in the same
-            // `SetWindowPos` that moves it, so a band answered here is answered on screen at once.
-            Some(band) => ensure_pinned_sibling_box(band),
+            // The place is the show — the window goes up in the same `SetWindowPos` that moves
+            // it, so a band answered here is answered on screen at once. Placed directly rather
+            // than through `ensure_pinned_sibling_box`: that call is refused while a park stands,
+            // and the swap places the window BEFORE taking the flag down, so the cover is still up
+            // when the window goes back (see `unpark_pinned_player`).
+            Some(band) => {
+                let _ = ensure_video_window_topmost(
+                    band.0,
+                    band.1,
+                    (band.2 - band.0).max(1),
+                    (band.3 - band.1).max(1),
+                );
+            }
             // A pin with no band to go back into has no rect to be told, so only its hiddenness is
             // taken back (see `unpark_pinned_player`).
             None => show_pinned_player_window(),
@@ -451,6 +461,43 @@ pub(super) fn end_pin_beside_the_state() {
     if let Ok(mut request) = PIN_BOX_REQUEST.lock() {
         *request = None;
     }
+
+    // And the frame a drag of this pin held for its media band. A pin taken down with a drag still
+    // in flight — a pick from the bubble under the hand, the watchdog — never reaches the other end
+    // of its park, and what it was holding is a picture the size of a display (see
+    // `compose_parked_band`).
+    forget_video_frame();
+
+    // And the gesture that killed with its end still to come. A pin taken
+    // down mid-dead-band never reaches its relaunch, and the snapshot left
+    // behind is a resume for a pin that has gone: no end will ever take it,
+    // and the next gesture would relaunch at a stale second. Given up with
+    // the pin — the player is already dead or riding the orphan reaper, so
+    // there is nothing here left to kill.
+    take_gesture_snapshot();
+
+    // And the relaunch that never landed: a pin taken down with one in flight behind its cover —
+    // a walk stepping off, the watchdog — leaves a player nothing will ever show. It dies
+    // unpublished rather than lingering, and reaped rather than orphaned. Only a confirmed kill
+    // forgets the record; a kill not yet taken stays pending — and the pin is going away, so no
+    // settle will ever retry it. That half is handed to the orphan reaper that outlives the pin,
+    // which asks again on every tick until the death confirms: never dropped, never waited on
+    // (see `retire_orphaned_player`).
+    if pending_pinned_relaunch().is_some() {
+        let _ = reap_superseded_relaunch();
+        if let Some(still) = pending_pinned_relaunch() {
+            retire_orphaned_player(still.pid);
+            clear_pending_pinned_relaunch();
+        }
+    }
+
+    // And the cover a seek of this pin was aiming under. A pin taken down
+    // mid-aim — a walk stepping off, the watchdog — never reaches its swap,
+    // and the record left behind is a cover over a pin that has gone: no park
+    // flag to end it, and the next park overwrites it rather than extends it,
+    // but a settle asked before that would answer a dead player. Given up
+    // with the frame it was holding.
+    forget_pin_park_swap();
 }
 
 /// Whether the thing a pin is a window onto is still there.
@@ -515,7 +562,22 @@ pub(super) fn pin_media_is_alive(navigating: bool) -> bool {
     }
 
     match kind {
-        MediaType::Video => is_video_process_running(),
+        MediaType::Video => {
+            // A gesture that killed leaves the player gone with its end
+            // relaunch still to come: the cover stands over a dead band, and
+            // that is not a pin that came apart.
+            if gesture_snapshot_active() {
+                return true;
+            }
+            // A supersede-kill leaves the player gone with its replacement on its way — the
+            // cover standing over a relaunch still to come, or one still in flight. That is not
+            // a pin that came apart: the release relaunches, the in-flight one lands, and the
+            // cover holds until one of them does.
+            if pin_park_covers_a_relaunch() {
+                return true;
+            }
+            is_video_process_running()
+        }
         // A card is this app's own text and a player this app started, and the player is
         // between passes rather than gone — the whole of what is asked about here is above.
         MediaType::Audio => true,
@@ -589,6 +651,16 @@ pub(super) fn pin_media_failed_before_a_frame(player_started: Option<Instant>) -
         MediaType::NativeVideo => video_player::failing_before_a_frame()
             .filter(|path| pinned_path().as_deref() == Some(path.as_path())),
         MediaType::Video => {
+            // A player ended for a gesture or a park is not a file that failed: it was killed on
+            // purpose and its replacement is on its way, which is exactly how `pin_media_is_alive`
+            // reads the same two facts. Without this the tick after a kill road's own player is
+            // read as a dead file — inside the give-up window — and the pin falls to the failure
+            // mark before the relaunch that road owes can arrive (the "window breaks permanently"
+            // after a Next: a film's player is killed and the pin is stuck on the cross).
+            if gesture_snapshot_active() || pin_park_covers_a_relaunch() {
+                return None;
+            }
+
             if is_video_process_running() {
                 return None;
             }
@@ -641,6 +713,19 @@ pub(super) fn pinned_window_box() -> Option<(ScreenRegion, i32, i32)> {
         (window.2 - window.0).max(1),
         (window.3 - window.1).max(1),
     ))
+}
+
+/// The pin's own window, for a road that has no message in hand to name it.
+///
+/// The handle the window was created into, which is the same one
+/// [`PinWindow::hwnd`] reads and the same one `raise_pinned_window` is asked
+/// with from the loop's own tick. It is here for the two covers that run with no
+/// pointer message of their own — a box change and a file step are both the
+/// loop's work, and both owe a paint before a player is hidden — so the handle
+/// they paint through is read rather than carried down from a window procedure
+/// that is not on either road.
+pub(super) fn pinned_window() -> HWND {
+    HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _)
 }
 
 /// Put a pinned window up at the box its state says, painted before it is shown: what a layered

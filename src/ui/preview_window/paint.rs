@@ -180,23 +180,37 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         paint.overlay,
     );
     let band_height = band_height.max(1) as u32;
+    let band_width = width.max(1) as u32;
+    let mem_dc = layered_surface_dc(hwnd.0 as isize);
 
     // A player parked for the length of a drag is painted over rather than painted through: the
     // band is transparent everywhere else so that FFmpeg's own window shows through it, and a
-    // transparent band with the player hidden is a hole in the desktop shaped like a video. Black
-    // rather than the configured `Background -> Video`, because that setting is allowed to be
-    // `Transparent` — and a deliberately transparent band is exactly the hole this is here not to
-    // leave (see `park_pinned_player`).
+    // transparent band with the player hidden is a hole in the desktop shaped like a video. So the
+    // band is filled with the last frame the player had on screen, scaled to the box being dragged
+    // to exactly as a picture's own frame is (see `compose_parked_band`), and black under it rather
+    // than the configured `Background -> Video` — that setting is allowed to be `Transparent`, and
+    // a deliberately transparent band is exactly the hole this is here not to leave.
     if paint.parked {
-        fill_band_opaque(
-            out,
-            width.max(1) as u32,
-            band_top.max(0) as u32,
-            band_height,
-        );
+        if let Some(mem_dc) = mem_dc {
+            let held = held_video_frame();
+            compose_parked_band(
+                held.as_ref()
+                    .map(|frame| (frame.pixels.as_slice(), (frame.width, frame.height))),
+                band_width,
+                BandTarget {
+                    out,
+                    dc: mem_dc,
+                    width: band_width,
+                    origin_y: band_top.max(0) as u32,
+                    height: band_height,
+                },
+            );
+        } else {
+            fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
+        }
     }
 
-    if let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) {
+    if let Some(mem_dc) = mem_dc {
         if let Ok(media) = CURRENT_MEDIA.lock() {
             if let Some(media) = media.as_ref() {
                 if !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video) {
@@ -204,13 +218,13 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                         media.current_pixels(),
                         media.current_width(),
                         media.current_height(),
-                        (width.max(1) as u32, band_height),
+                        (band_width, band_height),
                         preview_background(media.media_type),
                         media.current_frame_is_opaque(),
                         BandTarget {
                             out,
                             dc: mem_dc,
-                            width: width as u32,
+                            width: band_width,
                             origin_y: band_top.max(0) as u32,
                             height: band_height,
                         },
@@ -640,6 +654,43 @@ pub(super) fn stretch_into_band(
 
         true
     })
+}
+
+/// Fill the band a parked player's window has left, answering whether a picture filled it.
+///
+/// **This is the whole of what a drag of a pinned film is drawn from, and both halves of it are
+/// load-bearing.** The opaque fill is there whatever else happens: the band is transparent
+/// everywhere a film is playing, and a transparent band with nothing behind it is a hole in the
+/// desktop shaped like a video, so a picture that could not be taken has to leave black rather
+/// than leave a hole. And the picture is the *last frame the player had on screen*, scaled to the
+/// box the window is being dragged to by the same road a resized picture is scaled by — so a band
+/// grown shows the film larger and a band shrunk shows it smaller, and a hand is choosing a size
+/// against the film rather than against a rectangle (see `compose_media_into_band`).
+///
+/// A frame that is no longer held is not a reason to paint black twice over: the flat fill is the
+/// fallback and the frame goes on top of it, so a frame of a size that does not cover the whole
+/// band — or a road that declines to draw at all — leaves a band that is still opaque.
+pub(super) fn compose_parked_band(
+    held: Option<(&[u8], (u32, u32))>,
+    width: u32,
+    target: BandTarget<'_>,
+) -> bool {
+    fill_band_opaque(&mut *target.out, width, target.origin_y, target.height);
+
+    let Some((pixels, (frame_width, frame_height))) = held else {
+        return false;
+    };
+
+    compose_media_into_band(
+        pixels,
+        frame_width,
+        frame_height,
+        (width, target.height),
+        TransparentBackground::Black,
+        true,
+        target,
+    );
+    true
 }
 
 /// `compose_preview_pixels_into` for a frame that is not the whole surface: the frame is

@@ -108,16 +108,20 @@ fn a_press_that_cannot_be_measured_takes_nothing_at_all() {
 /// halves — a `SetCapture` on the way in and a `release_pin_capture` on the way out — and
 /// nothing said they had to agree about which window.
 ///
-/// The player's window is on the list too, because a move is the drag with no relaunch to
-/// bring one of its own back, and the place it goes back to is the band as it stands rather
-/// than the box the drag began at (see `unpark_pinned_player`).
+/// The player's window is **not** on this list any more, and the reason is the second of the two
+/// flashes a drag used to have. A move has no relaunch behind it, so the release used to put the
+/// picture back itself — the flag down, the band transparent, and the compositor's first look at a
+/// window that has been hidden for the length of a drag still filling in. The band is now filled
+/// with the frame the drag was holding until there is a player to see through it, and that is the
+/// settle's question on the loop's tick rather than a window procedure's (see
+/// `settle_pinned_park`). What this asserts is the negative of it: the release puts the pointer
+/// back and repaints, and touches nothing of somebody else's.
 ///
-/// The band is moved by the hand while the drag runs, which is what a move *is*, and the
-/// player's window has not followed it: the park is a hide and nothing else, so the rect the
-/// window is still standing at is the one the drag started from. A picture put back by a bare
-/// `ShowWindow` therefore lands at the old box, behind a band that has moved, and the tick's
-/// re-assertion corrects it a couple of hundred milliseconds later — a sixth of a second of a
-/// film in the wrong place, at the moment the hand lets go.
+/// The band is moved by the hand while the drag runs, which is what a move *is*, and the player's
+/// window has not followed it: the park is a hide and nothing else, so the rect the window is
+/// still standing at is the one the drag started from. The swap puts it back at the band as it
+/// stands rather than the box the drag began at, which is the same place it did before — a tick
+/// later.
 #[test]
 fn a_drag_lets_go_of_the_pointer_it_took() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -134,13 +138,6 @@ fn a_drag_lets_go_of_the_pointer_it_took() {
         "there was a drag to let go of"
     );
 
-    // The band as it stands at the drag's end, read here rather than spelled out: the pin is a
-    // process-wide value other tests write, and a rect written out here would be this test
-    // asserting against whichever pin happened to be standing when it was read. What is being
-    // asserted is that the window is put back *somewhere*, and that the somewhere is the band —
-    // a call that is not there at all, or one carrying the box the drag began at, both fail.
-    let band = pinned_content();
-
     assert_eq!(
         window.calls(),
         vec![
@@ -148,28 +145,30 @@ fn a_drag_lets_go_of_the_pointer_it_took() {
             PinWindowCall::WindowBox(Some((300, 200, 700, 600))),
             PinWindowCall::Capture,
             PinWindowCall::ReleaseCapture,
-            PinWindowCall::UnparkPlayerWindow(band),
             PinWindowCall::Repaint,
         ],
-        "the pointer is taken for the drag and given back when the drag is over, the picture \
-             goes back to the band as it now stands rather than to the box the drag began at, and \
-             the window is drawn at where the hand left it — the pointer first, because a window \
-             still holding it after the drag has gone eats every mouse message on the desktop"
+        "the pointer is taken for the drag and given back when the drag is over, and the window \
+             is drawn at where the hand left it — the pointer first, because a window still \
+             holding it after the drag has gone eats every mouse message on the desktop"
     );
 
-    // And a second end has nothing to release: the drag is taken out of the pin by the first,
-    // so the second road finds nothing rather than releasing a pointer for a drag that has
-    // already been let go of.
+    // And a second end has nothing to *repaint*: the drag is taken out of the pin by the first,
+    // so the second road finds nothing rather than drawing for a drag that has already been let go
+    // of. It does still hand the pointer back, because that is the one thing a road cannot know it
+    // has no business doing — a capture taken from under a drag is Windows' to report and nobody
+    // else's to reason about, so every end lets go of it (see `release_the_pointer`). On the
+    // machine that release finds no capture to give back, which is the answer the recorder records
+    // rather than the absence of one.
     let after_the_first_end = window.calls().len();
     assert!(
         !finish_pin_drag(hwnd, &window),
         "a drag that is over is not ended twice"
     );
     assert_eq!(
-        window.calls().len(),
-        after_the_first_end,
-        "and the second end asks the window for nothing at all — a release and a repaint for a \
-             drag that has already been let go of would repaint a window nobody is carrying"
+        window.calls()[after_the_first_end..],
+        vec![PinWindowCall::ReleaseCapture],
+        "and the second end asks the window for nothing but the pointer — a repaint for a drag \
+             that has already been let go of would draw a window nobody is carrying"
     );
 }
 

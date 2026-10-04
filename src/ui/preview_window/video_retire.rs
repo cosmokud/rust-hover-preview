@@ -169,6 +169,28 @@ pub(super) fn retirement_after_relaunch(
     )
 }
 
+/// Whether the player standing in the band is a different process from the one a park captured its
+/// frame for — which is the whole of what "the replacement has not put a frame up yet" can be asked
+/// of anything this app knows.
+///
+/// **It is asked of the pids and not of the window, because a window says nothing about whether the
+/// process behind it has decoded anything.** A player that has just been begun has a window of its
+/// own within a few milliseconds — SDL makes it before it opens the file — and that window is
+/// visible, correctly sized and empty: which is exactly the state a park that hands the band back
+/// on visibility alone leaves the desktop behind for as long as the decode takes (see
+/// `park_swap_arm`). A pid is the one fact that tells a player carrying the picture the park
+/// captured from a player that has not opened the file yet, and it is a fact this app wrote down
+/// itself rather than read out of a process of somebody else's.
+///
+/// A pid of zero on either side is not a replacement but a player that is not there: `VIDEO_PID` is
+/// cleared by every path that ends a player, so a cleared one says the pin has nothing playing
+/// rather than that something new has taken its place — and a park whose player has gone has no
+/// replacement to wait for (see `PIN_PARK_SWAP_TIMEOUT`).
+pub(super) fn player_replaced_since(parked: u32) -> bool {
+    let now = VIDEO_PID.load(Ordering::Acquire);
+    parked != 0 && now != 0 && parked != now
+}
+
 /// Whether a player being replaced can be ended now, or is still the one on screen.
 ///
 /// Everything in this is about not ending the only picture there is: a replacement with a
@@ -233,6 +255,109 @@ pub(super) fn end_retired_player(pid: u32) -> RetireEnd {
     end
 }
 
+/// End a player a newer gesture has superseded, before it can publish:
+/// kill-on-supersede rather than land-and-retire.
+///
+/// A relaunch that a second gesture strands behind a standing cover must
+/// never be shown nor placed — at a stale box it lingers outside the preview,
+/// playing, until the next release. So the superseded player is terminated
+/// here, while the cover is still up, and reaped where that can be confirmed:
+/// its record forgotten and `VIDEO_PID` cleared where it still names it, so
+/// no show path can find it and no audio survives it.
+///
+/// Returns whether nothing is left: pid zero is already nothing, and a kill
+/// that is confirmed gone leaves nothing either. A kill not yet confirmed
+/// answers false, and the settle asks again on the next tick — termination is
+/// a request, not a wait.
+pub(super) fn kill_superseded_player(pid: u32) -> bool {
+    if pid == 0 {
+        return true;
+    }
+
+    terminate_ffplay_pid(pid);
+
+    if is_ffplay_pid_alive(pid) {
+        return false;
+    }
+
+    // Confirmed gone, so the record of it goes with it rather than being left
+    // for the next run to look for — the same bookkeeping a settled
+    // retirement does (see `end_retired_player`).
+    engine_processes::forget(pid);
+    clear_video_process_state(pid);
+    true
+}
+
+/// Players a pin's teardown asked to die whose kill is not yet confirmed.
+///
+/// A teardown cannot wait — termination is a request, not a wait — and the pin
+/// is going away, so no settle will ever retry the pending record it leaves
+/// behind. Clearing that record from under an unconfirmed kill loses the only
+/// retry the kill had: an orphan ffplay with zombie audio. So an unconfirmed
+/// kill is parked here instead, owned by this list rather than by any pin, and
+/// retried to confirmation by the loop's own settle, which runs with no pin up
+/// (see `settle_video_retirement`).
+pub(super) static ORPHANED_VIDEO_KILLS: Lazy<Mutex<Vec<u32>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Park an unconfirmed kill where the loop retries it to confirmation.
+///
+/// A kill confirmed on the spot is reaped here instead and never parked: its
+/// record forgotten and `VIDEO_PID` cleared where it still names it, the same
+/// bookkeeping `kill_superseded_player` does. Only a player still dying after
+/// being asked is owned by the list — never dropped, never waited on.
+pub(super) fn retire_orphaned_player(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    if end_retired_player(pid) == RetireEnd::Gone {
+        clear_video_process_state(pid);
+        return;
+    }
+    if let Ok(mut held) = ORPHANED_VIDEO_KILLS.lock() {
+        if !held.contains(&pid) {
+            held.push(pid);
+        }
+    }
+}
+
+/// Retry every orphaned kill, keeping only the ones still dying.
+///
+/// Only confirmed-gone kills leave the list, and only by being reaped — the
+/// same terminate-confirm-forget as every other kill path (see
+/// `end_retired_player`).
+fn settle_orphaned_video_kills() {
+    let Ok(mut held) = ORPHANED_VIDEO_KILLS.lock() else {
+        return;
+    };
+    held.retain(|&pid| {
+        if end_retired_player(pid) != RetireEnd::Gone {
+            return true;
+        }
+        // Confirmed gone: its pid goes with it where it still names it, so no
+        // show path can find a dead player after its pin has gone.
+        clear_video_process_state(pid);
+        false
+    });
+}
+
+#[cfg(test)]
+pub(super) fn orphaned_video_kills() -> Vec<u32> {
+    ORPHANED_VIDEO_KILLS
+        .lock()
+        .map(|held| held.clone())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(super) fn orphaned_video_kills_push_for_test(pid: u32) {
+    if let Ok(mut held) = ORPHANED_VIDEO_KILLS.lock() {
+        if !held.contains(&pid) {
+            held.push(pid);
+        }
+    }
+}
+
 /// A player that a relaunch has taken the place of, ended now that there is a window to replace
 /// it with, and a player that died being settled in the bar that was drawn against it.
 ///
@@ -255,6 +380,11 @@ pub(super) fn end_retired_player(pid: u32) -> RetireEnd {
 /// with, and every path here is a handful of non-blocking Windows calls, so the wait a relaunch
 /// asks on this thread is a wait measured in microseconds.
 pub(super) fn settle_video_retirement() {
+    // The orphan reaper runs with no pin up: a teardown hands unconfirmed
+    // kills here precisely because no settle will retry them afterwards, so
+    // this must not wait on the retirement below having anything to do.
+    settle_orphaned_video_kills();
+
     let Ok(mut held) = VIDEO_RETIREMENT.lock() else {
         return;
     };
@@ -305,6 +435,13 @@ pub(super) fn settle_video_retirement() {
 /// press starts it from there — but the button stops claiming there is something playing to pause.
 pub(super) fn settle_pinned_transport() {
     if current_media_type() != Some(MediaType::Video) || !pinned() {
+        return;
+    }
+
+    // A gesture that killed owns the dead interval: the frozen hold, the
+    // claim and the stopped clock are the press's to write and the end's to
+    // take back, so a player nothing is behind reconciles nothing here.
+    if gesture_snapshot_active() {
         return;
     }
 
@@ -482,7 +619,7 @@ pub(super) fn settle_pending_hold() {
     let Some((_, _, transport, _)) = pinned_playback_state() else {
         return;
     };
-    if !transport.pending_hold {
+    if !pending_hold_delivers(transport.pending_hold, transport.drag_held) {
         return;
     }
 
@@ -493,4 +630,22 @@ pub(super) fn settle_pending_hold() {
         let at = transport_clock(&transport).unwrap_or(0.0);
         update_pin_transport(|state| state.held(at));
     }
+}
+
+/// Whether a hold a relaunch wrote down as owed is this tick's to deliver.
+///
+/// **A gesture that is still holding the film delivers it instead, and the two are the same key.**
+/// A hold is the pause key, and the pause key is a toggle: a relaunch begun under a gesture's hold
+/// — which is what a resize's settle is, and a seek taken from a hand that is still down — writes
+/// the hold down as owed because the player it has just begun has no window to post it through yet.
+/// The tick that delivers it and the tick that lets the gesture go of it are the same tick, so both
+/// post, and two toggles on one player is a film playing over a bar with a pause glyph on it — which
+/// is what a paused video did on a resize and did not do on a move, the whole difference being that
+/// a move has no relaunch behind it to owe anything.
+///
+/// The claim is the transport's own rather than a flag beside it, because it is the one fact that
+/// reconciles the two: every path that begins, holds, lets go of or loses a player takes it with
+/// them (see `video_drag_hold_claim`).
+pub(super) fn pending_hold_delivers(owed: bool, gesture_held: bool) -> bool {
+    owed && !gesture_held
 }
