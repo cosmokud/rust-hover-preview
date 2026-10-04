@@ -278,6 +278,7 @@ mod pin_edges;
 mod pin_frames;
 mod pin_input;
 mod pin_keys;
+mod pin_player_failure;
 mod pin_resize;
 mod pin_volume;
 mod placement;

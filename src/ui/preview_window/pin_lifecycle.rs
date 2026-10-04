@@ -651,6 +651,16 @@ pub(super) fn pin_media_failed_before_a_frame(player_started: Option<Instant>) -
         MediaType::NativeVideo => video_player::failing_before_a_frame()
             .filter(|path| pinned_path().as_deref() == Some(path.as_path())),
         MediaType::Video => {
+            // A player ended for a gesture or a park is not a file that failed: it was killed on
+            // purpose and its replacement is on its way, which is exactly how `pin_media_is_alive`
+            // reads the same two facts. Without this the tick after a kill road's own player is
+            // read as a dead file — inside the give-up window — and the pin falls to the failure
+            // mark before the relaunch that road owes can arrive (the "window breaks permanently"
+            // after a Next: a film's player is killed and the pin is stuck on the cross).
+            if gesture_snapshot_active() || pin_park_covers_a_relaunch() {
+                return None;
+            }
+
             if is_video_process_running() {
                 return None;
             }
