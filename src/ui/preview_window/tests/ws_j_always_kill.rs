@@ -686,10 +686,16 @@ fn teardown_during_the_dead_band_reaps() {
     restore(previous_pin, previous_pid, previous_media);
 }
 
-/// Swap regressions kept: a cover with no window holds past its bound, and a
-/// spent swap never swaps twice.
+/// Swap regressions kept: a cover with no window holds while it is still within the cover's own
+/// bound and is given up once it is not, and a spent swap never swaps twice.
+///
+/// **The second half of this is WS-L and it overturns what the first half used to say.** A cover
+/// with nothing behind it was held for ever, and the placeholder it held was opaque — which is a
+/// shape this app's own window hit-tests, so every click in the video area was answered here
+/// rather than by the player, and no press reached the road that could have ended it (see
+/// `PIN_PARK_COVER_TIMEOUT`).
 #[test]
-fn swap_regressions_hold_without_a_window_and_never_twice() {
+fn swap_regressions_hold_within_the_cover_bound_give_up_past_it_and_never_swap_twice() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -710,14 +716,14 @@ fn swap_regressions_hold_without_a_window_and_never_twice() {
     );
     if let Ok(mut held) = PIN_PARK_SWAP.lock() {
         if let Some(swap) = held.as_mut() {
-            swap.since = Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT * 4);
+            swap.since = Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT);
         }
     }
 
     let window = RecordedPinWindow::new(0x1000);
     assert!(
         !settle_pinned_park_where(&window, false),
-        "four times the bound with no window behind the band is not a band \
+        "the swap bound spent with no window behind the band is not a band \
          to hand back"
     );
     assert!(pin_player_is_parked(), "so the cover stands");
@@ -727,9 +733,36 @@ fn swap_regressions_hold_without_a_window_and_never_twice() {
         "no arm for a park still standing"
     );
 
-    // A window arrives: one swap, placed and repainted in the same tick.
+    // Past the cover's own bound there is nothing left behind the band and nothing left to wait
+    // for, so the cover is given up rather than left claiming the video area for the pin's life.
+    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
+        if let Some(swap) = held.as_mut() {
+            swap.since = Some(Instant::now() - PIN_PARK_COVER_TIMEOUT);
+        }
+    }
+    assert!(
+        settle_pinned_park_where(&window, false),
+        "and a cover no window ever arrived behind is given up by its own deadline"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "so the band is the hole it is between films again"
+    );
+    assert!(
+        matches!(park_swap_last_arm(), Some((ParkSwap::Abandoned, _))),
+        "and the arm is the one the cover's own bound ends on"
+    );
+
+    // A window arrives for a cover of its own: one swap, placed and repainted in the same tick.
+    forget_pin_park_swap();
+    forget_video_frame();
+    assert!(
+        park_pinned_player(HWND(0x1000 as *mut _), (100, 80), true),
+        "a replacement's cover stands again"
+    );
     fake_end_relaunch(102, 30.0, false);
     spend_the_swap_bound();
+    let window = RecordedPinWindow::new(0x1000);
     assert!(
         settle_pinned_park_where(&window, true),
         "the current replacement swaps"

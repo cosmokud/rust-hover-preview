@@ -293,6 +293,7 @@ fn the_release_relaunch_re_arms_the_swap_bound() {
             player: 100,
             replacing: true,
             awaiting_relaunch: true,
+            owner: ParkArm::Seek,
             since: Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT * 4),
         });
     }
