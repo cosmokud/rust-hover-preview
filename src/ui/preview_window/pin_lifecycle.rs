@@ -467,6 +467,14 @@ pub(super) fn end_pin_beside_the_state() {
     // of its park, and what it was holding is a picture the size of a display (see
     // `compose_parked_band`).
     forget_video_frame();
+
+    // And the cover a seek of this pin was aiming under. A pin taken down
+    // mid-aim — a walk stepping off, the watchdog — never reaches its swap,
+    // and the record left behind is a cover over a pin that has gone: no park
+    // flag to end it, and the next park overwrites it rather than extends it,
+    // but a settle asked before that would answer a dead player. Given up
+    // with the frame it was holding.
+    forget_pin_park_swap();
 }
 
 /// Whether the thing a pin is a window onto is still there.

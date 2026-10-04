@@ -819,13 +819,77 @@ pub(super) fn park_pinned_player(hwnd: HWND, at: (i32, i32), resizing: bool) -> 
 
 /// Put a pinned video's player away for a seek taken from the transport bar.
 ///
-/// The same cover a drag is given, without the two things a drag's cover carries: no hold —
-/// a scrub keeps playing, and pausing it is the defect rather than the fix — and no resume
-/// frame, because the playhead is moving and a frame rendered at the second the hand started
-/// from is a frame of the wrong second. The relaunch the release makes runs behind this cover
-/// and the settle swaps it once (see `settle_pinned_park`).
+/// The same cover a drag is given, with the same hold: the press holds the
+/// film (see `seek_press_hold`), the aim moves silently under the cover, and
+/// the release relaunches once carrying that hold. No resume frame, because
+/// the playhead is moving and a frame rendered at the second the hand started
+/// from is a frame of the wrong second. The relaunch the release makes runs
+/// behind this cover and the settle swaps it once (see `settle_pinned_park`).
 pub(super) fn park_pinned_player_for_seek(hwnd: HWND, at: (i32, i32)) -> bool {
     park_pinned_player_inner(hwnd, at, true, false, true)
+}
+
+/// Whether a press on the seekbar arms the gesture: only an aimed second does.
+/// A press with no second to seek to (an unknown length) parks nothing and
+/// holds nothing, or the cover stands over a playing film with no relaunch
+/// coming to end it.
+pub(super) fn seek_press_arms(seeking: Option<f64>) -> bool {
+    seeking.is_some()
+}
+
+/// Hold a pinned film for a seek taken from the transport bar: the same
+/// gesture hold as a drag, taken at the press rather than on the tick after
+/// it.
+///
+/// A seeking player is a held player: audio and video both, for the whole
+/// gesture — the cover the press parks is over a silent player, and the
+/// relaunch the release makes carries the hold behind it (see
+/// `PinTransport::begun`). A press over a paused film holds nothing, and a
+/// second press while the aim is still held posts no second key: the pause is
+/// a toggle, and a toggle per press is an unpause (see
+/// `video_drag_hold_decision`).
+///
+/// Scrub steps never come through here — the drag only moves the aim — so one
+/// press is one key for the whole gesture.
+pub(super) fn seek_press_hold() {
+    let Some((_, _, transport, _)) = pinned_playback_state() else {
+        return;
+    };
+
+    if video_drag_hold_decision(true, pin_is_playing(&transport), transport.drag_held)
+        != VideoDragHold::Hold
+    {
+        return;
+    }
+
+    if ffplay_key_pause() {
+        let at = pin_playhead(&transport).unwrap_or(0.0);
+        update_pin_transport(|state| {
+            state.held(at);
+            state.drag_held = true;
+        });
+    }
+}
+
+/// Spend the stamp a scrub's ticks kept, so the swap bound runs from the
+/// release's relaunch rather than from the press.
+///
+/// The stamp is taken by the first tick that finds the park standing, and a
+/// scrub holds the cover past the bound without relaunching anything — so
+/// without this the first tick after the release finds the bound already
+/// spent and swaps onto whatever window merely exists: published within
+/// milliseconds of being begun, and empty until the file is open and the
+/// first frame decoded. The wait the bound buys is the new player's decode,
+/// and only a stamp taken at the relaunch buys it.
+pub(super) fn rearm_seek_cover_for_relaunch() {
+    let mut held = PIN_PARK_SWAP
+        .lock()
+        .unwrap_or_else(|swap| swap.into_inner());
+    if let Some(swap) = held.as_mut() {
+        if swap.awaiting_relaunch {
+            swap.since = None;
+        }
+    }
 }
 
 /// What a park begins: a fresh park over a live window, or an extend over a standing one.
@@ -1053,12 +1117,51 @@ pub(super) fn settle_pinned_park_where(window: &dyn PinWindow, window_up: bool) 
         return false;
     }
 
+    // A seek's hold ends with the swap rather than with a key: the replacement
+    // has been playing since the release relaunched it, so posting one would
+    // pause the film the swap just uncovered. The owed hold is taken back and
+    // the gesture's claim dropped with it, and a playing film is playing after
+    // (see `settle_seek_hold_after_swap`). A drag's hold never reaches here —
+    // its own release lets go of it before any relaunch — so a claim standing
+    // at a swap is a seek's.
+    settle_seek_hold_after_swap();
+
     // Given up through the same helper the other end uses, and for the same reason: a park begun in
     // the gap between the flag going down and this write has written a record of its own, and this
     // must not take it away.
     forget_the_park_that_is_not();
     note_park_swap(arm, waited);
     true
+}
+
+/// End a seek's hold on the tick its swap uncovered, without posting a key.
+///
+/// The press held the old player with one key, the release carried that hold
+/// onto the replacement as owed, and the wait deferred it while the gesture
+/// held the claim (see `pending_hold_delivers`) — so the player behind the
+/// band has been playing since the relaunch, silently behind the cover, and
+/// the only thing left is the bookkeeping: the hold taken back at the second
+/// the player has actually reached, which is what `released` writes. No key
+/// is posted because there is nothing to toggle: one more would pause the
+/// film the swap just uncovered.
+///
+/// A paused film has no claim — its press held nothing — so it keeps its hold
+/// and its owed flag for the loop to deliver through the new window, and
+/// stays paused (see `settle_pending_hold`).
+pub(super) fn settle_seek_hold_after_swap() {
+    let ours = pin_state()
+        .and_then(|pinned| {
+            pinned
+                .pin()
+                .map(|pin| (pin.transport.drag_held, transport_clock(&pin.transport)))
+        })
+        .filter(|(held, _)| *held);
+
+    let Some((_, at)) = ours else {
+        return;
+    };
+
+    update_pin_transport(|state| state.released(at.unwrap_or(0.0)));
 }
 
 /// Put the frame a background rendered for this park in place of the one the park captured, and
