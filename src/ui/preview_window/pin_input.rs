@@ -274,6 +274,11 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
                     .unwrap_or((0, 0));
                 park_pinned_player_for_seek(hwnd, at);
                 seek_press_hold();
+                // A newer gesture supersedes whatever relaunch is still in flight behind the
+                // cover: the bump kills it before it can publish. After the hold rather than
+                // before it — the key is posted to the live player, and there is no window
+                // to post one through once it has gone.
+                bump_pinned_generation();
             }
         }
         // The volume button is held rather than acted on where it is pressed, like every button a

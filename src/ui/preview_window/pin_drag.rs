@@ -579,13 +579,12 @@ pub(super) fn begin_pin_drag(
     if installed {
         window.capture(hwnd);
         // Traced so the order is answerable: the hold is taken before the park reads the frame.
-        trace_park_step("hold");
-        // **The film's hold is taken before the park rather than on the tick after it, and the
-        // order of the two is the point.** The hold is a pause key, so the film it stops keeps
-        // playing until the key reaches a player that is decoding it — and the park below reads
-        // the picture off the screen, so a hold that lands a tick later is a band holding a frame
-        // the player has already moved on from, which is the frozen-image flash at the start of a
-        // drag that no ordering of the paint can explain (see `settle_video_drag_hold`).
+        trace_park_step("hold"); // **The film's hold is taken before the park rather than on the tick after it, and the
+                                 // order of the two is the point.** The hold is a pause key, so the film it stops keeps
+                                 // playing until the key reaches a player that is decoding it — and the park below reads
+                                 // the picture off the screen, so a hold that lands a tick later is a band holding a frame
+                                 // the player has already moved on from, which is the frozen-image flash at the start of a
+                                 // drag that no ordering of the paint can explain (see `settle_video_drag_hold`).
         settle_video_drag_hold(true);
         // The box the window is standing at, and not the one the pin remembers, for the same reason
         // the drag is begun from it: the park paints the placeholder into this window at the place
@@ -598,6 +597,10 @@ pub(super) fn begin_pin_drag(
             (window_box.0, window_box.1),
             matches!(action, PinDragAction::Resize(_)),
         );
+        // A newer gesture supersedes whatever relaunch is still in flight behind the cover: the
+        // bump kills it before it can publish. After the park rather than before it — the fresh
+        // park's capture reads the live window, and there is nothing to read once it has gone.
+        bump_pinned_generation();
     } else {
         window.release_capture(hwnd);
     }
@@ -634,12 +637,25 @@ pub(super) fn unpark_pinned_player(window: &dyn PinWindow) -> bool {
         return false;
     }
 
+    // Re-checked at the show site itself, under no lock but immediately before the show: a bump
+    // on the window thread may have superseded after the settle's own gate, and a condemned
+    // player is never placed nor shown. The kill is retried rather than dropped, and the cover
+    // holds for the next tick to ask again.
+    if !pending_relaunch_is_current() {
+        let _ = reap_superseded_relaunch();
+        return false;
+    }
+
     // The band is read before the flag goes down rather than with it: a hand that carried the
     // window elsewhere left the player's window at the box the drag began from, and the place is
     // part of putting it back. What follows is place, flag down, repaint — strictly ordered, in
     // this same tick — because a band painted transparent with nothing behind it is the desktop,
     // and the pixels the compositor is still holding are the placeholder until the repaint.
-    let band = pinned_content();
+    //
+    // A pin with no media band — collapsed, with no hole for anybody else's window — is still
+    // placed, at the box it stands at now: a show without a place would leave the window at
+    // whatever rect it happens to be at, which is the stale-box defect in miniature.
+    let band = pinned_content().or_else(pinned_media_box_now);
 
     // Placed while the cover is still up rather than after it is down: the window goes back at
     // the final box before the band is a hole again, so no paint can fall between the two.
@@ -665,6 +681,15 @@ pub(super) fn unpark_pinned_player(window: &dyn PinWindow) -> bool {
     // the desktop, for as long as the compositor takes to reach the raise above.
     window.repaint();
     true
+}
+
+/// The media box the pin stands at now, band or no band.
+///
+/// `pinned_content` answers nothing for a collapsed pin — it has no bands for anybody else's
+/// window to stand in — but its box is still the final one, so an unpark that would otherwise
+/// show without placing places there instead (see `unpark_pinned_player`).
+fn pinned_media_box_now() -> Option<ScreenRegion> {
+    pin_state()?.pin().map(|pin| pin.content)
 }
 
 /// Let go of the pointer a drag took.
@@ -941,6 +966,11 @@ pub(super) fn finish_pin_drag(hwnd: HWND, window: &dyn PinWindow) -> bool {
                 *request = Some(content);
             }
         }
+    } else if park_stranded_without_a_player() {
+        // The begin killed the in-flight relaunch and this move brings no player of its own:
+        // relaunch at the box the hand left behind rather than leaving a cover nothing ends.
+        // Only then — a live player behind the cover is left for the settle to hand the band to.
+        relaunch_stranded_park();
     } else if seek_cover_is_waiting() {
         // A seek's cover waited out by a gesture that relaunches nothing — a move let go of over
         // a scrub in flight — is handed back to the player it covers: no relaunch is coming, so
@@ -1027,7 +1057,11 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
 
     // A seek abandoned mid-aim never relaunches: hand the band back to the player the cover
     // stands over rather than leaving a cover nothing ends (see `seek_cover_is_waiting`).
-    if seek_cover_is_waiting() {
+    // Stranded first: a cover whose player was killed has no player to hand back, so the
+    // release relaunches one at the box the pin stands at now.
+    if park_stranded_without_a_player() {
+        relaunch_stranded_park();
+    } else if seek_cover_is_waiting() {
         unpark_pinned_player(window);
     }
 }

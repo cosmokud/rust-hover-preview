@@ -423,7 +423,13 @@ pub fn run_preview_window() {
                 // would each close the pin over a player that exited because its film finished
                 // rather than because it died, and the loop that replaces them is this one (see
                 // `loop_ended_pinned_player`).
-                loop_ended_pinned_player();
+                //
+                // Not while the cover is owed a player: a supersede-kill leaves the clock near
+                // the film's end with no player behind it, and a loop begun at the beginning
+                // here would stack a second relaunch onto the replacement already on its way.
+                if !pin_park_covers_a_relaunch() {
+                    loop_ended_pinned_player();
+                }
 
                 // A press that landed on the window the engine draws a document in, which is the
                 // one thing on a pinned window the window procedure cannot be told about: the

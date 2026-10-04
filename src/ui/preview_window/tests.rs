@@ -287,3 +287,4 @@ mod video_hold;
 mod video_transport;
 mod walk;
 mod ws_g_seek_hold;
+mod ws_h_supersede;

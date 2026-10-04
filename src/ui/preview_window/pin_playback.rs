@@ -143,6 +143,15 @@ pub(super) fn restart_pinned_player(
     // being confirmed does, so it still names the process that was there a moment ago.
     let replaced = VIDEO_PID.load(Ordering::SeqCst);
 
+    // A relaunch begun while another is still in flight behind the cover supersedes it — and the
+    // unpublished one is killed BEFORE the replacement is spawned rather than after it. A spawn
+    // first leaves a start-to-kill window in which the stale player can still publish: its window
+    // arrives, the monitor finds it, and something shows it at a stale box beside its replacement.
+    // Killed first, it is dying before its replacement exists. Only a confirmed kill clears the
+    // record; a kill not yet taken stays pending and the settle keeps the cover standing while it
+    // asks again (see `reap_superseded_relaunch`).
+    let killed = reap_superseded_relaunch();
+
     // The handle is taken and the process left alone, which is the whole of what "parked" means for
     // the media: nothing else in here can reach the player, so the only thing that can end it is
     // the loop that was told about it.
@@ -168,7 +177,11 @@ pub(super) fn restart_pinned_player(
     // running* — a relaunch that ended it instead would leave the band empty for the whole of the
     // wait below, and the wait is as long as a player takes to open the file.
     if pid != 0 {
-        retire_replaced_player(replaced, pid);
+        // ...unless it is the superseded one just killed: nothing waits on its arrival and
+        // nothing will ever show it.
+        if killed != Some(replaced) {
+            retire_replaced_player(replaced, pid);
+        }
     } else {
         // A replacement that did not come up leaves nothing to arrive, so the player on screen is
         // ended here instead of waiting for an arrival that is never going to happen — which is the
@@ -187,8 +200,14 @@ pub(super) fn restart_pinned_player(
     // and the band was opaque for every one of those milliseconds and did not matter. The settle
     // is what puts a replacement up, in the same tick it takes the flag down (see
     // `settle_pinned_park`), so nothing is left on screen but the frame the drag was holding.
+    //
+    // **And not a superseded generation either** (see `show_current_replacement`): a newer
+    // gesture's bump kills the in-flight relaunch, and a bump landing between the tag below and
+    // this show is re-checked after it — the condemned window hidden again rather than left
+    // published — with the residual stated honestly where the helper is.
+    note_pinned_relaunch(pid);
     if !pin_player_is_parked() {
-        let _ = ensure_video_window_topmost(content.0, content.1, width, height);
+        show_current_replacement(pid, content);
     }
 
     update_pin_transport(|transport| transport.begun(seconds, pid != 0, holding));
@@ -649,6 +668,201 @@ pub(super) struct PinParkSwap {
 /// written on the pointer message that begins a drag and read by every tick of the loop after it.
 pub(super) static PIN_PARK_SWAP: Lazy<Mutex<Option<PinParkSwap>>> = Lazy::new(|| Mutex::new(None));
 
+/// The generation of the pinned player: every gesture's park begins a new one, and every
+/// relaunch is tagged with the one that is current when it is begun.
+///
+/// Generation covers players, not just park records. The re-entrant extend keeps the park
+/// *record* current, but the first gesture's *relaunch* still lands: its replacement arrives
+/// and something shows it — at a stale box, outside the now-current band, playing. A relaunch
+/// superseded by a newer gesture is killed when superseded — never shown, never placed — and
+/// the settle shows and places a replacement only while its generation is current.
+pub(super) static PIN_PLAYER_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// A relaunch begun behind a standing cover that no settle has swapped yet: what the next
+/// bump kills if a newer gesture arrives first, and what the next relaunch kills if it is
+/// still unpublished when that one begins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PendingPinnedRelaunch {
+    pub(super) pid: u32,
+    pub(super) generation: u64,
+}
+
+/// The in-flight relaunch, if one is waiting behind the cover for its swap.
+pub(super) static PIN_PENDING_RELAUNCH: Lazy<Mutex<Option<PendingPinnedRelaunch>>> =
+    Lazy::new(|| Mutex::new(None));
+
+/// The generation relaunches are tagged with.
+pub(super) fn current_pinned_generation() -> u64 {
+    PIN_PLAYER_GENERATION.load(Ordering::Acquire)
+}
+
+/// Tag a relaunch with the current generation. A launch that never came up leaves nothing in
+/// flight rather than a pid nothing will ever publish.
+pub(super) fn note_pinned_relaunch(pid: u32) {
+    let mut pending = PIN_PENDING_RELAUNCH
+        .lock()
+        .unwrap_or_else(|pending| pending.into_inner());
+    if pid == 0 {
+        *pending = None;
+    } else {
+        *pending = Some(PendingPinnedRelaunch {
+            pid,
+            generation: current_pinned_generation(),
+        });
+    }
+}
+
+/// The in-flight relaunch, if one is still waiting behind the cover.
+pub(super) fn pending_pinned_relaunch() -> Option<PendingPinnedRelaunch> {
+    PIN_PENDING_RELAUNCH
+        .lock()
+        .ok()
+        .and_then(|pending| *pending)
+}
+
+/// Forget the in-flight relaunch: its swap consumed it, or its kill reaped it.
+pub(super) fn clear_pending_pinned_relaunch() {
+    if let Ok(mut pending) = PIN_PENDING_RELAUNCH.lock() {
+        *pending = None;
+    }
+}
+
+/// Kill the superseded in-flight relaunch where it stands, and forget it where
+/// the kill is confirmed — answering which pid was reaped, if one was.
+///
+/// The one helper every supersede path goes through, so an unconfirmed kill is
+/// never cleared from under itself: only a confirmed kill forgets the record,
+/// and a kill not yet taken stays pending for the next path to retry. Callers
+/// that own no retry — the pin's own teardown — hand what is left to the
+/// orphan reaper instead of dropping it (see `retire_orphaned_player`).
+pub(super) fn reap_superseded_relaunch() -> Option<u32> {
+    let killed = pending_pinned_relaunch()
+        .filter(|stale| kill_superseded_player(stale.pid))
+        .map(|stale| stale.pid);
+    if killed.is_some() {
+        clear_pending_pinned_relaunch();
+    }
+    killed
+}
+
+/// Whether there is no in-flight relaunch, or it is of the current generation: the settle's
+/// gate for showing or placing anything.
+pub(super) fn pending_relaunch_is_current() -> bool {
+    pending_pinned_relaunch()
+        .map(|pending| pending.generation == current_pinned_generation())
+        .unwrap_or(true)
+}
+
+/// Begin a new player generation: a newer gesture supersedes whatever relaunch is still in
+/// flight behind the cover, so that player is killed before it can publish — and reaped, no
+/// orphan ffplay, no zombie audio.
+///
+/// Returns the new current generation. It fires only on an actual supersede: with no
+/// in-flight relaunch there is nothing to kill, and a single gesture's own relaunch is tagged
+/// current after this and swaps untouched — no extra waits, no latency on the ordinary road.
+pub(super) fn bump_pinned_generation() -> u64 {
+    let generation = PIN_PLAYER_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    let _ = reap_superseded_relaunch();
+    generation
+}
+
+/// Place-and-show a replacement iff its generation is still current.
+///
+/// A superseded generation is never placed nor shown: the gate refuses it and
+/// retries the kill instead, so a player a newer gesture condemned cannot
+/// land at a stale box.
+///
+/// The gate and the show are two steps rather than one atomic section, and
+/// the residual is stated honestly rather than hidden. `VIDEO_PID` and
+/// `VIDEO_HWND` are independent atomics with no common lock — the monitor
+/// thread publishes the handle, the loop publishes the pid — so a bump on the
+/// window thread landing *between* the gate and the show still shows a
+/// condemned window: place and show are one `SetWindowPos` behind the
+/// read-only `ensure_video_window_topmost`, and nothing here can split them
+/// or hold them off. What bounds the damage is the revalidation below: the
+/// window is at most a tick old before it is hidden again and its kill
+/// retried. Closing the slice entirely would take the place-and-show split
+/// under `PIN_PENDING_RELAUNCH`'s lock, which no caller here can reach
+/// through — the show lives behind that read-only call.
+pub(super) fn show_current_replacement(pid: u32, content: ScreenRegion) {
+    if !pending_relaunch_is_current() {
+        let _ = reap_superseded_relaunch();
+        return;
+    }
+
+    let _ = ensure_video_window_topmost(
+        content.0,
+        content.1,
+        (content.2 - content.0).max(1),
+        (content.3 - content.1).max(1),
+    );
+    revalidate_shown_replacement(pid);
+}
+
+/// Re-check a just-shown replacement, and un-show a condemned one.
+///
+/// This is the half of the gate-to-show race the gate cannot cover (see
+/// `show_current_replacement`): a bump landing between the gate and the show
+/// leaves a player on screen something else has already condemned. Only the
+/// shown pid is ever hidden — where a newer relaunch has already published,
+/// `VIDEO_PID` names it and this touches nothing — and the kill is retried
+/// rather than dropped.
+pub(super) fn revalidate_shown_replacement(pid: u32) {
+    if pending_relaunch_is_current() {
+        return;
+    }
+    if pid != 0 && VIDEO_PID.load(Ordering::Acquire) == pid {
+        hide_pinned_player_window();
+    }
+    let _ = reap_superseded_relaunch();
+}
+
+/// Whether the standing cover is owed a player that has not arrived yet: parked with an
+/// in-flight relaunch, or parked over a relaunch that is still to come — a resize's drag, a
+/// seek's cover. The pin stays up across the gap a supersede-kill leaves: the player is gone
+/// but its replacement is on its way, so a dead player here is not a pin that came apart.
+pub(super) fn pin_park_covers_a_relaunch() -> bool {
+    pin_player_is_parked()
+        && (pending_pinned_relaunch().is_some() || park_record_expects_a_player())
+}
+
+/// Whether the park's own record is still waiting on a player: a relaunch behind the cover,
+/// or one still to come.
+fn park_record_expects_a_player() -> bool {
+    PIN_PARK_SWAP
+        .lock()
+        .ok()
+        .and_then(|held| *held)
+        .is_some_and(|swap| swap.replacing || swap.awaiting_relaunch)
+}
+
+/// Whether the standing cover has no player left to hand the band to: the in-flight relaunch
+/// was killed or died, and no replacement has begun. The gesture's own release relaunches
+/// instead of leaving a cover nothing ends.
+pub(super) fn park_stranded_without_a_player() -> bool {
+    pin_player_is_parked()
+        && pending_pinned_relaunch().is_none()
+        && VIDEO_PID.load(Ordering::Acquire) == 0
+}
+
+/// Relaunch the film a stranded cover is standing over, at the box and the second the pin
+/// stands at now: the recovery a release owes after its own begin killed the in-flight
+/// relaunch. Only then — a live player behind the cover is never relaunched here, and a
+/// collapsed pin has no band to put one back into.
+pub(super) fn relaunch_stranded_park() {
+    if pin_is_collapsed() || current_media_type() != Some(MediaType::Video) {
+        return;
+    }
+    if !park_stranded_without_a_player() {
+        return;
+    }
+    let Some((path, content, transport, _)) = pinned_playback_state() else {
+        return;
+    };
+    let at = pin_playhead(&transport).unwrap_or(0.0);
+    restart_pinned_player(&path, content, at, transport.paused_at.is_some());
+}
+
 /// Which of the two arms a park's end was taken on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum ParkSwap {
@@ -1102,6 +1316,22 @@ pub(super) fn settle_pinned_park() -> bool {
 /// `Win32PinWindow` is a handle to a window this app created — and a settle tested only through the
 /// loop's own version is a settle not tested at all. Everything else it reads is this app's own
 /// state, which a test stands (see `stand_pin`).
+/// Refuse a swap for a superseded generation: retry its kill, upgrade the parked
+/// band, and hold the cover.
+///
+/// Answers whether the cover held — the settle's shape for every stale check,
+/// at the gate and immediately before the show alike, so a bump landing
+/// between the two still diverts to the kill path rather than placing a
+/// condemned player (see `settle_pinned_park_where` and `unpark_pinned_player`).
+fn stale_generation_holds_the_cover(window: &dyn PinWindow) -> bool {
+    if pending_relaunch_is_current() {
+        return false;
+    }
+    let _ = reap_superseded_relaunch();
+    upgrade_the_parked_band(window);
+    true
+}
+
 pub(super) fn settle_pinned_park_where(window: &dyn PinWindow, window_up: bool) -> bool {
     if !pin_player_is_parked() {
         forget_the_park_that_is_not();
@@ -1115,6 +1345,14 @@ pub(super) fn settle_pinned_park_where(window: &dyn PinWindow, window_up: bool) 
         return false;
     }
 
+    // Only the current generation is ever shown or placed: a superseded relaunch dies
+    // unpublished, and the cover holds while its kill is confirmed. A kill not yet taken is
+    // asked again here rather than waited out — termination is a request, and the next tick
+    // finds it gone — and the band is upgraded rather than left to go stale in the meantime.
+    if stale_generation_holds_the_cover(window) {
+        return false;
+    }
+
     let Some((arm, waited)) = park_swap_arm_for_the_band(window_up) else {
         // Still waiting for a window, so the placeholder stays standing — but a frame a background
         // rendered for this park can have landed in the meantime, and a frame nothing repaints is
@@ -1122,6 +1360,14 @@ pub(super) fn settle_pinned_park_where(window: &dyn PinWindow, window_up: bool) 
         upgrade_the_parked_band(window);
         return false;
     };
+
+    // Re-checked immediately before the show below: a bump on the window thread may have
+    // superseded between the gate above and this swap — the arm above is computed with no lock
+    // held — and a condemned player must not be placed nor shown. The unpark re-checks at the
+    // show site itself; this one diverts before any of that work begins.
+    if stale_generation_holds_the_cover(window) {
+        return false;
+    }
 
     // The swap itself: the flag goes down and the window goes up in the same tick, and the band is
     // painted through the window in that same tick and not before — so the band is never a moment of
@@ -1269,6 +1515,10 @@ pub(super) fn seek_cover_is_waiting() -> bool {
 /// and this sees the flag up and leaves the record alone — or writes both after this has released
 /// the lock. Read without it, a park begun in the gap between the read and the write loses the
 /// record it had just written, and a park that has lost its record is a placeholder nothing ends.
+///
+/// The in-flight relaunch goes with it: the swap consumed it, or there never was a cover for it
+/// to wait behind — a relaunch with no park standing is showable only by the relaunch's own
+/// immediate place, which has already run, so nothing is left for the settle to gate on.
 fn forget_the_park_that_is_not() {
     let Some(mut pinned) = pin_state() else {
         return;
@@ -1280,6 +1530,7 @@ fn forget_the_park_that_is_not() {
         return;
     }
 
+    clear_pending_pinned_relaunch();
     forget_pin_park_swap();
 }
 
