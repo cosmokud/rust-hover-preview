@@ -290,3 +290,4 @@ mod ws_g_seek_hold;
 mod ws_h_supersede;
 mod ws_j_always_kill;
 mod ws_k_chrome_nav;
+mod ws_l_cover_owner;

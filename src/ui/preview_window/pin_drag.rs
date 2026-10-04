@@ -601,20 +601,14 @@ pub(super) fn begin_pin_drag(
                                  // anywhere on the gesture (see `gesture_press_freeze`).
         let killed_road =
             current_media_type() == Some(MediaType::Video) && gesture_press_freeze() && {
-                park_pinned_player(
+                // The record the cover's own end will wait on, written by the road that raised
+                // it — including where this press only extends a cover another road began, in
+                // which case that road's record is left as it was found (see `ParkArm`).
+                park_pinned_player_for_gesture(
                     HWND(hwnd as *mut _),
                     (window_box.0, window_box.1),
                     matches!(action, PinDragAction::Resize(_)),
                 );
-                // A relaunch is coming at the release, behind this cover: the
-                // record waits on it rather than on a player standing in the
-                // band.
-                if let Ok(mut swap) = PIN_PARK_SWAP.lock() {
-                    if let Some(record) = swap.as_mut() {
-                        record.replacing = true;
-                        record.awaiting_relaunch = true;
-                    }
-                }
                 kill_pinned_player_async();
                 true
             };

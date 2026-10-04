@@ -493,7 +493,7 @@ fn a_drag_that_ends_leaves_the_frame_standing_for_the_settle_to_answer() {
     }
 }
 
-/// The two arms a park's end can be taken on, and the answer that is not one of them.
+/// The arms a park's end can be taken on, and the answer that is not one of them.
 ///
 /// **Visible is not presented, and that is the whole of the end-of-drag flash.** A replacement's
 /// window is on screen and correctly sized within a few milliseconds of being begun — SDL makes it
@@ -505,13 +505,16 @@ fn a_drag_that_ends_leaves_the_frame_standing_for_the_settle_to_answer() {
 /// player that died mid-relaunch, or a machine with no decoder must not be able to hold a black
 /// band against a window for ever.
 ///
-/// **And no window at all is not a third arm, which is the hole this whole arrangement exists not
-/// to leave.** The band is transparent because a player's window stands in it, so a band handed
-/// back with nothing behind it is the desktop — and a replacement within its bound of publishing a
-/// window is answered out of the hand by every place that could put it up, so swapping on the bound
-/// alone would take the parked flag down and show nothing.
+/// **And no window at all is not a swap, but it cannot be a cover for ever either.** The band is
+/// transparent because a player's window stands in it, so a band handed back with nothing behind it
+/// is the desktop — and a replacement within its bound of publishing a window is answered out of
+/// the hand by every place that could put it up, so swapping on the bound alone would take the
+/// parked flag down and show nothing. What an opaque band *is*, though, is a shape this app's own
+/// window hit-tests: a placeholder standing over the video area answers every click in it and
+/// answers it wrong. So the `no window` case has a bound of its own and ends by giving the cover
+/// up (see `PIN_PARK_COVER_TIMEOUT` and `ParkSwap::Abandoned`).
 #[test]
-fn a_band_is_handed_back_on_a_player_or_on_a_wait_and_never_on_neither() {
+fn a_band_is_handed_back_on_a_player_and_given_up_on_a_cover_that_waits_for_neither() {
     // The player that was playing is back, and it is the same process: nothing to wait for, at any
     // age — including immediately, which is what a move's release is.
     assert_eq!(
@@ -544,8 +547,8 @@ fn a_band_is_handed_back_on_a_player_or_on_a_wait_and_never_on_neither() {
          from being a black band that never becomes a picture"
     );
 
-    // No window at all is the case the bound does *not* cover, and the one it most certainly must
-    // not: there is nothing to hand the band to, and the placeholder it is holding is opaque.
+    // No window at all is the case the swap bound does *not* cover, and the one it most certainly
+    // must not: there is nothing to hand the band to, and the placeholder it is holding is opaque.
     assert_eq!(
         park_swap_arm(false, false, Duration::ZERO),
         None,
@@ -554,15 +557,25 @@ fn a_band_is_handed_back_on_a_player_or_on_a_wait_and_never_on_neither() {
     assert_eq!(
         park_swap_arm(false, true, PIN_PARK_SWAP_TIMEOUT),
         None,
-        "and the bound is not a reason to swap one that never published a window: the swap takes \
-         the parked flag down and the window up together, and with no window up it is the desktop"
+        "and the swap bound is not a reason to swap one that never published a window: the swap \
+         takes the parked flag down and the window up together, and with no window up it is the \
+         desktop"
+    );
+
+    // The cover's own bound is the case that must not be for ever, because an opaque band this
+    // app's own window hit-tests answers every click in the video area for the life of the pin.
+    assert_eq!(
+        park_swap_arm(false, true, PIN_PARK_COVER_TIMEOUT),
+        Some(ParkSwap::Abandoned),
+        "past the cover's own bound the cover is given up rather than held: the band goes back to \
+         being the hole it is between films, which a player's window fills the moment it has one"
     );
     assert_eq!(
         park_swap_arm(false, true, PIN_PARK_SWAP_TIMEOUT * 4),
-        None,
-        "nor is four times the bound — the placeholder stands until there is a player to see \
-         through it, and the wait is extended rather than restarted so that a window arriving late \
-         is handed the band on the first tick that finds it"
+        Some(ParkSwap::Abandoned),
+        "nor is four times the swap bound any different — the wait is extended rather than \
+         restarted, so a window arriving late is still handed the band on the first tick that \
+         finds it, and a window that never arrives does not keep the placeholder"
     );
 }
 
@@ -2195,6 +2208,11 @@ fn a_seek_cover_waits_for_its_relaunch_rather_than_spending_its_bound() {
         park_pinned_player_for_seek(hwnd, (100, 80)),
         "a seek parks its cover at seek-start"
     );
+    // The scrub itself, which is what this test is about: the hold below is a tick *mid-scrub*, so
+    // the aim the press stored has to be standing. A cover with no scrub in flight is a cover whose
+    // release has already come, and the tick does not hold that one (see
+    // `cover_relaunch_is_still_possible`).
+    update_pin_transport(|transport| transport.seeking = Some(90.0));
     assert!(
         seek_cover_is_waiting(),
         "which waits for the release's relaunch: no player has been begun behind it yet"

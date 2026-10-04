@@ -581,13 +581,10 @@ pub(super) unsafe fn pinned_volume_press(hwnd: HWND, x: i32, y: i32) -> bool {
             .map(|origin| (origin.0, origin.1))
             .or_else(|| pinned_content().map(|content| (content.0, content.1)))
             .unwrap_or((0, 0));
-        park_pinned_player(hwnd, at, false);
-        if let Ok(mut swap) = PIN_PARK_SWAP.lock() {
-            if let Some(record) = swap.as_mut() {
-                record.replacing = true;
-                record.awaiting_relaunch = true;
-            }
-        }
+        // The record the cover's own end will wait on, written by the road that raised it and by
+        // nobody else: a press that arrives over a file step's cover extends that record and
+        // leaves its arm alone (see `park_pinned_player_for_gesture`).
+        park_pinned_player_for_gesture(hwnd, at, false);
         kill_pinned_player_async();
         bump_pinned_generation();
     }
