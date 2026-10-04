@@ -587,6 +587,11 @@ pub(super) fn unpark_pinned_player(window: &dyn PinWindow) -> bool {
     // The band is read after the flag rather than with it, and both are read before the window is
     // asked for anything — the flag says the park is over and the band says where the window is
     // to go, and a pin that has been taken down between the two has no band to go to.
+    //
+    // The frame held for the band goes with the park rather than with the drag: it was the band's
+    // picture for as long as the band's player was away, and a picture the size of a display is
+    // not left behind for a pin that is not being dragged (see `compose_parked_band`).
+    forget_video_frame();
     window.unpark_player_window(pinned_content());
     true
 }

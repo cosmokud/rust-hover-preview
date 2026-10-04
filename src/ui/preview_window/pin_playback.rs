@@ -184,12 +184,13 @@ pub(super) fn restart_pinned_player(
     update_pin_transport(|transport| transport.begun(seconds, pid != 0, holding));
     with_pin(|pin| pin.volume.playing_at = volume);
 
-    // A relaunch is also how a drag's parking is undone, because a relaunch brings a player of its
-    // own with a window of its own: there is nothing left to unpark, and the flag that would keep
-    // the band painted flat has to go with it or the new picture is drawn behind an opaque
-    // rectangle. The hold written just above is the relaunch's own, so it is not the one the drag
-    // made and there is nothing here to restore (see `park_pinned_player`).
-    with_pin(|pin| pin.parked = false);
+    // A relaunch is also how a drag's parking is undone, and it is undone by the same question as
+    // everywhere else: a player's window has to be there for the band to be a hole again, and the
+    // player just begun is running and has no window yet. So this is the settle rather than a write
+    // — which is what keeps the band this app's to fill, holding the last frame scaled to the box
+    // the drag settled on, for as long as the replacement takes to put a window up
+    // (see `settle_pinned_park`).
+    settle_pinned_park();
 }
 
 /// Whether the pinned window is showing a held file, for a relaunch that has no transport of its
@@ -609,7 +610,7 @@ pub(super) fn pinned_audio_duration(path: &Path) -> Option<f64> {
 ///
 /// The band is painted flat while the picture is away rather than left transparent, so the desktop
 /// does not show through a window that has been hidden: the paint reads this flag (see
-/// `paint.parked`).
+/// `paint.parked`) and fills the band with the last frame the player had on screen.
 pub(super) fn park_pinned_player() -> bool {
     let parked = pin_state().is_some_and(|mut pinned| {
         let Some(pin) = pinned.pin_mut() else {
@@ -626,8 +627,82 @@ pub(super) fn park_pinned_player() -> bool {
     });
 
     if parked {
+        // Taken before the window is hidden, and only when this really is a park: it is a read of
+        // what is on screen, so there is nothing to read once the window has gone (see
+        // `hold_video_window_frame`).
+        hold_video_window_frame();
         hide_pinned_player_window();
     }
 
     parked
+}
+
+/// Take a park back, answering whether there was one to take.
+///
+/// **The park ends when there is a picture to see through the band again, and not one moment
+/// before.** The band is transparent while a film is playing because FFmpeg's window stands in it,
+/// so a park that ends while that window is not there is a hole in the desktop in every band a
+/// player of this app's stands in — which is what a relaunch used to leave for the whole of the
+/// wait for its replacement, because the flag was written down the moment the replacement was
+/// begun rather than the moment it had a window of its own (see `restart_pinned_player`).
+///
+/// So the window is the whole of the question and the flag answers nothing: a player that is still
+/// starting, a player that is being replaced and has not put its window up yet, and a player whose
+/// process died on the way are all one answer, which is that the band is still this app's to fill.
+///
+/// **Being on screen is the whole of the answer too, and existing is not it.** A window this app
+/// found for the player has been found by a monitor thread whose raise is answered by the same
+/// flag — so a window found while the park stands has been styled and published and left exactly
+/// where it was, and the band is a hole the moment the flag goes down over it.
+///
+/// The window is put in the band before the flag goes down rather than after it, which is why this
+/// is not `ensure_pinned_sibling_box` on its own: that call is answered out of the hand for as long
+/// as the park stands, and the tick's own raise is answered out of the hand for the same reason,
+/// so the tick that takes the park back is the one that has to place the window.
+pub(super) fn settle_pinned_park() -> bool {
+    if !pin_player_is_parked() {
+        return false;
+    }
+
+    let Some(hwnd) = video_window_for(VIDEO_PID.load(Ordering::SeqCst)) else {
+        return false;
+    };
+    // SAFETY: `hwnd` came out of `video_window_for`, which settles `IsWindow` on the handle it
+    // publishes before handing it over, and `IsWindowVisible` reports rather than faults for a
+    // window on its way out.
+    if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        return false;
+    }
+
+    if !settle_pinned_park_onto(true) {
+        return false;
+    }
+
+    if let Some(content) = pinned_content() {
+        ensure_pinned_sibling_box(content);
+    }
+    true
+}
+
+/// The park taken back when `player_up` says the player's own window is standing in the band, or
+/// left standing when it does not: the flag and the window are two facts and the flag is only ever
+/// this app's own account of the window (see `settle_pinned_park`).
+///
+/// The frame goes with the park rather than with the drag, because it is the band's picture for as
+/// long as the band has no window in it and not one tick longer (see `forget_video_frame`).
+pub(super) fn settle_pinned_park_onto(player_up: bool) -> bool {
+    let settled = pin_state().is_some_and(|mut pinned| {
+        pinned.pin_mut().is_some_and(|pin| {
+            pin.parked && player_up && {
+                pin.parked = false;
+                true
+            }
+        })
+    });
+
+    if settled {
+        forget_video_frame();
+    }
+
+    settled
 }

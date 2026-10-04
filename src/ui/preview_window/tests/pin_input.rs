@@ -834,6 +834,100 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
     }
 }
 
+/// A park is not taken back by the flag it is written in, and this is the whole of why: the band
+/// is transparent while a film is playing because FFmpeg's own window stands in it, so a park that
+/// ends while that window is not there is a hole in the desktop in every band a player of this
+/// app's is drawn in. A resize's release used to be exactly that — the relaunch that answers it
+/// wrote the flag down the moment it began a replacement, which is a player that is running and
+/// has no window yet — and what the user saw for the length of the wait was the file behind, and
+/// the windows beside it, through the window they were holding the edge of.
+///
+/// So the settle asks the window rather than the flag, and a park that is answered while the
+/// replacement is still starting stays standing, holding the last frame it took scaled to the box
+/// the drag settled on. It is asked with the window rather than with a pid because the two overlap
+/// during a relaunch and a pid cannot say which of them is on screen (see `video_window_for`).
+///
+/// The frame is given up with the park and not one tick before it: it is the band's picture for as
+/// long as the band has no window in it, and a pin that is not being dragged pays nothing to hold
+/// a picture the size of a display.
+#[test]
+fn a_park_is_taken_back_only_once_the_players_own_window_is_there() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    stand_pin(Some(PinnedPreview {
+        path: PathBuf::from("parked-until-the-replacement-arrives.mkv"),
+        ..PinnedPreview::for_test()
+    }));
+
+    let mut media = create_loading_media(320, 240);
+    media.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    assert!(
+        park_pinned_player(),
+        "a drag puts the player's window away, which is the half of the band that is then this \
+             app's to fill"
+    );
+    // The machine this runs on has no player of this app's, so the frame a real park would have
+    // taken off the desktop is stood in for it (see `hold_video_window_frame`).
+    stand_video_frame_for_a_test([0u8, 0, 255, 255].repeat(16), 4, 4);
+    assert!(
+        held_video_frame().is_some(),
+        "and the frame that was on screen a pointer message ago is held for the drag to scale"
+    );
+
+    assert!(
+        !settle_pinned_park_onto(false),
+        "a replacement that is running and has no window yet is not a picture to see through the \
+             band, so the park is not taken back"
+    );
+    assert!(
+        pin_player_is_parked(),
+        "and the band keeps the frame it has rather than becoming a hole in the desktop — which is \
+             what this very settle used to do, for as long as a player takes to open a file"
+    );
+    assert!(
+        !settle_pinned_park_onto(false),
+        "a settle asked again while the replacement is still starting is still the same answer"
+    );
+
+    assert!(
+        settle_pinned_park_onto(true),
+        "and it is taken back the moment the player's own window is standing in the band"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "which is the whole of what the park was holding off: the band is transparent again \
+             because there is a window of somebody else's in it"
+    );
+    assert!(
+        !settle_pinned_park_onto(true),
+        "and a park that has been taken back cannot be taken back again, so a relaunch that finds \
+             no drag in flight does not write a flag nobody will ever ask about"
+    );
+    assert!(
+        held_video_frame().is_none(),
+        "the frame goes with it rather than being held for the rest of the run: a pin that is not \
+             being dragged pays nothing for a picture the size of a display"
+    );
+
+    // And with no pin up there is no flag, so a settle is answered by nothing at all.
+    stand_pin(None);
+    assert!(
+        !settle_pinned_park_onto(true),
+        "a park over no pin at all cannot be standing, and so cannot be taken back"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
 /// A window that hands the pointer back the way the machine does, by delivering the capture
 /// notice back into the window procedure before the call returns.
 ///
