@@ -937,18 +937,22 @@ fn a_park_is_taken_back_only_once_the_players_own_window_is_there() {
 /// what makes the two ends of a capture tellable apart on a machine with no desktop: a
 /// recorder that merely recorded the release would let a park be undone twice with nothing in
 /// the test ever noticing.
-struct CapturingWindow {
+///
+/// Shared rather than kept to this file, because it is the stand-in for the machine and not
+/// for one road: whether a release that reached an arm is an answer or a theft of what the
+/// press armed cannot be told without it (see `ws_k_chrome_nav`).
+pub(super) struct CapturingWindow {
     inner: RecordedPinWindow,
 }
 
 impl CapturingWindow {
     /// This window, keeping the rest of a drag's list on the recorder underneath.
-    fn around(inner: RecordedPinWindow) -> Self {
+    pub(super) fn around(inner: RecordedPinWindow) -> Self {
         Self { inner }
     }
 
     /// Everything the road did, in the order it did it.
-    fn calls(&self) -> Vec<PinWindowCall> {
+    pub(super) fn calls(&self) -> Vec<PinWindowCall> {
         self.inner.calls()
     }
 }
@@ -1015,8 +1019,8 @@ impl PinWindow for CapturingWindow {
 ///
 /// Taken rather than read because the slot is a machine value the loop drains on its next turn and
 /// other tests write it too, so a test that left one behind would be laying out whatever pin ran
-/// next.
-fn take_relayout_request() -> Option<ScreenRegion> {
+/// next. Shared with the tests about what a drag's end asks for (see `ws_k_chrome_nav`).
+pub(super) fn take_relayout_request() -> Option<ScreenRegion> {
     PIN_BOX_REQUEST
         .lock()
         .ok()
