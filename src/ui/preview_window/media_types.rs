@@ -344,6 +344,20 @@ impl MediaType {
         matches!(self, Self::NativeVideo)
     }
 
+    /// Whether this kind's picture is a window of its own — another process's window standing
+    /// behind the pin's band — rather than a frame this window draws.
+    ///
+    /// It is the question a park is asked, and the whole of it: what a drag puts away is the
+    /// window behind the band, so a band this app fills itself has nothing to put away, and the
+    /// flat fill a park paints would be laid over a picture this window is drawing — a frame of
+    /// this app's own, blanked for the length of a drag and answered with a stray decode. FFmpeg's
+    /// player and the browser that draws an engine document are the two of them; the media engine's
+    /// video is drawn into this window's own surface like any other frame (see
+    /// `park_pinned_player`).
+    pub(super) fn draws_in_a_window_of_its_own(&self) -> bool {
+        matches!(self, Self::Video) || self.is_engine()
+    }
+
     /// Whether this is a sound, whose card is the one painted preview that changes while it is
     /// on screen: the clock and the bar under it are drawn from a player that is running.
     pub(super) fn is_audio(&self) -> bool {
