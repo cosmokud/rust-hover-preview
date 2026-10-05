@@ -466,8 +466,8 @@ pub(super) fn cached_video_geometry(path: &Path) -> Option<ProbedGeometry> {
 /// The total pixels of the film `path`, where the probe has measured it: the whole frame the file
 /// holds rather than the crop the picture is drawn in, because what the hybrid weighs is what there
 /// is to decode. It is read without cloning the geometry, since all the route wants is the one
-/// number, and `None` where the file has not been measured — which the hybrid reads as the small
-/// answer (see `video_hw::resolve_video_engine`).
+/// number, and `None` where the file has not been measured — which the hybrid reads as a film to
+/// hand over where FFmpeg's player is installed (see `video_hw::resolve_video_engine`).
 pub(super) fn cached_video_source_pixels(path: &Path) -> Option<u64> {
     let key = VideoGeometryKey {
         path: path.to_path_buf(),
