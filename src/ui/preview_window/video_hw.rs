@@ -470,11 +470,11 @@ pub(super) fn named_for_the_media_engine(path: &Path) -> bool {
 /// whole rule is one function the tests can hand stub answers to.
 ///
 /// `Best` and `Hybrid` are one order between them, and it is the file's own: the media engine for a
-/// film at or below `VIDEO_FFMPEG_ABOVE_PIXELS`, FFmpeg's player for a bigger one, and the media
-/// engine where the size was never read — the small answer is the safe one, and a film nobody
-/// measured is not one to hand to a process. A chosen engine is itself alone with the fallback off,
-/// and itself followed by the rest of `VIDEO_ENGINES` with it on; a choice the machine cannot
-/// supply at all is ignored as `Best`.
+/// film at or below `VIDEO_FFMPEG_ABOVE_PIXELS`, and FFmpeg's player for a bigger one — and for a
+/// film nobody measured, where the player more forgiving than the probe is a better answer than a
+/// box nothing would be drawn into (see `probe_video_geometry`). A chosen engine is itself alone
+/// with the fallback off, and itself followed by the rest of `VIDEO_ENGINES` with it on; a choice
+/// the machine cannot supply at all is ignored as `Best`.
 pub(super) fn resolve_video_engine(
     choice: VideoEngine,
     fallback: bool,
@@ -492,7 +492,12 @@ pub(super) fn resolve_video_engine(
 
     let mut candidates: Vec<VideoEngine> = match choice {
         VideoEngine::Best | VideoEngine::Hybrid => {
-            let prefer = if pixels.is_some_and(|pixels| pixels > VIDEO_FFMPEG_ABOVE_PIXELS) {
+            // A film nobody measured is handed over where FFmpeg's player is here: `ffprobe` could
+            // not read it, and a player more forgiving than the probe is a better answer than a box
+            // nothing would be drawn into (see `probe_video_geometry`). The order's own filter
+            // leaves the media engine where there is no player to hand it to.
+            let handed_over = pixels.map_or(true, |pixels| pixels > VIDEO_FFMPEG_ABOVE_PIXELS);
+            let prefer = if handed_over {
                 VideoEngine::Ffmpeg
             } else {
                 VideoEngine::Native

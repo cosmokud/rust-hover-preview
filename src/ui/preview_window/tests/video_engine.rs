@@ -258,10 +258,10 @@ fn a_video_that_has_not_been_probed_waits_in_the_waiting_box() {
 /// stub answers rather than with the machine the test happens to run on.
 ///
 /// `Best` and `Hybrid` are one rule between them and it is the file's own: the media engine for a
-/// film at or below the pixel threshold, FFmpeg's player for a bigger one, and the media engine
-/// where the size was never read. An explicit choice is itself alone with the fallback off and a
-/// walk of the order with it on, and a choice naming an engine the machine has not got is ignored
-/// as `Best`, since a row that is greyed names a player that is not here.
+/// film at or below the pixel threshold, and FFmpeg's player for a bigger one or for a film nobody
+/// measured. An explicit choice is itself alone with the fallback off and a walk of the order with
+/// it on, and a choice naming an engine the machine has not got is ignored as `Best`, since a row
+/// that is greyed names a player that is not here.
 #[test]
 fn a_video_is_played_by_whichever_engine_the_choice_and_the_machine_leave_to_it() {
     let all_installed = |_| true;
@@ -288,8 +288,20 @@ fn a_video_is_played_by_whichever_engine_the_choice_and_the_machine_leave_to_it(
     );
     assert_eq!(
         resolve_video_engine(VideoEngine::Hybrid, true, None, all_installed, all_play),
+        Some(VideoEngine::Ffmpeg),
+        "and a film nobody measured is handed over, since the probe that would have weighed it \
+         could not read it"
+    );
+    assert_eq!(
+        resolve_video_engine(
+            VideoEngine::Hybrid,
+            true,
+            None,
+            |engine| engine == VideoEngine::Native,
+            all_play,
+        ),
         Some(VideoEngine::Native),
-        "and a film nobody measured is taken for a small one"
+        "unless there is no FFmpeg to hand it to, and the engine is all there is"
     );
 
     // An explicit engine is itself, and the size has nothing to do with it.

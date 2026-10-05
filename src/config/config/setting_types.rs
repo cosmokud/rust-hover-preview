@@ -178,8 +178,9 @@ pub enum VideoEngine {
     Ffmpeg,
     /// The media engine for a film small enough to draw here and FFmpeg's player for a larger one:
     /// drawing a big film through this window costs more than handing it to a player, and drawing
-    /// a small one costs less. What divides the two is `VIDEO_FFMPEG_ABOVE_PIXELS` total pixels
-    /// (see `video_hw::resolve_video_engine`).
+    /// a small one costs less. What divides the two is `VIDEO_FFMPEG_ABOVE_PIXELS` total pixels,
+    /// and a film nobody measured is handed over as well, because it is the probe that would have
+    /// weighed it that could not read it (see `video_hw::resolve_video_engine`).
     Hybrid,
 }
 
