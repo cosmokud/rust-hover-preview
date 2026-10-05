@@ -12,7 +12,7 @@
 //! handle, the message Explorer sends when it restarts, and the themes the menu last listed.
 
 use crate::config::config::{
-    AudioSeek, AvoidMode, EngineIdle, PreviewScale, TextTheme, TransparentBackground,
+    AudioSeek, AvoidMode, EngineIdle, PreviewScale, TextTheme, TransparentBackground, VideoEngine,
 };
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
@@ -61,6 +61,22 @@ pub(super) const ID_TRAY_TRIGGER_AFFECT_PIN: u16 = 1099;
 /// update row at 1007 leaves before the page's backdrop range that begins at 1010.
 pub(super) const ID_TRAY_ENGINE_OFFICE_MS: u16 = 1008;
 pub(super) const ID_TRAY_ENGINE_OFFICE_LIBRE: u16 = 1009;
+/// The `Engine -> Select Engine -> Video` submenu: the `Fallback` toggle at the top, and one
+/// row per engine below it. The toggle is a switch and the engines are a radio group, so the
+/// toggle has an id of its own and the engines are a base plus the position each was listed at
+/// (see `VIDEO_ENGINE_CHOICES`). They sit in the slack the LibreOffice idle range leaves before
+/// the config row at 1040.
+pub(super) const ID_TRAY_VIDEO_ENGINE_FALLBACK: u16 = 1034;
+pub(super) const ID_TRAY_VIDEO_ENGINE_BASE: u16 = 1035;
+
+/// The engines the `Video` submenu lists, in the order it lists them, with `Best` at the top and
+/// the hybrid — `Native (FFmpeg above 3.2MP)` — below the two plain ones.
+pub(super) const VIDEO_ENGINE_CHOICES: [VideoEngine; 4] = [
+    VideoEngine::Best,
+    VideoEngine::Native,
+    VideoEngine::Ffmpeg,
+    VideoEngine::Hybrid,
+];
 /// The `Background` submenu: one command per backdrop it offers, in the order it
 /// lists them, for each of the six kinds of preview it keeps apart — a picture's
 /// backdrop, a vector drawing's, a page of HTML's, a font specimen's, a texture's, and a

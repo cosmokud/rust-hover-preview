@@ -3117,23 +3117,19 @@ pub fn run_preview_window() {
                         current_show = show_snapshot.clone();
                     }
 
-                    // Where FFmpeg's player is installed a video is played by it, whatever the
-                    // two lists say, and that is this whole question: the engine is not started
-                    // for a video at all on such a machine, so there is nothing for the lists to
-                    // decide here and nothing to ask the engine (see `media_engine_plays`). It is
-                    // the machine's answer and not the file's, which is why it is asked of the
-                    // install rather than of the router — a fork that asked the router first
-                    // would ask it on this thread, and the one file-shaped part of that answer is
-                    // a source reader over the file (see `video_route` and `spawn_video_probe`).
+                    // Which road a video takes is the route, and it is asked at the fork below
+                    // rather than here: this branch is the wait for its probe, and the probe is
+                    // what asks the route on a thread of its own (see `spawn_video_probe`) — so by
+                    // the time the fork is reached the file-shaped half of the answer is held, and
+                    // asking it here would open the media engine over the file on the thread that
+                    // draws, for a hover that is only going to wait.
                     //
-                    // The two take different roads from here: the engine's frames come back
+                    // The two roads are the two they always were: the engine's frames come back
                     // through the ordinary load and are drawn by this app's own window — which is
                     // what a pin of one is resized, maximized and dragged by — while FFmpeg's
-                    // player is a window of its own, which is what the branch below puts up. A
-                    // video neither of them will take is answered by that load with no media at
-                    // all, rather than by a third branch here (see `load_video_thumbnail`).
-                    let ffplay_plays_video = show_is_video && codecs::ffplay_available();
-
+                    // player is a window of its own, which is the branch below. A video neither of
+                    // them will take is answered by that load with no media at all, rather than by
+                    // a third branch here (see `load_video_thumbnail`).
                     if show_video_probe || show_measure_probe {
                         // The hover is waiting on a probe: nothing of the file can be
                         // laid out or loaded until there is a shape or a box to lay it out with,
@@ -3218,7 +3214,7 @@ pub fn run_preview_window() {
                             video_probe = Some((path.clone(), gen));
                             spawn_video_probe(path, gen);
                         }
-                    } else if ffplay_plays_video {
+                    } else if show_is_video && video_route(&path) == VideoRoute::Ffplay {
                         // Cancel any in-flight image load before switching to video.
                         current_generation += 1;
                         pending_load = None;

@@ -2029,6 +2029,17 @@ fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
     let previous_pin = take_pin_for_a_test();
     let holding = video_drag_holding();
 
+    // A press is only parked for a picture that is a window of its own — the film FFmpeg is
+    // playing, which is what this gesture is about (see `MediaType::draws_in_a_window_of_its_own`).
+    // A player id of zero keeps the press on the hold road the trace below is written by, which
+    // parks the same way as the kill road it is the fallback for.
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+    VIDEO_PID.store(0, Ordering::SeqCst);
+
     for (name, action) in [
         ("move", PinDragAction::Move),
         (

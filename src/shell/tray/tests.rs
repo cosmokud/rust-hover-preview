@@ -870,3 +870,110 @@ fn every_offered_idle_time_is_one_the_setting_keeps() {
     );
     assert_eq!(engine_idle_at(0), Some(EngineIdle::Indefinite));
 }
+
+/// The `Engine -> Select Engine -> Video` rows are ids of their own, and none of them falls inside
+/// another submenu's range: a click read as an idle time or as a backdrop would set that setting
+/// instead of the engine the user named.
+///
+/// The engines the submenu lists are the whole of what the setting holds and every one of them is
+/// named, with the one the app starts at marked — the mark is read from the constant the setting
+/// starts at rather than written into the label, the way every other value menu here reads it.
+#[test]
+fn the_video_engine_rows_are_ids_of_their_own() {
+    let engines =
+        ID_TRAY_VIDEO_ENGINE_BASE..ID_TRAY_VIDEO_ENGINE_BASE + VIDEO_ENGINE_CHOICES.len() as u16;
+
+    assert!(
+        !engines.contains(&ID_TRAY_VIDEO_ENGINE_FALLBACK),
+        "the switch at the top of the submenu is not one of the engines below it"
+    );
+
+    for (base, len, what) in [
+        (
+            ID_TRAY_LIBREOFFICE_IDLE_BASE,
+            ENGINE_IDLE_CHOICES.len() as u16,
+            "an idle time",
+        ),
+        (
+            ID_TRAY_IMAGE_BACKGROUND_BASE,
+            BACKGROUND_CHOICES.len() as u16,
+            "a backdrop",
+        ),
+    ] {
+        let range = base..base + len;
+
+        assert!(
+            !range.contains(&ID_TRAY_VIDEO_ENGINE_FALLBACK)
+                && !range.contains(&engines.start)
+                && !engines.contains(&range.start),
+            "the video rows and the range at {base} overlap, so a click on {what} is answered \
+             as the other"
+        );
+    }
+
+    assert_eq!(
+        VIDEO_ENGINE_CHOICES.map(video_engine_label),
+        [
+            "Best (Default)".to_string(),
+            "Native".to_string(),
+            "FFmpeg".to_string(),
+            "Native (FFmpeg above 3.2MP)".to_string(),
+        ]
+    );
+
+    let marked: Vec<VideoEngine> = VIDEO_ENGINE_CHOICES
+        .iter()
+        .copied()
+        .filter(|engine| video_engine_label(*engine).ends_with(" (Default)"))
+        .collect();
+
+    assert_eq!(
+        marked,
+        [DEFAULT_VIDEO_ENGINE],
+        "the engine the setting starts at is the one the menu marks"
+    );
+
+    // Every engine an item can pick is one the setting holds, so a choice made here is still the
+    // choice after a restart.
+    for engine in VIDEO_ENGINE_CHOICES {
+        let written = engine.as_str();
+
+        assert_eq!(
+            VideoEngine::from_str(written),
+            Some(engine),
+            "`{written}` read back"
+        );
+    }
+
+    let defaults = crate::config::config::AppConfig::default();
+
+    assert_eq!(
+        defaults.video_engine, DEFAULT_VIDEO_ENGINE,
+        "the best engine the machine has is the choice until the user makes one"
+    );
+    assert_eq!(
+        defaults.video_engine_fallback, DEFAULT_VIDEO_ENGINE_FALLBACK,
+        "a file the chosen engine cannot play is played by another one until that is turned off"
+    );
+    assert!(
+        DEFAULT_VIDEO_ENGINE_FALLBACK,
+        "the app starts with the fallback on"
+    );
+
+    // The rows that are greyed are the ones naming a player this machine has not got: the two the
+    // app and Windows supply are always here, and both FFmpeg-based choices need `ffplay`.
+    assert!(
+        VideoEngine::Best.installed() && VideoEngine::Native.installed(),
+        "the app's own answer and the engine Windows ships are never greyed"
+    );
+    assert_eq!(
+        VideoEngine::Ffmpeg.installed(),
+        crate::formats::codecs::ffplay_available(),
+        "FFmpeg's row is offered exactly where `ffplay` is installed"
+    );
+    assert_eq!(
+        VideoEngine::Hybrid.installed(),
+        crate::formats::codecs::ffplay_available(),
+        "and the hybrid needs `ffplay` for the half of it that hands a film over"
+    );
+}

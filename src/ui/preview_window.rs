@@ -102,7 +102,7 @@ use crate::config::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget,
     sanitize_general_disk_cache_mb, sanitize_image_cache_mb, sanitize_spinner_delay_ms,
     sanitize_webp_playback_fps, AppConfig, AudioSeek, MarkdownMode, OfficeEngine, PreviewScale,
-    PreviewType, TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT,
+    PreviewType, TextTheme, TransparentBackground, VideoEngine, DEFAULT_ANIMATED_SCALE_PERCENT,
     DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
     DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
@@ -110,7 +110,8 @@ use crate::config::config::{
     DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED,
     DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS, VIDEO_FFMPEG_ABOVE_PIXELS,
 };
 use crate::engines::calibre_render;
 use crate::engines::imagemagick_render;
@@ -275,6 +276,10 @@ pub(crate) use subtitle_files::trim_now as trim_subtitle_cache;
 pub(crate) use tick::preview_stall_ms;
 pub(crate) use tick::PREVIEW_SENDER;
 pub(crate) use video_hw::forget_video_hw_accel_answer;
+// What the tray's `Engine -> Select Engine -> Video` submenu reads: what the choice moving costs
+// the probe cache (see `set_video_engine`). Which engines this machine has is
+// `VideoEngine::installed`, asked of the setting itself.
+pub(crate) use video_probe::forget_video_geometry;
 
 // The parts, in one namespace (see the note above).
 use animated::*;

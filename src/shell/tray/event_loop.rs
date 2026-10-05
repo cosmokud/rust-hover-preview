@@ -21,13 +21,13 @@ use super::commands::{
     set_office_engine, set_office_engine_idle, set_pin_nav_file_types, set_preview_scale,
     set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
     set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
-    set_vector_scale, set_video_scale, set_video_volume, set_webview_idle,
+    set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
     toggle_engine_persistent, toggle_normalize_video_volume, toggle_normalize_volume,
     toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
     toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
     toggle_render_html, toggle_startup, toggle_trigger_key_affect_pin_mode,
-    toggle_trigger_key_enabled, toggle_video_hw_accel,
+    toggle_trigger_key_enabled, toggle_video_engine_fallback, toggle_video_hw_accel,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SEEK_CHOICES, AVOID_CHOICES, BACKGROUND_CHOICES,
@@ -57,9 +57,10 @@ use super::ids::{
     ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS,
     ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
     ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
-    ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_VOLUME_BASE,
-    ID_TRAY_WEBVIEW_IDLE_BASE, TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS,
-    TRAY_CLASS, TRAY_HWND, WM_TRAYICON,
+    ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
+    ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE,
+    TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND,
+    VIDEO_ENGINE_CHOICES, WM_TRAYICON,
 };
 use super::menus::show_context_menu;
 use super::submenus::open_codec_page;
@@ -194,6 +195,18 @@ unsafe extern "system" fn tray_window_proc(
                     ID_TRAY_PRIORITIZE_KEYBOARD => toggle_prioritize_keyboard(),
                     ID_TRAY_ENGINE_OFFICE_MS => set_office_engine(OfficeEngine::MicrosoftOffice),
                     ID_TRAY_ENGINE_OFFICE_LIBRE => set_office_engine(OfficeEngine::LibreOffice),
+                    ID_TRAY_VIDEO_ENGINE_FALLBACK => toggle_video_engine_fallback(),
+                    // Which engine plays a video, by the position it was listed at: the
+                    // `Video` submenu is the same base-plus-position arrangement every value
+                    // menu here is.
+                    cmd if (ID_TRAY_VIDEO_ENGINE_BASE
+                        ..ID_TRAY_VIDEO_ENGINE_BASE + VIDEO_ENGINE_CHOICES.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_video_engine(
+                            VIDEO_ENGINE_CHOICES[(cmd - ID_TRAY_VIDEO_ENGINE_BASE) as usize],
+                        )
+                    }
                     // A backdrop, by the position it was listed at: an image's or a
                     // document's, whichever half of the `Background` submenu it was in.
                     cmd if (ID_TRAY_IMAGE_BACKGROUND_BASE

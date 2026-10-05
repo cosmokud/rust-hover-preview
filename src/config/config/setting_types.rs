@@ -9,6 +9,7 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 
 use crate::config::theme_files;
+use crate::formats::codecs;
 
 use super::app_config::AppConfig;
 use super::defaults::{
@@ -156,6 +157,64 @@ impl OfficeEngine {
                 Some(Self::MicrosoftOffice)
             }
             "libreoffice" | "libre" | "soffice" => Some(Self::LibreOffice),
+            _ => None,
+        }
+    }
+}
+
+/// Which engine plays a video, as the tray's `Engine -> Select Engine -> Video` lists it.
+///
+/// `Best` is the machine's own answer and the default, and it is `Hybrid` where FFmpeg is
+/// installed and `Native` where it is not (see `video_hw::resolve_video_engine`). The other three
+/// name one engine each, or — `Hybrid` — a rule between two of them, whatever the machine would
+/// have preferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VideoEngine {
+    /// The best engine this machine has for the file.
+    Best,
+    /// The media engine Windows has, drawn into this window's own frame.
+    Native,
+    /// FFmpeg's `ffplay`, in a window of its own.
+    Ffmpeg,
+    /// The media engine for a film small enough to draw here and FFmpeg's player for a larger one:
+    /// drawing a big film through this window costs more than handing it to a player, and drawing
+    /// a small one costs less. What divides the two is `VIDEO_FFMPEG_ABOVE_PIXELS` total pixels,
+    /// and a film nobody measured is handed over as well, because it is the probe that would have
+    /// weighed it that could not read it (see `video_hw::resolve_video_engine`).
+    Hybrid,
+}
+
+impl VideoEngine {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Best => "best",
+            Self::Native => "native",
+            Self::Ffmpeg => "ffmpeg",
+            Self::Hybrid => "hybrid",
+        }
+    }
+
+    /// Whether this machine has the engine this choice names, which is what a tray row is greyed on
+    /// and what a choice is put back to `Best` for at a start. `Best` is always here — it is the
+    /// app's own answer rather than a named player — and `Native` is the engine Windows ships;
+    /// both `Ffmpeg` and `Hybrid` need `ffplay` (see `video_hw::resolve_video_engine`).
+    pub(crate) fn installed(self) -> bool {
+        match self {
+            Self::Best | Self::Native => true,
+            Self::Ffmpeg | Self::Hybrid => codecs::ffplay_available(),
+        }
+    }
+
+    /// The engine a `config.ini` value names, or `None` for one that names no player: a value
+    /// the app cannot read leaves the setting where it is (see `OfficeEngine::from_str`).
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "best" | "auto" | "default" => Some(Self::Best),
+            "native" | "media_engine" | "media engine" | "media" | "windows" => Some(Self::Native),
+            "ffmpeg" | "ffplay" | "ff" => Some(Self::Ffmpeg),
+            "hybrid" | "native_ffmpeg" | "native_above" | "native then ffmpeg" => {
+                Some(Self::Hybrid)
+            }
             _ => None,
         }
     }

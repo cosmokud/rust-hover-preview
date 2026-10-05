@@ -19,7 +19,7 @@ use super::defaults::{
 use super::setting_types::{
     sanitize_afk_timer_secs, sanitize_dds_background, sanitize_html_background, AudioSeek,
     AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinNavFileTypes, PreviewScale, TextTheme,
-    TransparentBackground, TriggerKeyMode,
+    TransparentBackground, TriggerKeyMode, VideoEngine,
 };
 
 impl AppConfig {
@@ -325,6 +325,16 @@ impl AppConfig {
             CONFIG_SECTION,
             "office_engine",
             Some(self.office_engine.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "video_engine",
+            Some(self.video_engine.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "video_engine_fallback",
+            Some(self.video_engine_fallback.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -798,6 +808,14 @@ impl AppConfig {
             if let Some(engine) = OfficeEngine::from_str(&value) {
                 self.office_engine = engine;
             }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "video_engine") {
+            if let Some(engine) = VideoEngine::from_str(&value) {
+                self.video_engine = engine;
+            }
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_engine_fallback") {
+            self.video_engine_fallback = value;
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "office_engine_idle") {
             if let Some(idle) = EngineIdle::from_str(&value) {
