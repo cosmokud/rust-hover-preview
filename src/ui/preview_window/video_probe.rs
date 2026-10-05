@@ -463,6 +463,25 @@ pub(super) fn cached_video_geometry(path: &Path) -> Option<ProbedGeometry> {
     video_geometry_cache().get(&key).cloned()
 }
 
+/// The total pixels of the film `path`, where the probe has measured it: the whole frame the file
+/// holds rather than the crop the picture is drawn in, because what the hybrid weighs is what there
+/// is to decode. It is read without cloning the geometry, since all the route wants is the one
+/// number, and `None` where the file has not been measured — which the hybrid reads as the small
+/// answer (see `video_hw::resolve_video_engine`).
+pub(super) fn cached_video_source_pixels(path: &Path) -> Option<u64> {
+    let key = VideoGeometryKey {
+        path: path.to_path_buf(),
+        version: file_version(path),
+    };
+
+    match video_geometry_cache().get(&key) {
+        Some(ProbedGeometry::Measured(geometry)) => {
+            Some(u64::from(geometry.frame_width) * u64::from(geometry.frame_height))
+        }
+        _ => None,
+    }
+}
+
 /// Give up every probed geometry: the engine choice moved, and a geometry read by FFprobe is not
 /// the geometry a media-engine preview wants (or the reverse), so the next hover probes again.
 ///
@@ -470,6 +489,28 @@ pub(super) fn cached_video_geometry(path: &Path) -> Option<ProbedGeometry> {
 /// re-export `preview_window` makes, and a re-export cannot be wider than what it names.
 pub fn forget_video_geometry() {
     video_geometry_cache().clear();
+}
+
+/// Whether the geometry probe runs FFmpeg's passes for a film.
+///
+/// It does for every choice that may reach FFmpeg's player — `Best` and `Hybrid`, which hand a big
+/// film over, and an explicit `Ffmpeg` — and not for an explicit `Native` with nothing to hand the
+/// film on: the engine alone answers there, and FFmpeg's passes would be work for a player nobody
+/// hands it to. An explicit `Native` with the fallback on is the engine alone too *where the engine
+/// will take the film*; a film it will not take is handed on, so the passes run and the player that
+/// gets it is given a geometry rather than a bare window (see `VideoEngine` and
+/// `probe_video_geometry`).
+///
+/// `engine_takes_the_film` is asked only where the answer matters, which is what keeps the file
+/// from being opened for a choice that does not consult it.
+pub(super) fn probe_runs_ffmpeg(
+    choice: VideoEngine,
+    fallback: bool,
+    ffplay_installed: bool,
+    engine_takes_the_film: impl FnOnce() -> bool,
+) -> bool {
+    let engine_alone = choice == VideoEngine::Native && (!fallback || engine_takes_the_film());
+    !engine_alone && ffplay_installed
 }
 
 /// Probe a video's geometry, from the cache when the file and its version have been
@@ -514,19 +555,22 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // waits for the slowest of the three legs rather than for all of them in turn — so the walk is
     // now behind the two processes it was very likely to be slower than anyway. And it is asked
     // once per file and version rather than once per launch, so a resize no longer pays it again.
-    // A media-engine video is asked of the engine and nothing of FFmpeg: the shape is the engine's
-    // own, and there is no crop to detect, no subtitle stream to copy, no sidecar to find and no
-    // gain to measure for a player that renders frames and nothing else. Every other choice may be
-    // handed to FFmpeg's player, and it is this probe that reads the size the hybrid decides on —
-    // so FFmpeg's passes run for them, exactly as the default did before the engine was a setting
-    // (see `VideoEngine::Hybrid`). The answer is the choice's rather than the route's on purpose:
-    // the route weighs the size, and the size is what this probe is here to read.
+    // A native choice asks the engine alone where the engine will take the film and nothing will
+    // hand it on: the shape is the engine's own, and there is no crop to detect, no subtitle stream
+    // to copy, no sidecar to find and no gain to measure for a player that renders frames and
+    // nothing else. Every other case may reach FFmpeg's player, and it is this probe that reads the
+    // size the hybrid decides on — so FFmpeg's passes run for it, exactly as the default did before
+    // the engine was a setting (see `VideoEngine::Hybrid`). An explicit native choice with the
+    // fallback on runs them for a film the engine will not take, which is the one it hands on, so
+    // the player that gets it is given a geometry rather than a bare window.
     let native = {
-        let choice = CONFIG
+        let (choice, fallback) = CONFIG
             .lock()
-            .map(|config| config.video_engine)
-            .unwrap_or(DEFAULT_VIDEO_ENGINE);
-        choice == VideoEngine::Native || !VideoEngine::Ffmpeg.installed()
+            .map(|config| (config.video_engine, config.video_engine_fallback))
+            .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK));
+        !probe_runs_ffmpeg(choice, fallback, VideoEngine::Ffmpeg.installed(), || {
+            named_for_the_media_engine(path)
+        })
     };
 
     // What the media engine answers with: a shape, and nothing else. No duration, because the

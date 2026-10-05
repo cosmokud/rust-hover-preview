@@ -457,8 +457,10 @@ fn named_in_the_video_list(path: &Path) -> bool {
 }
 
 /// Whether the media engine Windows has will play `path`: its name is the engine's to ask about
-/// and the engine opens it (see `video_player::plays`).
-fn named_for_the_media_engine(path: &Path) -> bool {
+/// and the engine opens it (see `video_player::plays`). It is `pub(super)` because the probe asks
+/// it too — a native choice runs FFmpeg's passes only for a film the engine will not take, which is
+/// the one it hands on (see `video_probe::probe_video_geometry`).
+pub(super) fn named_for_the_media_engine(path: &Path) -> bool {
     named_in_the_video_list(path) && video_player::plays(path)
 }
 
@@ -529,7 +531,7 @@ pub(super) fn video_route(path: &Path) -> VideoRoute {
     match resolve_video_engine(
         choice,
         fallback,
-        source_pixels(path),
+        cached_video_source_pixels(path),
         |engine| engine.installed(),
         |engine| match engine {
             VideoEngine::Ffmpeg => codecs::ffplay_available(),
@@ -543,19 +545,6 @@ pub(super) fn video_route(path: &Path) -> VideoRoute {
     }
 }
 
-/// How big the film `path` is, where the probe has read it: the whole frame the file holds rather
-/// than the crop the picture is drawn in, because what the hybrid weighs is what there is to
-/// decode. `None` where the file has not been measured, which the hybrid reads as the small answer
-/// (see `resolve_video_engine`).
-fn source_pixels(path: &Path) -> Option<u64> {
-    match cached_video_geometry(path) {
-        Some(ProbedGeometry::Measured(geometry)) => {
-            Some(u64::from(geometry.frame_width) * u64::from(geometry.frame_height))
-        }
-        _ => None,
-    }
-}
-
 /// Whether the media engine Windows has plays this file, which is the one of the two players a
 /// layout, a load and a pin each ask about before they do anything else for a video.
 ///
@@ -563,9 +552,9 @@ fn source_pixels(path: &Path) -> Option<u64> {
 /// frames are drawn by this app or by a player, whether a pin of one is resized and maximized or
 /// only moved, and whether its transport bar is a control or a read-out (see `pin_frame` and
 /// `pin_transport_kind`). It is also where the engine is asked about a file at all: where the
-/// route settles on FFmpeg's player — which is every video on a machine with FFmpeg on it and the
-/// default `Best` — nothing opens the file, so `video_player::plays` and its per-file memo are
-/// reached only for a file the route would otherwise give the media engine.
+/// route settles on FFmpeg's player — a film above the hybrid's threshold, or every film when the
+/// choice names FFmpeg's player — nothing opens the file, so `video_player::plays` and its
+/// per-file memo are reached only for a file the route gives the media engine.
 ///
 /// The write-back is what makes the question affordable where it is asked: the probe opens the
 /// file and builds a decoder chain for it, so the answer is held, and a hover that asks twice —

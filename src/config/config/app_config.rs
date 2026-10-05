@@ -435,8 +435,9 @@ pub struct AppConfig {
     /// `Engine → Select Engine → Office` setting.
     pub office_engine: OfficeEngine,
     /// Which engine plays a video, which is the tray's `Engine -> Select Engine -> Video`
-    /// setting. `Best` is the machine's own answer and what the app starts at; the other two
-    /// name one engine each — see `video_hw::resolve_video_engine`.
+    /// setting. `Best` is the machine's own answer and what the app starts at — the hybrid, which
+    /// draws a small film here and hands a large one over where FFmpeg is installed — and the other
+    /// three name an engine, or a rule between two, plainly. See `video_hw::resolve_video_engine`.
     pub video_engine: VideoEngine,
     /// Whether an explicitly chosen engine that cannot play a given file falls through to the
     /// others, which is the `Fallback` switch at the top of the same submenu. It is read only

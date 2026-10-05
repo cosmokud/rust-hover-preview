@@ -377,3 +377,44 @@ fn the_media_engine_is_not_asked_where_the_route_settles_on_ffplay() {
         "FFmpeg's player takes the file without the media engine being consulted"
     );
 }
+
+/// The geometry probe runs FFmpeg's passes for every choice that may hand the film to FFmpeg's
+/// player, so that a film it reaches is given a geometry; an explicit native choice with nothing to
+/// hand the film on is the engine alone, and a machine with no `ffplay` runs none of them.
+#[test]
+fn the_probe_runs_ffmpeg_for_every_choice_that_may_hand_the_film_over() {
+    assert!(
+        probe_runs_ffmpeg(VideoEngine::Best, true, true, || false),
+        "the hybrid probe is what reads the size it decides on"
+    );
+    assert!(
+        probe_runs_ffmpeg(VideoEngine::Hybrid, true, true, || false),
+        "and it does the same as `Best`, which is the same rule"
+    );
+    assert!(
+        probe_runs_ffmpeg(VideoEngine::Ffmpeg, false, true, || false),
+        "an explicit FFmpeg choice is FFmpeg's player and needs its passes"
+    );
+
+    // An explicit native choice is the engine alone: with the fallback off the film is never handed
+    // on, so the engine is not even asked, and with it on it is asked only to learn the answer.
+    assert!(
+        !probe_runs_ffmpeg(VideoEngine::Native, false, true, || {
+            panic!("the engine was asked with the fallback off")
+        }),
+        "a native choice with the fallback off runs none of FFmpeg's passes"
+    );
+    assert!(
+        !probe_runs_ffmpeg(VideoEngine::Native, true, true, || true),
+        "and one whose engine takes the film is alone with the fallback on too"
+    );
+    assert!(
+        probe_runs_ffmpeg(VideoEngine::Native, true, true, || false),
+        "but a film it will not take is handed on, so FFmpeg's passes run for the player that gets it"
+    );
+
+    assert!(
+        !probe_runs_ffmpeg(VideoEngine::Best, true, false, || false),
+        "a machine with no ffplay runs none of FFmpeg's passes"
+    );
+}
