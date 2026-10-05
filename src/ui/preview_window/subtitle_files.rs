@@ -15,10 +15,21 @@
 //! **One hover pays for the extraction; every hover after it reads the files.** The user chose
 //! that the hover which starts the extraction draws *no* subtitles rather than the slow ones —
 //! "fast, no subs once", no mid-hover upgrade — so `video_launch::subtitle_filter` answers
-//! `None` while an extraction is coming and only falls back to the film's own track once the
-//! one pass has failed. The extraction itself runs on a thread of its own and is never waited
-//! on: what starts it is the probe, and what a later hover reads is the geometry cache entry
-//! the thread updates when it is done (see `finish`).
+//! `None` while an extraction is coming, and `None` again where the one pass has failed: a
+//! subtitle that is not there is a film played without subtitles, never a film played from
+//! itself. The extraction itself runs on a thread of its own and is never waited on by a
+//! preview: what starts it is the launch of the film, and what a later hover reads is the
+//! geometry cache entry the thread updates when it is done (see `finish`).
+//!
+//! **One film is read at a time, and only while its window is showing.** Every extraction is a
+//! whole read of a film, so two of them at once is two films read end to end for a preview that
+//! can only be showing one of them — and a pass that outlives the window that asked for it is a
+//! read nobody is waiting for. So the extraction is a single slot (see `claim`): a request for
+//! another film drops the pass that is running, and the roads out of a preview — a hover that
+//! ended, a pin that came down or was shown another file — drop it too (see
+//! `keep_extraction_for`). A dropped pass kills its child, leaves no half-written folder behind
+//! (see `discard`), and is not remembered as a failure, so the next time the film is shown the
+//! copy is started again.
 //!
 //! **The files are a folder per film, under a key of the film and its version**, which is the
 //! shape `document_cache` uses for the pages its engines draw and `image_cache` uses for
@@ -80,13 +91,114 @@ const SUBTITLE_PREFIX: &str = "sub";
 /// stuck one is not a process left for the session.
 pub(super) const SUBTITLE_EXTRACTION_TIMEOUT_SECS: u64 = 300;
 
-/// The films whose subtitles are being extracted right now, which is what keeps a film hovered
-/// twice in the time one extraction takes from being read twice (see `begin` and `finish`).
-static EXTRACTING: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
+/// The one extraction that may be running right now, and the two switches its thread reads.
+///
+/// It is a slot rather than a list of films because a machine must not read two films at once:
+/// every extraction is a whole read of a film (see the note at the top of this module), and what
+/// a window is showing is the one film worth reading (see `keep_extraction_for`). The `dropped`
+/// switch is the whole of a drop: the thread that owns the pass looks at it while it waits,
+/// kills the child, and gives up rather than finishing a read nobody is waiting for. The `ended`
+/// switch is what a task that displaced this one waits on before starting its own pass, so that
+/// at most one film is being read at any moment (see `spawn_subtitle_extraction`).
+struct Extraction {
+    /// The film whose tracks this extraction is copying.
+    path: PathBuf,
+    /// Set when this extraction is no longer the one wanted.
+    dropped: AtomicBool,
+    /// Set by this extraction's thread once it has ended: child reaped, folder settled.
+    ended: AtomicBool,
+}
 
-/// Reads in flight this list holds before it is emptied, the same bound and the same reasoning
-/// as the measure list's own (see `MEASURING_GAIN_MAX_ENTRIES`).
-const EXTRACTING_MAX_ENTRIES: usize = 64;
+/// The slot an extraction lives in, with the rules that hold one task at a time in one place.
+///
+/// The state machine is asked of a slot rather than of the one global one so that the tests can
+/// hold a slot of their own (see `one_extraction_at_a_time_is_the_slot_the_newest_window_takes`):
+/// the busy rules are the same either way, and a test that shared the running slot with the rest
+/// of the binary would be a test racing every other test that shows or hides a preview.
+#[derive(Default)]
+struct Slot {
+    running: Option<Arc<Extraction>>,
+}
+
+impl Slot {
+    /// Claim the slot for `path`, answering the task to run and the task it displaced — or
+    /// nothing where `path` is exactly what the slot already holds.
+    ///
+    /// The claim is the whole of "one at a time": a film already being copied is not copied
+    /// again, and anything else in the slot is a task from a window that is no longer showing,
+    /// which is dropped by the same claim that displaces it.
+    fn claim(&mut self, path: &Path) -> Option<(Arc<Extraction>, Option<Arc<Extraction>>)> {
+        if let Some(current) = self.running.as_ref() {
+            if current.path == path && !current.dropped.load(Ordering::Acquire) {
+                return None;
+            }
+
+            current.dropped.store(true, Ordering::Release);
+        }
+
+        let displaced = self.running.take();
+        let extraction = Arc::new(Extraction {
+            path: path.to_path_buf(),
+            dropped: AtomicBool::new(false),
+            ended: AtomicBool::new(false),
+        });
+        self.running = Some(Arc::clone(&extraction));
+
+        Some((extraction, displaced))
+    }
+
+    /// Give up the slot, where it is still this task's.
+    ///
+    /// A task that was displaced left the slot to the task that displaced it, so what it gives
+    /// up here is nothing: the check is what keeps an ending task from clearing a running task's
+    /// claim.
+    fn release(&mut self, extraction: &Arc<Extraction>) {
+        if self
+            .running
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, extraction))
+        {
+            self.running = None;
+        }
+    }
+
+    /// Keep only the extraction of `keep` running: every other one is dropped.
+    ///
+    /// `None` is the answer for a preview that has gone — a hover ended, a pin came down — which
+    /// asks for no extraction at all. What is dropped is not waited for here: the switch is set,
+    /// and the thread that owns the pass kills its child on its next look (see
+    /// `EXTRACTION_POLL_MS`).
+    fn keep(&mut self, keep: Option<&Path>) {
+        let Some(current) = self.running.as_ref() else {
+            return;
+        };
+
+        if keep != Some(current.path.as_path()) {
+            current.dropped.store(true, Ordering::Release);
+        }
+    }
+}
+
+/// The slot the extraction above lives in, and the only one: nothing running is the state no
+/// task, one running is the state one film and no others.
+static RUNNING: Lazy<Mutex<Slot>> = Lazy::new(|| Mutex::new(Slot::default()));
+
+/// How often a running pass is looked in on while it is waited for: how long a dropped
+/// extraction may go on reading its film before it is killed.
+///
+/// It is the only latency a drop has — the delivery of the switch the road that dropped it set —
+/// and it is small because what a drop is *for* is the disk: the sooner the pass is killed, the
+/// sooner the film that replaces it is read at full speed.
+const EXTRACTION_POLL_MS: u64 = 25;
+
+/// How long a task that displaced another waits for it to end before starting its own pass.
+///
+/// A displaced task notices within one poll and is never waited on for anything else, so this is
+/// a bound on the impossible rather than the expected case: a machine where a killed child
+/// cannot be reaped at all. Past it the new pass starts anyway, because a wait with no end is
+/// worse than a brief overlap — and what the overlap would cost is nothing like what the pass
+/// the switch was set for was going to cost.
+const EXTRACTION_HANDOVER_WAIT_SECS: u64 = 5;
 
 /// The folder every film's extracted files are kept in.
 ///
@@ -159,6 +271,11 @@ fn limit_bytes() -> u64 {
 /// `codecs` is the film's subtitle-relative codec names as the probe read them, and it is what
 /// the slots are counted against: a track whose codec has no small form was never written, so
 /// its slot stays `None` while its index is still the one `si=` counts to.
+///
+/// **Only the files the filter can draw are read**, whatever a folder happens to hold (see
+/// `drawable_copy`): a folder an older build left a PGS copy in is not an answer, and naming one
+/// of those to the filter is a filter that fails to build — which is the film's picture taken
+/// down with it, and a state caching would make permanent.
 pub(super) fn resolve(path: &Path, codecs: &[String]) -> Option<DerivedSubtitles> {
     let folder = film_folder(path);
     let mut tracks: Vec<Option<PathBuf>> = vec![None; codecs.len()];
@@ -173,6 +290,10 @@ pub(super) fn resolve(path: &Path, codecs: &[String]) -> Option<DerivedSubtitles
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
+            if !drawable_copy(&name) {
+                continue;
+            }
+
             let Some(index) = name
                 .strip_prefix(SUBTITLE_PREFIX)
                 .and_then(|rest| rest.split('.').next())
@@ -210,6 +331,21 @@ fn holds_files(folder: &Path) -> bool {
     })
 }
 
+/// Whether a name is one of the small files the `subtitles` filter draws: the three text forms
+/// the copy writes out, and nothing else a film's folder may hold.
+///
+/// It is the filter's own condition read back (see `extension`): libass draws text subtitles and
+/// refuses everything else, so a name that is not one of these is not an answer a probe may
+/// trust whatever wrote it — a PGS copy an older build left behind above all.
+fn drawable_copy(name: &str) -> bool {
+    matches!(
+        Path::new(name)
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some("ass" | "ssa" | "srt")
+    )
+}
+
 /// Whether the one extraction pass is worth starting for what the probe just read.
 ///
 /// The refusals are the whole of the rule. A sidecar beside the film is already a small file to
@@ -218,9 +354,9 @@ fn holds_files(folder: &Path) -> bool {
 /// small form — a container whose only subtitle is a codec this cannot write out — would be a
 /// whole read producing nothing, which is the one thing this must never do.
 ///
-/// Whether an extraction is *already running* is not asked here: what says that is the in-flight
-/// guard the spawn itself takes (see `spawn_subtitle_extraction`), which is what makes two
-/// probes of one film race safely.
+/// Whether an extraction is *already running* is not asked here: what says that is the slot the
+/// spawn itself claims (see `spawn_subtitle_extraction`), which is what makes two launches of
+/// one film race safely.
 pub(super) fn extraction_due(
     sidecar: Option<&Path>,
     derived: Option<&DerivedSubtitles>,
@@ -236,16 +372,24 @@ pub(super) fn extraction_due(
 /// The extension a subtitle track of this codec is copied out as, or nothing for a codec with
 /// no form this app draws from a small file.
 ///
-/// The three are the muxers FFmpeg's own build here has — `ass`, `srt` and `sup` were each
-/// measured to exist and to take a copied stream — and the codecs are the ones that reach
-/// them: `ass` and `ssa` are the same muxer, SubRip text and its siblings are the SubRip one,
-/// and PGS bitmaps are the raw `sup` stream. Anything else is a track whose slot stays empty,
-/// which is the film drawn without it rather than the film streamed for it.
+/// The two are the text muxers FFmpeg's own build here has — `ass` and `srt` were each measured
+/// to exist and to take a copied stream — and the codecs are the ones that reach them: `ass` and
+/// `ssa` are the same muxer, and SubRip text with its siblings is the SubRip one. Anything else
+/// is a track whose slot stays empty, which is the film drawn without it rather than the film
+/// streamed for it.
+///
+/// **A codec the `subtitles` filter cannot draw is not copied, and PGS is the case that made
+/// that a rule rather than a taste.** The filter draws text subtitles through libass and refuses
+/// every other kind outright — its own check is `AV_CODEC_PROP_TEXT_SUB`, logged as "Only text
+/// based subtitles are currently supported" — and a filter that refuses the file it was named
+/// is a filtergraph that fails to build: the player exits without a window, which is a preview
+/// that never appears however long anyone waits. A `sup` copy of a PGS track is exactly such a
+/// file, and one cached under a film's key is a film that can never be previewed again: the
+/// answer is read by every probe after it, in memory and on disk (see `resolve`).
 fn extension(codec: &str) -> Option<&'static str> {
     match codec {
         "ass" | "ssa" => Some("ass"),
         "subrip" | "text" | "mov_text" => Some("srt"),
-        "hdmv_pgs_subtitle" => Some("sup"),
         _ => None,
     }
 }
@@ -322,14 +466,18 @@ pub(super) fn extraction_args(
     Some(args)
 }
 
-/// Copy a film's subtitle tracks out of it, on a thread of its own, once.
+/// Copy a film's subtitle tracks out of it, on a thread of its own, once — the one extraction
+/// this machine may be running (see `RUNNING`).
 ///
-/// Nothing waits for it and nothing is held up by it: the hover that asked is answered
-/// immediately, without subtitles, and what this pass produces answers every hover after it
-/// (see the note at the top of this module). The guard is what keeps one film from being read
-/// twice — a hover begun again while the first extraction runs is the ordinary case, since a
-/// hover is a second or two and an extraction is more, and the second hover must not pay the
-/// same whole read again.
+/// Nothing waits for it and nothing is held up by it: the window that asked is answered
+/// immediately, without subtitles, and what this pass produces answers every launch after it
+/// (see the note at the top of this module). What is asked here is the film a launch is about to
+/// show (see `request_extraction`), so a film already being copied is not copied again, and any
+/// *other* film's copy is dropped: the window that is on screen is the one whose subtitles are
+/// worth reading a film for.
+///
+/// The displaced pass ends before this one's begins — its thread notices the switch within one
+/// poll, kills its child, and sets its `ended` — so a machine never reads two films at once.
 ///
 /// At a budget of nothing there is nothing to gain: the extraction's own product is the only
 /// thing the budget holds, so at `0` the files would be written and given up inside the same
@@ -345,34 +493,128 @@ pub(super) fn spawn_subtitle_extraction(path: &Path, codecs: &[String], attachme
         return;
     };
 
-    if !begin(path) {
+    let Some((extraction, displaced)) = claim(path) else {
         return;
-    }
+    };
 
     let path = path.to_path_buf();
     let codecs = codecs.to_vec();
     let fonts = folder.join(FONTS_FOLDER);
 
     std::thread::spawn(move || {
-        // The fonts folder is created even where the container attached none, because it is the
-        // working directory the pass runs in and a pass that writes nothing there leaves it
-        // empty rather than absent — `resolve` names it only when it holds files.
-        let ran = std::fs::create_dir_all(&fonts).is_ok() && copy_out(&args, &fonts);
-        let ok = ran && resolve(&path, &codecs).is_some();
+        // The task this one displaced ends first, so that the film it was reading is not being
+        // read while this pass runs: one film at a time is the whole of what the slot is for.
+        if let Some(displaced) = displaced {
+            wait_for_end(
+                &displaced,
+                Duration::from_secs(EXTRACTION_HANDOVER_WAIT_SECS),
+            );
+        }
 
-        finish(&path, &codecs, ok);
-        trim_now();
+        // A task dropped while it was waiting for the one before it never reached the folder,
+        // so there is nothing to kill, nothing to remove and nothing to write down.
+        if !extraction.dropped.load(Ordering::Acquire) {
+            // The fonts folder is created even where the container attached none, because it is
+            // the working directory the pass runs in and a pass that writes nothing there leaves
+            // it empty rather than absent — `resolve` names it only when it holds files.
+            let ran =
+                std::fs::create_dir_all(&fonts).is_ok() && copy_out(&args, &fonts, &extraction);
+            let dropped = extraction.dropped.load(Ordering::Acquire);
+            let ok = ran && !dropped && resolve(&path, &codecs).is_some();
+
+            // A pass that failed or was dropped leaves nothing: a half-written folder is an
+            // answer a later probe would read and trust (see `discard`).
+            if !ok {
+                discard(&path);
+            }
+
+            if !dropped {
+                finish(&path, &codecs, ok);
+            }
+
+            trim_now();
+        }
+
+        extraction.ended.store(true, Ordering::Release);
+        release(&extraction);
     });
+}
+
+/// Ask for a film's subtitles to be copied out, where the probe's answer says there is anything
+/// to copy and no copy has answered for it yet.
+///
+/// It is asked at the launch rather than at the probe, and that placement is the whole of the
+/// "only while its window is showing" rule: a probe runs for a file the pointer may only have
+/// passed over, while a launch is a film actually put on screen. Every road that shows a film
+/// comes through it — a hover installed, a pin shown another file, a seek — so a film whose copy
+/// was dropped when the user moved on is asked for again by the next launch that shows it.
+pub(super) fn request_extraction(path: &Path, geometry: Option<&VideoGeometry>) {
+    let Some(geometry) = geometry else {
+        return;
+    };
+
+    // A pass that has already failed is not asked for again until the next run: the flag is the
+    // memory of that failure (see `finish`), and a film whose copy cannot be made is a film
+    // played without subtitles rather than one paid for on every launch.
+    if geometry.subtitle_extraction_failed {
+        return;
+    }
+
+    if !extraction_due(
+        geometry.sidecar.as_deref(),
+        geometry.derived.as_ref(),
+        geometry.subtitles.count,
+        &geometry.subtitle_codecs,
+    ) {
+        return;
+    }
+
+    spawn_subtitle_extraction(path, &geometry.subtitle_codecs, &geometry.attachment_codecs);
+}
+
+/// Keep only the extraction of `keep` running, asking the one slot to drop every other one (see
+/// `Slot::keep` and `RUNNING`).
+pub(super) fn keep_extraction_for(keep: Option<&Path>) {
+    if let Ok(mut slot) = RUNNING.lock() {
+        slot.keep(keep);
+    }
+}
+
+/// Claim the one extraction slot for `path` (see `Slot::claim`).
+fn claim(path: &Path) -> Option<(Arc<Extraction>, Option<Arc<Extraction>>)> {
+    RUNNING.lock().ok()?.claim(path)
+}
+
+/// Give up the slot, where it is still this task's (see `Slot::release`).
+fn release(extraction: &Arc<Extraction>) {
+    if let Ok(mut slot) = RUNNING.lock() {
+        slot.release(extraction);
+    }
+}
+
+/// Wait for a task that was displaced to end, bounded by `timeout` (see
+/// `EXTRACTION_HANDOVER_WAIT_SECS`).
+fn wait_for_end(extraction: &Arc<Extraction>, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+
+    while !extraction.ended.load(Ordering::Acquire) {
+        if Instant::now() >= deadline {
+            return;
+        }
+
+        std::thread::sleep(Duration::from_millis(EXTRACTION_POLL_MS));
+    }
 }
 
 /// Run the one pass, answering whether it finished successfully.
 ///
 /// The process is hidden and adopted like every other one this app starts, and it is waited for
-/// under a bound rather than plainly: a pass that runs past
+/// in slices rather than plainly so that the slot's switch reaches it: a pass that has been
+/// dropped is killed and reaped where it stands, and the answer is that it did not finish. The
+/// bound is the other thing the slices make — a pass that runs past
 /// `SUBTITLE_EXTRACTION_TIMEOUT_SECS` is killed and reaped, and the answer is that it did not
-/// finish — which is what a later hover is told as well, so a film whose extraction is stuck is
-/// not extracted again on every probe (see `finish`).
-fn copy_out(args: &[String], workdir: &Path) -> bool {
+/// finish, which is what a later launch is told as well (see `finish`).
+fn copy_out(args: &[String], workdir: &Path, extraction: &Extraction) -> bool {
     let child = engine_processes::hidden_command("ffmpeg")
         .args(args)
         .current_dir(workdir)
@@ -381,31 +623,49 @@ fn copy_out(args: &[String], workdir: &Path) -> bool {
         .stderr(Stdio::null())
         .spawn();
 
-    let Ok(child) = child else {
+    let Ok(mut child) = child else {
         return false;
     };
 
     engine_processes::adopt(child.id());
 
-    wait_bounded(child, Duration::from_secs(SUBTITLE_EXTRACTION_TIMEOUT_SECS))
-        .is_some_and(|output| output.status.success())
+    let handle = HANDLE(child.as_raw_handle());
+    let deadline = Instant::now() + Duration::from_secs(SUBTITLE_EXTRACTION_TIMEOUT_SECS);
+    let poll = Duration::from_millis(EXTRACTION_POLL_MS);
+
+    loop {
+        if extraction.dropped.load(Ordering::Acquire) || Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return false;
+        }
+
+        let slice = poll.min(deadline.saturating_duration_since(Instant::now()));
+        let waited = unsafe { WaitForSingleObject(handle, slice.as_millis().max(1) as u32) };
+
+        // Anything but the slice having run out is a process that has ended — or a handle the
+        // wait could not read, which is the same answer a moment later — and what is left is
+        // what it wrote and the status it finished with.
+        if waited != WAIT_TIMEOUT {
+            return child.wait().is_ok_and(|status| status.success());
+        }
+    }
 }
 
 /// The extraction of this film is done: hold what it wrote, or hold that it failed.
 ///
 /// Both outcomes are remembered in the geometry cache entry for this file and version, which is
-/// the whole of how a later hover hears about either without this thread being waited on — and
-/// a success is also the one thing a pinned window is told, because a pin has its film on
-/// screen already and begins its player again to draw what just landed (see
+/// the whole of how a later launch hears about either without this thread being waited on — and
+/// a success is also the one thing a pinned window is told, because a pin has its film on screen
+/// already and begins its player again to draw what just landed (see
 /// `reload_pinned_subtitles`). What a success leaves is the derived files themselves, so the
-/// next hover draws them. What a failure leaves is the flag that opens the slow route: the
-/// film's own embedded track, which draws a frame in fourteen seconds rather than not at all. A
-/// missing entry is not written here — a probe that has not answered yet is answered by its own
-/// resolution a moment later, and an entry this thread wrote alone could race the probe's own
-/// answer.
+/// next launch draws them. What a failure leaves is the flag that says this film is not asked
+/// again: the launch that reads it draws the film *without* subtitles and stays fast (see
+/// `video_launch::subtitle_filter`), which is the whole of why a failure is not allowed to
+/// matter past itself. A missing entry is not written here — a probe that has not answered yet
+/// is answered by its own resolution a moment later, and an entry this thread wrote alone could
+/// race the probe's own answer.
 fn finish(path: &Path, codecs: &[String], ok: bool) {
-    end(path);
-
     // Read off the disk before the cache lock is taken: the folder is somebody else's state at
     // this moment — the pass has just closed its last file — and the cache is this module's.
     let derived = ok.then(|| resolve(path, codecs)).flatten();
@@ -435,42 +695,23 @@ fn finish(path: &Path, codecs: &[String], ok: bool) {
     // pin showing this film has a player that was begun before the copy existed, and the frame
     // it draws next is drawn without the subtitles the user is watching for; the message is
     // what begins that player again, at the second the bar is showing (see
-    // `reload_pinned_subtitles`). A hover is told nothing — that is the user's own choice, and
-    // the hover after this one is the one that draws the files (see
+    // `reload_pinned_subtitles`). A hover is told nothing — it was answered without subtitles
+    // by the user's own choice, and the hover after it reads what this wrote (see
     // `video_launch::subtitle_filter`) — and a pass that *failed* tells nothing either: the
-    // route a relaunch would take is the film's own track, which is the whole read this whole
-    // arrangement exists to take off the hover.
+    // film's own track is not a route this app takes at all (see `subtitle_filter`).
     if ready {
         super::requests::notify_video_subtitles_ready(path);
     }
 }
 
-/// Say that this film's subtitles are being extracted, answering whether one already is.
-fn begin(path: &Path) -> bool {
-    let Ok(mut extracting) = EXTRACTING.lock() else {
-        return false;
-    };
-
-    if extracting.iter().any(|running| running == path) {
-        return false;
-    }
-
-    if extracting.len() >= EXTRACTING_MAX_ENTRIES {
-        extracting.clear();
-    }
-
-    extracting.push(path.to_path_buf());
-
-    true
-}
-
-/// Say that the extraction of this film's subtitles is done with.
-fn end(path: &Path) {
-    let Ok(mut extracting) = EXTRACTING.lock() else {
-        return;
-    };
-
-    extracting.retain(|running| running != path);
+/// Give up a film's folder: what a pass that failed or was dropped leaves behind.
+///
+/// A half-written folder is worse than no folder at all, because a later probe reads it as an
+/// answer (see `resolve`) and draws files that were never finished. The removal is best-effort:
+/// a folder that cannot be given up is one the trim will reach in the end, and nothing here is
+/// worth failing an extraction thread over.
+fn discard(path: &Path) {
+    let _ = std::fs::remove_dir_all(film_folder(path));
 }
 
 /// Trim the folder to the configured budget now, which is what the tray asks for when a smaller

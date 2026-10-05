@@ -231,6 +231,8 @@ fn a_video_follows_its_own_scale() {
             subtitles: SubtitleStreams::default(),
             sidecar: None,
             derived: None,
+            subtitle_codecs: Vec::new(),
+            attachment_codecs: Vec::new(),
             subtitle_extraction_failed: false,
         }),
     );
@@ -298,6 +300,8 @@ fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
                 subtitles: SubtitleStreams::default(),
                 sidecar: None,
                 derived: None,
+                subtitle_codecs: Vec::new(),
+                attachment_codecs: Vec::new(),
                 subtitle_extraction_failed: false,
             }),
         );

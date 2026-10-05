@@ -710,6 +710,11 @@ pub(super) fn load_video_thumbnail(
             // a film nothing could read, so there are no small files and no pass to have failed
             // (see `subtitle_files`).
             derived: None,
+            // And nothing this box's launch could ask for a copy from: the codec names come out
+            // of a header read, and this box is built for a file whose header could not be read
+            // at all (see `subtitle_files::request_extraction`).
+            subtitle_codecs: Vec::new(),
+            attachment_codecs: Vec::new(),
             subtitle_extraction_failed: false,
         },
     };

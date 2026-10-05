@@ -122,6 +122,8 @@ fn stand_a_ready_copy(film: &Path) {
                 tracks: vec![Some(PathBuf::from("pin-subtitle-reload-sub0.ass"))],
                 fonts: None,
             }),
+            subtitle_codecs: vec!["ass".to_string()],
+            attachment_codecs: Vec::new(),
             subtitle_extraction_failed: false,
         }),
     );

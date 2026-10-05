@@ -24,9 +24,10 @@
 //!   escaped inside a quoted value. And an input-side `-ss` makes the filter draw *nothing at
 //!   all*: measured on a clip with a cue over 0.5s–3.0s, `-ss 2.0` before the input leaves the frame
 //!   byte-identical to the same frame without the filter, while the same `-ss` after the input
-//!   changes it. `si=` is the third: it counts subtitle streams from zero among themselves, so a
-//!   file whose subtitle is the third stream of the container is `si=0`, and `si=2` is refused with
-//!   `Unable to locate subtitle stream` (see `subtitle_filter`).
+//!   changes it. The third is the file it is pointed at: the filter draws text subtitles and refuses
+//!   everything else, and a file it refuses — or one that is not there — is a filtergraph that fails
+//!   to build, which takes the player down with it rather than falling back to no subtitles (see
+//!   `subtitle_filter`, and `subtitle_files` for what it is therefore named).
 //!
 //! **And the filter is measured here to be nearly free, which is worth saying because it is the
 //! obvious suspect for a slow start.** Timed on this machine at first window: a 1080p MKV with an
@@ -106,51 +107,48 @@ pub fn hw_accel_candidates(enabled: bool) -> &'static [&'static str] {
 /// present for any given name, and where two are, the SubRip one is the plainer of the two.
 const SIDECAR_EXTENSIONS: [&str; 3] = ["srt", "ass", "ssa"];
 
-/// The subtitle file a video is shown with, if it has one at all, and which of the file's own
-/// subtitle streams it is drawn from.
+/// The subtitle file a video is shown with, if it has one at all.
 ///
-/// Three sources, and the first of each that exists wins. A sidecar beside the video is the
-/// plainest thing that can happen and needs nothing read out of the file. Failing one, a track
-/// this app copied out of the film into a small file of its own (see `subtitle_files`) — the
-/// same arrangement as a sidecar and drawn the same way, with the container's fonts beside it.
-/// And failing both, the film's own stream, which is the route that costs the whole film.
+/// **Two sources, and only ever small files: a sidecar beside the film, or a track this app
+/// copied out of it** (see `subtitle_files`). The first of the two that exists wins, and where
+/// neither exists the answer is nothing — a film played without subtitles.
 ///
-/// **The sidecar and the copied track are named only where they are still there.** Both are
-/// answers the probe cached for a file and a version (see `probe_video_geometry`), and neither
-/// the folder nor this app's cache pays any attention to the other: a sidecar renamed away beside
-/// an unchanged film leaves a cached answer that names a file no longer there, and a filter
-/// naming a missing file fails to load — the player exits without putting a window up, which is
-/// a preview that never appears. A stat of a named path is the whole of the check, and it is not
-/// the folder walk the cached answer exists to save: it opens no directory and reads no file.
+/// **The film's own stream is never named, and that is a refusal with a measurement behind it.**
+/// A `subtitles` filter pointed at the film opens it a second time and streams the whole
+/// container to its first subtitle before the first frame is drawn: measured, a cold 1.4 GB MKV
+/// took 14 904 ms and read 1 423 MB that way, against 492 ms and 41 MB drawn from the 30 KB
+/// `.ass` copied out of it. The player's start is waited for under `VIDEO_START_WAIT_SECS` (see
+/// `player_wait`), so a format that costs fifteen seconds before its first frame is a player
+/// this app gives up on and kills — a preview that never appears, every time the film is
+/// hovered, and — the failure being cached — permanently. A copy that is not there yet, a copy
+/// that has failed and a film whose only track has no small form are all answered with no
+/// subtitles: the fast hover is the user's own choice, and no subtitle is worth the picture.
 ///
-/// **The film's own stream is named only once the cheap route is known not to be coming**, and
-/// that is the user's own choice: a film whose copy is still being written is drawn without
-/// subtitles rather than with the slow ones, because naming the film makes the player stream the
-/// whole container before its first frame — measured, 14 904 ms and 1 423 MB on a cold 1.4 GB
-/// MKV, against 492 ms and 41 MB from the `.ass` copied out of it. The cases that name the film
-/// are a copy that has failed, and a track the copy does not carry because its codec has no
-/// small form: a slow hover with subtitles beats a fast hover without them for a film this app
-/// cannot copy.
+/// **And only a file libass can draw is ever named.** The filter renders text subtitles and
+/// refuses every other kind outright (its own check is `AV_CODEC_PROP_TEXT_SUB`, logged as "Only
+/// text based subtitles are currently supported"), and a filter that refuses the file it was
+/// given is a filtergraph that fails to build: the player exits without ever putting a window
+/// up, which is this same no-preview fault by a second road. Both sources are therefore gated on
+/// a name the filter can read — the sidecar by the extensions it is looked for under (see
+/// `sidecar_for`), and the copy by the extensions the pass writes (see `subtitle_files::resolve`).
 ///
-/// The index handed over is the *subtitle-relative* one, counted from zero among subtitle streams
-/// and not over every stream in the container. That is measured, not assumed: on a two-track file
-/// whose subtitle streams are the container's second and third, `si=0` and `si=1` are both accepted
-/// and `si=2` is refused outright with `Unable to locate subtitle stream`. Which is fortunate
-/// rather than lucky, because the app already counts this way everywhere else — `SubtitleStreams`
-/// and `next_subtitle` both walk subtitle streams from zero among themselves — so nothing new has
-/// to be kept to be right.
+/// **The named file is checked before it is named**, and that check is not the folder walk the
+/// cached answer exists to save: a sidecar renamed away beside an unchanged film leaves a cached
+/// answer that names a file no longer there, and a filter naming a missing file fails to load —
+/// the player exits without a window, which is the preview that never appears. A stat of a named
+/// path is the whole of the check; it opens no directory and reads no file.
 ///
-/// A `track` out of that range is answered with the first stream rather than with nothing, because a
-/// refused stream specifier is not a filter that draws another track: it is a filter that fails to
-/// be built, which takes the picture down with it (see `video_launch::HWACCEL_DEVICES` for the same
-/// shape of answer on the decoding side). Nothing at all is named for a file with no subtitle
-/// streams, and for a file whose name cannot be spelled — see `escape_filter_path`.
+/// The index handed over is the *subtitle-relative* one, counted from zero among subtitle
+/// streams (see `SubtitleStreams`), and it chooses which copied file is named rather than a `si=`
+/// specifier: a copied track is a whole file with no streams of its own, exactly as a sidecar is.
+/// An index the answer does not carry — a track that was never copied, or a number the cache
+/// remembers from before the film changed — falls back to the first copy rather than to nothing,
+/// because the choice is worth less than the subtitles (see
+/// `a_track_the_answer_does_not_carry_is_answered_with_the_first_copy_rather_than_with_nothing`
+/// in the tests).
 pub fn subtitle_filter(
-    path: &Path,
     sidecar: Option<&Path>,
     derived: Option<&DerivedSubtitles>,
-    extraction_failed: bool,
-    subtitle_streams: usize,
     track: Option<usize>,
 ) -> Option<String> {
     // A sidecar carries no streams of its own for a track to name: the whole of that file is the
@@ -163,46 +161,30 @@ pub fn subtitle_filter(
         return Some(format!("subtitles='{sidecar}'"));
     }
 
-    // The track the filter would name, settled before either small answer is looked for: a number
-    // the file does not carry is answered with the first stream it does, and the copied file and
-    // the film's own track have to be the same track (see the note above).
-    let track = track.filter(|track| *track < subtitle_streams).unwrap_or(0);
-
     // The track this app copied out of the film, where the extraction wrote one and it is still
     // there. Like a sidecar it is a whole file with no streams of its own, so it carries no
     // `si=`; unlike a sidecar, the container's own fonts are drawn with it out of the folder the
     // same pass dumped them into, because the styles an embedded track is written in name faces
     // the film carries and the machine may not have (see `subtitle_files`).
-    if let Some(track_file) = derived
-        .and_then(|derived| derived.track(track))
+    let derived = derived?;
+    let track = track
+        .filter(|track| *track < derived.tracks.len())
+        .unwrap_or(0);
+    let track_file = derived
+        .track(track)
         .filter(|track_file| track_file.is_file())
-        .and_then(spelled)
-    {
-        let fonts = derived
-            .and_then(|derived| derived.fonts.as_deref())
-            .filter(|fonts| fonts.is_dir())
-            .and_then(spelled);
+        .and_then(spelled)?;
 
-        return Some(match fonts {
-            Some(fonts) => format!("subtitles='{track_file}':fontsdir='{fonts}'"),
-            None => format!("subtitles='{track_file}'"),
-        });
-    }
+    let fonts = derived
+        .fonts
+        .as_deref()
+        .filter(|fonts| fonts.is_dir())
+        .and_then(spelled);
 
-    // Nothing to draw from, which is the answer that has always been given for a file with no
-    // subtitles and is the only one that leaves the film playing.
-    if subtitle_streams == 0 {
-        return None;
-    }
-
-    // **The film's own stream is named only once the cheap route is known not to be coming.**
-    // What is coming is a film whose copy has not answered yet: this hover is drawn without
-    // subtitles rather than with the whole-container read (see the note above).
-    if derived.is_none() && !extraction_failed {
-        return None;
-    }
-
-    spelled(path).map(|spelled| format!("subtitles='{spelled}':si={track}"))
+    Some(match fonts {
+        Some(fonts) => format!("subtitles='{track_file}':fontsdir='{fonts}'"),
+        None => format!("subtitles='{track_file}'"),
+    })
 }
 
 /// The sidecar beside `path` that carries subtitles, if one does.
@@ -536,8 +518,8 @@ mod tests {
         }
     }
 
-    /// A path with an apostrophe in it is refused rather than spelled, which is the whole of what an
-    /// unspellable path gets.
+    /// A subtitle file with an apostrophe in it is refused rather than spelled, which is the whole
+    /// of what an unspellable path gets.
     ///
     /// This is the one character of the seven that cannot be escaped, and the reason is that there
     /// are two parsers and the apostrophe is punctuation for both. Inside the quotes a backslash is
@@ -550,22 +532,21 @@ mod tests {
     fn a_path_that_cannot_be_spelled_is_refused_rather_than_silently_changed() {
         let dir = std::env::temp_dir().join(format!("hl-apostrophe-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-        let video = dir.join("it's a film.mkv");
-        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+        let sidecar = dir.join("episode's cut.srt");
+        std::fs::write(&sidecar, b"1\n").expect("a stand-in sidecar is writable");
 
         assert_eq!(
-            subtitle_filter(&video, None, None, true, 2, Some(0)),
+            subtitle_filter(Some(&sidecar), None, None),
             None,
             "an apostrophe cannot be escaped through both parsers: escaped, it survives as a bare \
-             `'` and the filter opens `its a film.mkv` instead, quietly. A film with subtitles this \
-             app cannot name is a film played without them, which is not the same fault as a film \
-             played with the wrong ones"
+             `'` and the filter opens `episodes cut.srt` instead, quietly. A film with subtitles \
+             this app cannot name is a film played without them, which is not the same fault as a \
+             film played with the wrong ones"
         );
         assert_eq!(
-            spelled(&video),
+            spelled(&sidecar),
             None,
-            "the refusal belongs to the spelling rather than to the choice of track, so nothing that \
-             asks for a spelling can be given one"
+            "the refusal belongs to the spelling, so nothing that asks for one can be given one"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -581,12 +562,10 @@ mod tests {
     fn a_sidecar_is_named_inside_quotes_so_the_escape_survives() {
         let dir = std::env::temp_dir().join(format!("hl-quoted-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-        let video = dir.join("episode.mp4");
-        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
         let sidecar = dir.join("episode.srt");
         std::fs::write(&sidecar, b"1\n").expect("a stand-in sidecar is writable");
 
-        let filter = subtitle_filter(&video, Some(&sidecar), None, false, 0, None)
+        let filter = subtitle_filter(Some(&sidecar), None, None)
             .expect("a clip with a sidecar beside it has a subtitle filter to draw it with");
 
         assert!(
@@ -604,15 +583,13 @@ mod tests {
     fn a_sidecar_beside_the_video_is_preferred_over_the_files_own_tracks() {
         let dir = std::env::temp_dir().join(format!("hl-sidecar-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-        let video = dir.join("episode.mkv");
-        std::fs::write(&video, b"not really a video").expect("a stand-in file is writable");
         let sidecar = dir.join("episode.srt");
         std::fs::write(&sidecar, b"1\n").expect("a stand-in sidecar is writable");
 
         // The sidecar is the probe's answer now, handed in rather than looked for — which is
         // what the finding of it is, and it is found and cached once per file version (see
         // `probe_video_geometry`). This is the filter's half of that arrangement.
-        let filter = subtitle_filter(&video, Some(&sidecar), None, false, 3, Some(2))
+        let filter = subtitle_filter(Some(&sidecar), None, Some(2))
             .expect("a sidecar is a subtitle file to show");
 
         assert!(
@@ -628,150 +605,172 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A sidecar whose name cannot be spelled falls through to the file's own tracks rather than to
-    /// no subtitles at all.
+    /// A sidecar whose name cannot be spelled falls through to the copy made out of the film
+    /// rather than to the film itself.
     ///
-    /// The sidecar wins over the tracks beneath it wherever it can be named, so refusing it must not
-    /// mean refusing the subtitles too: the tracks are the *next source down*, not another attempt at
-    /// the same one. A film played with the wrong track is a fault and a film played with none is a
-    /// different fault, and there is a third spelling still available here — the second source.
+    /// The sidecar wins over the copy beneath it wherever it can be named, so refusing it must not
+    /// mean refusing the subtitles too: the copy is the *next source down*, not another attempt at
+    /// the same one. And where there is no copy either, the answer is no subtitles at all — the
+    /// film's own track is never named (see `the_films_own_track_is_never_named`).
     #[test]
-    fn a_sidecar_that_cannot_be_spelled_falls_through_to_the_files_own_tracks() {
+    fn a_sidecar_that_cannot_be_spelled_falls_through_to_the_copy_of_the_films_own_track() {
         let dir = std::env::temp_dir().join(format!("hl-sidecar-fall-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
 
-        // A spellable video beside a sidecar whose own name cannot be spelled: the tracks beneath
-        // are drawn, and the sidecar is not silently renamed into something else.
-        let video = dir.join("episode.mkv");
-        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+        // A sidecar whose own name cannot be spelled: the copy beneath it answers, and the
+        // sidecar is not silently renamed into something else.
         let cut = dir.join("episode's cut.srt");
         std::fs::write(&cut, b"1\n").expect("a stand-in sidecar is writable");
+        let copy = dir.join("sub1.ass");
+        std::fs::write(&copy, b"[Script Info]\n").expect("a stand-in copy is writable");
+        let copied = DerivedSubtitles {
+            tracks: vec![None, Some(copy)],
+            fonts: None,
+        };
 
-        let filter = subtitle_filter(&video, Some(&cut), None, true, 2, Some(1))
-            .expect("the tracks beneath an unspellable sidecar are still subtitles to draw");
+        let filter = subtitle_filter(Some(&cut), Some(&copied), Some(1))
+            .expect("the copy beneath an unspellable sidecar is still a subtitle file to draw");
 
         assert!(
             !filter.contains(".srt"),
             "the sidecar here is named `episode's cut.srt`, whose apostrophe cannot be spelled, so a \
-             filter naming it would open `episodes cut.srt` instead — quietly, and wrongly. The \
-             video is a `.mkv`, so any `.srt` in the filter at all is a sidecar that was taken over \
-             the tracks it was supposed to be preferred to: {filter}"
+             filter naming it would open `episodes cut.srt` instead — quietly, and wrongly: {filter}"
         );
         assert!(
-            filter.contains(":si=1"),
-            "and the track asked for is the one drawn, from the file itself: {filter}"
+            filter.contains("sub1.ass"),
+            "and the copy made out of the film is what answers instead: {filter}"
         );
 
-        // A sidecar that can be spelled is still preferred over the tracks, which is what makes the
+        // With no copy beneath it, the same sidecar is a film played without subtitles rather
+        // than a filter naming the film.
+        assert_eq!(
+            subtitle_filter(Some(&cut), None, None),
+            None,
+            "an unspellable sidecar with nothing under it is no subtitles rather than the film"
+        );
+
+        // A sidecar that can be spelled is still preferred over the copy, which is what makes the
         // fall-through above the second answer rather than the first.
-        let video = dir.join("plain.mkv");
-        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
         let plain = dir.join("plain.srt");
         std::fs::write(&plain, b"1\n").expect("a stand-in sidecar is writable");
 
-        let filter = subtitle_filter(&video, Some(&plain), None, false, 2, Some(1))
+        let filter = subtitle_filter(Some(&plain), Some(&copied), Some(1))
             .expect("a spellable sidecar is a subtitle file");
 
         assert!(
             filter.contains("plain.srt"),
-            "a sidecar that can be named wins over the tracks, as it always has: {filter}"
+            "a sidecar that can be named wins over the copy, as it always has: {filter}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The track the caller names is the track the filter is given, which is the whole of what a
-    /// track choice is worth to a relaunch.
+    /// The track the caller names is the copy that is drawn, which is the whole of what a track
+    /// choice is worth to a relaunch.
     ///
     /// A player reports nothing about what it did with the number, and every relaunch — a seek, a
     /// resize, a change of track — begins a player again, so this is the only place a choice survives
-    /// one. It was not there before: the filter was built with `si=0` written into it and the
-    /// caller's track thrown away, so the bar's next-track press advanced a selection no player was
-    /// ever told about, and a pin's remembered track was a number nothing drew.
+    /// one: the copy the filter is given is the one the bar's next-track press landed on.
     ///
-    /// The index is the subtitle-relative one, counted from zero among subtitle streams — measured,
-    /// on a file whose subtitle streams are the container's second and third: `si=0` and `si=1` are
-    /// both accepted and `si=2` is refused with `Unable to locate subtitle stream`.
+    /// The index is the subtitle-relative one, counted from zero among subtitle streams, which is
+    /// the numbering the copies were written under (see `subtitle_files`).
     #[test]
-    fn the_track_the_caller_names_is_the_track_the_filter_is_given() {
+    fn the_track_the_caller_names_is_the_copy_the_filter_is_given() {
         let dir = std::env::temp_dir().join(format!("hl-track-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-        let video = dir.join("film.mkv");
-        std::fs::write(&video, b"not really a video").expect("a stand-in file is writable");
+        let copies = ["sub0.ass", "sub1.ass", "sub2.srt"].map(|name| {
+            let file = dir.join(name);
+            std::fs::write(&file, b"[Script Info]\n").expect("a stand-in copy is writable");
+            Some(file)
+        });
+        let copied = DerivedSubtitles {
+            tracks: copies.to_vec(),
+            fonts: None,
+        };
 
-        for (streams, chosen) in [(2, 0), (2, 1), (3, 2), (1, 0)] {
-            let filter = subtitle_filter(&video, None, None, true, streams, Some(chosen))
-                .expect("a file with subtitle streams has a filter to draw them with");
+        for chosen in 0..3 {
+            let filter = subtitle_filter(None, Some(&copied), Some(chosen))
+                .expect("a film with copies has a filter to draw them with");
 
             assert!(
-                filter.contains(&format!(":si={chosen}")),
-                "the track the caller chose is the track that has to be drawn, or the choice never \
-                 left the bar: {streams} streams, {chosen} chosen, got {filter}"
+                filter.contains(&format!("sub{chosen}.")),
+                "the copy the caller chose is the one that has to be drawn, or the choice never \
+                 left the bar: {chosen} chosen, got {filter}"
             );
         }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A track the file does not carry is answered with the first one rather than with nothing.
+    /// A track the answer does not carry is answered with the first copy rather than with nothing.
     ///
-    /// A refused stream specifier is not a filter that draws another track: it is a filter that fails
-    /// to be built, which takes the picture down with it. So a number out of range costs the choice
-    /// and not the preview — which is the asymmetry worth having here, since the number came out of
-    /// a cache of probed geometry rather than out of the user.
+    /// A number with no copy behind it is a stale cache entry rather than a user's choice — the
+    /// probe's answer is per file and version — so the fallback costs the choice and not the
+    /// subtitles, which is the asymmetry worth having: the subtitles are what the user asked for,
+    /// and which track among them is the smaller of the two facts.
     #[test]
-    fn a_track_the_file_does_not_carry_is_answered_with_the_first_rather_than_with_nothing() {
+    fn a_track_the_answer_does_not_carry_is_answered_with_the_first_copy_rather_than_with_nothing()
+    {
         let dir = std::env::temp_dir().join(format!("hl-range-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-        let video = dir.join("film.mkv");
-        std::fs::write(&video, b"not really a video").expect("a stand-in file is writable");
+        let first = dir.join("sub0.ass");
+        std::fs::write(&first, b"[Script Info]\n").expect("a stand-in copy is writable");
+        let copied = DerivedSubtitles {
+            tracks: vec![Some(first)],
+            fonts: None,
+        };
 
-        for out_of_range in [2, 7, usize::MAX] {
-            let filter = subtitle_filter(&video, None, None, true, 2, Some(out_of_range)).expect(
-                "a file with subtitle streams keeps its subtitles whatever number the cache held",
-            );
+        for out_of_range in [1, 2, 7, usize::MAX] {
+            let filter = subtitle_filter(None, Some(&copied), Some(out_of_range))
+                .expect("a film with a copy keeps its subtitles whatever number the cache held");
 
             assert!(
-                filter.contains(":si=0"),
-                "`si={out_of_range}` is refused outright by the filter, and a filter that fails to be \
-                 built takes the picture with it — so a number the file does not carry falls back to \
-                 the first stream it does: {filter}"
+                filter.contains("sub0.ass"),
+                "`{out_of_range}` names no copy and the first copy answers for it: {filter}"
             );
         }
 
-        // A caller that has chosen nothing is the same answer, because a launch naming no track at
-        // all is a launch that lets the player's own choice stand — and the player's own choice is
-        // the first stream, not a specifier this app guessed at.
-        let filter = subtitle_filter(&video, None, None, true, 2, None)
-            .expect("a file with streams has a filter");
+        // A caller that has chosen nothing is the same answer, because the player's own first
+        // stream is what a pin writes down for itself (see `SubtitleStreams::chosen`).
+        let filter =
+            subtitle_filter(None, Some(&copied), None).expect("a film with a copy has a filter");
         assert!(
-            filter.contains(":si=0"),
-            "nothing chosen has to be spelled rather than left out, or the two parsers are left to \
-             decide between them: {filter}"
+            filter.contains("sub0.ass"),
+            "nothing chosen draws the first copy: {filter}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A video with subtitles of its own is shown with its own first track, numbered from zero
-    /// among subtitle streams — the numbering that is measured, since the absolute stream index is
-    /// refused by the filter.
+    /// **The film's own track is never named, whatever the state of the copy** — the regression
+    /// this refusal exists for.
+    ///
+    /// A `subtitles` filter pointed at the film opens it and streams the whole container before the
+    /// first frame is drawn — measured at 14 904 ms and 1 423 MB on a cold 1.4 GB MKV — while the
+    /// player's start is waited for under `VIDEO_START_WAIT_SECS`. So naming the film is not a slow
+    /// preview but a preview the loop abandons and kills: a spinner that ends in nothing, every
+    /// time the film is hovered, and — the answer being cached — permanently. A copy that is
+    /// still coming, a copy that has failed and a film nothing can copy are all a film played
+    /// without subtitles.
     #[test]
-    fn an_embedded_track_is_named_by_its_place_among_the_subtitle_streams() {
-        let dir = std::env::temp_dir().join(format!("hl-embedded-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-        let video = dir.join("film.mkv");
-        std::fs::write(&video, b"not really a video").expect("a stand-in file is writable");
+    fn the_films_own_track_is_never_named() {
+        for (streams, track) in [(1usize, Some(0)), (2, Some(1)), (3, Some(2))] {
+            assert_eq!(
+                subtitle_filter(None, None, track),
+                None,
+                "a film with {streams} subtitle streams of its own and no small file to draw is a \
+                 film played without subtitles: naming the film is the whole-container read that \
+                 takes the preview down with it"
+            );
+        }
 
-        let filter = subtitle_filter(&video, None, None, true, 2, Some(0))
-            .expect("a file with subtitle streams has a filter");
-
-        assert!(
-            filter.contains(":si=0"),
-            "the first subtitle stream is `si=0` whatever the container numbers it at: {filter}"
+        // And a caller that chose nothing is the same answer: a film with no small file and no
+        // sidecar has no filter at all, however the extraction ended.
+        assert_eq!(
+            subtitle_filter(None, None, None),
+            None,
+            "no copy and no sidecar is no filter"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A sidecar named for the language it is in is drawn, which is the naming a release actually
@@ -810,7 +809,7 @@ mod tests {
         // And it has to reach the filter as that answer does: the probe asks once and the launch
         // is handed it (see `probe_video_geometry`), so the drawing of it is a separate half and
         // is checked here rather than assumed from the finding above.
-        let filter = subtitle_filter(&video, found.as_deref(), None, false, 0, None)
+        let filter = subtitle_filter(found.as_deref(), None, None)
             .expect("a sidecar carrying the language in its own name is still a sidecar");
 
         assert!(
@@ -831,7 +830,7 @@ mod tests {
         std::fs::write(&longer, b"1\n").expect("a stand-in sidecar is writable");
 
         let found = sidecar_for(&video);
-        let filter = subtitle_filter(&video, found.as_deref(), None, false, 0, None)
+        let filter = subtitle_filter(found.as_deref(), None, None)
             .expect("a three-letter language code is the same case");
 
         assert_eq!(
@@ -865,8 +864,7 @@ mod tests {
         std::fs::write(dir.join("episode.en.srt"), b"1\n").expect("a stand-in sidecar is writable");
 
         let found = sidecar_for(&video);
-        let filter = subtitle_filter(&video, found.as_deref(), None, false, 0, None)
-            .expect("a sidecar is a sidecar");
+        let filter = subtitle_filter(found.as_deref(), None, None).expect("a sidecar is a sidecar");
 
         assert_eq!(
             found.as_deref(),
@@ -912,7 +910,7 @@ mod tests {
              two apart"
         );
         assert_eq!(
-            subtitle_filter(&video, found.as_deref(), None, false, 0, None),
+            subtitle_filter(found.as_deref(), None, None),
             None,
             "and with nothing found and no streams of its own, the film is drawn without subtitles"
         );
@@ -930,7 +928,7 @@ mod tests {
              would put a directory walk on the thread that has to keep answering Explorer"
         );
         assert_eq!(
-            subtitle_filter(&video, None, None, true, 0, None),
+            subtitle_filter(None, None, None),
             None,
             "so the filter below it is built from nothing, which is the only answer that leaves the \
              film playing"
@@ -949,14 +947,7 @@ mod tests {
         std::fs::write(&video, b"not really a video").expect("a stand-in file is writable");
 
         assert_eq!(
-            subtitle_filter(
-                &video,
-                sidecar_for(&video).as_deref(),
-                None,
-                true,
-                0,
-                Some(0)
-            ),
+            subtitle_filter(sidecar_for(&video).as_deref(), None, Some(0)),
             None,
             "a filter naming a file that is not there is a filter that fails to load"
         );
@@ -975,39 +966,32 @@ mod tests {
     /// on a 1.4 GB episode.
     #[test]
     fn a_film_whose_own_tracks_are_still_being_copied_is_drawn_without_subtitles() {
-        let dir = std::env::temp_dir().join(format!("hl-pending-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-        let video = dir.join("film.mkv");
-        std::fs::write(&video, b"not really a video").expect("a stand-in file is writable");
-
         assert_eq!(
-            subtitle_filter(&video, None, None, false, 2, Some(0)),
+            subtitle_filter(None, None, Some(0)),
             None,
             "naming the film is the read this exists to take off the hover, so a copy that is \
              still coming means no filter this time rather than the slow one"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Once the one copying pass has failed, the film's own track is drawn again: a slow hover
-    /// with subtitles is better than no subtitles at all for a film this app cannot copy.
+    /// Once the one copying pass has failed, the film is still drawn without subtitles rather than
+    /// from its own track: a slow hover is not what a failure buys, a broken preview is.
+    ///
+    /// This is the other half of the regression `the_films_own_track_is_never_named` is written
+    /// for. The failure is remembered in the probe's answer — the film is not asked for a copy
+    /// again until the next run — and what that remembered failure must not become is the
+    /// whole-container read: that route overruns the ten-second wait a player's start is given,
+    /// so the preview is killed and every later hover repeats it. No subtitles and a fast film is
+    /// the answer, and the film never stops being previewable for it.
     #[test]
-    fn a_film_whose_copy_has_failed_is_drawn_from_its_own_track_again() {
-        let dir = std::env::temp_dir().join(format!("hl-failed-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-        let video = dir.join("film.mkv");
-        std::fs::write(&video, b"not really a video").expect("a stand-in file is writable");
-
-        let filter = subtitle_filter(&video, None, None, true, 2, Some(1))
-            .expect("a film whose copy failed keeps its subtitles, at the price the film asks");
-
-        assert!(
-            filter.contains(":si=1"),
-            "the track the caller chose is drawn from the film itself: {filter}"
+    fn a_film_whose_copy_has_failed_is_still_drawn_without_subtitles() {
+        assert_eq!(
+            subtitle_filter(None, None, Some(1)),
+            None,
+            "the film's own track would stream the whole container before a first frame — measured \
+             at 14 904 ms — so a failed copy is a film played without subtitles, and the preview is \
+             never the thing that is lost"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A track this app copied out of the film is drawn like a sidecar — a whole file, no track
@@ -1017,8 +1001,6 @@ mod tests {
     fn a_copied_track_is_drawn_with_its_fonts_and_no_track_number() {
         let dir = std::env::temp_dir().join(format!("hl-copied-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-        let video = dir.join("film.mkv");
-        std::fs::write(&video, b"not really a video").expect("a stand-in file is writable");
         let ass = dir.join("sub0.ass");
         std::fs::write(&ass, b"[Script Info]\n").expect("a stand-in copy is writable");
         let fonts = dir.join("fonts");
@@ -1029,7 +1011,7 @@ mod tests {
             tracks: vec![Some(ass.clone())],
             fonts: Some(fonts),
         };
-        let filter = subtitle_filter(&video, None, Some(&copied), false, 2, None)
+        let filter = subtitle_filter(None, Some(&copied), None)
             .expect("a copied track is a subtitle file to draw");
 
         assert!(
@@ -1052,7 +1034,7 @@ mod tests {
             tracks: vec![Some(ass)],
             fonts: None,
         };
-        let filter = subtitle_filter(&video, None, Some(&copied), false, 2, None)
+        let filter = subtitle_filter(None, Some(&copied), None)
             .expect("a copied track is a subtitle file to draw with or without its fonts");
 
         assert!(
@@ -1071,8 +1053,6 @@ mod tests {
     fn a_sidecar_that_went_away_is_not_named() {
         let dir = std::env::temp_dir().join(format!("hl-stale-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-        let video = dir.join("episode.mp4");
-        std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
 
         // The sidecar the probe saw is gone; a copy of the film's own track answers instead.
         let missing = dir.join("episode.srt");
@@ -1082,7 +1062,7 @@ mod tests {
             tracks: vec![Some(ass)],
             fonts: None,
         };
-        let filter = subtitle_filter(&video, Some(&missing), Some(&copied), false, 1, Some(0))
+        let filter = subtitle_filter(Some(&missing), Some(&copied), Some(0))
             .expect("the copied track is still a subtitle file to draw");
 
         assert!(
@@ -1095,9 +1075,10 @@ mod tests {
              load and the preview never appears: {filter}"
         );
 
-        // Gone with nothing else to draw: no filter at all rather than the missing file.
+        // Gone with nothing else to draw: no filter at all rather than the missing file, and
+        // never the film's own track (see `the_films_own_track_is_never_named`).
         assert_eq!(
-            subtitle_filter(&video, Some(&missing), None, false, 1, Some(0)),
+            subtitle_filter(Some(&missing), None, Some(0)),
             None,
             "a sidecar that is not there is not a sidecar, and nothing else is drawn while the \
              film's own copy is coming"

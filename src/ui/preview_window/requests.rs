@@ -75,6 +75,11 @@ pub fn show_preview(path: &Path, x: i32, y: i32, avoid: Option<((i32, i32, i32, 
         return;
     }
 
+    // The window this hover puts up is the film its subtitle copy belongs to, so the copy of
+    // any *other* film is dropped: the pass reads the whole film, and only the film being shown
+    // is worth that read (see `subtitle_files`).
+    subtitle_files::keep_extraction_for(Some(path));
+
     // The hook answers with the region and whether it is a column of the view rather
     // than the item's own text (see `AvoidRegion`).
     let avoid = avoid.map(|(region, column)| {
@@ -103,6 +108,10 @@ pub fn show_preview_keyboard(
         return;
     }
 
+    // And it is a hover like any other for the subtitle copy too: the film being shown is the
+    // one whose copy is kept, and any other's is dropped (see `show_preview`).
+    subtitle_files::keep_extraction_for(Some(path));
+
     // A keyboard preview is not the pointer's, so the item the pointer was last read
     // on has nothing to say about it: the box goes rather than gating a preview the
     // keyboard asked for (see `HOVER_POINTER_BOX`).
@@ -129,6 +138,12 @@ pub fn hide_preview() {
     if pinned() {
         return;
     }
+
+    // A hover that is going away takes the copy of its film's subtitles with it: the pass reads
+    // the whole film, and a read outliving the window that asked for it is a read nobody is
+    // waiting for (see `subtitle_files`). A pin is left alone above, because a pin that is up is
+    // a window still showing its film.
+    subtitle_files::keep_extraction_for(None);
 
     // The window coming down, the count of its coming down and the item the pointer
     // was last read on are written under one lock, so a load that is still running —
