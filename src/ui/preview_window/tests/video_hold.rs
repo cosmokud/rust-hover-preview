@@ -461,6 +461,108 @@ fn a_files_first_subtitle_track_is_the_one_the_player_would_pick_for_itself() {
     );
 }
 
+/// The shape and the length and the subtitle streams come out of one pass over one header, and
+/// the picture survives the streams that are not pictures printing their own `N/A`.
+///
+/// **This is the fault the single pass was able to introduce, and it is why the picture is read
+/// off the first video stream rather than off whichever line came last.** Asking for the whole
+/// header means every stream prints a `width` and a `height`, and every stream that is not a
+/// picture prints `N/A` for both — so the shape a subtitled file reports is erased by the subtitle
+/// streams printed after its picture, and the file is answered `Unmeasurable` (see
+/// `probe_video_geometry`). The capture below is one FFprobe wrote: it is what the merged
+/// `-show_entries` puts out for a file with an embedded track, with the `N/A` pairs included.
+#[test]
+fn a_picture_survives_the_streams_after_it_that_print_no_width_of_their_own() {
+    let probe = "index=0\n\
+                 codec_type=video\n\
+                 width=1840\n\
+                 height=1024\n\
+                 DISPOSITION:default=1\n\
+                 index=1\n\
+                 codec_type=audio\n\
+                 DISPOSITION:default=0\n\
+                 index=2\n\
+                 codec_type=subtitle\n\
+                 width=N/A\n\
+                 height=N/A\n\
+                 DISPOSITION:default=1\n\
+                 index=3\n\
+                 codec_type=subtitle\n\
+                 width=N/A\n\
+                 height=N/A\n\
+                 DISPOSITION:default=0\n\
+                 duration=1440.500000\n";
+
+    assert_eq!(
+        parse_video_picture(probe),
+        Some((1840, 1024, Some(1440.5))),
+        "the picture is the first video stream's, and the `N/A` pairs the two subtitle streams \
+         printed after it neither become the shape nor erase it"
+    );
+
+    // A file with a picture and no subtitles at all: the same pass, one fewer stream, the same
+    // shape — which is the answer a hover of a plain film has always been given.
+    assert_eq!(
+        parse_video_picture(
+            "index=0\n\
+             codec_type=video\n\
+             width=1920\n\
+             height=1080\n\
+             DISPOSITION:default=1\n\
+             index=1\n\
+             codec_type=audio\n\
+             DISPOSITION:default=0\n\
+             duration=N/A\n"
+        ),
+        Some((1920, 1080, None)),
+        "a container that says no length is a file of no known length, which is the same answer \
+         as nothing at all — and not a reason to lose the shape it did say"
+    );
+
+    // And a container of a video's name with a sound and no picture in it, which is the arm the
+    // media engine's fallback is reached from.
+    assert_eq!(
+        parse_video_picture(
+            "index=0\n\
+             codec_type=audio\n\
+             DISPOSITION:default=1\n\
+             duration=210.000000\n"
+        ),
+        None,
+        "a file with no picture in it has no shape to answer, whatever else it holds"
+    );
+}
+
+/// Two video streams are one file's first picture and not its second, because `-select_streams
+/// v:0` used to say which one it was and one pass over a whole header does not.
+///
+/// The stream that comes first is the one FFmpeg's `v:0` names, so reading it is the same answer
+/// the single-selection probe gave — and it is the answer a file with a cover art track and a
+/// main feature behind it has to be read out of the same way.
+#[test]
+fn only_the_first_of_two_video_streams_is_the_files_picture() {
+    let probe = "index=0\n\
+                 codec_type=video\n\
+                 width=320\n\
+                 height=240\n\
+                 DISPOSITION:default=0\n\
+                 index=1\n\
+                 codec_type=audio\n\
+                 DISPOSITION:default=0\n\
+                 index=2\n\
+                 codec_type=video\n\
+                 width=1920\n\
+                 height=1080\n\
+                 DISPOSITION:default=1\n";
+
+    assert_eq!(
+        parse_video_picture(probe),
+        Some((320, 240, None)),
+        "the first video stream is `v:0`, and taking the last pair instead would hand the hover a \
+         box for a stream the file does not open with"
+    );
+}
+
 #[test]
 fn a_key_posted_to_ffplays_player_carries_the_scan_code_its_symbol_is_read_from() {
     let lparam = ffplay_key_lparam(FFPLAY_PAUSE_KEY.1).0;

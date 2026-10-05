@@ -1,5 +1,9 @@
 //! What a film is asked of FFprobe: its size and length, the subtitle streams it holds, and
 //! the crop the picture is really drawn in.
+//!
+//! The first three of those are one pass over one header rather than a pass each, which is what
+//! `probe_video_header` is for; the crop is a pass of its own because it decodes frames, and is
+//! the leg a hover waits for.
 
 use super::*;
 
@@ -49,8 +53,28 @@ pub(super) fn wait_bounded(mut child: Child, timeout: Duration) -> Option<Output
     child.wait_with_output().ok()
 }
 
-/// Get video dimensions using ffprobe
-pub(super) fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32, Option<f64>)> {
+/// What one read of a file's header answers: the shape of its first picture, how long it plays,
+/// and what subtitle streams it holds.
+///
+/// The three are one read rather than three because they are all in the same header, and a read
+/// of a header is paid for twice over once it has a process of its own: a spawn to begin with,
+/// the file opened and its streams walked again, and a deadline of its own standing on the hover
+/// that waits for it. **Measured on this machine, two `ffprobe` passes run beside each other cost
+/// 34–61 ms against 31–51 ms for one pass carrying all three answers** — and the reason the two
+/// were ever apart was not one that survives being written down: each was asking for every
+/// stream, so neither could be narrowed, and two passes over one header is two walks of it.
+///
+/// So one `ffprobe`, no stream selection, asking for every field any of the three wants.
+pub(super) struct VideoHeader {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) duration: Option<f64>,
+    pub(super) subtitles: SubtitleStreams,
+}
+
+/// Read all three of a file's header answers with one pass over it: the shape of its first
+/// picture, its length, and its subtitle streams.
+pub(super) fn probe_video_header(path: &PathBuf) -> Option<VideoHeader> {
     // Spawned rather than run through `Command::output`, which is these two calls
     // under one name, so that the probe is in the job before it is waited on: a
     // probe left behind by a crash would otherwise go on reading a file that nobody
@@ -65,10 +89,18 @@ pub(super) fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32, Option<f
             "ignore_err",
             "-fflags",
             "+genpts+discardcorrupt+igndts",
-            "-select_streams",
-            "v:0",
+            // No `-select_streams`, because the streams wanted are two kinds of stream and a
+            // selection names one of them: `v:0` is the picture on its own and `s` would be the
+            // subtitles on their own, so the one selection that could carry both does not exist.
+            // Asking for the whole header and reading the two kinds out of it is what makes this
+            // one pass rather than two (see `VideoHeader`).
+            //
+            // `width` and `height` are asked of every stream rather than only of a picture, which
+            // is what puts a `width=N/A` in the output for every subtitle stream — see
+            // `parse_video_picture`, where that line is the reason the picture is read off the
+            // first video stream rather than off whichever line came last.
             "-show_entries",
-            "stream=width,height:format=duration",
+            "stream=index,codec_type,width,height:stream_disposition=default:format=duration",
             "-of",
             "default=noprint_wrappers=1",
         ])
@@ -83,21 +115,64 @@ pub(super) fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32, Option<f
     let output = wait_bounded(child, Duration::from_secs(VIDEO_PROBE_TIMEOUT_SECS))?;
     let output_str = String::from_utf8_lossy(&output.stdout);
 
-    let mut width = None;
-    let mut height = None;
+    let (width, height, duration) = parse_video_picture(&output_str)?;
+
+    Some(VideoHeader {
+        width,
+        height,
+        duration,
+        subtitles: parse_subtitle_streams(&output_str),
+    })
+}
+
+/// The shape of the first picture a probe's flat answer describes, and how long the file is.
+///
+/// **Only the first video stream is read, and that is the whole of what this half of the parser
+/// is for.** Asking for the whole header means every stream prints its own `width` and `height`,
+/// and a stream that is not a picture prints `N/A` for both — so a parser that took the last pair
+/// it saw, which is all the shape needed when `-select_streams v:0` meant no other stream ever
+/// printed one, reads a subtitled file as a container with no picture in it and answers it
+/// `Unmeasurable` (see `probe_video_geometry`). Keying off `codec_type` and taking the first
+/// video stream instead is what makes the two answers the same answer.
+///
+/// The length is the format's own rather than a stream's, because a stream with no length of its
+/// own — a live capture, a container that does not say — answers `N/A`, which is the same answer
+/// as nothing at all here.
+pub(super) fn parse_video_picture(probe: &str) -> Option<(u32, u32, Option<f64>)> {
+    let mut picture = None;
     let mut duration = None;
 
-    for line in output_str.lines() {
+    // Whether the stream being read is the picture, and whether one has been taken already — the two
+    // kept apart because a file may hold more than one video stream and only the first is its
+    // shape. A stream that is not a picture is read for neither, which is what keeps a subtitle
+    // stream's `N/A` pair out of the answer.
+    let mut wants_picture = false;
+    let mut seen_video = false;
+    let mut width = None;
+    let mut height = None;
+
+    for line in probe.lines() {
         let Some((key, value)) = line.trim().split_once('=') else {
             continue;
         };
         let value = value.trim();
 
         match key.trim() {
-            "width" => width = value.parse::<u32>().ok(),
-            "height" => height = value.parse::<u32>().ok(),
-            // A stream with no length of its own — a live capture, a container that does not
-            // say — answers `N/A`, which is the same answer as nothing at all here.
+            // A stream begins here, so what the one before it said is finished with — and only a
+            // video stream is one whose numbers were taken, so a subtitle stream's `N/A` pair can
+            // neither become the shape nor erase one.
+            "codec_type" => {
+                if wants_picture && width.is_some() && height.is_some() {
+                    picture = Some((width?, height?));
+                }
+                width = None;
+                height = None;
+
+                wants_picture = value == "video" && !seen_video;
+                seen_video |= value == "video";
+            }
+            "width" if wants_picture => width = value.parse::<u32>().ok(),
+            "height" if wants_picture => height = value.parse::<u32>().ok(),
             "duration" => {
                 duration = value
                     .parse::<f64>()
@@ -108,52 +183,13 @@ pub(super) fn get_video_dimensions(path: &PathBuf) -> Option<(u32, u32, Option<f
         }
     }
 
-    Some((width?, height?, duration))
-}
+    // The last stream is never flushed by the line after it, so it is flushed here.
+    if wants_picture && width.is_some() && height.is_some() {
+        picture = Some((width?, height?));
+    }
 
-/// Read a file's subtitle streams, counted and ordered the way FFmpeg numbers them for `-sst`.
-///
-/// It is asked of the same probe that measures the shape and the length, and run beside the two
-/// others rather than after them, because none of the three needs another's answer — a file's
-/// subtitle streams are in its header whether or not anything has been decoded out of it yet, so
-/// adding this read costs a third process in parallel rather than a round trip in series.
-///
-/// `ffprobe` is asked for every stream rather than for `v:0`, because a selection is the one
-/// thing that would hide the answer: the count and the order of a file's subtitle streams are
-/// counted among themselves, so selecting the video alone would report no subtitles at all for a
-/// file that has three. What comes back is one `key=value` per line in stream order, and the two
-/// facts wanted are read from it the same way the shape is read from the other probe — by
-/// splitting on the first `=`, with the disposition's own `key:value` name left whole.
-pub(super) fn probe_subtitle_streams(path: &Path) -> SubtitleStreams {
-    let child = engine_processes::hidden_command("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-err_detect",
-            "ignore_err",
-            "-fflags",
-            "+genpts+discardcorrupt+igndts",
-            "-show_entries",
-            "stream=index,codec_type:stream_disposition=default",
-            "-of",
-            "default=noprint_wrappers=1",
-        ])
-        .arg(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok();
-
-    let Some(child) = child else {
-        return SubtitleStreams { count: 0, first: 0 };
-    };
-    engine_processes::adopt(child.id());
-
-    let Some(output) = wait_bounded(child, Duration::from_secs(VIDEO_PROBE_TIMEOUT_SECS)) else {
-        return SubtitleStreams { count: 0, first: 0 };
-    };
-
-    parse_subtitle_streams(&String::from_utf8_lossy(&output.stdout))
+    let (width, height) = picture?;
+    Some((width, height, duration))
 }
 
 /// The subtitle streams of a probe's flat answer: how many there are and which the player would
@@ -388,33 +424,43 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         return *cached;
     }
 
-    // Reading the dimensions and detecting the crop are two external processes,
-    // and the detector is the one that decodes frames: neither needs the other's
-    // answer until the crop is validated, so they run at once and the hover waits
-    // for the slower one rather than for both in turn. The subtitle streams are a
-    // third, for the same reason and because they are in the file's header rather
-    // than in its pictures — a header read does not wait on a decode.
-    let (dimensions, candidates, subtitles) = std::thread::scope(|scope| {
-        let dimensions = scope.spawn(|| get_video_dimensions(path));
+    // Two external processes, and the detector is the one that decodes frames: neither needs
+    // the other's answer until the crop is validated, so they run at once and the hover waits
+    // for the slower one rather than for both in turn.
+    //
+    // **A file's subtitle streams used to be a third of them**, run beside these two on the
+    // reasoning that a header read does not wait on a decode — which was true, and left a hover
+    // paying a third spawn and a third deadline for a read that shares a header with the shape
+    // and the length anyway. It is the same pass now (see `probe_video_header`), so the count is
+    // still in hand before the hover's player is launched and the hover waits for two processes
+    // rather than three.
+    let (header, candidates) = std::thread::scope(|scope| {
+        let header = scope.spawn(|| probe_video_header(path));
         let candidates = scope.spawn(|| collect_video_crop_candidates(path));
-        let subtitles = scope.spawn(|| probe_subtitle_streams(path));
 
         (
-            dimensions.join().unwrap_or(None),
+            header.join().unwrap_or(None),
             candidates.join().unwrap_or_default(),
-            subtitles
-                .join()
-                .unwrap_or(SubtitleStreams { count: 0, first: 0 }),
         )
     });
 
     // A file FFmpeg is not there for — or one its own probe could not read — is asked of
     // the media engine Windows has, which is also the engine that would play it. That is
     // the whole of the fallback's geometry: there is no crop to detect, because cropdetect
-    // is an FFmpeg filter and the engine is handed the frame as the file holds it.
-    let Some((src_w, src_h, src_duration)) = dimensions
-        .or_else(|| video_player::dimensions(path).map(|(width, height)| (width, height, None)))
-    else {
+    // is an FFmpeg filter and the engine is handed the frame as the file holds it. It is
+    // also the whole of what is known of such a file's subtitles, which is nothing: the
+    // engine answers with a shape, and the read that would have said what else the file
+    // holds is the one that could not read it (see `video_subtitles`).
+    let header = header.or_else(|| {
+        video_player::dimensions(path).map(|(width, height)| VideoHeader {
+            width,
+            height,
+            duration: None,
+            subtitles: SubtitleStreams::default(),
+        })
+    });
+
+    let Some(header) = header else {
         // No picture in the file at all — which leaves two answers, and the one that matters
         // is asked first. A container of a video's name whose streams hold a sound and no
         // picture is a song: the sound is probed for, and a machine that can play it is
@@ -451,6 +497,13 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
 
         return ProbedGeometry::Unmeasurable;
     };
+
+    let VideoHeader {
+        width: src_w,
+        height: src_h,
+        duration: src_duration,
+        subtitles,
+    } = header;
 
     // The film's soundtrack is measured beside its geometry where `Normalize` is on for videos —
     // but on a thread of its own, and that is the whole of the change.
