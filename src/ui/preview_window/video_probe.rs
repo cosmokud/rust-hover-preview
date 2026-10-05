@@ -463,6 +463,15 @@ pub(super) fn cached_video_geometry(path: &Path) -> Option<ProbedGeometry> {
     video_geometry_cache().get(&key).cloned()
 }
 
+/// Give up every probed geometry: the engine choice moved, and a geometry read by FFprobe is not
+/// the geometry a media-engine preview wants (or the reverse), so the next hover probes again.
+///
+/// It is `pub` for the reason `forget_video_hw_accel_answer` is: the tray reaches it through the
+/// re-export `preview_window` makes, and a re-export cannot be wider than what it names.
+pub fn forget_video_geometry() {
+    video_geometry_cache().clear();
+}
+
 /// Probe a video's geometry, from the cache when the file and its version have been
 /// probed before.
 ///
@@ -554,7 +563,11 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // engine answers with a shape, and the read that would have said what else the file
     // holds is the one that could not read it (see `video_subtitles`). A native route has
     // already taken this answer above, so the fallback is the FFmpeg arm's alone.
-    let header = if native { header } else { header.or_else(engine_header) };
+    let header = if native {
+        header
+    } else {
+        header.or_else(engine_header)
+    };
 
     let Some(header) = header else {
         // No picture in the file at all — which leaves two answers, and the one that matters

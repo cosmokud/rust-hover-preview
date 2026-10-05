@@ -161,6 +161,42 @@ impl OfficeEngine {
     }
 }
 
+/// Which engine plays a video, as the tray's `Engine -> Select Engine -> Video` lists it.
+///
+/// `Best` is the machine's own answer and the default: FFmpeg's player where it is installed,
+/// and the media engine Windows has where it is not (see `video_hw::resolve_video_engine`).
+/// The other two name one engine each, whatever the machine would have preferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VideoEngine {
+    /// The best engine this machine has for the file.
+    Best,
+    /// The media engine Windows has, drawn into this window's own frame.
+    Native,
+    /// FFmpeg's `ffplay`, in a window of its own.
+    Ffmpeg,
+}
+
+impl VideoEngine {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Best => "best",
+            Self::Native => "native",
+            Self::Ffmpeg => "ffmpeg",
+        }
+    }
+
+    /// The engine a `config.ini` value names, or `None` for one that names no player: a value
+    /// the app cannot read leaves the setting where it is (see `OfficeEngine::from_str`).
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "best" | "auto" | "default" => Some(Self::Best),
+            "native" | "media_engine" | "media engine" | "media" | "windows" => Some(Self::Native),
+            "ffmpeg" | "ffplay" | "ff" => Some(Self::Ffmpeg),
+            _ => None,
+        }
+    }
+}
+
 /// How long an engine that is kept warm between documents is kept.
 ///
 /// Two settings are one shape: the Office engine, which is the application this app

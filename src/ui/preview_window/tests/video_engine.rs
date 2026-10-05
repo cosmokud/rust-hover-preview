@@ -253,54 +253,98 @@ fn a_video_that_has_not_been_probed_waits_in_the_waiting_box() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// Which engine plays a video is four answers rather than a chain, and the whole of it is
-/// decided by two things that are not the file: whether FFmpeg's player is installed on this
-/// machine, and whether the file's name is one the media engine's own list carries.
+/// Which engine plays a video is decided by the choice, the fallback switch and the machine, and
+/// the whole of the rule is `resolve_video_engine` — so this is the rule asked with stub answers
+/// rather than with the machine the test happens to run on.
 ///
-/// The order is the whole of the rule and it is worth stating as a table rather than as a
-/// chain because every arm of it says something different about who decides. Where FFmpeg is
-/// installed its player takes every video there is, both lists or neither, because it is the
-/// one that decodes what Windows cannot at no cost of a process per frame — and where it is
-/// not installed the two lists are the only thing left to decide with, so they are the only
-/// case where they are read at all.
+/// `Best` is the machine's own answer: the first engine of `VIDEO_ENGINES` that is installed and
+/// that can play the file, which is FFmpeg's player where it is installed and the media engine
+/// where it is not. An explicit choice is one engine with the fallback off and a walk of the list
+/// with it on, and a choice naming an engine the machine has not got is ignored as `Best`, since
+/// a row that is greyed names a player that is not here.
 #[test]
-fn a_video_is_played_by_whichever_of_the_two_engines_the_lists_and_the_machine_leave_to_it() {
+fn a_video_is_played_by_whichever_engine_the_choice_and_the_machine_leave_to_it() {
+    let both_installed = |_| true;
+    let cannot_play = |_| false;
+
     assert_eq!(
-        route_video(true, || true),
-        VideoRoute::Ffplay,
-        "with FFmpeg installed a name the media engine's list carries is played by FFmpeg's player anyway"
+        resolve_video_engine(VideoEngine::Best, true, both_installed, |engine| {
+            engine == VideoEngine::Ffmpeg
+        }),
+        Some(VideoEngine::Ffmpeg),
+        "with both engines on the machine the best of them is FFmpeg's player"
     );
+
     assert_eq!(
-        route_video(true, || false),
-        VideoRoute::Ffplay,
-        "with FFmpeg installed a name only the `[ffmpeg]` list carries is played by FFmpeg's player as well"
+        resolve_video_engine(
+            VideoEngine::Best,
+            true,
+            |engine| engine == VideoEngine::Native,
+            |engine| engine == VideoEngine::Native,
+        ),
+        Some(VideoEngine::Native),
+        "a machine with no FFmpeg on it plays the file with the media engine Windows has"
     );
+
     assert_eq!(
-        route_video(false, || true),
-        VideoRoute::MediaEngine,
-        "with no FFmpeg on the machine a name of the media engine's list is the one the engine is asked about"
+        resolve_video_engine(VideoEngine::Best, true, both_installed, cannot_play),
+        None,
+        "a file no installed engine will take has no player at all, which is a preview-less video \
+         rather than a broken one"
     );
+
     assert_eq!(
-        route_video(false, || false),
-        VideoRoute::NoPreview,
-        "with no FFmpeg on the machine a name neither list reaches has no player at all"
+        resolve_video_engine(VideoEngine::Native, false, both_installed, |engine| {
+            engine == VideoEngine::Ffmpeg
+        }),
+        None,
+        "with the fallback off a chosen engine that cannot play the file is the end of the rule, \
+         so there is no preview of it"
+    );
+
+    assert_eq!(
+        resolve_video_engine(VideoEngine::Native, true, both_installed, |engine| {
+            engine == VideoEngine::Ffmpeg
+        }),
+        Some(VideoEngine::Ffmpeg),
+        "with the fallback on the same file is played by the next engine of the order instead"
+    );
+
+    assert_eq!(
+        resolve_video_engine(
+            VideoEngine::Ffmpeg,
+            false,
+            |engine| engine == VideoEngine::Native,
+            |engine| engine == VideoEngine::Native,
+        ),
+        Some(VideoEngine::Native),
+        "a choice naming an engine this machine has not got is answered as `Best`"
     );
 }
 
-/// The list is not read where FFmpeg's player is installed, and what reading it would cost is
-/// not only a lock: the two extensions the video list shares with the text lists are settled
-/// by whether the file holds MPEG-TS packets, which is an open and a read of it. So a hover on
-/// a machine with FFmpeg answers its routing from the install alone, and the decoder chain
-/// the engine would be asked to build is never built for a file FFmpeg's player will take.
+/// The media engine is not asked about a file the route settles on FFmpeg's player for, and what
+/// that saves is not only a lock: the two extensions the video list shares with the text lists are
+/// settled by whether the file holds MPEG-TS packets, which is an open and a read of it. So a
+/// machine with FFmpeg on it answers its routing from the install alone, and the decoder chain the
+/// engine would be asked to build is never built for a file FFmpeg's player will take.
 #[test]
-fn the_video_lists_are_not_read_where_ffmpeg_is_installed() {
-    let route = route_video(true, || {
-        panic!("the video lists were read on a machine where FFmpeg plays the file anyway")
-    });
+fn the_media_engine_is_not_asked_where_the_route_settles_on_ffplay() {
+    let engine = resolve_video_engine(
+        VideoEngine::Best,
+        true,
+        |_| true,
+        |engine| match engine {
+            VideoEngine::Ffmpeg => true,
+            VideoEngine::Native => {
+                panic!("the media engine was asked about a file FFmpeg's player takes anyway")
+            }
+            VideoEngine::Best => false,
+        },
+    );
 
     assert_eq!(
-        route,
-        VideoRoute::Ffplay,
-        "FFmpeg's player takes the file without a list or the media engine being consulted"
+        engine,
+        Some(VideoEngine::Ffmpeg),
+        "FFmpeg's player takes the file without the media engine being consulted"
     );
 }

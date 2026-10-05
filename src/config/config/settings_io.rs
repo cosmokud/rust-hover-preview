@@ -142,6 +142,8 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "office_engine",
             "office_engine_idle",
             "office_engine_persistent",
+            "video_engine",
+            "video_engine_fallback",
             "webview_idle",
             "webview_persistent",
         ],

@@ -424,21 +424,19 @@ pub fn normalize_available() -> bool {
 /// Whether the engine Windows has is the *only* player this machine has for a video: nothing of
 /// FFmpeg's is installed, so a file the engine cannot open is a file nothing plays.
 ///
-/// It is one half of the question the router asks before it plays a video, and the other half is
-/// the file's own answer, asked of the engine itself: this says whether there is anything to fall
-/// back *to*, and `video_player::plays` says whether the fallback is needed for this file. On a
-/// machine with no FFmpeg the first answer settles it, which is why the two are asked in that
-/// order and why this asks about the machine rather than about a file.
-///
 /// The direction of the preference is the other way round from what the name suggests, and worth
 /// stating once here because the whole of the routing follows from it: this is **not** "the engine
-/// plays video natively, so use it". Where FFmpeg *is* installed the router sends every video to
-/// FFmpeg regardless — hardware decode is worth more than the ergonomics of a pause this engine
-/// answers better — and this function is reached only on the machines where there is no choice.
-/// That makes it a statement about the machine's *lack* of a player rather than about the
-/// engine's ability, and it is why the layout and the renderer both have to agree about it: the
-/// one asks whether a video has a size to be placed at, and the other asks which of the two
-/// engines draws it.
+/// plays video natively, so use it". Where FFmpeg *is* installed every video goes to FFmpeg
+/// regardless — hardware decode is worth more than the ergonomics of a pause this engine answers
+/// better — so this is a statement about the machine's *lack* of a player rather than about the
+/// engine's ability.
+///
+/// **Nothing asks it since the engine choice became a setting** (see `video_hw::resolve_video_engine`):
+/// the router asks `ffplay_available` about the engine it is considering rather than about the
+/// machine as a whole, because a user may name the media engine on a machine where FFmpeg is
+/// installed. It is kept rather than dropped — it is the machine's own answer to the question the
+/// layout and the renderer used to ask together, and it is still how a second caller would ask it.
+#[allow(dead_code)]
 pub fn plays_video_natively() -> bool {
     !ffplay_available()
 }

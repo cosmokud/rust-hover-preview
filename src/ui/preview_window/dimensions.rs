@@ -84,7 +84,7 @@ pub(super) fn video_box(path: &Path) -> Option<(u32, u32)> {
             // it was the only player there is, or the name is one only the `[ffmpeg]` list
             // carries on such a machine. That is a file with no preview at all, and the layout
             // is answered with no size so the hover is dropped rather than laid out into a box
-            // nothing would be drawn into (see `route_video`).
+            // nothing would be drawn into (see `video_route`).
             VideoRoute::MediaEngine | VideoRoute::NoPreview => None,
         },
         // Not probed yet: the wait for the probe, which is the box the hover is placed
