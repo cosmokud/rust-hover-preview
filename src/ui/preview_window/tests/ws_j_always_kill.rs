@@ -379,13 +379,13 @@ fn end_takes_the_snapshot_exactly_once() {
     restore(previous_pin, previous_pid, previous_media);
 }
 
-/// END holding = was-held || gesture-held: a playing film resumes, a paused
-/// one stays held.
+/// END holding = was-held only: a playing film relaunches playing and is
+/// never paused by a reload; a paused one stays held.
 #[test]
 fn end_holding_restores_prior_transport() {
     assert!(
-        gesture_end_holding(true, false),
-        "a playing film carries the gesture hold onto the relaunch"
+        !gesture_end_holding(true, false),
+        "a playing film relaunches playing: no hold, no key, no pause"
     );
     assert!(
         gesture_end_holding(false, true),
@@ -393,7 +393,7 @@ fn end_holding_restores_prior_transport() {
     );
     assert!(
         gesture_end_holding(true, true),
-        "either is held: the swap tells them apart, not the relaunch"
+        "held wins: the swap keeps it held, not the relaunch"
     );
     assert!(
         !gesture_end_holding(false, false),
@@ -433,7 +433,7 @@ fn whole_gesture_resumes_a_playing_film_at_the_snapshot() {
         "mid-gesture: no player, no audio"
     );
 
-    // END: the one relaunch at the snapshot second, carrying the hold.
+    // END: the one relaunch at the snapshot second, playing with nothing owed.
     let snapshot = take_gesture_snapshot().expect("the end owns the relaunch");
     assert!(
         (snapshot.seconds - 30.0).abs() < 1.0,
@@ -480,7 +480,7 @@ fn whole_gesture_resumes_a_playing_film_at_the_snapshot() {
     let (paused, owed, claimed, at) = transport.expect("the transport stands");
     assert_eq!(
         paused, None,
-        "a playing film is playing after: the swap ends the gesture hold with no key"
+        "a playing film is playing after: relaunched playing with nothing owed, no key"
     );
     assert!(!owed, "nothing owed");
     assert!(!claimed, "no claim left");
@@ -933,10 +933,20 @@ fn drag_end_through_a_reentrant_capture_relaunches_once() {
         !gesture_snapshot_active(),
         "the take disarms the dead interval"
     );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport))),
-        Some(frozen),
-        "the one player is at the snapshot second"
+    let (playing, at) = pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                (
+                    pin.transport.paused_at.is_none(),
+                    pin_playhead(&pin.transport),
+                )
+            })
+        })
+        .expect("the transport stands");
+    assert!(playing, "a playing film relaunches playing, never paused");
+    assert!(
+        at.is_some_and(|at| (at - frozen).abs() < 0.12),
+        "the one player is at the snapshot second, got {at:?} vs {frozen}"
     );
     assert_eq!(
         pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.content)),
@@ -990,10 +1000,20 @@ fn drag_capture_lost_then_end_relaunches_once() {
         1,
         "the release after a lost capture relaunches nothing"
     );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport))),
-        Some(frozen),
-        "the one player is at the snapshot second"
+    let (playing, at) = pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                (
+                    pin.transport.paused_at.is_none(),
+                    pin_playhead(&pin.transport),
+                )
+            })
+        })
+        .expect("the transport stands");
+    assert!(playing, "a playing film relaunches playing, never paused");
+    assert!(
+        at.is_some_and(|at| (at - frozen).abs() < 0.12),
+        "the one player is at the snapshot second, got {at:?} vs {frozen}"
     );
 
     restore(previous_pin, previous_pid, previous_media);
@@ -1037,10 +1057,20 @@ fn volume_release_through_a_reentrant_capture_relaunches_once() {
         Some((70, 70)),
         "the single relaunch is at the latest level"
     );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport))),
-        Some(frozen),
-        "and at the snapshot second"
+    let (playing, at) = pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                (
+                    pin.transport.paused_at.is_none(),
+                    pin_playhead(&pin.transport),
+                )
+            })
+        })
+        .expect("the transport stands");
+    assert!(playing, "a playing film relaunches playing, never paused");
+    assert!(
+        at.is_some_and(|at| (at - frozen).abs() < 0.12),
+        "and at the snapshot second, got {at:?} vs {frozen}"
     );
 
     restore(previous_pin, previous_pid, previous_media);
@@ -1077,10 +1107,20 @@ fn seek_release_through_a_reentrant_capture_relaunches_once_at_the_aim() {
         !gesture_snapshot_active(),
         "the take disarms the dead interval"
     );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport))),
-        Some(aimed),
-        "the single relaunch carries the aimed second, never the press's stale one"
+    let (playing, at) = pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                (
+                    pin.transport.paused_at.is_none(),
+                    pin_playhead(&pin.transport),
+                )
+            })
+        })
+        .expect("the transport stands");
+    assert!(playing, "a playing film relaunches playing, never paused");
+    assert!(
+        at.is_some_and(|at| (at - aimed).abs() < 0.12),
+        "the single relaunch carries the aimed second, never the press's stale one, got {at:?} vs {aimed}"
     );
 
     restore(previous_pin, previous_pid, previous_media);
@@ -1109,10 +1149,20 @@ fn seek_capture_lost_relaunches_once_at_the_aim() {
         1,
         "the abandoned seek is owed its one relaunch"
     );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin_playhead(&pin.transport))),
-        Some(aimed),
-        "at the aimed second, never the press's stale one"
+    let (playing, at) = pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                (
+                    pin.transport.paused_at.is_none(),
+                    pin_playhead(&pin.transport),
+                )
+            })
+        })
+        .expect("the transport stands");
+    assert!(playing, "a playing film relaunches playing, never paused");
+    assert!(
+        at.is_some_and(|at| (at - aimed).abs() < 0.12),
+        "at the aimed second, never the press's stale one, got {at:?} vs {aimed}"
     );
     assert!(
         !gesture_snapshot_active(),

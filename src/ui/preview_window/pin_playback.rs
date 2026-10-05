@@ -305,10 +305,13 @@ pub(super) fn take_gesture_snapshot() -> Option<GestureSnapshot> {
         .and_then(|mut held| held.take())
 }
 
-/// Whether the end relaunches held: a film the gesture held, or one the hand
-/// found held — the swap tells them apart afterwards, not the relaunch.
-pub(super) fn gesture_end_holding(was_playing: bool, was_held: bool) -> bool {
-    was_playing || was_held
+/// Whether the end relaunches held: only a film the hand found held.
+/// A film that was playing relaunches playing, never paused: ffplay starts
+/// playing, so no key is owed and the swap has nothing to release. A paused
+/// intermediate for a playing film flickers the bar and strands paused on a
+/// spawn failure or an abandoned cover.
+pub(super) fn gesture_end_holding(_was_playing: bool, was_held: bool) -> bool {
+    was_held
 }
 
 /// Snapshot the playhead and freeze the clock: the press of every gesture
@@ -369,8 +372,9 @@ pub(super) fn gesture_press_freeze() -> bool {
 
 /// The end relaunch of a gesture that killed: exactly one
 /// `restart_pinned_player` at the snapshot second, the box the hand left
-/// behind, the latest level, the snapshot subtitle — carrying was-held or
-/// the gesture's hold for the swap to settle without a key.
+/// behind, the latest level, the snapshot subtitle — carrying was-held only.
+/// A playing film relaunches playing with nothing owed; a held film carries
+/// its hold for the loop to deliver through the new window.
 ///
 /// The snapshot is *taken* here, not read: letting go of the pointer
 /// re-enters `pin_capture_lost` synchronously through `WM_CAPTURECHANGED`
