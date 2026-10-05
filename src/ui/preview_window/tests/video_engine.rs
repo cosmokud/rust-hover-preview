@@ -230,6 +230,8 @@ fn a_video_that_has_not_been_probed_waits_in_the_waiting_box() {
             subtitles: SubtitleStreams::default(),
             sidecar: None,
             derived: None,
+            subtitle_codecs: Vec::new(),
+            attachment_codecs: Vec::new(),
             subtitle_extraction_failed: false,
         }),
     );

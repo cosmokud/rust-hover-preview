@@ -70,6 +70,12 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
         walk,
     };
 
+    // The pin is being shown another file, so the copy of the film it was showing is dropped:
+    // the pass reads the whole film, and the film the window is actually showing is the one
+    // worth that read (see `subtitle_files`). A copy for this same file is kept, which is what
+    // a pin taken up over a hover's own extraction needs.
+    subtitle_files::keep_extraction_for(Some(&file.path));
+
     // What was showing goes before what replaces it: the player a video of this app's was started
     // in, and the frame this side holds.
     //

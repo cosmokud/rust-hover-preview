@@ -151,17 +151,17 @@ pub(super) fn start_video_playback(
     });
 
     // The subtitles are drawn into the same filter chain rather than named beside it, because
-    // `-sst` is inert on this build: the subtitle stream is demuxed and no subtitle filter is put
+    // `-sst` is inert on this build: the subtitle stream is demuxed, no subtitle filter is put
     // in the graph, so nothing is drawn whatever track is chosen. What draws is the `subtitles`
     // filter, which initialises libass — and which is appended *after* the crop rather than put in
     // front of it, so the lettering is laid over the cropped picture rather than cropped along
     // with it.
     //
-    // The track named is the one the caller was given, where there is a choice. A caller that has
-    // chosen nothing is answered with the file's own default rather than with nothing at all,
-    // because the player is about to be launched with a specifier either way and the one it would
-    // have picked for itself is the one the picture was drawn with last time (see
-    // `SubtitleStreams::chosen`).
+    // Only a small file is ever named — the sidecar beside the film or the copy made out of it —
+    // and a track the caller was given chooses which copy, where there is a choice. A file with
+    // neither source is a film played without subtitles, which is deliberate and measured: the
+    // film's own stream would stream the whole container before a first frame and cost the
+    // preview itself (see `video_launch::subtitle_filter`, where that refusal is written out).
     let streams = video_subtitles(path);
     let sidecar = measured
         .as_ref()
@@ -169,17 +169,15 @@ pub(super) fn start_video_playback(
     let derived = measured
         .as_ref()
         .and_then(|geometry| geometry.derived.as_ref());
-    let extraction_failed = measured
-        .as_ref()
-        .is_some_and(|geometry| geometry.subtitle_extraction_failed);
-    let subtitles = video_launch::subtitle_filter(
-        path,
-        sidecar,
-        derived,
-        extraction_failed,
-        streams.count,
-        subtitle.or(streams.chosen()),
-    );
+    let subtitles = video_launch::subtitle_filter(sidecar, derived, subtitle.or(streams.chosen()));
+
+    // **The copy of this film's own tracks is asked for here, where the film is actually put on
+    // screen**, and not by the probe: the pass that makes one is a whole read of the film, so it
+    // belongs to a window that is showing it rather than to a hover that may only be passing
+    // over. Being asked at the launch is also what gives a dropped copy its second chance:
+    // every launch asks again, so a film the user came back to is copied again rather than
+    // never (see `subtitle_files::request_extraction`).
+    subtitle_files::request_extraction(path, measured.as_ref());
 
     // What this player is drawn with is written down for the take-up that may adopt it: a pin
     // does not begin a player of its own over a hover's, so a player begun without subtitles

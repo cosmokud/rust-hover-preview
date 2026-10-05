@@ -614,34 +614,17 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         spawn_gain_scan(path);
     }
 
-    // **The film's own subtitle tracks are copied out of it here, once, and that read is what a
-    // hover of an embedded-subtitle film stops paying.** The filter that draws an embedded track
-    // makes FFmpeg open the film a second time and stream the container to its first subtitle:
-    // measured, a cold 1.4 GB MKV took 14 904 ms to a first frame and read 1 423 MB, against
-    // 492 ms and 41 MB for the same film drawn from the 30 KB `.ass` this extraction writes. The
-    // pass is started on this thread because it is the thread that already runs a film's slow
-    // work, and nothing waits for it: what a later hover reads is the geometry entry the thread
-    // updates (see `subtitle_files::finish`).
+    // **What is already copied out of the film is read here, once, and the copy of what is not
+    // there yet is asked for by the launch rather than by this probe.** The pass that makes one
+    // is a whole read of the film (see `subtitle_files`), and asking for it here would ask for
+    // it on behalf of a hover the pointer may only be passing over — so the ask is placed where
+    // a film is actually put on screen (see `subtitle_files::request_extraction`), and what a
+    // *dropped* copy costs is the read of a film nobody is watching.
     //
-    // The order of the two questions is the order they can be answered: what is already in the
-    // cache folder is a `read_dir` of one small folder, and whether this machine would draw the
-    // film with FFmpeg's player at all is a question for the engine — asked last, because it is
-    // the one that can be expensive and it cannot change the first answer. The engine's files are
-    // not FFmpeg's to draw, so a file the media engine plays is never extracted: its subtitles
-    // are the engine's business. On a machine with FFmpeg installed that question is answered
-    // from the install alone without the file being opened, and where it is not, the answer is
-    // memoised per file and version (see `media_engine_plays`).
+    // What this probe leaves for that launch is the answer itself: the small files a pass before
+    // it left, the sidecar beside the film, and the codec names the pass's own command is built
+    // from, all held together in the geometry entry below.
     let derived = subtitle_files::resolve(path, &subtitle_codecs);
-    if !media_engine_plays(path)
-        && subtitle_files::extraction_due(
-            sidecar.as_deref(),
-            derived.as_ref(),
-            subtitles.count,
-            &subtitle_codecs,
-        )
-    {
-        subtitle_files::spawn_subtitle_extraction(path, &subtitle_codecs, &attachment_codecs);
-    }
 
     let crop = best_valid_crop(candidates, src_w, src_h);
 
@@ -666,6 +649,10 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             subtitles,
             sidecar,
             derived,
+            // The names the extraction's own command is built from, held so the launch that asks
+            // for the pass needs no second read of the header (see `subtitle_codecs`).
+            subtitle_codecs,
+            attachment_codecs,
             // Nothing has failed yet as far as this probe knows: a failure is written by the
             // extraction thread into this very entry, and a probe that finds an entry answers
             // from it instead of running again (see the cache lookup at the top).
@@ -682,6 +669,8 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             subtitles,
             sidecar,
             derived,
+            subtitle_codecs,
+            attachment_codecs,
             subtitle_extraction_failed: false,
         }
     };

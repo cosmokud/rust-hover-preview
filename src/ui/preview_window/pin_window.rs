@@ -71,7 +71,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use super::{PinCommand, PinnedPreview, ScreenRegion};
+use super::{subtitle_files, PinCommand, PinnedPreview, ScreenRegion};
 
 mod window;
 
@@ -556,6 +556,11 @@ pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
     // A road that finds the pin already over is told nothing about the window: the road that ended
     // it has already ended it, style and all, and the second road is a race the watchdog and the
     // loop's own tick are both entitled to lose (see `two_roads_racing_on_one_pin_end_it_once`).
+
+    // The pin coming down takes the copy of its film's subtitles with it: what the pass reads is
+    // the whole film, and the pinned window was the only reason it was asked for (see
+    // `subtitle_files::keep_extraction_for`).
+    subtitle_files::keep_extraction_for(None);
 
     PIN_UP.store(false, Ordering::Release);
     // A pin that is over is a pointer that is on something new: the file the pin was of is not

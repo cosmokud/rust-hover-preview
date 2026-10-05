@@ -572,9 +572,15 @@ pub(super) struct VideoGeometry {
     /// film's own embedded track, which streams the whole container before the first frame (see
     /// `video_launch::subtitle_filter`).
     pub(super) derived: Option<DerivedSubtitles>,
-    /// Whether the one extraction pass has failed, which is the only case in which the film's
-    /// own embedded track is named for the filter: that route streams the whole container before
-    /// it draws anything, so it is taken only once the cheap route is known not to be coming.
+    /// The codec name of every subtitle stream, by subtitle-relative index, and of every
+    /// attachment in the container's own order: the two lists the extraction's one command is
+    /// built from, held beside the answer so that the launch which asks for the pass needs no
+    /// second read of the header (see `subtitle_files::request_extraction`).
+    pub(super) subtitle_codecs: Vec<String>,
+    pub(super) attachment_codecs: Vec<String>,
+    /// Whether the one extraction pass has failed, which is the flag that keeps it from being
+    /// asked for again: the film is then drawn *without* subtitles and stays fast, because the
+    /// film's own embedded track is never named (see `video_launch::subtitle_filter`).
     pub(super) subtitle_extraction_failed: bool,
 }
 

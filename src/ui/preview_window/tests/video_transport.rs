@@ -589,13 +589,17 @@ fn only_a_player_that_was_seeked_has_its_loop_given_by_this_app() {
 /// Subtitles are drawn by a filter in the same chain as the crop, and the file is named the
 /// one way the filter parses.
 ///
-/// The escaping is measured in both directions and only one spelling survives. The `subtitles`
-/// filter separates its filename from its options with a colon, and a Windows path opens with
-/// one, so the drive letter is read as a filename and the rest as the filter's first option —
-/// which is why FFmpeg's complaint names `original_size`, which nobody asked for. The whole of
-/// the escaping, the characters beyond the colon and the one that cannot be escaped at all, is
-/// in `video_launch` beside it; what is asserted here is that the track the pin is remembering
-/// reaches the filter, which is the half that was missing.
+/// The filter the pin is given names the copied track it is remembering, spelled the way the
+/// filtergraph parses it.
+///
+/// The pin remembers a track number across every relaunch — a seek, a resize, a change of track —
+/// because a player reports nothing about what it did with the number. The number's whole effect
+/// is here: it chooses which copied file the filter names. The spelling half is here for the same
+/// reason it was always here: a Windows path opens with a colon and the filter's own separator is
+/// a colon, which is why FFmpeg's complaint names `original_size`, which nobody asked for. The
+/// whole of the escaping, the characters beyond the colon and the one that cannot be escaped at
+/// all, is in `video_launch` beside it; what is asserted here is that the track the pin is
+/// remembering reaches the filter, which is the half that was missing.
 #[test]
 fn subtitles_are_named_the_way_the_filter_that_reads_them_parses() {
     assert_eq!(
@@ -607,19 +611,23 @@ fn subtitles_are_named_the_way_the_filter_that_reads_them_parses() {
 
     let dir = std::env::temp_dir().join(format!("preview-subs-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
-    let video = dir.join("film.mkv");
-    std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+    let first = dir.join("sub0.ass");
+    std::fs::write(&first, b"[Script Info]\n").expect("a stand-in copy is writable");
+    let chosen = dir.join("sub1.ass");
+    std::fs::write(&chosen, b"[Script Info]\n").expect("a stand-in copy is writable");
+    let copied = DerivedSubtitles {
+        tracks: vec![Some(first), Some(chosen)],
+        fonts: None,
+    };
 
-    // No sidecar: this is about an embedded track reaching the filter, so the sidecar beside the
-    // film is answered with nothing rather than being found (see `probe_video_geometry`).
-    let filter = video_launch::subtitle_filter(&video, None, None, true, 2, Some(1))
-        .expect("a file with a subtitle stream of its own has a filter to draw it with");
+    // The track the pin is remembering chooses the copy that is named — not a hard-coded first —
+    // and the value is quoted the way the filter's parser needs it (see `escape_filter_path`).
+    let filter = video_launch::subtitle_filter(None, Some(&copied), Some(1))
+        .expect("a film with a copy has a filter to draw it with");
     assert!(
-        filter.starts_with("subtitles='") && filter.contains(":si=1"),
-        "the value is quoted so the escape survives the filtergraph parser, and the track is the \
-             one the pin is remembering rather than a hard-coded first: `si=2` on a third stream is \
-             refused outright with 'Unable to locate subtitle stream', so the index has to be \
-             counted among subtitle streams and it has to be the one that was chosen: {filter}"
+        filter.starts_with("subtitles='") && filter.contains("sub1.ass"),
+        "the value is quoted so the escape survives the filtergraph parser, and the copy the pin \
+         is remembering is the one the filter names rather than a hard-coded first: {filter}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
