@@ -90,11 +90,15 @@ pub(super) struct PinUpdateWatch {
     /// When the selection above was last polled: the poll answers out of live shell objects
     /// on every read, so it runs on its own cadence rather than on every tick.
     pub(super) sel_polled_at: Option<Instant>,
-    /// Where the pointer was when the last press was read, or nothing where this watch has
-    /// not seen one. It is what tells a press of its own from the second press of a
-    /// double-click, which is one gesture at one point rather than two picks (see
-    /// `PinUpdateWatch::press_is_a_pick`).
-    pub(super) press_point: Option<POINT>,
+    /// Where the pointer was when the last press was read, and when it was read, or nothing
+    /// where this watch has not seen one. It is what tells a press of its own from a later press
+    /// inside the same gesture — one gesture is two presses at one spot in one window of time,
+    /// not two choices (see `PinUpdateWatch::press_is_a_pick`).
+    ///
+    /// The spot and its clock are one record rather than two because one of them alone decides
+    /// nothing: a spot with no clock beside it is a spot that is never past, so every press
+    /// after it at that pixel is read as part of a gesture that ended long ago.
+    pub(super) press_point: Option<(POINT, Instant)>,
 }
 
 /// A click in hand: the three things that are always said of it together — when it was read,
@@ -224,13 +228,20 @@ impl PinUpdateWatch {
         // Read by the tick that hands the watch its input rather than here, because the press bit is
         // the one thing about a click that can only be read once a tick (see `focus_move_input`).
         //
-        // A press the hand has not moved for is the other half of a press it has already made, and
-        // is not a pick of its own. That is what a double-click is: one gesture at one point. Where
-        // the first press opened a folder, the second is answered out of the listing that first one
-        // put under a pointer nobody moved — a file the user never chose, and the one the new folder
-        // happens to have drawn there. Both doors a press comes through are closed by this one
-        // answer: the file under the point, and the listing's own selection (see
-        // `PinUpdateWatch::press_is_a_pick`).
+        // A press the hand has not moved for, and that landed inside the machine's own
+        // double-click window of the press before it, is another press of a gesture it has
+        // already read, and is not a pick of its own. That is what a double-click is: one
+        // gesture at one point in one window of time. Where the first press opened a folder, the
+        // second is answered out of the listing that first one put under a pointer nobody moved —
+        // a file the user never chose, and the one the new folder happens to have drawn there.
+        // Both doors a press comes through are closed by this one answer: the file under the
+        // point, and the listing's own selection (see `PinUpdateWatch::press_is_a_pick`).
+        //
+        // The window is what leaves the click *after* that folder change alone, though: it shares
+        // its pixel with the press that opened the folder and shares the listing under it, and
+        // only the time tells them apart. Without it the pin refuses every click at that spot for
+        // as long as the hand stays on it, and a pin standing over that spot stops following the
+        // listing — which is the fault, and the one this rule's own half above is written for.
         //
         // Where the press landed is the other half of what makes it a pick: a press is read off
         // the key rather than off a window, so the window it landed on is the only thing that
@@ -247,7 +258,7 @@ impl PinUpdateWatch {
         let current_is_chrome = window_is_menu_popup_chrome(pointer.window);
         let previous_was_chrome = previous_window.is_some_and(window_is_menu_popup_chrome);
         let pick = clicked
-            && self.press_is_a_pick(pointer.point, threshold)
+            && self.press_is_a_pick(pointer.point, threshold, now)
             && press_is_a_listing(
                 over_explorer,
                 over_our_own,
@@ -493,9 +504,9 @@ impl PinUpdateWatch {
         }
     }
 
-    /// Whether the press that was just read is a pick of its own, rather than the second press of
-    /// a double-click — one gesture at one point rather than two choices. The press is noted on the
-    /// way out, so the next one is measured against this one.
+    /// Whether the press that was just read is a pick of its own, rather than a later press in
+    /// the same gesture — one gesture at one point rather than two choices. The press is noted on
+    /// the way out, so the next one is measured against this one.
     ///
     /// This is the whole of the rule that keeps a folder change from being answered as a pick.
     /// A press is read against whatever is under the pointer at the tick it lands, and a
@@ -506,20 +517,37 @@ impl PinUpdateWatch {
     /// pointer is" are one place. The hand can, because a pick in a new listing is a file the
     /// hand travelled to.
     ///
-    /// A press within the move tolerance of the last one is therefore the other half of a gesture
-    /// already read, and is not offered — through either door, the file under the point and the
-    /// listing's own selection. It is still noted, so the third press of a triple-click is
-    /// refused the same way rather than answering on the strength of the first.
+    /// A press within the move tolerance of the last one *and* inside the machine's own
+    /// double-click window is therefore the other half of a gesture already read, and is not
+    /// offered — through either door, the file under the point and the listing's own selection.
+    /// It is still noted, so the third press of a triple-click is refused the same way rather
+    /// than answering on the strength of the first.
+    ///
+    /// The window is the other half of what makes a double-click a double-click, and it is what
+    /// this rule was reading without. Measured on the spot alone, the second press of the
+    /// double-click that opened a folder is the same thing as the click a user makes on the file
+    /// that folder then drew under a hand they never moved: the same pixel, and the button went
+    /// down in both cases. So the folder opens and every click at that pixel after it is refused
+    /// for good — which is the whole of the fault, because the pin is standing over that pixel
+    /// and stops following the listing it is standing in. Read in time as well, the press that
+    /// opened the folder is still inside the gesture's own window while the click after it is
+    /// not, and a click past that window is a file the user chose however little the hand has
+    /// moved since.
     ///
     /// What this does not cost: a click on a different file is a different row, and the hand
     /// crosses a row to reach it. A click on the file the pin already shows is declined in
     /// silence by `offer` whatever this says, and a second click on one file — what a slow
     /// double-click on a file is — has nothing new to ask for either.
-    pub(super) fn press_is_a_pick(&mut self, point: POINT, threshold: i32) -> bool {
-        let pick = self.press_point.is_none_or(|last| {
-            (point.x - last.x).abs() > threshold || (point.y - last.y).abs() > threshold
+    pub(super) fn press_is_a_pick(&mut self, point: POINT, threshold: i32, now: Instant) -> bool {
+        let pick = self.press_point.is_none_or(|(last, at)| {
+            let past_the_gesture =
+                now.saturating_duration_since(at) > Duration::from_millis(double_click_ms());
+            let moved =
+                (point.x - last.x).abs() > threshold || (point.y - last.y).abs() > threshold;
+
+            past_the_gesture || moved
         });
-        self.press_point = Some(point);
+        self.press_point = Some((point, now));
         pick
     }
 

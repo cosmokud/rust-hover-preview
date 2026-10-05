@@ -683,43 +683,96 @@ fn the_second_press_of_a_double_click_is_not_a_pick() {
     let on_the_folder = POINT { x: 400, y: 300 };
     // The new folder's listing drew a row under the hand, in the same place.
     let on_the_new_listing = POINT { x: 402, y: 301 };
+    // One gesture's presses are a moment apart, and the clock is driven rather than waited on so
+    // that what is being asserted is the rule and not how fast the machine this runs on is.
+    let started = Instant::now();
+    let second = started + Duration::from_millis(1);
+    let third = second + Duration::from_millis(1);
 
     let mut watch = PinUpdateWatch::default();
 
     // The first press: the folder. A pick, and `offer` declines it — a folder is not a file
     // this app can show anything for.
     assert!(
-        watch.press_is_a_pick(on_the_folder, tolerance),
+        watch.press_is_a_pick(on_the_folder, tolerance, started),
         "the first press of a double-click is a pick of its own"
     );
 
     // The second, one gesture later, on the file the new folder put under the hand.
     assert!(
-        !watch.press_is_a_pick(on_the_new_listing, tolerance),
-        "a press the hand has not moved for is the other half of a gesture, not a pick"
+        !watch.press_is_a_pick(on_the_new_listing, tolerance, second),
+        "a press the hand has not moved for, inside the gesture's own window, is the other half of \
+         that gesture and not a pick"
     );
 
     // And a third, for the same reason: a triple-click is one gesture, and the second press
     // being refused must not leave the third answering on the strength of the first.
     assert!(
-        !watch.press_is_a_pick(on_the_new_listing, tolerance),
+        !watch.press_is_a_pick(on_the_new_listing, tolerance, third),
         "a triple-click is one gesture too"
     );
 
     // What it does cost: a click on a file the hand reached is a pick, however soon the click
     // before it was made.
     let mut moved = PinUpdateWatch::default();
-    assert!(moved.press_is_a_pick(on_the_folder, tolerance));
+    assert!(moved.press_is_a_pick(on_the_folder, tolerance, started));
     assert!(
-        moved.press_is_a_pick(POINT { x: 40, y: 140 }, tolerance),
+        moved.press_is_a_pick(POINT { x: 40, y: 140 }, tolerance, second),
         "a click on another row is a file the hand travelled to"
     );
 
     // And the very first press a watch sees is a pick: there is no press before it to be the
     // other half of, which is the first click after a pin is taken up.
     assert!(
-        PinUpdateWatch::default().press_is_a_pick(on_the_folder, tolerance),
+        PinUpdateWatch::default().press_is_a_pick(on_the_folder, tolerance, started),
         "the first press a watch sees is a pick"
+    );
+}
+
+/// A press the hand has not moved for is the other half of a gesture *while there is one to be
+/// the other half of*: a double-click is two presses inside the machine's own double-click time,
+/// and a click at the same spot well after it is a hand that has come back, not a third press.
+///
+/// This is the reported fault. A double-click opens a folder under a hand that does not move,
+/// the new listing draws its rows exactly where the hand already was, and the click that picks
+/// one of those rows lands on the very pixel the two presses of the double-click did. With the
+/// spot alone deciding, that click is the third press of a gesture and is refused — and a pin
+/// whose `press_point` was only ever a spot is refused at that pixel for good, so the preview
+/// never follows the first file the user clicks in the folder it just opened.
+#[test]
+fn a_click_the_hand_has_not_moved_for_is_a_pick_once_the_gesture_is_over() {
+    let tolerance = KeyboardPointerPause::default().move_threshold_px(false, 96);
+    let on_the_folder = POINT { x: 400, y: 300 };
+    // The new folder's listing drew a row under the hand, in the same place.
+    let on_the_new_listing = POINT { x: 402, y: 301 };
+    let started = Instant::now();
+    let second_press = started + Duration::from_millis(1);
+
+    let mut watch = PinUpdateWatch::default();
+
+    // The double-click that opened the folder: the folder, and then the gesture's second half.
+    assert!(
+        watch.press_is_a_pick(on_the_folder, tolerance, started),
+        "the first press of a double-click is a pick of its own"
+    );
+    assert!(
+        !watch.press_is_a_pick(on_the_new_listing, tolerance, second_press),
+        "and the second press of it is the other half of that same gesture"
+    );
+
+    // And then the click on the file the new folder drew under the hand, which is a gesture of
+    // its own: the user read the folder before reaching for anything in it. One millisecond past
+    // this machine's own double-click window, measured from the press it has to be told from, so
+    // the assertion holds whatever the mouse is set to rather than against a number this test
+    // chose.
+    assert!(
+        watch.press_is_a_pick(
+            on_the_new_listing,
+            tolerance,
+            second_press + Duration::from_millis(double_click_ms() + 1)
+        ),
+        "a click outside the double-click's own window is a pick, and not the third press of a \
+         gesture that ended when the hand let the mouse button alone"
     );
 }
 
