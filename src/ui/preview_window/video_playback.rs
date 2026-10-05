@@ -84,7 +84,9 @@ pub(super) fn start_video_playback(
     // folder (`video_launch::sidecar_for`), and this is inside the launch — so a walk here would be
     // paid again by every seek, resize, volume change and track change. The probe resolves it
     // once per file and version, beside the two processes it already runs (see
-    // `probe_video_geometry`), and one lookup here answers both facts the chain needs.
+    // `probe_video_geometry`), and one lookup here answers both facts the chain needs. The copied
+    // subtitle files and the answer that their one pass has failed come out of the same read, for
+    // the same reason once more: what the launch draws is the probe's answer, not a second look.
     let measured = match cached_video_geometry(path) {
         Some(ProbedGeometry::Measured(geometry)) => Some(geometry),
         _ => None,
@@ -111,10 +113,20 @@ pub(super) fn start_video_playback(
     // have picked for itself is the one the picture was drawn with last time (see
     // `SubtitleStreams::chosen`).
     let streams = video_subtitles(path);
-    let sidecar = measured.and_then(|geometry| geometry.sidecar);
+    let sidecar = measured
+        .as_ref()
+        .and_then(|geometry| geometry.sidecar.as_deref());
+    let derived = measured
+        .as_ref()
+        .and_then(|geometry| geometry.derived.as_ref());
+    let extraction_failed = measured
+        .as_ref()
+        .is_some_and(|geometry| geometry.subtitle_extraction_failed);
     let subtitles = video_launch::subtitle_filter(
         path,
-        sidecar.as_deref(),
+        sidecar,
+        derived,
+        extraction_failed,
         streams.count,
         subtitle.or(streams.chosen()),
     );

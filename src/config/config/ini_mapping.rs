@@ -11,8 +11,8 @@ use crate::readers::tone_map::Curve;
 use super::app_config::AppConfig;
 use super::defaults::{
     parse_text_font_scale, sanitize_decode_budget_gb, sanitize_document_cache_mb,
-    sanitize_hdr_exposure, sanitize_image_cache_mb, sanitize_image_disk_cache_mb,
-    sanitize_spinner_delay_ms, sanitize_text_font_scale_percent,
+    sanitize_general_disk_cache_mb, sanitize_hdr_exposure, sanitize_image_cache_mb,
+    sanitize_image_disk_cache_mb, sanitize_spinner_delay_ms, sanitize_text_font_scale_percent,
     sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms, sanitize_ttc_face,
     sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
 };
@@ -315,6 +315,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "image_disk_cache_mb",
             Some(sanitize_image_disk_cache_mb(self.image_disk_cache_mb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "general_disk_cache_mb",
+            Some(sanitize_general_disk_cache_mb(self.general_disk_cache_mb).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -779,6 +784,14 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "image_disk_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
                 self.image_disk_cache_mb = sanitize_image_disk_cache_mb(value);
+            }
+        }
+        // And the budget of the folder a film's own subtitle tracks are copied into, which is a
+        // cache of its own for the reason the one above is: what it holds are subtitle files and
+        // their fonts rather than developed pictures or the pages engines drew (see `subtitle_files`).
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "general_disk_cache_mb") {
+            if let Ok(value) = u32::try_from(value) {
+                self.general_disk_cache_mb = sanitize_general_disk_cache_mb(value);
             }
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "office_engine") {

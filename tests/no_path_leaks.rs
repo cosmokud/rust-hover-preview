@@ -16,7 +16,14 @@ use std::process::Command;
 const WORTH_READING: u64 = 2 << 20;
 
 fn is_skipped(name: &str) -> bool {
-    matches!(name, ".git" | "target" | ".scratch" | ".tmp")
+    // `.codegraph` is a code-graph tool's own state — an index and the daemon's log of the
+    // runs that wrote it — and the log names this checkout by its absolute path the moment the
+    // daemon starts. It is not source and it is never committed (the folder ignores itself
+    // outright, which is what the root `.gitignore` says one of these tools needed after it
+    // had already published where the repository lived), so there is nothing here for this
+    // walk to guard: what it would flag is written by a tool on every run and would have to
+    // be deleted before every run to keep it quiet.
+    matches!(name, ".git" | "target" | ".scratch" | ".tmp" | ".codegraph")
 }
 
 /// The shapes that name an account's own directory: a drive letter followed by an account

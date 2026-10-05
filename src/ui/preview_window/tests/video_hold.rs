@@ -13,6 +13,8 @@ fn measured_carrying(sidecar: Option<PathBuf>) -> VideoGeometry {
         duration: None,
         subtitles: SubtitleStreams::default(),
         sidecar,
+        derived: None,
+        subtitle_extraction_failed: false,
     }
 }
 
@@ -840,9 +842,15 @@ fn a_sidecar_beside_a_subtitled_film_is_drawn_in_preference_to_its_own_tracks() 
         }),
     );
 
-    let filter =
-        video_launch::subtitle_filter(&video, video_sidecar(&video).as_deref(), 2, Some(1))
-            .expect("a film with both sources has a filter to draw one of them with");
+    let filter = video_launch::subtitle_filter(
+        &video,
+        video_sidecar(&video).as_deref(),
+        None,
+        false,
+        2,
+        Some(1),
+    )
+    .expect("a film with both sources has a filter to draw one of them with");
 
     assert!(
         filter.contains("episode.srt"),

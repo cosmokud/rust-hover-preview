@@ -706,6 +706,11 @@ pub(super) fn load_video_thumbnail(
             // question — the folder beside the film — is a read this thread has no reason to make
             // for a file nothing could read in the first place (see `video_sidecar`).
             sidecar: None,
+            // And nothing derived either, for the same reason once more: no extraction runs for
+            // a film nothing could read, so there are no small files and no pass to have failed
+            // (see `subtitle_files`).
+            derived: None,
+            subtitle_extraction_failed: false,
         },
     };
 

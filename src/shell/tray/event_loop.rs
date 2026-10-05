@@ -16,17 +16,18 @@ use super::commands::{
     set_animated_scale, set_audio_seek, set_audio_volume, set_avoid_mode, set_dds_background,
     set_decode_budget_gb, set_design_background, set_design_scale, set_document_cache_mb,
     set_document_scale, set_ebook_scale, set_follow_cursor, set_font_background, set_font_scale,
-    set_hover_delay, set_html_background, set_image_background, set_image_cache_mb,
-    set_image_disk_cache_mb, set_libreoffice_idle, set_markdown_mode, set_office_engine,
-    set_office_engine_idle, set_pin_nav_file_types, set_preview_scale, set_same_file_rehover_delay,
-    set_settling_delay, set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu,
-    set_tick_ms, set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_scale,
-    set_video_volume, set_webview_idle, toggle_engine_persistent, toggle_normalize_video_volume,
-    toggle_normalize_volume, toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video,
-    toggle_pin_update_enabled, toggle_pin_update_on_hover, toggle_preview_enabled,
-    toggle_preview_type, toggle_prioritize_keyboard, toggle_remember_audio_volume,
-    toggle_remember_video_volume, toggle_render_html, toggle_startup,
-    toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_hw_accel,
+    set_general_disk_cache_mb, set_hover_delay, set_html_background, set_image_background,
+    set_image_cache_mb, set_image_disk_cache_mb, set_libreoffice_idle, set_markdown_mode,
+    set_office_engine, set_office_engine_idle, set_pin_nav_file_types, set_preview_scale,
+    set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
+    set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
+    set_vector_scale, set_video_scale, set_video_volume, set_webview_idle,
+    toggle_engine_persistent, toggle_normalize_video_volume, toggle_normalize_volume,
+    toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
+    toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
+    toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
+    toggle_render_html, toggle_startup, toggle_trigger_key_affect_pin_mode,
+    toggle_trigger_key_enabled, toggle_video_hw_accel,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SEEK_CHOICES, AVOID_CHOICES, BACKGROUND_CHOICES,
@@ -41,23 +42,24 @@ use super::ids::{
     ID_TRAY_EXIT, ID_TRAY_FONT_100, ID_TRAY_FONT_110, ID_TRAY_FONT_125, ID_TRAY_FONT_150,
     ID_TRAY_FONT_175, ID_TRAY_FONT_200, ID_TRAY_FONT_250, ID_TRAY_FONT_300, ID_TRAY_FONT_400,
     ID_TRAY_FONT_70, ID_TRAY_FONT_80, ID_TRAY_FONT_90, ID_TRAY_FONT_BACKGROUND_BASE,
-    ID_TRAY_FONT_SCALE_BASE, ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE,
-    ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_LIBREOFFICE_IDLE_BASE,
-    ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_NORMALIZE_VIDEO_VOLUME,
-    ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_NAV_ALL,
-    ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_UPDATE,
-    ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW,
-    ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME,
-    ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS,
-    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_STARTUP, ID_TRAY_TEXT_SCALE_BASE,
-    ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
-    ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
-    ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN,
-    ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS, ID_TRAY_TYPE_IMAGES,
-    ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS, ID_TRAY_UPDATE,
-    ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE, ID_TRAY_VIDEO_HW_ACCEL,
-    ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE,
-    TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND, WM_TRAYICON,
+    ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE,
+    ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
+    ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
+    ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
+    ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN_PAUSE_AUDIO,
+    ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_POSITION_BEST,
+    ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE,
+    ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML,
+    ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE,
+    ID_TRAY_STARTUP, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK,
+    ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE, ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE,
+    ID_TRAY_TRIGGER_ENABLE, ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO,
+    ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS,
+    ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
+    ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
+    ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_VOLUME_BASE,
+    ID_TRAY_WEBVIEW_IDLE_BASE, TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS,
+    TRAY_CLASS, TRAY_HWND, WM_TRAYICON,
 };
 use super::menus::show_context_menu;
 use super::submenus::open_codec_page;
@@ -403,6 +405,12 @@ unsafe extern "system" fn tray_window_proc(
                         .contains(&cmd) =>
                     {
                         set_image_disk_cache_mb(cmd - ID_TRAY_IMAGE_DISK_CACHE_BASE)
+                    }
+                    cmd if (ID_TRAY_GENERAL_DISK_CACHE_BASE
+                        ..ID_TRAY_GENERAL_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_general_disk_cache_mb(cmd - ID_TRAY_GENERAL_DISK_CACHE_BASE)
                     }
                     // The ceiling one hover is answered under, by the position it was
                     // listed at.

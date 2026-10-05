@@ -6,8 +6,8 @@ use crate::readers::tone_map::Curve;
 
 use super::defaults::{
     DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_VOLUME,
-    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_HDR_EXPOSURE,
-    DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_GENERAL_DISK_CACHE_MB,
+    DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME,
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
     DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
@@ -419,6 +419,17 @@ pub struct AppConfig {
     /// `image_cache_mb`, and a page of a *document* is `document_cache_mb` whatever it is drawn
     /// as — a slide's PNG and a workbook's picture included.
     pub image_disk_cache_mb: u32,
+    /// How much of what a film's own subtitle tracks were copied into is kept between hovers, in
+    /// megabytes: the small subtitle files this app's extraction wrote under the general folder,
+    /// with the fonts that came out of the container dumped beside them, given up least recently
+    /// used first. See `Performance → Cache → General (Disk)` in the tray.
+    ///
+    /// It is the one cache a hover's subtitles have, and it is what makes a hover a read of a few
+    /// dozen kilobytes instead of a stream of the whole film: the filter that draws an embedded
+    /// track opens the film and reads it to its first subtitle — measured at 14 904 ms and
+    /// 1 423 MB read on a cold 1.4 GB MKV, against 492 ms and 41 MB for the same film drawn from
+    /// its extracted `.ass` (see `subtitle_files`).
+    pub general_disk_cache_mb: u32,
     /// Which engine draws an Office document's page, which is the tray's
     /// `Engine → Select Engine → Office` setting.
     pub office_engine: OfficeEngine,
@@ -614,6 +625,7 @@ impl Default for AppConfig {
             vector_preview_enabled: true,
             document_cache_mb: DEFAULT_DOCUMENT_CACHE_MB,
             image_disk_cache_mb: DEFAULT_IMAGE_DISK_CACHE_MB,
+            general_disk_cache_mb: DEFAULT_GENERAL_DISK_CACHE_MB,
             office_engine: DEFAULT_OFFICE_ENGINE,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),

@@ -70,6 +70,15 @@ pub(super) struct VideoHeader {
     pub(super) height: u32,
     pub(super) duration: Option<f64>,
     pub(super) subtitles: SubtitleStreams,
+    /// The codec name of every subtitle stream, by subtitle-relative index, which is what the
+    /// extraction command is built from: one output per codec that has a small form, at the
+    /// index `-map 0:s:<i>` masks (see `subtitle_files::extraction_args`).
+    pub(super) subtitle_codecs: Vec<String>,
+    /// The codec name of every attachment stream, in the order the container holds them, which
+    /// is the order the extraction's dump specifier counts in — the container's fonts are only
+    /// dumped, and a cover image is not, so the index has to be the container's own rather than
+    /// one this app renumbered.
+    pub(super) attachment_codecs: Vec<String>,
 }
 
 /// Read all three of a file's header answers with one pass over it: the shape of its first
@@ -98,9 +107,12 @@ pub(super) fn probe_video_header(path: &PathBuf) -> Option<VideoHeader> {
             // `width` and `height` are asked of every stream rather than only of a picture, which
             // is what puts a `width=N/A` in the output for every subtitle stream — see
             // `parse_video_picture`, where that line is the reason the picture is read off the
-            // first video stream rather than off whichever line came last.
+            // first video stream rather than off whichever line came last. `codec_name` rides
+            // along for the same shape of reason: it is the one field the extraction needs and
+            // the header already holds, so asking for it here saves the second read of the file
+            // the extraction's command would otherwise be built from (see `parse_stream_codecs`).
             "-show_entries",
-            "stream=index,codec_type,width,height:stream_disposition=default:format=duration",
+            "stream=index,codec_type,codec_name,width,height:stream_disposition=default:format=duration",
             "-of",
             "default=noprint_wrappers=1",
         ])
@@ -116,12 +128,15 @@ pub(super) fn probe_video_header(path: &PathBuf) -> Option<VideoHeader> {
     let output_str = String::from_utf8_lossy(&output.stdout);
 
     let (width, height, duration) = parse_video_picture(&output_str)?;
+    let (subtitle_codecs, attachment_codecs) = parse_stream_codecs(&output_str);
 
     Some(VideoHeader {
         width,
         height,
         duration,
         subtitles: parse_subtitle_streams(&output_str),
+        subtitle_codecs,
+        attachment_codecs,
     })
 }
 
@@ -237,6 +252,47 @@ pub(super) fn parse_subtitle_streams(probe: &str) -> SubtitleStreams {
         count,
         first: default.unwrap_or(0).min(count.saturating_sub(1)),
     }
+}
+
+/// The codec name of every subtitle stream and every attachment in a probe's flat answer.
+///
+/// The subtitle names are held by subtitle-relative index, because that is the index every other
+/// subtitle question here counts in — `-sst s:<i>`, the filter's `si=`, and the extraction's
+/// `-map 0:s:<i>` — while the attachment names are held in the container's own stream order,
+/// because that is what the extraction's `-dump_attachment:t:<n>` specifier counts in. Both are
+/// read out of the same pass that answered the shape and the streams, rather than out of a
+/// second look at the file: what each of them is for is building one command, and the command
+/// is built once per film (see `subtitle_files::extraction_args`).
+///
+/// The name belongs to the stream *above* it in FFprobe's flat output — `codec_name` is printed
+/// before `codec_type` — so it is held until the type line says which list it goes into, the
+/// same shape the disposition above is read with. A stream of any other kind is not a name
+/// either list wants.
+pub(super) fn parse_stream_codecs(probe: &str) -> (Vec<String>, Vec<String>) {
+    let mut subtitles = Vec::new();
+    let mut attachments = Vec::new();
+    let mut codec = None;
+
+    for line in probe.lines() {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            continue;
+        };
+
+        match key.trim() {
+            "codec_name" => codec = Some(value.trim().to_string()),
+            "codec_type" => {
+                match value.trim() {
+                    "subtitle" => subtitles.push(codec.take().unwrap_or_default()),
+                    "attachment" => attachments.push(codec.take().unwrap_or_default()),
+                    _ => {}
+                }
+                codec = None;
+            }
+            _ => {}
+        }
+    }
+
+    (subtitles, attachments)
 }
 
 pub(super) fn parse_cropdetect_line(line: &str) -> Option<VideoCrop> {
@@ -474,6 +530,10 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             height,
             duration: None,
             subtitles: SubtitleStreams::default(),
+            // Nothing read the header, so nothing knows a codec name — which is the same answer
+            // the extraction takes as "no track to copy" (see `extraction_due`).
+            subtitle_codecs: Vec::new(),
+            attachment_codecs: Vec::new(),
         })
     });
 
@@ -520,6 +580,8 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         height: src_h,
         duration: src_duration,
         subtitles,
+        subtitle_codecs,
+        attachment_codecs,
     } = header;
 
     // The film's soundtrack is measured beside its geometry where `Normalize` is on for videos —
@@ -552,6 +614,35 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         spawn_gain_scan(path);
     }
 
+    // **The film's own subtitle tracks are copied out of it here, once, and that read is what a
+    // hover of an embedded-subtitle film stops paying.** The filter that draws an embedded track
+    // makes FFmpeg open the film a second time and stream the container to its first subtitle:
+    // measured, a cold 1.4 GB MKV took 14 904 ms to a first frame and read 1 423 MB, against
+    // 492 ms and 41 MB for the same film drawn from the 30 KB `.ass` this extraction writes. The
+    // pass is started on this thread because it is the thread that already runs a film's slow
+    // work, and nothing waits for it: what a later hover reads is the geometry entry the thread
+    // updates (see `subtitle_files::finish`).
+    //
+    // The order of the two questions is the order they can be answered: what is already in the
+    // cache folder is a `read_dir` of one small folder, and whether this machine would draw the
+    // film with FFmpeg's player at all is a question for the engine — asked last, because it is
+    // the one that can be expensive and it cannot change the first answer. The engine's files are
+    // not FFmpeg's to draw, so a file the media engine plays is never extracted: its subtitles
+    // are the engine's business. On a machine with FFmpeg installed that question is answered
+    // from the install alone without the file being opened, and where it is not, the answer is
+    // memoised per file and version (see `media_engine_plays`).
+    let derived = subtitle_files::resolve(path, &subtitle_codecs);
+    if !media_engine_plays(path)
+        && subtitle_files::extraction_due(
+            sidecar.as_deref(),
+            derived.as_ref(),
+            subtitles.count,
+            &subtitle_codecs,
+        )
+    {
+        subtitle_files::spawn_subtitle_extraction(path, &subtitle_codecs, &attachment_codecs);
+    }
+
     let crop = best_valid_crop(candidates, src_w, src_h);
 
     // The frame is kept beside the crop rather than only in the shape, because the two players
@@ -560,7 +651,10 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     //
     // The sidecar is held beside the shape rather than looked for again at the launch, which is
     // the whole of what it is here for: `video_sidecar` reads it from this cache entry, so the
-    // launch draws a film beside a subtitle file without ever touching the folder again.
+    // launch draws a film beside a subtitle file without ever touching the folder again. The
+    // derived files are here for the same reason, and they are read off the disk *now* rather
+    // than when the extraction finishes, because both answers are one lookup for the launch and
+    // the folder is what the next probe would ask again anyway.
     let geometry = if let Some(crop) = crop {
         VideoGeometry {
             width: crop.width,
@@ -571,6 +665,11 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             duration: src_duration,
             subtitles,
             sidecar,
+            derived,
+            // Nothing has failed yet as far as this probe knows: a failure is written by the
+            // extraction thread into this very entry, and a probe that finds an entry answers
+            // from it instead of running again (see the cache lookup at the top).
+            subtitle_extraction_failed: false,
         }
     } else {
         VideoGeometry {
@@ -582,6 +681,8 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             duration: src_duration,
             subtitles,
             sidecar,
+            derived,
+            subtitle_extraction_failed: false,
         }
     };
 

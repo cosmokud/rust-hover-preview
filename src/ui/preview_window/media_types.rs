@@ -552,6 +552,41 @@ pub(super) struct VideoGeometry {
     /// film's whole folder, and this struct is what the launch reads instead of reading the
     /// directory (see `video_sidecar`).
     pub(super) sidecar: Option<PathBuf>,
+    /// The small files this app's own extraction copied the film's subtitle tracks into, with
+    /// the container's fonts that came out beside them, where the extraction has answered (see
+    /// `subtitle_files`). `None` while nothing has been extracted yet, which is the state the
+    /// first hover of a film is answered in.
+    ///
+    /// A hover that draws one of these opens a few-dozen-kilobyte file rather than the film,
+    /// which is the whole of the difference the extraction exists to make — measured, a cold
+    /// 1.4 GB film drawn from its extracted `.ass` came up in 492 ms against 14 904 ms with the
+    /// film's own embedded track, which streams the whole container before the first frame (see
+    /// `video_launch::subtitle_filter`).
+    pub(super) derived: Option<DerivedSubtitles>,
+    /// Whether the one extraction pass has failed, which is the only case in which the film's
+    /// own embedded track is named for the filter: that route streams the whole container before
+    /// it draws anything, so it is taken only once the cheap route is known not to be coming.
+    pub(super) subtitle_extraction_failed: bool,
+}
+
+/// The small files this app copied a film's own subtitle tracks into, with the fonts
+/// that came out of the container beside them (see `subtitle_files`).
+#[derive(Clone, Default)]
+pub(super) struct DerivedSubtitles {
+    /// By subtitle-relative index: the file for that track, or `None` for one that
+    /// could not be copied (a codec with no small form).
+    pub(super) tracks: Vec<Option<PathBuf>>,
+    /// The folder the container's attached fonts were dumped into, where any were.
+    pub(super) fonts: Option<PathBuf>,
+}
+
+impl DerivedSubtitles {
+    /// The copied file for one subtitle-relative track, where that track was copied at all: a
+    /// track whose codec has no small form has no file, and its slot is `None` rather than a
+    /// path to something that is not there (see `subtitle_files`).
+    pub(super) fn track(&self, index: usize) -> Option<&Path> {
+        self.tracks.get(index).and_then(|track| track.as_deref())
+    }
 }
 
 /// A file's subtitle streams, counted and ordered the way FFmpeg's `-sst s:` specifier orders

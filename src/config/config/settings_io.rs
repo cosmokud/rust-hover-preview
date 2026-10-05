@@ -126,6 +126,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "decode_budget_gb",
             "document_cache_mb",
+            "general_disk_cache_mb",
             "image_cache_mb",
             "image_disk_cache_mb",
             "tick_ms",
