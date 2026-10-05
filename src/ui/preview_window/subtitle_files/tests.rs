@@ -106,10 +106,17 @@ fn a_stale_pgs_copy_is_not_read_back_as_an_answer() {
         "a folder holding only a copy the filter cannot draw holds nothing this app may name"
     );
 
-    // And with a drawable copy beside it, the drawable one is the answer and the refused one is
-    // not read at all.
+    // And with a drawable copy beside it — under a pass that said it finished, which is the
+    // other whole of what a folder is read through — the drawable one is the answer and the
+    // refused one is not read at all.
     let ass = folder.join("sub1.ass");
     std::fs::write(&ass, b"[Script Info]\n").expect("a stand-in copy is writable");
+    assert!(
+        resolve(&film, &["hdmv_pgs_subtitle".to_string(), "ass".to_string()]).is_none(),
+        "a folder with no mark behind it is not an answer, whatever a build left in it"
+    );
+
+    std::fs::write(folder.join(FINISHED_MARKER), b"").expect("the pass's own mark is writable");
     let derived = resolve(&film, &["hdmv_pgs_subtitle".to_string(), "ass".to_string()])
         .expect("a drawable copy means an answer");
 
@@ -196,8 +203,8 @@ fn an_extraction_is_due_only_for_a_film_that_has_something_to_copy_and_nowhere_t
 
 /// What the folder already holds is read back off the names its files carry, by
 /// subtitle-relative index — a track with no small form keeps its place as a hole rather than
-/// shifting its neighbours — and a folder with nothing is the answer that nothing has been
-/// copied yet.
+/// shifting its neighbours — and a folder with nothing, or with no pass's mark behind it, is the
+/// answer that nothing has been copied yet.
 #[test]
 fn what_is_already_in_the_folder_is_answered_by_track_with_its_fonts() {
     let dir = std::env::temp_dir().join(format!("subtitle-files-{}", std::process::id()));
@@ -219,6 +226,14 @@ fn what_is_already_in_the_folder_is_answered_by_track_with_its_fonts() {
     // The second track was copied and the first was not — the film's first subtitle track being
     // one whose codec has no small form, which is the shape the answers are checked against.
     let codecs = ["dvd_subtitle".to_string(), "ass".to_string()];
+
+    assert!(
+        resolve(&film, &codecs).is_none(),
+        "a copy is read back only through the pass's own mark, so a folder that does not carry it \
+         is not an answer however its files are named"
+    );
+
+    std::fs::write(folder.join(FINISHED_MARKER), b"").expect("the pass's own mark is writable");
     let derived = resolve(&film, &codecs).expect("a copy means an answer");
 
     assert_eq!(
@@ -244,6 +259,86 @@ fn what_is_already_in_the_folder_is_answered_by_track_with_its_fonts() {
         derived.fonts.as_deref(),
         Some(folder.join(FONTS_FOLDER).as_path()),
         "a fonts folder that holds a face is named with the track"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A folder is an answer only where the pass that wrote it said it finished.
+///
+/// A copy is read back from whatever files a folder holds by name, so a folder from a pass that
+/// was cut short — or from a build before this one, whose failure path left its outputs open and
+/// behind — would be read as an answer and named to a filter that cannot open what is in it. The
+/// mark is written after the pass's last file, and it is the whole of what tells the two apart.
+#[test]
+fn a_folder_is_an_answer_only_where_the_pass_said_it_finished() {
+    let dir = std::env::temp_dir().join(format!("subtitle-finished-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+    let film = dir.join("episode.mkv");
+    std::fs::write(&film, b"stand-in").expect("a stand-in film is writable");
+
+    let folder = film_folder(&film);
+    std::fs::create_dir_all(&folder).expect("the film's own folder is creatable");
+    let copy = folder.join("sub0.ass");
+    std::fs::write(&copy, b"[Script Info]\n").expect("a stand-in copy is writable");
+
+    assert!(
+        resolve(&film, &["ass".to_string()]).is_none(),
+        "a folder with no mark behind it is not read: every folder the builds that had no mark \
+         left is this shape, and it is the shape that kept a bad answer cached for good"
+    );
+
+    std::fs::write(folder.join(FINISHED_MARKER), b"").expect("the pass's own mark is writable");
+
+    let derived =
+        resolve(&film, &["ass".to_string()]).expect("a finished pass's copy is an answer");
+    assert_eq!(
+        derived.track(0),
+        Some(copy.as_path()),
+        "and it is answered by track as every copy is"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file with no bytes is not a copy, even out of a folder a pass marked finished.
+///
+/// This is the shape the fault was found in: a pass that failed with its outputs already open
+/// left a zero-byte `sub<i>.<ext>` for every track of the film — twenty-nine of them on one
+/// twenty-nine-track release — the reader answered with them, and the `subtitles` filter, which
+/// cannot open an empty file, failed to build its graph and took the player down with it on
+/// every hover and every pin. A marked folder is a folder FFmpeg closed every file of, so this
+/// is a belt beside a brace; what it must never do is answer.
+#[test]
+fn a_copy_with_no_bytes_is_not_an_answer() {
+    let dir = std::env::temp_dir().join(format!("subtitle-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+    let film = dir.join("episode.mkv");
+    std::fs::write(&film, b"stand-in").expect("a stand-in film is writable");
+
+    let folder = film_folder(&film);
+    std::fs::create_dir_all(&folder).expect("the film's own folder is creatable");
+    std::fs::write(folder.join("sub0.ass"), b"").expect("a zero-byte stand-in is writable");
+    std::fs::write(
+        folder.join("sub1.srt"),
+        b"1\n00:00:01,000 --> 00:00:02,000\nx\n",
+    )
+    .expect("a stand-in copy is writable");
+    std::fs::write(folder.join(FINISHED_MARKER), b"").expect("the pass's own mark is writable");
+
+    let derived = resolve(&film, &["ass".to_string(), "subrip".to_string()])
+        .expect("the copy with bytes in it is still an answer");
+
+    assert_eq!(
+        derived.track(0),
+        None,
+        "a zero-byte file is not a copy: naming one to the filter is a filtergraph that fails to \
+         build, which is the preview lost for good"
+    );
+    assert_eq!(
+        derived.track(1),
+        Some(folder.join("sub1.srt").as_path()),
+        "while its neighbour with bytes in it is answered as it always was"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
