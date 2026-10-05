@@ -258,6 +258,12 @@ fn a_focus_item_landed_in_another_place_is_a_baseline() {
         "a look that answered nothing is not a place that changed"
     );
     assert!(
+        watch.place.is_none(),
+        "and it takes the baseline with it: the item has moved, so the place in hand is the one it
+         moved out of, and the first read since the listing was replaced must not be compared with
+         the listing that has been left"
+    );
+    assert!(
         !watch.note_place(Some(view("file:///D:/Music", 0x9abc))),
         "and with no place in hand the next read establishes one"
     );

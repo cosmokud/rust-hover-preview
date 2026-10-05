@@ -40,8 +40,11 @@ pub(super) fn pin_update_settings() -> (bool, bool) {
 /// a key having walked to it, and the item a fresh listing puts under a hand nobody moved is drawn
 /// exactly where the click landed — so a place is what tells a move from a landing, and a witness
 /// (a key, or a click standing as one) is what tells a landing from a pick. Where the shell
-/// describes no place, a look that answered nothing leaves the last baseline standing rather than
-/// answering either way, and the witness is all that is left.
+/// describes no place, a look that answered nothing cannot answer either way, and each baseline is
+/// left as that read left it: the listing's own selection keeps its last answer, since a miss
+/// rather than a file means nothing has been seen to replace it, while the keyboard's item's place
+/// is dropped rather than kept, because the item has moved and the only place in hand is the one it
+/// moved out of (see `PinUpdateWatch::note_place`).
 #[derive(Default)]
 pub(super) struct PinUpdateWatch {
     /// The file the pin was last seen showing: a take-up is a watch beginning, a swap is not
