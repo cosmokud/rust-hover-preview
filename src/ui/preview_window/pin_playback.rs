@@ -153,6 +153,12 @@ pub(super) fn restart_pinned_player(
     let volume = pinned_volume_level();
     let subtitle = pinned_subtitle();
 
+    // How many streams the file carries, which is what the track above has to be in range of. It
+    // is read here rather than inside the launch because a hover is handed no count at all, and
+    // the count is a read of the file's header — so this is a pin's read and a hover makes none
+    // (see `probe_video_header`).
+    let subtitle_streams = video_subtitles(path).count;
+
     // The player this relaunch is replacing, read from the record rather than from the handle in
     // the media. The record is this app's own account of the player it last started, and it is the
     // right account to read here for a second reason as well as the obvious one: it is also the
@@ -186,7 +192,15 @@ pub(super) fn restart_pinned_player(
     }
 
     let process = start_video_playback(
-        path, content.0, content.1, width, height, seconds, volume, subtitle,
+        path,
+        content.0,
+        content.1,
+        width,
+        height,
+        seconds,
+        volume,
+        Some(subtitle_streams),
+        subtitle,
     );
     let pid = process.as_ref().map(|child| child.id()).unwrap_or(0);
 

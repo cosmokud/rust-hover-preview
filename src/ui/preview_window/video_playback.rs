@@ -10,9 +10,9 @@ use super::*;
 /// callers keep different ones: a preview that is beginning is played at `Volume → Video`, and a
 /// pinned one is played at the level its own window is holding — the one the tray named when that
 /// pin was taken up, moved by whatever the hand on its volume control has done since, and never
-/// written back to the setting (see `PinVolume`). `subtitle` is the same kind of answer for the
-/// same reason: it is what a pinned window is remembering, and `None` is what a hover asks for
-/// (see `next_subtitle`).
+/// written back to the setting (see `PinVolume`). `subtitle_streams` and `subtitle` are the same
+/// kind of answer for the same reason: they are what a pinned window is remembering, and a hover
+/// is handed neither of them (see `PinTransport::subtitle`).
 #[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 pub(super) fn start_video_playback(
     path: &PathBuf,
@@ -22,6 +22,7 @@ pub(super) fn start_video_playback(
     height: i32,
     start: f64,
     volume: u32,
+    subtitle_streams: Option<usize>,
     subtitle: Option<usize>,
 ) -> Option<Child> {
     let volume = volume.min(100);
@@ -96,14 +97,19 @@ pub(super) fn start_video_playback(
     // front of it, so the lettering is laid over the cropped picture rather than cropped along
     // with it.
     //
-    // The track named is the one the caller was given, where there is a choice. A caller that has
-    // chosen nothing is answered with the file's own default rather than with nothing at all,
-    // because the player is about to be launched with a specifier either way and the one it would
-    // have picked for itself is the one the picture was drawn with last time (see
-    // `SubtitleStreams::chosen`).
-    let streams = video_subtitles(path);
+    // The track named is the one the caller was given, and the count is what a track has to be in
+    // range of. Every caller resolves the file's own default for itself before it gets here —
+    // `SubtitleStreams::chosen` is what the pin's take-up and the swap both ask — so a track is
+    // named as the one the picture was last drawn with rather than as whatever the player would
+    // reach for on its own.
+    //
+    // **Being handed no count at all is the separate answer, and it is not a count of zero.** A
+    // count of zero still resolves to a subtitle file lying beside the film, and finding one walks
+    // the film's whole folder (`sidecar_for`) — so a launch told nothing builds no filter and asks
+    // nothing of the directory, which is what a hover is told. A pin is handed the count and the
+    // track, and a pinned window draws the track its bar says it is drawing.
     let subtitles =
-        video_launch::subtitle_filter(path, streams.count, subtitle.or(streams.chosen()));
+        subtitle_streams.and_then(|count| video_launch::subtitle_filter(path, count, subtitle));
     let vf = match (vf, subtitles) {
         (None, None) => None,
         (Some(chain), None) => Some(chain),
