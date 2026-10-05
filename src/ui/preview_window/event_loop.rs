@@ -3117,14 +3117,14 @@ pub fn run_preview_window() {
                         current_show = show_snapshot.clone();
                     }
 
-                    // Where FFmpeg's player is installed a video is played by it, whatever the
-                    // two lists say, and that is this whole question: the engine is not started
-                    // for a video at all on such a machine, so there is nothing for the lists to
-                    // decide here and nothing to ask the engine (see `media_engine_plays`). It is
-                    // the machine's answer and not the file's, which is why it is asked of the
-                    // install rather than of the router — a fork that asked the router first
-                    // would ask it on this thread, and the one file-shaped part of that answer is
-                    // a source reader over the file (see `video_route` and `spawn_video_probe`).
+                    // Which road this hover takes is the route, and it is the whole of the
+                    // question now that the engine is a setting: FFmpeg's player where the route
+                    // says `Ffplay`, and the ordinary load — the media engine's own frames, or no
+                    // media at all — everywhere else (see `video_route`). The file-shaped half of
+                    // that answer is already in hand: a video is probed before it reaches here,
+                    // and the probe asked the route on a thread of its own (see
+                    // `spawn_video_probe`), so the media engine is not opened here to answer it —
+                    // and a route that settles on FFmpeg's player asks about the file not at all.
                     //
                     // The two take different roads from here: the engine's frames come back
                     // through the ordinary load and are drawn by this app's own window — which is
@@ -3132,7 +3132,8 @@ pub fn run_preview_window() {
                     // player is a window of its own, which is what the branch below puts up. A
                     // video neither of them will take is answered by that load with no media at
                     // all, rather than by a third branch here (see `load_video_thumbnail`).
-                    let ffplay_plays_video = show_is_video && codecs::ffplay_available();
+                    let ffplay_plays_video =
+                        show_is_video && video_route(&path) == VideoRoute::Ffplay;
 
                     if show_video_probe || show_measure_probe {
                         // The hover is waiting on a probe: nothing of the file can be
