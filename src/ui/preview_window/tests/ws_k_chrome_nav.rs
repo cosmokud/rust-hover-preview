@@ -1246,8 +1246,8 @@ fn a_take_up_relaunches_a_film_without_pressing_it() {
 }
 
 /// K5 ROAD, the other half: the box change is the one road that does press, and its
-/// relaunch carries the press's own answer rather than whatever the frozen transport
-/// happens to say - which is what keeps a maximized film from coming back paused.
+/// relaunch carries was-held rather than the frozen transport — which is what
+/// keeps a maximized playing film playing instead of coming back paused.
 #[test]
 fn a_box_change_presses_the_film_and_relaunches_it_behind_the_cover() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1283,10 +1283,11 @@ fn a_box_change_presses_the_film_and_relaunches_it_behind_the_cover() {
         "exactly one relaunch, and it is the press's own end that makes it"
     );
     assert!(
-        pinned_is_held(),
-        "and it is begun held. The film was playing when the change began it, so the press's \
-         snapshot is what says so - not the frozen transport, which says held for every film a \
-         press has touched, playing or not"
+        !pinned_is_held(),
+        "and it is begun playing. The film was playing when the change began it, so was-held is \
+         false and the relaunch carries playing — never a pause. The frozen transport says held \
+         for every film a press has touched, playing or not, which is why the relaunch reads the \
+         snapshot's was-held instead"
     );
     assert!(
         !gesture_snapshot_active(),
