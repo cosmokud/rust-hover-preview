@@ -437,7 +437,6 @@ impl PinUpdateWatch {
                     // folder, a tab or a window the user moved to. The place is read for the watch's
                     // first item as much as for a move — a baseline is taken in a place too.
                     let place = focused_item_location(resolver, &focused);
-                    let landed = self.note_place(place.clone());
 
                     // And a place is not the whole of it, which is why the keyboard's own keys are
                     // asked as well: the place a focused item is read in is the view the *pointer*
@@ -445,15 +444,14 @@ impl PinUpdateWatch {
                     // provider reports no window for a frame's views to be told apart by — so a tab
                     // switched or a folder opened under the keyboard reads as the place the watch was
                     // already watching. A move both facts call the keyboard's is a file the user
-                    // picked; one either of them calls somebody else's is not (see
-                    // `focus_moved_by_key`).
+                    // picked; one either of them calls somebody else's is not (see `focus_pick`).
                     //
                     // A click is the other thing that moves the focus onto a file, and it is read
                     // here because it is the same change: what a click selects, the view reports as
                     // the focus it moved — from its own side, where the watch's own look at the point
                     // answers for whatever is standing on top. It carries its own witness, and a
                     // click that is not this one is not a pick (see `click_picked_item`).
-                    let by_key = known && !landed && self.focus_moved_by_key(now);
+                    let by_key = self.focus_pick(place.clone(), known, now);
                     let bounds = focused.item.bounds;
                     let by_click = self.click_picked_item(
                         (bounds.left, bounds.top, bounds.right, bounds.bottom),
@@ -573,6 +571,36 @@ impl PinUpdateWatch {
         }
     }
 
+    /// Whether a focus that has moved onto another item is a file the user picked with the
+    /// keyboard, out of the two facts that tell a key's move from a listing's own: the place the
+    /// item was read in is the one this watch is already watching, and a key that walks a listing
+    /// is what put the focus there (see `PinUpdateWatch::focus_moved_by_key`).
+    ///
+    /// The place is read and noted here rather than beside it, because **a place the shell cannot
+    /// answer for is not a place this watch is watching**. The item has moved and the read of where
+    /// it moved to has failed, so the place in hand describes the listing it came out of — a
+    /// listing that is no longer on screen. Leaving it standing is what made the first selection a
+    /// user makes after a folder change do nothing: the shell cannot describe a view while it is
+    /// navigating it, so the landing on the new folder's first item is read with no place at all,
+    /// and the *first* read that succeeds is the user's own key press — compared against the folder
+    /// that has been left and read as a move, so the pick it is was offered to nobody. The second
+    /// key press found the place already in hand and worked, which is the whole of what was seen:
+    /// one selection lost per folder change, every one after it answered.
+    ///
+    /// Dropping it costs nothing: with no place in hand the next read establishes one, and a move
+    /// the keyboard did not make is not offered either way — `focus_moved_by_key` is what separates
+    /// them, not the place.
+    pub(super) fn focus_pick(
+        &mut self,
+        place: Option<HoverLocation>,
+        known: bool,
+        now: Instant,
+    ) -> bool {
+        let landed = self.note_place(place);
+
+        known && !landed && self.focus_moved_by_key(now)
+    }
+
     /// Whether the keyboard's own keys are what put the focus where it is: a key that walks a
     /// listing was seen within the window a key press is given to have moved something, and nothing
     /// that moves the focus by other means has been seen since.
@@ -650,11 +678,15 @@ impl PinUpdateWatch {
     /// rather than a file the user picked — the three things this setting follows are a click, a
     /// hover and the keyboard, and a listing that changed under the keyboard is none of them.
     ///
-    /// A look that answered nothing is `false` and leaves the baseline standing, which is what
-    /// holds the line where a place cannot: the keyboard's own keys are asked beside it (see
-    /// `PinUpdateWatch::focus_moved_by_key`).
+    /// A look that answered nothing is `false` and takes the baseline with it, because the item has
+    /// moved and the only place in hand is the one it moved out of: a view cannot be described while
+    /// it is navigating, so the landing on a new folder's first item is read with no place at all,
+    /// and keeping the old one made the user's next key press — the first read since the listing was
+    /// replaced — read as the folder change rather than as the pick it is (see
+    /// `PinUpdateWatch::focus_pick`). With no place in hand the next read establishes one.
     pub(super) fn note_place(&mut self, place: Option<HoverLocation>) -> bool {
         let Some(place) = place else {
+            self.place = None;
             return false;
         };
 

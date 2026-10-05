@@ -259,11 +259,11 @@ fn a_focus_item_landed_in_another_place_is_a_baseline() {
     );
     assert!(
         !watch.note_place(Some(view("file:///D:/Music", 0x9abc))),
-        "and it leaves the place in hand where it is"
+        "and with no place in hand the next read establishes one"
     );
     assert!(
         watch.note_place(Some(view("file:///D:/Pictures", 0x1234))),
-        "so a place read after one that answered nothing is still compared with it"
+        "which is then compared with, so a listing that moved is still told from one that stayed"
     );
 }
 
@@ -340,6 +340,130 @@ fn a_focus_moved_by_anything_but_a_key_walking_is_not_a_pick() {
     assert!(
         !watch.focus_moved_by_key(started + Duration::from_millis(1360)),
         "a key pressed with a modifier down is a command, not a walk"
+    );
+}
+
+/// The first selection a user makes after a folder change is a pick, even though the watch
+/// could not read where the folder change landed it.
+///
+/// A view cannot be described while it is navigating, so the landing on a new folder's first
+/// item — the item Explorer focuses on its own when a folder opens — is read with no place at
+/// all. The place the watch held describes the folder that has just been left, so keeping it
+/// made the *first* read that succeeded the user's own key press, compared against the folder
+/// before it and read as a move: one selection swallowed per folder change, and every one after
+/// it answered, which is what was reported — "selecting the second file updates it".
+#[test]
+fn the_first_selection_after_a_folder_change_is_a_pick() {
+    let here = |url: &str| HoverLocation {
+        folder: None,
+        search_root: None,
+        location_url: Some(url.to_string()),
+        view_hwnd: Some(0x1234),
+    };
+    let started = Instant::now();
+
+    // The watch is settled on a listing: an item the keyboard is on, in a place of its own.
+    let mut watch = PinUpdateWatch {
+        focused: Some(FocusedItemKey {
+            name: "notes.txt".to_string(),
+            rect: (0, 100, 200, 120),
+        }),
+        ..PinUpdateWatch::default()
+    };
+    watch.note_place(Some(here("file:///D:/Notes")));
+
+    // The folder is opened with a double-click. The focus lands on its first item, and the place
+    // that item is read in cannot be answered — a view mid-navigation describes nothing.
+    watch.note_focus_move(
+        FocusMoveInput {
+            clicked: true,
+            ..Default::default()
+        },
+        started,
+    );
+    watch.focused = Some(FocusedItemKey {
+        name: "one.txt".to_string(),
+        rect: (0, 120, 200, 140),
+    });
+    assert!(
+        !watch.focus_pick(None, true, started),
+        "the folder change is not a pick, and the place it moved out of is not kept"
+    );
+
+    // The user's first arrow key. The place answers now, for the first time since the listing
+    // was replaced — and it is the pick, not the folder change, that this read belongs to.
+    watch.note_focus_move(
+        FocusMoveInput {
+            walked_by_key: true,
+            ..Default::default()
+        },
+        started + Duration::from_millis(400),
+    );
+    watch.focused = Some(FocusedItemKey {
+        name: "two.txt".to_string(),
+        rect: (0, 140, 200, 160),
+    });
+    assert!(
+        watch.focus_pick(
+            Some(here("file:///D:/Notes/2026")),
+            true,
+            started + Duration::from_millis(420)
+        ),
+        "the first selection after the folder change is the user's own pick"
+    );
+
+    // And the place is the one in hand from here, so the second key is measured against the
+    // listing it is walking rather than against the folder before it.
+    watch.note_focus_move(
+        FocusMoveInput {
+            walked_by_key: true,
+            ..Default::default()
+        },
+        started + Duration::from_millis(800),
+    );
+    assert!(
+        watch.focus_pick(
+            Some(here("file:///D:/Notes/2026")),
+            true,
+            started + Duration::from_millis(820)
+        ),
+        "and a second key in the same listing is a pick too"
+    );
+
+    // What the place rule is for is untouched: a listing that changed under a key walk is a
+    // move, not a pick, and nothing is offered out of it.
+    let mut moved_under_a_key = PinUpdateWatch {
+        focused: Some(FocusedItemKey {
+            name: "one.txt".to_string(),
+            rect: (0, 120, 200, 140),
+        }),
+        place: Some(here("file:///D:/Notes/2026")),
+        ..PinUpdateWatch::default()
+    };
+    moved_under_a_key.note_focus_move(
+        FocusMoveInput {
+            walked_by_key: true,
+            ..Default::default()
+        },
+        started,
+    );
+    assert!(
+        !moved_under_a_key.focus_pick(Some(here("file:///D:/Notes/2027")), true, started),
+        "a listing that changed where a key walked it is still a move and not a pick"
+    );
+
+    // And a move nothing was asked for still offers nothing at all — with or without a place in
+    // hand, which is what the witness alone has always decided.
+    watch.note_focus_move(
+        FocusMoveInput {
+            moved_otherwise: true,
+            ..Default::default()
+        },
+        started + Duration::from_millis(900),
+    );
+    assert!(
+        !watch.focus_pick(None, true, started + Duration::from_millis(920)),
+        "a focus that moved with no key behind it is nobody's pick"
     );
 }
 
