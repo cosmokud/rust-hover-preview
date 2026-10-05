@@ -463,6 +463,56 @@ pub(super) fn cached_video_geometry(path: &Path) -> Option<ProbedGeometry> {
     video_geometry_cache().get(&key).cloned()
 }
 
+/// The total pixels of the film `path`, where the probe has measured it: the whole frame the file
+/// holds rather than the crop the picture is drawn in, because what the hybrid weighs is what there
+/// is to decode. It is read without cloning the geometry, since all the route wants is the one
+/// number, and `None` where the file has not been measured — which the hybrid reads as a film to
+/// hand over where FFmpeg's player is installed (see `video_hw::resolve_video_engine`).
+pub(super) fn cached_video_source_pixels(path: &Path) -> Option<u64> {
+    let key = VideoGeometryKey {
+        path: path.to_path_buf(),
+        version: file_version(path),
+    };
+
+    match video_geometry_cache().get(&key) {
+        Some(ProbedGeometry::Measured(geometry)) => {
+            Some(u64::from(geometry.frame_width) * u64::from(geometry.frame_height))
+        }
+        _ => None,
+    }
+}
+
+/// Give up every probed geometry: the engine choice moved, and a geometry read by FFprobe is not
+/// the geometry a media-engine preview wants (or the reverse), so the next hover probes again.
+///
+/// It is `pub` for the reason `forget_video_hw_accel_answer` is: the tray reaches it through the
+/// re-export `preview_window` makes, and a re-export cannot be wider than what it names.
+pub fn forget_video_geometry() {
+    video_geometry_cache().clear();
+}
+
+/// Whether the geometry probe runs FFmpeg's passes for a film.
+///
+/// It does for every choice that may reach FFmpeg's player — `Best` and `Hybrid`, which hand a big
+/// film over, and an explicit `Ffmpeg` — and not for an explicit `Native` with nothing to hand the
+/// film on: the engine alone answers there, and FFmpeg's passes would be work for a player nobody
+/// hands it to. An explicit `Native` with the fallback on is the engine alone too *where the engine
+/// will take the film*; a film it will not take is handed on, so the passes run and the player that
+/// gets it is given a geometry rather than a bare window (see `VideoEngine` and
+/// `probe_video_geometry`).
+///
+/// `engine_takes_the_film` is asked only where the answer matters, which is what keeps the file
+/// from being opened for a choice that does not consult it.
+pub(super) fn probe_runs_ffmpeg(
+    choice: VideoEngine,
+    fallback: bool,
+    ffplay_installed: bool,
+    engine_takes_the_film: impl FnOnce() -> bool,
+) -> bool {
+    let engine_alone = choice == VideoEngine::Native && (!fallback || engine_takes_the_film());
+    !engine_alone && ffplay_installed
+}
+
 /// Probe a video's geometry, from the cache when the file and its version have been
 /// probed before.
 ///
@@ -505,26 +555,28 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // waits for the slowest of the three legs rather than for all of them in turn — so the walk is
     // now behind the two processes it was very likely to be slower than anyway. And it is asked
     // once per file and version rather than once per launch, so a resize no longer pays it again.
-    let (header, candidates, sidecar) = std::thread::scope(|scope| {
-        let header = scope.spawn(|| probe_video_header(path));
-        let candidates = scope.spawn(|| collect_video_crop_candidates(path));
-        let sidecar = scope.spawn(|| video_launch::sidecar_for(path));
+    // A native choice asks the engine alone where the engine will take the film and nothing will
+    // hand it on: the shape is the engine's own, and there is no crop to detect, no subtitle stream
+    // to copy, no sidecar to find and no gain to measure for a player that renders frames and
+    // nothing else. Every other case may reach FFmpeg's player, and it is this probe that reads the
+    // size the hybrid decides on — so FFmpeg's passes run for it, exactly as the default did before
+    // the engine was a setting (see `VideoEngine::Hybrid`). An explicit native choice with the
+    // fallback on runs them for a film the engine will not take, which is the one it hands on, so
+    // the player that gets it is given a geometry rather than a bare window.
+    let native = {
+        let (choice, fallback) = CONFIG
+            .lock()
+            .map(|config| (config.video_engine, config.video_engine_fallback))
+            .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK));
+        !probe_runs_ffmpeg(choice, fallback, VideoEngine::Ffmpeg.installed(), || {
+            named_for_the_media_engine(path)
+        })
+    };
 
-        (
-            header.join().unwrap_or(None),
-            candidates.join().unwrap_or_default(),
-            sidecar.join().unwrap_or(None),
-        )
-    });
-
-    // A file FFmpeg is not there for — or one its own probe could not read — is asked of
-    // the media engine Windows has, which is also the engine that would play it. That is
-    // the whole of the fallback's geometry: there is no crop to detect, because cropdetect
-    // is an FFmpeg filter and the engine is handed the frame as the file holds it. It is
-    // also the whole of what is known of such a file's subtitles, which is nothing: the
-    // engine answers with a shape, and the read that would have said what else the file
-    // holds is the one that could not read it (see `video_subtitles`).
-    let header = header.or_else(|| {
+    // What the media engine answers with: a shape, and nothing else. No duration, because the
+    // engine does not know one until the file is playing (see `pin_duration`), and no subtitle
+    // streams, because a frame-server player has none to name (see `video_player`).
+    let engine_header = || {
         video_player::dimensions(path).map(|(width, height)| VideoHeader {
             width,
             height,
@@ -535,7 +587,37 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             subtitle_codecs: Vec::new(),
             attachment_codecs: Vec::new(),
         })
-    });
+    };
+
+    let (header, candidates, sidecar) = if native {
+        (engine_header(), Default::default(), None)
+    } else {
+        std::thread::scope(|scope| {
+            let header = scope.spawn(|| probe_video_header(path));
+            let candidates = scope.spawn(|| collect_video_crop_candidates(path));
+            let sidecar = scope.spawn(|| video_launch::sidecar_for(path));
+
+            (
+                header.join().unwrap_or(None),
+                candidates.join().unwrap_or_default(),
+                sidecar.join().unwrap_or(None),
+            )
+        })
+    };
+
+    // A file FFmpeg is not there for — or one its own probe could not read — is asked of
+    // the media engine Windows has, which is also the engine that would play it. That is
+    // the whole of the fallback's geometry: there is no crop to detect, because cropdetect
+    // is an FFmpeg filter and the engine is handed the frame as the file holds it. It is
+    // also the whole of what is known of such a file's subtitles, which is nothing: the
+    // engine answers with a shape, and the read that would have said what else the file
+    // holds is the one that could not read it (see `video_subtitles`). A native route has
+    // already taken this answer above, so the fallback is the FFmpeg arm's alone.
+    let header = if native {
+        header
+    } else {
+        header.or_else(engine_header)
+    };
 
     let Some(header) = header else {
         // No picture in the file at all — which leaves two answers, and the one that matters
@@ -610,7 +692,11 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // that tells a spawned scan from an unspawed one is the gain it leaves behind — readable
     // only once the whole-file decode the scan is has run, which is a wall-clock assertion
     // rather than a seam.
-    if normalizing_video() {
+    // A native route measures nothing, and the reason is the launch rather than this thread: the
+    // gain is applied by FFmpeg's player's own filter, and a media-engine video is drawn from the
+    // engine's frames with nothing in front of them. Asking FFmpeg to decode the whole film for a
+    // gain nothing will use is the same leak the two probes above were spared here.
+    if !native && normalizing_video() {
         spawn_gain_scan(path);
     }
 
@@ -624,7 +710,13 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // What this probe leaves for that launch is the answer itself: the small files a pass before
     // it left, the sidecar beside the film, and the codec names the pass's own command is built
     // from, all held together in the geometry entry below.
-    let derived = subtitle_files::resolve(path, &subtitle_codecs);
+    let derived = if native {
+        // A player that shows no subtitles has nothing to draw from a copied track, so the folder
+        // is not read for one either (see `subtitle_files` and `video_player`).
+        None
+    } else {
+        subtitle_files::resolve(path, &subtitle_codecs)
+    };
 
     let crop = best_valid_crop(candidates, src_w, src_h);
 

@@ -782,10 +782,11 @@ pub fn can_play(path: &Path) -> bool {
 /// back to a file — must not pay for that twice. A file that is written again is a file whose
 /// answer is asked again, because the version is part of the key.
 ///
-/// On a machine with `ffplay` installed this is asked on the audio path and, for video, not at
-/// all: the router prefers FFmpeg's player for every video and only asks this when there is no
-/// player to prefer, which is precisely the case where the answer decides whether the file is
-/// shown at all (see [`plays_video_natively`](crate::formats::codecs::plays_video_natively)).
+/// It is asked for every film the route would draw with the media engine — which, since the engine
+/// is a setting, is a small film under the hybrid, every film under an explicit `Native`, and every
+/// film on a machine with no `ffplay` at all; a film FFmpeg's player takes never opens the file
+/// (see `video_hw::resolve_video_engine` and
+/// [`plays_video_natively`](crate::formats::codecs::plays_video_natively)).
 pub fn plays(path: &Path) -> bool {
     let key = head::key(path);
 

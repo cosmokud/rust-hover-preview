@@ -14,13 +14,14 @@ use super::defaults::{
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TICK_MS, DEFAULT_TTC_FACE,
-    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_VOLUME,
-    DEFAULT_WEBP_PLAYBACK_FPS, DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use super::setting_types::{
     AudioSeek, AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinNavFileTypes, PreviewScale,
-    TextTheme, TransparentBackground, TriggerKeyMode, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
-    DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
+    TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine, DEFAULT_AUDIO_SEEK,
+    DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
     DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
     DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
@@ -433,6 +434,16 @@ pub struct AppConfig {
     /// Which engine draws an Office document's page, which is the tray's
     /// `Engine → Select Engine → Office` setting.
     pub office_engine: OfficeEngine,
+    /// Which engine plays a video, which is the tray's `Engine -> Select Engine -> Video`
+    /// setting. `Best` is the machine's own answer and what the app starts at — the hybrid, which
+    /// draws a small film here and hands a large one over where FFmpeg is installed — and the other
+    /// three name an engine, or a rule between two, plainly. See `video_hw::resolve_video_engine`.
+    pub video_engine: VideoEngine,
+    /// Whether an explicitly chosen engine that cannot play a given file falls through to the
+    /// others, which is the `Fallback` switch at the top of the same submenu. It is read only
+    /// where the choice names an engine rather than `Best`, since `Best` is a walk of the same
+    /// list already.
+    pub video_engine_fallback: bool,
     /// How long the Office engine a family started is kept after that family's
     /// last page, which is the tray's `Engine → Microsoft Office TTL` setting.
     pub office_engine_idle: EngineIdle,
@@ -627,6 +638,8 @@ impl Default for AppConfig {
             image_disk_cache_mb: DEFAULT_IMAGE_DISK_CACHE_MB,
             general_disk_cache_mb: DEFAULT_GENERAL_DISK_CACHE_MB,
             office_engine: DEFAULT_OFFICE_ENGINE,
+            video_engine: DEFAULT_VIDEO_ENGINE,
+            video_engine_fallback: DEFAULT_VIDEO_ENGINE_FALLBACK,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
             libreoffice_idle: EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS),

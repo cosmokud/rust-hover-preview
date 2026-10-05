@@ -440,61 +440,114 @@ pub(super) enum VideoRoute {
     NoPreview,
 }
 
-/// The whole of the routing rule, as the table of two answers it is decided by.
-///
-/// Whether FFmpeg's player is installed is asked first and settles the question on its own: an
-/// installed `ffplay` plays every video there is, whatever either list says, because it is the
-/// player that decodes what Windows cannot and it costs nothing of a process's own time per frame
-/// — the engine hands every frame back to this app to draw, and on a high-resolution film that is
-/// the whole of the cost. So the two lists only ever decide anything on a machine with no FFmpeg
-/// on it, and there they are read in one order: a name of `[video]` is the one the engine is asked
-/// about, and a name only `[ffmpeg]` carries has no player here at all.
-///
-/// `named_for_the_media_engine` is a closure rather than an answer because it must not be paid for
-/// on the arm that does not consult it: consulting it takes the configuration lock, and the two
-/// extensions the video list shares with the text lists are settled by reading the file. A machine
-/// with FFmpeg on it answers every video from the install alone, and the decoder chain the engine
-/// would be asked to build for a file nobody is going to hand it is never built.
-pub(super) fn route_video(
-    ffplay_installed: bool,
-    named_for_the_media_engine: impl FnOnce() -> bool,
-) -> VideoRoute {
-    if ffplay_installed {
-        return VideoRoute::Ffplay;
-    }
+/// The engines a video may be played by, most preferred first: the order `Best` walks and the
+/// order an explicit choice falls through. One list, so a third engine is a variant and a row
+/// and no branch here (see `VideoEngine`).
+pub(super) const VIDEO_ENGINES: [VideoEngine; 2] = [VideoEngine::Ffmpeg, VideoEngine::Native];
 
-    if named_for_the_media_engine() {
-        VideoRoute::MediaEngine
-    } else {
-        VideoRoute::NoPreview
-    }
+/// The name-only half of whether the media engine can play `path`: the file's name is one the
+/// `[video]` list carries (see `video_formats::claims_video_name`).
+fn named_in_the_video_list(path: &Path) -> bool {
+    let Ok(config) = CONFIG.lock() else {
+        return false;
+    };
+    let extensions = config.video_extensions.clone();
+    drop(config);
+    video_formats::claims_video_name(path, &extensions)
 }
 
-/// Which of the two engines plays this file, on this machine, with these lists.
-pub(super) fn video_route(path: &Path) -> VideoRoute {
-    // The machine before the file, which is the order the whole of the rule is: a player
-    // installed here takes every video, so nothing about this file is worth asking yet.
-    // `plays_video_natively` is that question read the other way round — it is true only where
-    // nothing of FFmpeg's is installed, which is the one case where the lists are read at all.
-    route_video(!codecs::plays_video_natively(), || {
-        // The list is copied out and the lock given up before the list is consulted, because the
-        // consultation is not free: the two extensions the video list shares with the text lists
-        // are settled by reading the file, and that read was happening under the process-wide
-        // configuration lock on the thread that pumps this window's messages.
-        let extensions = {
-            let Ok(config) = CONFIG.lock() else {
-                return false;
-            };
-            config.video_extensions.clone()
-        };
+/// Whether the media engine Windows has will play `path`: its name is the engine's to ask about
+/// and the engine opens it (see `video_player::plays`). It is `pub(super)` because the probe asks
+/// it too — a native choice runs FFmpeg's passes only for a film the engine will not take, which is
+/// the one it hands on (see `video_probe::probe_video_geometry`).
+pub(super) fn named_for_the_media_engine(path: &Path) -> bool {
+    named_in_the_video_list(path) && video_player::plays(path)
+}
 
-        // The name first and the engine second, and the order is what the whole of this arm is
-        // for: a name `[ffmpeg]` carries is not asked about at all on a machine with no FFmpeg,
-        // because there would be nothing to do with an answer — the engine plays nothing — and
-        // what the answer is built out of is a source reader over the file, held per file and
-        // version so that a second ask is a lookup (see `video_player::plays`).
-        video_formats::claims_video_name(path, &extensions) && video_player::plays(path)
-    })
+/// Which engine plays a video, from the configured choice, the fallback switch, what this machine
+/// has and how big the file is. The closures are the machine's answers (`installed`) and the
+/// file's (`can_play`), and `pixels` is the file's resolution where the probe read one — so the
+/// whole rule is one function the tests can hand stub answers to.
+///
+/// `Best` and `Hybrid` are one order between them, and it is the file's own: the media engine for a
+/// film at or below `VIDEO_FFMPEG_ABOVE_PIXELS`, and FFmpeg's player for a bigger one — and for a
+/// film nobody measured, where the player more forgiving than the probe is a better answer than a
+/// box nothing would be drawn into (see `probe_video_geometry`). A chosen engine is itself alone
+/// with the fallback off, and itself followed by the rest of `VIDEO_ENGINES` with it on; a choice
+/// the machine cannot supply at all is ignored as `Best`.
+pub(super) fn resolve_video_engine(
+    choice: VideoEngine,
+    fallback: bool,
+    pixels: Option<u64>,
+    installed: impl Fn(VideoEngine) -> bool,
+    can_play: impl Fn(VideoEngine) -> bool,
+) -> Option<VideoEngine> {
+    // A choice the machine cannot supply is ignored as if it were `Best`: a row that is greyed
+    // names a player that is not here, and there is nothing to prefer about it.
+    let choice = if !installed(choice) {
+        VideoEngine::Best
+    } else {
+        choice
+    };
+
+    let mut candidates: Vec<VideoEngine> = match choice {
+        VideoEngine::Best | VideoEngine::Hybrid => {
+            // A film nobody measured is handed over where FFmpeg's player is here: `ffprobe` could
+            // not read it, and a player more forgiving than the probe is a better answer than a box
+            // nothing would be drawn into (see `probe_video_geometry`). The order's own filter
+            // leaves the media engine where there is no player to hand it to.
+            let handed_over = pixels.map_or(true, |pixels| pixels > VIDEO_FFMPEG_ABOVE_PIXELS);
+            let prefer = if handed_over {
+                VideoEngine::Ffmpeg
+            } else {
+                VideoEngine::Native
+            };
+            let mut list = vec![prefer];
+            list.extend(VIDEO_ENGINES.iter().copied().filter(|e| *e != prefer));
+            list
+        }
+        chosen if fallback => {
+            let mut list = vec![chosen];
+            list.extend(VIDEO_ENGINES.iter().copied().filter(|e| *e != chosen));
+            list
+        }
+        chosen => vec![chosen],
+    };
+
+    candidates.retain(|engine| installed(*engine));
+    candidates.into_iter().find(|engine| can_play(*engine))
+}
+
+/// Which engine plays this file, on this machine, with these lists.
+///
+/// The routing rule is `resolve_video_engine`, and what stands around it here is only what the
+/// machine and the file are: the choice and the fallback switch off the configuration, the
+/// installs the machine has, and the two questions about the file — how big it is, for the hybrid,
+/// and whether the media engine will take it. The name is asked before the engine is (see
+/// `named_in_the_video_list`), and the engine is asked only where the name is one of its own,
+/// which is what keeps a film only FFmpeg's list carries from being opened by an engine that has
+/// nothing to do with it.
+pub(super) fn video_route(path: &Path) -> VideoRoute {
+    let (choice, fallback) = CONFIG
+        .lock()
+        .map(|c| (c.video_engine, c.video_engine_fallback))
+        .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK));
+
+    match resolve_video_engine(
+        choice,
+        fallback,
+        cached_video_source_pixels(path),
+        |engine| engine.installed(),
+        |engine| match engine {
+            VideoEngine::Ffmpeg => codecs::ffplay_available(),
+            VideoEngine::Native => named_for_the_media_engine(path),
+            VideoEngine::Best | VideoEngine::Hybrid => false,
+        },
+    ) {
+        Some(VideoEngine::Ffmpeg) => VideoRoute::Ffplay,
+        Some(VideoEngine::Native) => VideoRoute::MediaEngine,
+        _ => VideoRoute::NoPreview,
+    }
 }
 
 /// Whether the media engine Windows has plays this file, which is the one of the two players a
@@ -503,9 +556,10 @@ pub(super) fn video_route(path: &Path) -> VideoRoute {
 /// It is one answer and not a chain, and everything about a video follows from it — whether the
 /// frames are drawn by this app or by a player, whether a pin of one is resized and maximized or
 /// only moved, and whether its transport bar is a control or a read-out (see `pin_frame` and
-/// `pin_transport_kind`). It is also where the engine is asked about a file at all: a machine with
-/// FFmpeg on it never opens one, so `video_player::plays` and its per-file memo are reached only
-/// where nothing else will play a video, and that is the only case where they decide anything.
+/// `pin_transport_kind`). It is also where the engine is asked about a file at all: where the
+/// route settles on FFmpeg's player — a film above the hybrid's threshold, or every film when the
+/// choice names FFmpeg's player — nothing opens the file, so `video_player::plays` and its
+/// per-file memo are reached only for a file the route gives the media engine.
 ///
 /// The write-back is what makes the question affordable where it is asked: the probe opens the
 /// file and builds a decoder chain for it, so the answer is held, and a hover that asks twice —

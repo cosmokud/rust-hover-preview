@@ -620,11 +620,20 @@ pub(super) fn begin_pin_drag(
             // answers about one box and must not be two different ones. A resize is told apart from a
             // move because only a resize ends in a relaunch, and only a relaunch leaves the band
             // wanting a frame of its own (see `park_pinned_player`).
-            park_pinned_player(
-                HWND(hwnd as *mut _),
-                (window_box.0, window_box.1),
-                matches!(action, PinDragAction::Resize(_)),
-            );
+            // Only a picture that is a window of its own is put away for a drag. The park hides
+            // another process's window and paints the band flat over the hole that leaves, and none
+            // of that belongs to a frame this window composes: the flat band would stand over this
+            // app's own pixels for the length of the drag, and a resize would ask for a resume frame
+            // nothing ever shows (see `MediaType::draws_in_a_window_of_its_own`). A move or a resize
+            // of a media-engine video is the same window work as any other pin's, with nothing of
+            // FFmpeg's in it.
+            if current_media_type().is_some_and(|kind| kind.draws_in_a_window_of_its_own()) {
+                park_pinned_player(
+                    HWND(hwnd as *mut _),
+                    (window_box.0, window_box.1),
+                    matches!(action, PinDragAction::Resize(_)),
+                );
+            }
         }
         // A newer gesture supersedes whatever relaunch is still in flight behind the cover: the
         // bump kills it before it can publish. After the park rather than before it — the fresh

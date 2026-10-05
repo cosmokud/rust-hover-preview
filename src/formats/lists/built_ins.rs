@@ -218,7 +218,7 @@ pub const DEFAULT_AUDIO_EXTENSIONS: &str = "aac,ac3,aif,aifc,aiff,amr,ape,au,awb
 /// engine is asked about and turns down. That question is asked of the engine itself, once per
 /// file and version (`video_player::plays`), and it is asked only where the engine can still be
 /// the answer — a file it turns down is one nothing plays here, and where FFmpeg is installed it
-/// was never going to be asked about at all (see `preview_window::route_video`).
+/// was never going to be asked about at all (see `preview_window::video_route`).
 pub const DEFAULT_VIDEO_EXTENSIONS: &str = "3g2,3gp,3gpp,asf,avi,dvr-ms,m1v,m2t,m2ts,m2v,m4v,mkv,\
 mov,mp4,mpe,mpeg,mpg,mts,qt,ts,vob,webm,wmv";
 
@@ -236,7 +236,7 @@ mov,mp4,mpe,mpeg,mpg,mts,qt,ts,vob,webm,wmv";
 /// here to `[video]` is the whole of asking the media engine about it instead, and there is one
 /// cost worth stating rather than discovering: a name the engine cannot open has no preview at all
 /// on such a machine, because the probe that decides it is the last thing standing between the
-/// file and a player (see `DEFAULT_VIDEO_EXTENSIONS` and `preview_window::route_video`).
+/// file and a player (see `DEFAULT_VIDEO_EXTENSIONS` and `preview_window::video_route`).
 pub const DEFAULT_FFMPEG_EXTENSIONS: &str =
     "264,265,266,apv,av1,avc,avs,avs2,avs3,bik,bk2,c93,cavs,cdg,cdxl,cin,cpk,dav,\
 dif,divx,drc,dv,evc,f4v,flm,flv,gxf,h261,h263,h264,h265,h266,h26l,hevc,ifv,imx,ismv,ivf,ivr,\

@@ -224,6 +224,20 @@ pub(in super::super) fn toggle_video_hw_accel() {
     crate::ui::preview_window::forget_video_hw_accel_answer();
 }
 
+/// Whether an explicitly chosen video engine falls through to the others when it cannot play a
+/// file, from the `Fallback` row at the top of `Engine -> Select Engine -> Video`.
+///
+/// Nothing on screen changes: the switch is read by the router on the next hover, and what the
+/// geometry probe holds is given up for the reason the choice moving gives it up — the answer
+/// the next hover wants may be another engine's (see `forget_video_geometry`).
+pub(in super::super) fn toggle_video_engine_fallback() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.video_engine_fallback = !config.video_engine_fallback;
+        config.save();
+    }
+    crate::ui::preview_window::forget_video_geometry();
+}
+
 /// Whether a page of HTML is drawn by the browser engine rather than shown as its markup.
 ///
 /// What changes is which of the two things draws a `.htm`, and the whole menu is read from
