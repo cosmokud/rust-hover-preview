@@ -445,18 +445,6 @@ pub(super) enum VideoRoute {
 /// and no branch here (see `VideoEngine`).
 pub(super) const VIDEO_ENGINES: [VideoEngine; 2] = [VideoEngine::Ffmpeg, VideoEngine::Native];
 
-/// Whether this machine has `engine` at all: the question the tray greys a row on, and the one
-/// a choice naming an engine that is not here is ignored for (see `resolve_video_engine`). It is
-/// `pub` for the reason `forget_video_hw_accel_answer` is: the tray reaches it through the
-/// re-export `preview_window` makes, and a re-export cannot be wider than what it names.
-pub fn video_engine_installed(engine: VideoEngine) -> bool {
-    match engine {
-        VideoEngine::Best => false,
-        VideoEngine::Ffmpeg => codecs::ffplay_available(),
-        VideoEngine::Native => true,
-    }
-}
-
 /// The name-only half of whether the media engine can play `path`: the file's name is one the
 /// `[video]` list carries (see `video_formats::claims_video_name`).
 fn named_in_the_video_list(path: &Path) -> bool {
@@ -474,26 +462,43 @@ fn named_for_the_media_engine(path: &Path) -> bool {
     named_in_the_video_list(path) && video_player::plays(path)
 }
 
-/// Which engine plays a video, from the configured choice, the fallback switch, and what this
-/// machine has. The engine order is `VIDEO_ENGINES`; the closures are the machine's answers
-/// (`installed`) and the file's (`can_play`), so the rule is one function the tests can hand
-/// stub answers to.
+/// Which engine plays a video, from the configured choice, the fallback switch, what this machine
+/// has and how big the file is. The closures are the machine's answers (`installed`) and the
+/// file's (`can_play`), and `pixels` is the file's resolution where the probe read one — so the
+/// whole rule is one function the tests can hand stub answers to.
+///
+/// `Best` and `Hybrid` are one order between them, and it is the file's own: the media engine for a
+/// film at or below `VIDEO_FFMPEG_ABOVE_PIXELS`, FFmpeg's player for a bigger one, and the media
+/// engine where the size was never read — the small answer is the safe one, and a film nobody
+/// measured is not one to hand to a process. A chosen engine is itself alone with the fallback off,
+/// and itself followed by the rest of `VIDEO_ENGINES` with it on; a choice the machine cannot
+/// supply at all is ignored as `Best`.
 pub(super) fn resolve_video_engine(
     choice: VideoEngine,
     fallback: bool,
+    pixels: Option<u64>,
     installed: impl Fn(VideoEngine) -> bool,
     can_play: impl Fn(VideoEngine) -> bool,
 ) -> Option<VideoEngine> {
     // A choice the machine cannot supply is ignored as if it were `Best`: a row that is greyed
     // names a player that is not here, and there is nothing to prefer about it.
-    let choice = if choice != VideoEngine::Best && !installed(choice) {
+    let choice = if !installed(choice) {
         VideoEngine::Best
     } else {
         choice
     };
 
     let mut candidates: Vec<VideoEngine> = match choice {
-        VideoEngine::Best => VIDEO_ENGINES.to_vec(),
+        VideoEngine::Best | VideoEngine::Hybrid => {
+            let prefer = if pixels.is_some_and(|pixels| pixels > VIDEO_FFMPEG_ABOVE_PIXELS) {
+                VideoEngine::Ffmpeg
+            } else {
+                VideoEngine::Native
+            };
+            let mut list = vec![prefer];
+            list.extend(VIDEO_ENGINES.iter().copied().filter(|e| *e != prefer));
+            list
+        }
         chosen if fallback => {
             let mut list = vec![chosen];
             list.extend(VIDEO_ENGINES.iter().copied().filter(|e| *e != chosen));
@@ -510,10 +515,11 @@ pub(super) fn resolve_video_engine(
 ///
 /// The routing rule is `resolve_video_engine`, and what stands around it here is only what the
 /// machine and the file are: the choice and the fallback switch off the configuration, the
-/// installs the machine has, and the one question that is about the file — whether the media
-/// engine will take it. The name is asked before the engine is (see `named_in_the_video_list`),
-/// and the engine is asked only where the name is one of its own, which is what keeps a film
-/// only FFmpeg's list carries from being opened by an engine that has nothing to do with it.
+/// installs the machine has, and the two questions about the file — how big it is, for the hybrid,
+/// and whether the media engine will take it. The name is asked before the engine is (see
+/// `named_in_the_video_list`), and the engine is asked only where the name is one of its own,
+/// which is what keeps a film only FFmpeg's list carries from being opened by an engine that has
+/// nothing to do with it.
 pub(super) fn video_route(path: &Path) -> VideoRoute {
     let (choice, fallback) = CONFIG
         .lock()
@@ -523,16 +529,30 @@ pub(super) fn video_route(path: &Path) -> VideoRoute {
     match resolve_video_engine(
         choice,
         fallback,
-        video_engine_installed,
+        source_pixels(path),
+        |engine| engine.installed(),
         |engine| match engine {
             VideoEngine::Ffmpeg => codecs::ffplay_available(),
             VideoEngine::Native => named_for_the_media_engine(path),
-            VideoEngine::Best => false,
+            VideoEngine::Best | VideoEngine::Hybrid => false,
         },
     ) {
         Some(VideoEngine::Ffmpeg) => VideoRoute::Ffplay,
         Some(VideoEngine::Native) => VideoRoute::MediaEngine,
         _ => VideoRoute::NoPreview,
+    }
+}
+
+/// How big the film `path` is, where the probe has read it: the whole frame the file holds rather
+/// than the crop the picture is drawn in, because what the hybrid weighs is what there is to
+/// decode. `None` where the file has not been measured, which the hybrid reads as the small answer
+/// (see `resolve_video_engine`).
+fn source_pixels(path: &Path) -> Option<u64> {
+    match cached_video_geometry(path) {
+        Some(ProbedGeometry::Measured(geometry)) => {
+            Some(u64::from(geometry.frame_width) * u64::from(geometry.frame_height))
+        }
+        _ => None,
     }
 }
 

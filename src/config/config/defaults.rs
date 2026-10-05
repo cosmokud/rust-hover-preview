@@ -287,12 +287,18 @@ pub const MAX_HDR_EXPOSURE: f32 = 10.0;
 /// format, with the render engine beside it as the fallback for a family this machine has
 /// no application for.
 pub const DEFAULT_OFFICE_ENGINE: OfficeEngine = OfficeEngine::MicrosoftOffice;
-/// Which engine plays a video unless the configuration says otherwise: the best this machine
-/// has, which is FFmpeg's player where it is installed and the media engine where it is not.
+/// Which engine plays a video unless the configuration says otherwise: the best this machine has,
+/// which is `VideoEngine::Hybrid` where FFmpeg is installed — the media engine for a small film
+/// and FFmpeg's player for a large one — and the media engine where it is not.
 pub const DEFAULT_VIDEO_ENGINE: VideoEngine = VideoEngine::Best;
 /// Whether an explicitly chosen engine that cannot play a file falls through to the others:
 /// on, so a film no media-engine decoder reaches is still played rather than shown as nothing.
 pub const DEFAULT_VIDEO_ENGINE_FALLBACK: bool = true;
+/// The resolution above which `VideoEngine::Hybrid` leaves a film to FFmpeg's player: 3.2 million
+/// pixels, which is between 1080p and QHD, so a 1440p film is handed over and a 1080p one is drawn
+/// here. It is total pixels and not an axis, because what it stands for is how much there is to
+/// draw rather than how wide the picture is (see `video_hw::resolve_video_engine`).
+pub const VIDEO_FFMPEG_ABOVE_PIXELS: u64 = 3_200_000;
 /// How long the Office engine a family started is kept after that family's last
 /// page. Producing a page costs an Office start, and an engine still warm is what
 /// makes the next document of that family cheap, so one is kept for a while by

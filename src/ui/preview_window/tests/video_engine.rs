@@ -253,57 +253,83 @@ fn a_video_that_has_not_been_probed_waits_in_the_waiting_box() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// Which engine plays a video is decided by the choice, the fallback switch and the machine, and
-/// the whole of the rule is `resolve_video_engine` — so this is the rule asked with stub answers
-/// rather than with the machine the test happens to run on.
+/// Which engine plays a video is decided by the choice, the fallback switch, the machine and the
+/// file's size, and the whole of the rule is `resolve_video_engine` — so this is the rule asked with
+/// stub answers rather than with the machine the test happens to run on.
 ///
-/// `Best` is the machine's own answer: the first engine of `VIDEO_ENGINES` that is installed and
-/// that can play the file, which is FFmpeg's player where it is installed and the media engine
-/// where it is not. An explicit choice is one engine with the fallback off and a walk of the list
-/// with it on, and a choice naming an engine the machine has not got is ignored as `Best`, since
-/// a row that is greyed names a player that is not here.
+/// `Best` and `Hybrid` are one rule between them and it is the file's own: the media engine for a
+/// film at or below the pixel threshold, FFmpeg's player for a bigger one, and the media engine
+/// where the size was never read. An explicit choice is itself alone with the fallback off and a
+/// walk of the order with it on, and a choice naming an engine the machine has not got is ignored
+/// as `Best`, since a row that is greyed names a player that is not here.
 #[test]
 fn a_video_is_played_by_whichever_engine_the_choice_and_the_machine_leave_to_it() {
-    let both_installed = |_| true;
-    let cannot_play = |_| false;
+    let all_installed = |_| true;
+    let all_play = |_| true;
+    let nothing_plays = |_| false;
+    let big = Some(VIDEO_FFMPEG_ABOVE_PIXELS + 1);
+    let small = Some(VIDEO_FFMPEG_ABOVE_PIXELS - 1);
 
+    // The hybrid, which `Best` is: the size of the file decides which engine is preferred.
     assert_eq!(
-        resolve_video_engine(VideoEngine::Best, true, both_installed, |engine| {
-            engine == VideoEngine::Ffmpeg
-        }),
+        resolve_video_engine(VideoEngine::Best, true, big, all_installed, all_play),
         Some(VideoEngine::Ffmpeg),
-        "with both engines on the machine the best of them is FFmpeg's player"
+        "a film above the threshold is handed to FFmpeg's player"
+    );
+    assert_eq!(
+        resolve_video_engine(VideoEngine::Hybrid, false, big, all_installed, all_play),
+        Some(VideoEngine::Ffmpeg),
+        "and the hybrid is that rule whether or not the fallback is on, which is what it is for"
+    );
+    assert_eq!(
+        resolve_video_engine(VideoEngine::Best, true, small, all_installed, all_play),
+        Some(VideoEngine::Native),
+        "a film at or below it is drawn by the media engine"
+    );
+    assert_eq!(
+        resolve_video_engine(VideoEngine::Hybrid, true, None, all_installed, all_play),
+        Some(VideoEngine::Native),
+        "and a film nobody measured is taken for a small one"
     );
 
+    // An explicit engine is itself, and the size has nothing to do with it.
+    assert_eq!(
+        resolve_video_engine(VideoEngine::Native, true, big, all_installed, all_play),
+        Some(VideoEngine::Native),
+        "a chosen media engine plays a large film itself rather than handing it over"
+    );
+
+    // A machine with no FFmpeg on it loses the FFmpeg half of every order.
     assert_eq!(
         resolve_video_engine(
             VideoEngine::Best,
             true,
+            big,
             |engine| engine == VideoEngine::Native,
             |engine| engine == VideoEngine::Native,
         ),
         Some(VideoEngine::Native),
-        "a machine with no FFmpeg on it plays the file with the media engine Windows has"
+        "a machine with no FFmpeg on it plays a large film with the media engine as well"
     );
 
     assert_eq!(
-        resolve_video_engine(VideoEngine::Best, true, both_installed, cannot_play),
+        resolve_video_engine(VideoEngine::Best, true, big, all_installed, nothing_plays),
         None,
         "a file no installed engine will take has no player at all, which is a preview-less video \
          rather than a broken one"
     );
 
+    // The fallback decides what an explicit choice does with a file it cannot play.
     assert_eq!(
-        resolve_video_engine(VideoEngine::Native, false, both_installed, |engine| {
+        resolve_video_engine(VideoEngine::Native, false, small, all_installed, |engine| {
             engine == VideoEngine::Ffmpeg
         }),
         None,
         "with the fallback off a chosen engine that cannot play the file is the end of the rule, \
          so there is no preview of it"
     );
-
     assert_eq!(
-        resolve_video_engine(VideoEngine::Native, true, both_installed, |engine| {
+        resolve_video_engine(VideoEngine::Native, true, small, all_installed, |engine| {
             engine == VideoEngine::Ffmpeg
         }),
         Some(VideoEngine::Ffmpeg),
@@ -314,6 +340,7 @@ fn a_video_is_played_by_whichever_engine_the_choice_and_the_machine_leave_to_it(
         resolve_video_engine(
             VideoEngine::Ffmpeg,
             false,
+            big,
             |engine| engine == VideoEngine::Native,
             |engine| engine == VideoEngine::Native,
         ),
@@ -324,21 +351,23 @@ fn a_video_is_played_by_whichever_engine_the_choice_and_the_machine_leave_to_it(
 
 /// The media engine is not asked about a file the route settles on FFmpeg's player for, and what
 /// that saves is not only a lock: the two extensions the video list shares with the text lists are
-/// settled by whether the file holds MPEG-TS packets, which is an open and a read of it. So a
-/// machine with FFmpeg on it answers its routing from the install alone, and the decoder chain the
-/// engine would be asked to build is never built for a file FFmpeg's player will take.
+/// settled by whether the file holds MPEG-TS packets, which is an open and a read of it. So a film
+/// above the threshold on a machine with FFmpeg on it answers its routing from the install alone,
+/// and the decoder chain the engine would be asked to build is never built for a file FFmpeg's
+/// player will take.
 #[test]
 fn the_media_engine_is_not_asked_where_the_route_settles_on_ffplay() {
     let engine = resolve_video_engine(
         VideoEngine::Best,
         true,
+        Some(VIDEO_FFMPEG_ABOVE_PIXELS + 1),
         |_| true,
         |engine| match engine {
             VideoEngine::Ffmpeg => true,
             VideoEngine::Native => {
                 panic!("the media engine was asked about a file FFmpeg's player takes anyway")
             }
-            VideoEngine::Best => false,
+            VideoEngine::Best | VideoEngine::Hybrid => false,
         },
     );
 

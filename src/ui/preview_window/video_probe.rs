@@ -514,14 +514,20 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // waits for the slowest of the three legs rather than for all of them in turn — so the walk is
     // now behind the two processes it was very likely to be slower than anyway. And it is asked
     // once per file and version rather than once per launch, so a resize no longer pays it again.
-    // A media-engine video is asked of the engine and nothing of FFmpeg. The shape is the engine's
+    // A media-engine video is asked of the engine and nothing of FFmpeg: the shape is the engine's
     // own, and there is no crop to detect, no subtitle stream to copy, no sidecar to find and no
-    // gain to measure for a player that renders frames and nothing else — so neither process below
-    // is spawned for one, and the pass that would have found a crop is answered with an empty list
-    // (see `video_route`). It is the same geometry a file gets on a machine with no FFmpeg on it,
-    // taken deliberately rather than as a fallback: the route says the engine is what plays this
-    // file, so FFmpeg's passes would be work for a player nobody is going to hand it to.
-    let native = video_route(path) == VideoRoute::MediaEngine;
+    // gain to measure for a player that renders frames and nothing else. Every other choice may be
+    // handed to FFmpeg's player, and it is this probe that reads the size the hybrid decides on —
+    // so FFmpeg's passes run for them, exactly as the default did before the engine was a setting
+    // (see `VideoEngine::Hybrid`). The answer is the choice's rather than the route's on purpose:
+    // the route weighs the size, and the size is what this probe is here to read.
+    let native = {
+        let choice = CONFIG
+            .lock()
+            .map(|config| config.video_engine)
+            .unwrap_or(DEFAULT_VIDEO_ENGINE);
+        choice == VideoEngine::Native || !VideoEngine::Ffmpeg.installed()
+    };
 
     // What the media engine answers with: a shape, and nothing else. No duration, because the
     // engine does not know one until the file is playing (see `pin_duration`), and no subtitle
