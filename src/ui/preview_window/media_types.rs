@@ -524,7 +524,9 @@ pub(super) struct VideoCrop {
     pub(super) y: u32,
 }
 
-#[derive(Clone, Copy)]
+/// Not `Copy`, and that is the sidecar's doing: it is a path rather than a number, so an answer
+/// read out of the cache is cloned rather than taken by value (see `video_probe`).
+#[derive(Clone)]
 pub(super) struct VideoGeometry {
     /// The shape the preview is placed at: the crop where the probe settled on one, and the
     /// frame itself where it did not.
@@ -543,6 +545,13 @@ pub(super) struct VideoGeometry {
     /// How many subtitle streams the file carries and which of them the player would reach for
     /// by itself — the whole of what a track choice is made of here (see `video_subtitles`).
     pub(super) subtitles: SubtitleStreams,
+    /// The subtitle file lying beside the film, where the folder holds one — the whole of
+    /// that file, which is why the filter beside it names no track (see `subtitle_filter`).
+    ///
+    /// It is here rather than looked for at the launch because looking for it is a walk of the
+    /// film's whole folder, and this struct is what the launch reads instead of reading the
+    /// directory (see `video_sidecar`).
+    pub(super) sidecar: Option<PathBuf>,
 }
 
 /// A file's subtitle streams, counted and ordered the way FFmpeg's `-sst s:` specifier orders

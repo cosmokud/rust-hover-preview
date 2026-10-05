@@ -701,6 +701,11 @@ pub(super) fn load_video_thumbnail(
             // because a `-sst` guessed at is a specifier it may refuse outright (see
             // `video_subtitles`).
             subtitles: SubtitleStreams::default(),
+            // And no sidecar either, which is the same answer for the same reason: this box is
+            // built here rather than read out of the cache, and the only thing that answers the
+            // question — the folder beside the film — is a read this thread has no reason to make
+            // for a file nothing could read in the first place (see `video_sidecar`).
+            sidecar: None,
         },
     };
 

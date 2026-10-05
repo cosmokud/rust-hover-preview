@@ -229,6 +229,7 @@ fn a_video_follows_its_own_scale() {
             crop: None,
             duration: None,
             subtitles: SubtitleStreams::default(),
+            sidecar: None,
         }),
     );
 
@@ -293,6 +294,7 @@ fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
                 crop: None,
                 duration: None,
                 subtitles: SubtitleStreams::default(),
+                sidecar: None,
             }),
         );
     }

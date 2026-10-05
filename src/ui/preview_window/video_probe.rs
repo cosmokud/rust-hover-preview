@@ -404,7 +404,7 @@ pub(super) fn cached_video_geometry(path: &Path) -> Option<ProbedGeometry> {
         version: file_version(path),
     };
 
-    video_geometry_cache().get(&key).copied()
+    video_geometry_cache().get(&key).cloned()
 }
 
 /// Probe a video's geometry, from the cache when the file and its version have been
@@ -421,7 +421,7 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     };
 
     if let Some(cached) = video_geometry_cache().get(&key) {
-        return *cached;
+        return cached.clone();
     }
 
     // Two external processes, and the detector is the one that decodes frames: neither needs
@@ -434,13 +434,30 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // and the length anyway. It is the same pass now (see `probe_video_header`), so the count is
     // still in hand before the hover's player is launched and the hover waits for two processes
     // rather than three.
-    let (header, candidates) = std::thread::scope(|scope| {
+    //
+    // **A read of the film's own folder is a third leg, and it is here rather than at the launch
+    // for the same reason the gain scan above was moved off the other thread.** Finding the
+    // sidecar beside a film is a `read_dir` of that folder (see `video_launch::sidecar_for`), and
+    // it was being walked from inside `start_video_playback` — which is the preview thread, the one
+    // thread that must not wait, and which every seek, resize, volume change and track change goes
+    // back through. It was also the only cold-sensitive piece of the whole path: the subtitle
+    // filter itself costs ~40-120ms even on a 4K file carrying 120 000 subtitle events, so a hover
+    // is slow cold and fast warm because of the walk and not because of libass.
+    //
+    // A third leg is nearly free here, which is the whole of what moving it buys. It is a
+    // `read_dir` rather than a process, so it costs no spawn and adds no deadline, and the hover
+    // waits for the slowest of the three legs rather than for all of them in turn — so the walk is
+    // now behind the two processes it was very likely to be slower than anyway. And it is asked
+    // once per file and version rather than once per launch, so a resize no longer pays it again.
+    let (header, candidates, sidecar) = std::thread::scope(|scope| {
         let header = scope.spawn(|| probe_video_header(path));
         let candidates = scope.spawn(|| collect_video_crop_candidates(path));
+        let sidecar = scope.spawn(|| video_launch::sidecar_for(path));
 
         (
             header.join().unwrap_or(None),
             candidates.join().unwrap_or_default(),
+            sidecar.join().unwrap_or(None),
         )
     });
 
@@ -540,6 +557,10 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // The frame is kept beside the crop rather than only in the shape, because the two players
     // are told about a crop in different terms: FFmpeg's player in pixels, and the media engine
     // as a share of the frame the rectangle was cut from (see `video_player::Crop`).
+    //
+    // The sidecar is held beside the shape rather than looked for again at the launch, which is
+    // the whole of what it is here for: `video_sidecar` reads it from this cache entry, so the
+    // launch draws a film beside a subtitle file without ever touching the folder again.
     let geometry = if let Some(crop) = crop {
         VideoGeometry {
             width: crop.width,
@@ -549,6 +570,7 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             crop: Some(crop),
             duration: src_duration,
             subtitles,
+            sidecar,
         }
     } else {
         VideoGeometry {
@@ -559,6 +581,7 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             crop: None,
             duration: src_duration,
             subtitles,
+            sidecar,
         }
     };
 
@@ -566,7 +589,9 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
         cache.clear();
     }
-    cache.insert(key, ProbedGeometry::Measured(geometry));
+    // Cloned rather than moved, which is the whole of what dropping `Copy` costs: one string
+    // copy per file, once, on the thread that was going to wait for two processes anyway.
+    cache.insert(key, ProbedGeometry::Measured(geometry.clone()));
 
     ProbedGeometry::Measured(geometry)
 }

@@ -15,7 +15,10 @@ pub(super) struct VideoGeometryKey {
     pub(super) version: FileVersion,
 }
 
-#[derive(Clone, Copy)]
+/// Not `Copy`, for the same reason the geometry it holds is not: the sidecar in there is a
+/// path, so every read out of the cache is a clone of the answer rather than a copy of it
+/// (see `cached_video_geometry`).
+#[derive(Clone)]
 pub(super) enum ProbedGeometry {
     /// The shape the probe read, and the crop the detector settled on.
     Measured(VideoGeometry),

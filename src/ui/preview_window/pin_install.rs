@@ -180,10 +180,7 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
         // The track is the new file's own choice, which is the one the take-up that
         // installs this file writes down beside it — so the player and the bar
         // agree from the first frame rather than the bar being corrected by the
-        // first seek (see `PinTransport::subtitle`). The count is what that track has
-        // to be in range of, and both come out of one read of the header the probe
-        // already made (see `probe_video_header`).
-        let streams = video_subtitles(&file.path);
+        // first seek (see `PinTransport::subtitle`).
         let Some(process) = start_video_playback(
             &file.path,
             content.0,
@@ -192,8 +189,7 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             height,
             0.0,
             volume,
-            Some(streams.count),
-            streams.chosen(),
+            video_subtitles(&file.path).chosen(),
         ) else {
             // A cover standing over a player that was killed for a replacement that never came is
             // a frozen frame nothing will ever end, so it is given up here rather than left for

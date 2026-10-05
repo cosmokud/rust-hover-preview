@@ -610,7 +610,9 @@ fn subtitles_are_named_the_way_the_filter_that_reads_them_parses() {
     let video = dir.join("film.mkv");
     std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
 
-    let filter = video_launch::subtitle_filter(&video, 2, Some(1))
+    // No sidecar: this is about an embedded track reaching the filter, so the sidecar beside the
+    // film is answered with nothing rather than being found (see `probe_video_geometry`).
+    let filter = video_launch::subtitle_filter(&video, None, 2, Some(1))
         .expect("a file with a subtitle stream of its own has a filter to draw it with");
     assert!(
         filter.starts_with("subtitles='") && filter.contains(":si=1"),

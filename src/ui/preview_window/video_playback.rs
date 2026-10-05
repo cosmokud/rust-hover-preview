@@ -10,9 +10,9 @@ use super::*;
 /// callers keep different ones: a preview that is beginning is played at `Volume → Video`, and a
 /// pinned one is played at the level its own window is holding — the one the tray named when that
 /// pin was taken up, moved by whatever the hand on its volume control has done since, and never
-/// written back to the setting (see `PinVolume`). `subtitle_streams` and `subtitle` are the same
-/// kind of answer for the same reason: they are what a pinned window is remembering, and a hover
-/// is handed neither of them (see `PinTransport::subtitle`).
+/// written back to the setting (see `PinVolume`). `subtitle` is the same kind of answer for the
+/// same reason: it is what a pinned window is remembering, and `None` is what a hover asks for
+/// (see `next_subtitle`).
 #[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 pub(super) fn start_video_playback(
     path: &PathBuf,
@@ -22,7 +22,6 @@ pub(super) fn start_video_playback(
     height: i32,
     start: f64,
     volume: u32,
-    subtitle_streams: Option<usize>,
     subtitle: Option<usize>,
 ) -> Option<Child> {
     let volume = volume.min(100);
@@ -79,16 +78,25 @@ pub(super) fn start_video_playback(
     // that hover has already answered (see `probe_video_geometry`). A file whose answer is
     // that there is nothing to measure gets no filter at all, which is the frame as the
     // file holds it.
-    let vf = match cached_video_geometry(path) {
-        Some(ProbedGeometry::Measured(geometry)) => Some(match geometry.crop {
-            Some(crop) => format!(
-                "crop={}:{}:{}:{},setsar=1",
-                crop.width, crop.height, crop.x, crop.y
-            ),
-            None => "setsar=1".to_string(),
-        }),
+    //
+    // **The sidecar is read out of this same answer rather than out of a lookup of its own, and
+    // that is what keeps this thread off the film's folder.** Finding it is a `read_dir` of that
+    // folder (`video_launch::sidecar_for`), and this is inside the launch — so a walk here would be
+    // paid again by every seek, resize, volume change and track change. The probe resolves it
+    // once per file and version, beside the two processes it already runs (see
+    // `probe_video_geometry`), and one lookup here answers both facts the chain needs.
+    let measured = match cached_video_geometry(path) {
+        Some(ProbedGeometry::Measured(geometry)) => Some(geometry),
         _ => None,
     };
+
+    let vf = measured.as_ref().map(|geometry| match geometry.crop {
+        Some(crop) => format!(
+            "crop={}:{}:{}:{},setsar=1",
+            crop.width, crop.height, crop.x, crop.y
+        ),
+        None => "setsar=1".to_string(),
+    });
 
     // The subtitles are drawn into the same filter chain rather than named beside it, because
     // `-sst` is inert on this build: the subtitle stream is demuxed and no subtitle filter is put
@@ -97,19 +105,19 @@ pub(super) fn start_video_playback(
     // front of it, so the lettering is laid over the cropped picture rather than cropped along
     // with it.
     //
-    // The track named is the one the caller was given, and the count is what a track has to be in
-    // range of. Every caller resolves the file's own default for itself before it gets here —
-    // `SubtitleStreams::chosen` is what the pin's take-up and the swap both ask — so a track is
-    // named as the one the picture was last drawn with rather than as whatever the player would
-    // reach for on its own.
-    //
-    // **Being handed no count at all is the separate answer, and it is not a count of zero.** A
-    // count of zero still resolves to a subtitle file lying beside the film, and finding one walks
-    // the film's whole folder (`sidecar_for`) — so a launch told nothing builds no filter and asks
-    // nothing of the directory, which is what a hover is told. A pin is handed the count and the
-    // track, and a pinned window draws the track its bar says it is drawing.
-    let subtitles =
-        subtitle_streams.and_then(|count| video_launch::subtitle_filter(path, count, subtitle));
+    // The track named is the one the caller was given, where there is a choice. A caller that has
+    // chosen nothing is answered with the file's own default rather than with nothing at all,
+    // because the player is about to be launched with a specifier either way and the one it would
+    // have picked for itself is the one the picture was drawn with last time (see
+    // `SubtitleStreams::chosen`).
+    let streams = video_subtitles(path);
+    let sidecar = measured.and_then(|geometry| geometry.sidecar);
+    let subtitles = video_launch::subtitle_filter(
+        path,
+        sidecar.as_deref(),
+        streams.count,
+        subtitle.or(streams.chosen()),
+    );
     let vf = match (vf, subtitles) {
         (None, None) => None,
         (Some(chain), None) => Some(chain),

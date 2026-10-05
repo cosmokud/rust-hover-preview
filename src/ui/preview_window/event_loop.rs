@@ -3251,16 +3251,10 @@ pub fn run_preview_window() {
                                     media_height,
                                     0.0,
                                     current_video_volume(),
-                                    // A hover draws no subtitles and reads nothing to find out
-                                    // whether it could: the launch is handed neither a count nor
-                                    // a track, so no subtitle filter is built, the file's header
-                                    // is not read for this, and the folder the film is in is not
-                                    // walked looking for a sidecar beside it — which is the one
-                                    // piece of per-file work on this path that grows with the
-                                    // folder rather than staying flat (see `sidecar_for`).
-                                    // Naming a track is what a pin is for, and a pin asks for the
-                                    // count it has to be in range of (see `next_subtitle`).
-                                    None,
+                                    // A hover shows the file the way the player chooses to, which
+                                    // is its first subtitle stream and the one any relaunch
+                                    // reaches again by the same route. Only a pinned window is
+                                    // remembering a track of its own (see `next_subtitle`).
                                     None,
                                 );
                                 let pid =

@@ -1,5 +1,38 @@
 use super::*;
 
+/// The geometry a probe leaves behind for a measured film: the shape, no crop, and the sidecar the
+/// probe found beside it. Written here so that what the reader answers is the probe's answer and
+/// not something the reader went looking for (see `video_sidecar`).
+fn measured_carrying(sidecar: Option<PathBuf>) -> VideoGeometry {
+    VideoGeometry {
+        width: 640,
+        height: 360,
+        frame_width: 640,
+        frame_height: 360,
+        crop: None,
+        duration: None,
+        subtitles: SubtitleStreams::default(),
+        sidecar,
+    }
+}
+
+/// The same answer as the cache holds it, for the tests that only care about one field of it.
+fn measured_with(sidecar: Option<PathBuf>) -> ProbedGeometry {
+    ProbedGeometry::Measured(measured_carrying(sidecar))
+}
+
+/// Hold `geometry` as the probe's answer about `path`, which is what a probe that has run leaves
+/// in the cache: the entry is per file and version, so the same key a reader will ask for.
+fn probed_as(path: &Path, geometry: ProbedGeometry) {
+    video_geometry_cache().insert(
+        VideoGeometryKey {
+            path: path.to_path_buf(),
+            version: file_version(path),
+        },
+        geometry,
+    );
+}
+
 /// The wait for a video's player ends one of two ways and never by itself: a player
 /// whose window is up has arrived, a player that is gone is not coming, and a start
 /// that has run past the cap is given up on — while a player that is alive with no
@@ -688,4 +721,139 @@ fn a_held_film_is_neither_begun_again_nor_left_with_a_clock_that_ran_on() {
         "and the very same film playing *is* due, so the refusal above is about the hold and not \
              about a decision that always says no"
     );
+}
+
+/// A film whose folder holds a sidecar beside it is answered with that sidecar's path, which is
+/// the whole of what the reader is for.
+///
+/// The folder really does hold the file here — the geometry is written with the path a probe would
+/// have found beside it, and the walk that finds it is `video_launch::sidecar_for`, whose own
+/// matching is tested where it lives. What is asserted here is the reader's half: the answer the
+/// probe left is the answer the launch is given, so a hover draws a film beside a subtitle file
+/// without ever reading the folder again (see `video_sidecar`).
+#[test]
+fn a_probed_film_whose_folder_holds_a_sidecar_is_answered_with_that_path() {
+    let dir = std::env::temp_dir().join(format!("sidecar-held-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+    let video = dir.join("episode.mkv");
+    std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+    let sidecar = dir.join("episode.en.srt");
+    std::fs::write(&sidecar, b"1\n").expect("a stand-in sidecar is writable");
+
+    probed_as(&video, measured_with(Some(sidecar.clone())));
+
+    assert_eq!(
+        video_sidecar(&video),
+        Some(sidecar),
+        "the sidecar the probe found beside the film is what the launch is handed, so the hover \
+         draws the words without walking the folder a second time"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A film whose folder holds no sidecar is answered with nothing, and that is not the same answer
+/// as a film nothing has probed: the probe ran and found none, which is a fact about the file.
+#[test]
+fn a_probed_film_whose_folder_holds_no_sidecar_is_answered_with_nothing() {
+    let dir = std::env::temp_dir().join(format!("sidecar-none-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+    let video = dir.join("episode.mkv");
+    std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+
+    probed_as(&video, measured_with(None));
+
+    assert_eq!(
+        video_sidecar(&video),
+        None,
+        "a film beside no subtitle file is a film with no external subtitles, and the embedded \
+         tracks below that are what it is drawn with"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The sidecar is answered out of the probe's held answer and not by looking again, which is the
+/// whole of what moving the walk bought.
+///
+/// **This is the half that cannot be asserted any other way, and it is asserted by making the
+/// probe's answer and the folder disagree.** A cached geometry is inserted carrying a sidecar for
+/// a film whose folder holds no subtitle file at all, so a reader that went looking would find
+/// nothing and answer with nothing. The cached path has to come back, twice, because the walk was
+/// the piece of work whose cost grew with the folder and was paid again by every seek, resize,
+/// volume change and track change (see `sidecar_for`).
+#[test]
+fn the_sidecar_is_the_probes_held_answer_rather_than_a_walk_of_the_folder() {
+    let dir = std::env::temp_dir().join(format!("sidecar-held-once-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+    let video = dir.join("episode.mkv");
+    std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+
+    // A sidecar named as the probe found one, and deliberately not a file in the folder: the
+    // answer and the folder are made to disagree here, which is the only way a reader that reads
+    // the folder can be caught.
+    let cached = dir.join("episode.en.srt");
+    probed_as(&video, measured_with(Some(cached.clone())));
+
+    assert!(
+        std::fs::metadata(&cached).is_err(),
+        "the premise of this test is that the folder holds no sidecar at all — if one is written \
+         there, a reader that walks the folder passes this and the test says nothing"
+    );
+
+    for reading in 0..2 {
+        assert_eq!(
+            video_sidecar(&video),
+            Some(cached.clone()),
+            "reading {reading}: what comes back is the answer the probe left, not what is in the \
+             folder now — which is the difference between one walk per file version and one per \
+             launch, and a launch is what every seek and resize begins"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A film with both a sidecar beside it and tracks of its own is drawn with the sidecar, which is
+/// the precedence that has always held and that the change of who finds it must not disturb.
+///
+/// The sidecar wins because it is the plainer answer — it needs nothing read out of the file, and
+/// it is the arrangement every player and every tool reads. So this is the same rule seen from the
+/// other end of the new arrangement: the probe's held answer goes in, and the embedded track that
+/// would otherwise have been named is not named at all.
+#[test]
+fn a_sidecar_beside_a_subtitled_film_is_drawn_in_preference_to_its_own_tracks() {
+    let dir = std::env::temp_dir().join(format!("sidecar-wins-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+    let video = dir.join("episode.mkv");
+    std::fs::write(&video, b"stand-in").expect("a stand-in file is writable");
+    let sidecar = dir.join("episode.srt");
+    std::fs::write(&sidecar, b"1\n").expect("a stand-in sidecar is writable");
+
+    // A film with two embedded subtitle streams *and* a sidecar: the arrangement where the two
+    // sources could be confused for each other, which is what this pins down.
+    probed_as(
+        &video,
+        ProbedGeometry::Measured(VideoGeometry {
+            subtitles: SubtitleStreams { count: 2, first: 1 },
+            ..measured_carrying(Some(sidecar.clone()))
+        }),
+    );
+
+    let filter =
+        video_launch::subtitle_filter(&video, video_sidecar(&video).as_deref(), 2, Some(1))
+            .expect("a film with both sources has a filter to draw one of them with");
+
+    assert!(
+        filter.contains("episode.srt"),
+        "the sidecar is the answer the probe held and the one every tool on this machine reads, so \
+         it is what has to be drawn even where the file carries tracks of its own: {filter}"
+    );
+    assert!(
+        !filter.contains("si="),
+        "and no track is named for it: a sidecar carries no streams of its own, the whole of that \
+         file is the subtitle — so the second embedded track is simply not this one: {filter}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

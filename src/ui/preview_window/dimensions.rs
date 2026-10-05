@@ -143,6 +143,29 @@ pub(super) fn video_duration(path: &Path) -> Option<f64> {
     }
 }
 
+/// The subtitle file lying beside this file, as the probe that measured the film found it, or
+/// nothing where the folder holds none.
+///
+/// It is read from the cache and never looked for here, which is the whole of what it is for:
+/// finding it is a `read_dir` of the film's own folder (`video_launch::sidecar_for`), and this is
+/// asked on the preview thread — inside the launch, so a seek, a resize, a volume change and a
+/// track change would each have paid the walk again. The probe resolves it once per file and
+/// version, beside the two processes it already runs, and this is where that answer is read
+/// (see `probe_video_geometry`).
+///
+/// It is asked of by the tests rather than by the launch, because the launch already holds the
+/// geometry it would name — it read the same entry a few lines above for the crop — so it takes
+/// the field out of that answer rather than paying a second lookup for it (see
+/// `start_video_playback`). This is the named way to ask, so that the reader is a thing with a
+/// name and not a field read spelled out at each use.
+#[cfg(test)]
+pub(super) fn video_sidecar(path: &Path) -> Option<PathBuf> {
+    match cached_video_geometry(path) {
+        Some(ProbedGeometry::Measured(geometry)) => geometry.sidecar,
+        _ => None,
+    }
+}
+
 /// A file's subtitle streams, as the probe that measured it read them, or none at all for a file
 /// the probe has no answer for.
 ///
