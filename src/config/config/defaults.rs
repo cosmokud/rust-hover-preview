@@ -10,7 +10,7 @@ use std::path::Path;
 
 use crate::readers::tone_map::Curve;
 
-use super::setting_types::OfficeEngine;
+use super::setting_types::{OfficeEngine, VideoEngine};
 
 pub(super) const CONFIG_SECTION: &str = "settings";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
@@ -287,6 +287,12 @@ pub const MAX_HDR_EXPOSURE: f32 = 10.0;
 /// format, with the render engine beside it as the fallback for a family this machine has
 /// no application for.
 pub const DEFAULT_OFFICE_ENGINE: OfficeEngine = OfficeEngine::MicrosoftOffice;
+/// Which engine plays a video unless the configuration says otherwise: the best this machine
+/// has, which is FFmpeg's player where it is installed and the media engine where it is not.
+pub const DEFAULT_VIDEO_ENGINE: VideoEngine = VideoEngine::Best;
+/// Whether an explicitly chosen engine that cannot play a file falls through to the others:
+/// on, so a film no media-engine decoder reaches is still played rather than shown as nothing.
+pub const DEFAULT_VIDEO_ENGINE_FALLBACK: bool = true;
 /// How long the Office engine a family started is kept after that family's last
 /// page. Producing a page costs an Office start, and an engine still warm is what
 /// makes the next document of that family cheap, so one is kept for a while by

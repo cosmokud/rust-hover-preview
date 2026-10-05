@@ -34,7 +34,7 @@ pub(super) use setters::{
     set_office_engine, set_office_engine_idle, set_pin_nav_file_types, set_preview_scale,
     set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
     set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
-    set_vector_scale, set_video_scale, set_video_volume, set_webview_idle,
+    set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
 };
 pub(super) use toggles::{
     toggle_engine_persistent, toggle_normalize_video_volume, toggle_normalize_volume,
@@ -42,7 +42,7 @@ pub(super) use toggles::{
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
     toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
     toggle_render_html, toggle_startup, toggle_trigger_key_affect_pin_mode,
-    toggle_trigger_key_enabled, toggle_video_hw_accel,
+    toggle_trigger_key_enabled, toggle_video_engine_fallback, toggle_video_hw_accel,
 };
 
 // The four that turn an id back into the choice it was listed for. No window proc asks for

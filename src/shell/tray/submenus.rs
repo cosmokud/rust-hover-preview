@@ -17,23 +17,25 @@ use super::ids::{
     EngineIdleIds, AFK_TIMER_CHOICES_SECS, AUDIO_SEEK_CHOICES, AVOID_CHOICES, BACKGROUND_CHOICES,
     BITMAP_SCALE_CHOICES, DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES,
     HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_CODEC_BASE,
-    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, TICK_CHOICES_MS,
-    TIMING_DELAY_CHOICES_MS,
+    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_VIDEO_ENGINE_BASE,
+    ID_TRAY_VIDEO_ENGINE_FALLBACK, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
 };
 
 use crate::app::dialogs;
 use crate::config::config::{
     AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PreviewScale, TransparentBackground,
-    DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB,
-    DEFAULT_OFFICE_ENGINE, DEFAULT_TICK_MS,
+    VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
+    DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE,
+    DEFAULT_VIDEO_ENGINE_FALLBACK,
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
+use crate::ui::preview_window::video_engine_installed;
 use crate::CONFIG;
 use windows::core::{w, PCWSTR};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, HMENU, MENU_ITEM_FLAGS, MF_BYCOMMAND,
-    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
+    MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
 };
 
 /// One `Timing` submenu: an item per delay the setting offers, in the order the table
@@ -519,6 +521,64 @@ pub(super) fn document_scale_at(index: u16) -> Option<PreviewScale> {
     DOCUMENT_SCALE_CHOICES.get(index as usize).copied()
 }
 
+/// The `Engine -> Select Engine -> Video` submenu: the `Fallback` switch at the top, then the
+/// engines it decides between. An engine this machine does not have is greyed, since there is
+/// nothing there to choose; `Best` is the default and carries the mark.
+fn append_video_engine_menu(parent: HMENU) {
+    let (selected, fallback) = CONFIG
+        .lock()
+        .map(|config| (config.video_engine, config.video_engine_fallback))
+        .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK));
+
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    append_labeled_item(
+        menu,
+        MF_STRING | if fallback { MF_CHECKED } else { MF_UNCHECKED },
+        ID_TRAY_VIDEO_ENGINE_FALLBACK,
+        "Fallback",
+    );
+    let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
+
+    for (index, engine) in VIDEO_ENGINE_CHOICES.iter().enumerate() {
+        // `Best` is never greyed: it is not an engine this machine may be without, it is the
+        // app's own answer, and it is what a choice the machine cannot supply falls back to
+        // anyway (see `resolve_video_engine`).
+        let unavailable = *engine != VideoEngine::Best && !video_engine_installed(*engine);
+
+        append_labeled_item(
+            menu,
+            MF_STRING | if unavailable { MF_GRAYED } else { MF_ENABLED },
+            ID_TRAY_VIDEO_ENGINE_BASE + index as u16,
+            &video_engine_label(*engine),
+        );
+    }
+
+    if let Some(index) = VIDEO_ENGINE_CHOICES.iter().position(|e| *e == selected) {
+        let _ = unsafe {
+            CheckMenuRadioItem(
+                menu,
+                ID_TRAY_VIDEO_ENGINE_BASE as u32,
+                (ID_TRAY_VIDEO_ENGINE_BASE + VIDEO_ENGINE_CHOICES.len() as u16 - 1) as u32,
+                (ID_TRAY_VIDEO_ENGINE_BASE + index as u16) as u32,
+                MF_BYCOMMAND.0,
+            )
+        };
+    }
+
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Video")) };
+}
+
+/// What an engine row is called: the engine's name, with the one the app starts at marked.
+pub(super) fn video_engine_label(engine: VideoEngine) -> String {
+    let label = match engine {
+        VideoEngine::Best => "Best",
+        VideoEngine::Native => "Native",
+        VideoEngine::Ffmpeg => "FFmpeg",
+    };
+    default_label(label, engine == DEFAULT_VIDEO_ENGINE)
+}
+
 /// The `Engine → Select Engine → Office` submenu: which engine an Office document's page
 /// is asked of, with the setting's own choice marked.
 ///
@@ -535,6 +595,8 @@ pub(super) fn append_select_engine_menu(parent: HMENU) {
 
     let select_engine_menu = unsafe { CreatePopupMenu().unwrap() };
     let office_menu = unsafe { CreatePopupMenu().unwrap() };
+
+    append_video_engine_menu(select_engine_menu);
 
     let microsoft_office = default_label(
         "Microsoft Office",

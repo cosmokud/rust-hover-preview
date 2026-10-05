@@ -33,12 +33,13 @@ use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_general_disk_cache_mb,
     sanitize_image_cache_mb, sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent,
     sanitize_tick_ms, AudioSeek, AvoidMode, MarkdownMode, OfficeEngine, PinNavFileTypes,
-    PreviewScale, PreviewType, TextTheme, TriggerKeyMode, VOLUME_CHOICES,
+    PreviewScale, PreviewType, TextTheme, TriggerKeyMode, VideoEngine, VOLUME_CHOICES,
 };
 use crate::engines::document_cache;
 use crate::engines::office_render;
 use crate::ui::preview_window::{
-    refresh_preview, refresh_preview_types, trim_image_cache, trim_subtitle_cache,
+    forget_video_geometry, refresh_preview, refresh_preview_types, trim_image_cache,
+    trim_subtitle_cache,
 };
 use crate::{app::startup, CONFIG};
 use std::os::windows::ffi::OsStrExt;
@@ -290,6 +291,21 @@ pub(in super::super) fn set_office_engine(engine: OfficeEngine) {
     if engine == OfficeEngine::LibreOffice {
         office_render::stop_engines();
     }
+}
+
+/// Which engine plays a video, from `Engine -> Select Engine -> Video`.
+///
+/// The choice is read live by the router on the next hover, so nothing on screen is rebuilt: a
+/// preview that is already up belongs to the engine playing it and is replaced the next time it
+/// is laid out. What is given up is the probe cache, because a geometry read by FFprobe is not
+/// the geometry a media-engine preview is placed by (or the reverse), so the next hover of a
+/// file measures it again (see `forget_video_geometry`).
+pub(in super::super) fn set_video_engine(engine: VideoEngine) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.video_engine = engine;
+        config.save();
+    }
+    forget_video_geometry();
 }
 
 /// How long the browser engine is kept after the last document it drew — for a browser that
