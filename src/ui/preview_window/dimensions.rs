@@ -182,6 +182,22 @@ pub(super) fn video_subtitles(path: &Path) -> SubtitleStreams {
     }
 }
 
+/// Whether the small files this app copied out of this film's own subtitle tracks are ready to
+/// draw, as the probe's answer for the film holds them.
+///
+/// What asks is the pin's take-up: the `ffplay` a hover began is adopted by the pin as it stands
+/// (see `take_up_pinned_window`), so a player begun while the copy was still coming is one a
+/// pinned window would draw on without the subtitles — and the take-up begins it again where
+/// this answers yes and the player was one of those (see `reload_adopted_subtitles`). A film no
+/// probe has answered for is answered `false` here on the same terms as `video_subtitles`: an
+/// answer nothing read is not a copy, and a player begun for such a film has nothing to correct.
+pub(super) fn video_copy_ready(path: &Path) -> bool {
+    match cached_video_geometry(path) {
+        Some(ProbedGeometry::Measured(geometry)) => geometry.derived.is_some(),
+        _ => false,
+    }
+}
+
 /// Whether this file is a video the probe has not answered for yet.
 ///
 /// A hover for one cannot be laid out as a video — the layout has no shape to place — so

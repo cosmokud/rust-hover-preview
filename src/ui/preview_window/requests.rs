@@ -229,6 +229,17 @@ pub(super) fn notify_video_probed(path: &Path, generation: u64) {
     });
 }
 
+/// The small subtitle files a film's own tracks were copied into are in the cache. Sent from
+/// the extraction thread through the same channel every other answer arrives on, because the
+/// one thing waiting on it is a pinned window: a pin showing that film is begun again so the
+/// frame it draws next is drawn with the copy, and beginning a player belongs to the preview
+/// loop (see `reload_pinned_subtitles`). A hover is told nothing — it was answered without
+/// subtitles by the user's own choice, and the hover after it reads what this wrote (see
+/// `video_launch::subtitle_filter`).
+pub(super) fn notify_video_subtitles_ready(path: &Path) {
+    send_preview(PreviewMessage::VideoSubtitlesReady(path.to_path_buf()));
+}
+
 /// The ImageMagick engine is done with a file. Sent from the engine's own thread, through the
 /// same channel every other answer arrives on, so the hover that was waiting is replayed the
 /// moment there is a picture to place it with — or taken down, where the answer is that the

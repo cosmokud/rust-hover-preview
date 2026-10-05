@@ -280,6 +280,7 @@ mod pin_input;
 mod pin_keys;
 mod pin_player_failure;
 mod pin_resize;
+mod pin_subtitle_reload;
 mod pin_volume;
 mod placement;
 mod probes;

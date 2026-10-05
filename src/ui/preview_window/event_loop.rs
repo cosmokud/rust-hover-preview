@@ -1882,6 +1882,14 @@ pub fn run_preview_window() {
                             video_probed = Some((path, generation));
                         }
                     }
+                    PreviewMessage::VideoSubtitlesReady(path) => {
+                        // A pinned window showing this film is begun again so the copy that just
+                        // landed is drawn by the frame after it — the one reload a hover
+                        // deliberately does not have (see `reload_pinned_subtitles`). Nothing
+                        // here is hover bookkeeping: the message is not an answer to a hover, and
+                        // a hover is never begun again for it.
+                        reload_pinned_subtitles(&path);
+                    }
                     PreviewMessage::PinAnswered(answer) => {
                         // Both answers are the pin's own, and both are dropped where the
                         // pin is no longer up: the wait was a window's, and a window that
@@ -2921,6 +2929,15 @@ pub fn run_preview_window() {
                         // at all until then, so there is nothing here to clear.
                         pin_set_focusable(hwnd, true);
 
+                        // **A player adopted without its film's copied subtitles is begun
+                        // again here**, where the copy is ready now and the adopted player is
+                        // one the hover began before it existed — the corner the ready-message
+                        // cannot reach, because it has already been and gone (see
+                        // `reload_adopted_subtitles`). A pin taken up on a film that is still
+                        // being copied is not this: the message will find the pin when it
+                        // lands, and there is nothing to draw yet in any case.
+                        reload_adopted_subtitles(&path);
+
                         // A text preview is the one kind a pin *changes* rather than frames: it
                         // comes up in full mode, which is the scrollbar, the selection, and the
                         // keys that copy it all out (see `current_text_options`). That is the
@@ -3028,6 +3045,10 @@ pub fn run_preview_window() {
                     // once more: a page's worth of content arriving for the hover that asked
                     // for it, replayed rather than handled as a hover here.
                     PreviewMessage::PeazipReady { .. } => {}
+                    // And a film's copied subtitles arriving, which a pinned window is begun
+                    // again for above rather than a hover being laid out for (see
+                    // `PreviewMessage::VideoSubtitlesReady`).
+                    PreviewMessage::VideoSubtitlesReady(_) => {}
                     // And the file a pinned window is to be shown instead of the one it has,
                     // which is answered above: it is not a hover, so nothing here has a layout
                     // to make for it (see `PreviewMessage::PinUpdate`).
