@@ -12,7 +12,7 @@ use crate::config::theme_files;
 use crate::formats::lists;
 
 use super::app_config::AppConfig;
-use super::defaults::CONFIG_SECTION;
+use super::defaults::{CONFIG_SECTION, DEFAULT_VIDEO_ENGINE};
 
 /// The headings the settings section is written under, in the order the tray lists its
 /// menus: the menu a setting is changed from is the menu it is found under, so the file
@@ -383,6 +383,13 @@ impl AppConfig {
                     let repaired = lists::repair_older_lists(&mut ini) || old_headings;
                     config.apply_ini(&ini);
 
+                    // An engine this machine has not got is put back to `Best` at a start: the
+                    // choice names a player that is not here, which the router would ignore anyway,
+                    // and a row marked for it is greyed besides (see `VideoEngine::installed`).
+                    if !config.video_engine.installed() {
+                        config.video_engine = DEFAULT_VIDEO_ENGINE;
+                    }
+
                     // The file is written again where the repair had a list to bring up or a
                     // heading to put back, and where it does not hold what this app writes: a
                     // setting the file does not have, one whose value is not the value the app
@@ -440,6 +447,13 @@ impl AppConfig {
                 if ini.read(text).is_ok() {
                     let repaired = lists::repair_older_lists(&mut ini) || old_headings;
                     self.apply_ini(&ini);
+
+                    // The engine repair a start puts the file through, for the same reason an edit
+                    // to the file is put through the others: a choice naming a player this machine
+                    // has not got is written back as `Best` (see `VideoEngine::installed`).
+                    if !self.video_engine.installed() {
+                        self.video_engine = DEFAULT_VIDEO_ENGINE;
+                    }
 
                     if repaired || self.differs(&ini) {
                         self.save();

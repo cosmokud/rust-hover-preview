@@ -917,6 +917,7 @@ fn the_video_engine_rows_are_ids_of_their_own() {
             "Best (Default)".to_string(),
             "Native".to_string(),
             "FFmpeg".to_string(),
+            "Native (FFmpeg above 3.2MP)".to_string(),
         ]
     );
 
@@ -957,5 +958,22 @@ fn the_video_engine_rows_are_ids_of_their_own() {
     assert!(
         DEFAULT_VIDEO_ENGINE_FALLBACK,
         "the app starts with the fallback on"
+    );
+
+    // The rows that are greyed are the ones naming a player this machine has not got: the two the
+    // app and Windows supply are always here, and both FFmpeg-based choices need `ffplay`.
+    assert!(
+        VideoEngine::Best.installed() && VideoEngine::Native.installed(),
+        "the app's own answer and the engine Windows ships are never greyed"
+    );
+    assert_eq!(
+        VideoEngine::Ffmpeg.installed(),
+        crate::formats::codecs::ffplay_available(),
+        "FFmpeg's row is offered exactly where `ffplay` is installed"
+    );
+    assert_eq!(
+        VideoEngine::Hybrid.installed(),
+        crate::formats::codecs::ffplay_available(),
+        "and the hybrid needs `ffplay` for the half of it that hands a film over"
     );
 }

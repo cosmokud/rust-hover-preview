@@ -69,9 +69,14 @@ pub(super) const ID_TRAY_ENGINE_OFFICE_LIBRE: u16 = 1009;
 pub(super) const ID_TRAY_VIDEO_ENGINE_FALLBACK: u16 = 1034;
 pub(super) const ID_TRAY_VIDEO_ENGINE_BASE: u16 = 1035;
 
-/// The engines the `Video` submenu lists, in the order it lists them, with `Best` at the top.
-pub(super) const VIDEO_ENGINE_CHOICES: [VideoEngine; 3] =
-    [VideoEngine::Best, VideoEngine::Native, VideoEngine::Ffmpeg];
+/// The engines the `Video` submenu lists, in the order it lists them, with `Best` at the top and
+/// the hybrid — `Native (FFmpeg above 3.2MP)` — below the two plain ones.
+pub(super) const VIDEO_ENGINE_CHOICES: [VideoEngine; 4] = [
+    VideoEngine::Best,
+    VideoEngine::Native,
+    VideoEngine::Ffmpeg,
+    VideoEngine::Hybrid,
+];
 /// The `Background` submenu: one command per backdrop it offers, in the order it
 /// lists them, for each of the six kinds of preview it keeps apart — a picture's
 /// backdrop, a vector drawing's, a page of HTML's, a font specimen's, a texture's, and a

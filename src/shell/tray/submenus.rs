@@ -30,7 +30,6 @@ use crate::config::config::{
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
-use crate::ui::preview_window::video_engine_installed;
 use crate::CONFIG;
 use windows::core::{w, PCWSTR};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -541,10 +540,9 @@ fn append_video_engine_menu(parent: HMENU) {
     let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
 
     for (index, engine) in VIDEO_ENGINE_CHOICES.iter().enumerate() {
-        // `Best` is never greyed: it is not an engine this machine may be without, it is the
-        // app's own answer, and it is what a choice the machine cannot supply falls back to
-        // anyway (see `resolve_video_engine`).
-        let unavailable = *engine != VideoEngine::Best && !video_engine_installed(*engine);
+        // A row is greyed for an engine this machine has not got: `Best` and `Native` are always
+        // here, and both FFmpeg-based choices need `ffplay` (see `VideoEngine::installed`).
+        let unavailable = !engine.installed();
 
         append_labeled_item(
             menu,
@@ -575,6 +573,7 @@ pub(super) fn video_engine_label(engine: VideoEngine) -> String {
         VideoEngine::Best => "Best",
         VideoEngine::Native => "Native",
         VideoEngine::Ffmpeg => "FFmpeg",
+        VideoEngine::Hybrid => "Native (FFmpeg above 3.2MP)",
     };
     default_label(label, engine == DEFAULT_VIDEO_ENGINE)
 }
