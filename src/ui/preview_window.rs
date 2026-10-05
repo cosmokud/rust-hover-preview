@@ -38,6 +38,8 @@
 //! - `pin_input` - a hand on a pinned window.
 //! - `pin_drag` - carrying a pinned window with the pointer.
 //! - `video_probe` - what a film is asked of FFprobe.
+//! - `subtitle_files` - a film's own subtitle tracks copied out once, into the small files a
+//!   hover draws them from.
 //! - `ffplay_window` - the window and the process FFmpeg draws a film into.
 //! - `video_playback` - starting and stopping a film.
 //! - `video_retire` - handing one film over to the next.
@@ -84,6 +86,7 @@ mod pixels;
 mod pointer;
 mod preview_scale;
 mod requests;
+mod subtitle_files;
 mod surfaces;
 mod text_selection;
 mod tick;
@@ -96,12 +99,13 @@ mod window_proc;
 
 use crate::app::engine_processes;
 use crate::config::config::{
-    frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_image_cache_mb,
-    sanitize_spinner_delay_ms, sanitize_webp_playback_fps, AppConfig, AudioSeek, MarkdownMode,
-    OfficeEngine, PreviewScale, PreviewType, TextTheme, TransparentBackground,
-    DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND,
-    DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE,
-    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
+    frame_bytes_within_budget, image_decode_limits, read_within_budget,
+    sanitize_general_disk_cache_mb, sanitize_image_cache_mb, sanitize_spinner_delay_ms,
+    sanitize_webp_playback_fps, AppConfig, AudioSeek, MarkdownMode, OfficeEngine, PreviewScale,
+    PreviewType, TextTheme, TransparentBackground, DEFAULT_ANIMATED_SCALE_PERCENT,
+    DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
+    DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
+    DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
     DEFAULT_IMAGE_CACHE_MB, DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME,
     DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED,
     DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
@@ -267,6 +271,7 @@ pub(crate) use requests::show_preview;
 pub(crate) use requests::show_preview_keyboard;
 pub(crate) use requests::take_pin_resumed;
 pub(crate) use requests::update_pinned_preview;
+pub(crate) use subtitle_files::trim_now as trim_subtitle_cache;
 pub(crate) use tick::preview_stall_ms;
 pub(crate) use tick::PREVIEW_SENDER;
 pub(crate) use video_hw::forget_video_hw_accel_answer;

@@ -229,6 +229,8 @@ fn a_video_that_has_not_been_probed_waits_in_the_waiting_box() {
             duration: None,
             subtitles: SubtitleStreams::default(),
             sidecar: None,
+            derived: None,
+            subtitle_extraction_failed: false,
         }),
     );
     assert_eq!(video_box(&path), Some((640, 360)));

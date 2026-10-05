@@ -30,14 +30,16 @@ use super::super::submenus::{
 
 use crate::app::dialogs;
 use crate::config::config::{
-    sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_image_cache_mb,
-    sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent, sanitize_tick_ms, AudioSeek,
-    AvoidMode, MarkdownMode, OfficeEngine, PinNavFileTypes, PreviewScale, PreviewType, TextTheme,
-    TriggerKeyMode, VOLUME_CHOICES,
+    sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_general_disk_cache_mb,
+    sanitize_image_cache_mb, sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent,
+    sanitize_tick_ms, AudioSeek, AvoidMode, MarkdownMode, OfficeEngine, PinNavFileTypes,
+    PreviewScale, PreviewType, TextTheme, TriggerKeyMode, VOLUME_CHOICES,
 };
 use crate::engines::document_cache;
 use crate::engines::office_render;
-use crate::ui::preview_window::{refresh_preview, refresh_preview_types, trim_image_cache};
+use crate::ui::preview_window::{
+    refresh_preview, refresh_preview_types, trim_image_cache, trim_subtitle_cache,
+};
 use crate::{app::startup, CONFIG};
 use std::os::windows::ffi::OsStrExt;
 use windows::core::{w, PCWSTR};
@@ -404,6 +406,26 @@ pub(in super::super) fn set_image_disk_cache_mb(index: u16) {
     }
 
     document_cache::trim_image_now();
+}
+
+/// How much of what a film's own subtitle tracks were copied into may be kept, between hovers.
+///
+/// The same shape as the two beside it and for the same reason: a film is copied for the hover
+/// that asks for it whatever the size, and a size of nothing means nothing is copied at all —
+/// such a hover is answered without subtitles rather than with the whole film streamed for
+/// them, which is the answer the first hover of a film gets anyway while its copy is coming
+/// (see `subtitle_files`).
+pub(in super::super) fn set_general_disk_cache_mb(index: u16) {
+    let Some(megabytes) = cache_size_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.general_disk_cache_mb = sanitize_general_disk_cache_mb(megabytes);
+        config.save();
+    }
+
+    trim_subtitle_cache();
 }
 
 /// What one hover may decode or read for, in gigabytes.

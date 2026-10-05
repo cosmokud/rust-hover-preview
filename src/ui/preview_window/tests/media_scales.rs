@@ -230,6 +230,8 @@ fn a_video_follows_its_own_scale() {
             duration: None,
             subtitles: SubtitleStreams::default(),
             sidecar: None,
+            derived: None,
+            subtitle_extraction_failed: false,
         }),
     );
 
@@ -295,6 +297,8 @@ fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
                 duration: None,
                 subtitles: SubtitleStreams::default(),
                 sidecar: None,
+                derived: None,
+                subtitle_extraction_failed: false,
             }),
         );
     }

@@ -661,6 +661,8 @@ fn the_document_scale_ranges_are_not_another_submenus_range() {
             ..ID_TRAY_DOCUMENT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
         ID_TRAY_IMAGE_DISK_CACHE_BASE
             ..ID_TRAY_IMAGE_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+        ID_TRAY_GENERAL_DISK_CACHE_BASE
+            ..ID_TRAY_GENERAL_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
         ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE,
     ];
 

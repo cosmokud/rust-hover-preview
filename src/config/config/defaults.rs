@@ -236,6 +236,22 @@ pub const MAX_DOCUMENT_CACHE_MB: u32 = 2048;
 /// use. See `document_cache`.
 pub const DEFAULT_IMAGE_DISK_CACHE_MB: u32 = 512;
 pub const MAX_IMAGE_DISK_CACHE_MB: u32 = 2048;
+/// The folder a film's extracted subtitle files are kept in may hold, in megabytes. What it
+/// holds are the small files this app copied a film's own subtitle tracks into, with the fonts
+/// that came out of the container dumped beside them (see `preview_window::subtitle_files`),
+/// and what the folder buys is the whole point of that extraction: a hover whose subtitles are
+/// embedded in the film otherwise streams the entire container before the first frame is
+/// drawn — measured on this machine, a cold 1.4 GB MKV read 1 423 MB and took 14 904 ms to
+/// show a frame with the embedded filter, against 492 ms and 41 MB for the same film drawn
+/// from a 30 KB extracted `.ass`.
+///
+/// A hundred and twenty-eight megabytes by default, which is thousands of films: the measured
+/// extraction of a 1.4 GB anime episode is a 30 KB `.ass`, and even a film whose tracks are
+/// PGS bitmaps writes a few megabytes. It is a disk cache like the two beside it — nothing is
+/// read from the folder while it is not in use — and the budget is what bounds a library's
+/// worth of films hovered across months rather than anything a single film needs.
+pub const DEFAULT_GENERAL_DISK_CACHE_MB: u32 = 128;
+pub const MAX_GENERAL_DISK_CACHE_MB: u32 = 2048;
 /// What one hover may decode or read for, in gigabytes: the ceiling every reader is
 /// handed before it allocates — a picture's decode, a document's bytes, the page
 /// Office exported, a theme a preview is painted with.
@@ -341,6 +357,17 @@ pub fn sanitize_document_cache_mb(value: u32) -> u32 {
 /// whether the hover after it reads one back or pays for it again.
 pub fn sanitize_image_disk_cache_mb(value: u32) -> u32 {
     value.min(MAX_IMAGE_DISK_CACHE_MB)
+}
+
+/// The budget of the folder a film's extracted subtitle files are kept in, which is the derived
+/// subtitle files' own cache rather than the pages the document engines write or the pictures
+/// an image converter develops.
+///
+/// `0` is a cache that keeps nothing, the same as the two above: at that size the whole-film
+/// read an extraction pays for would be given straight back, so nothing is extracted at all
+/// and a film whose subtitles are embedded is drawn without them (see `subtitle_files`).
+pub fn sanitize_general_disk_cache_mb(value: u32) -> u32 {
+    value.min(MAX_GENERAL_DISK_CACHE_MB)
 }
 
 /// The text preview font scale, where `0` and nonsense land back on the default.

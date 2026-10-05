@@ -355,7 +355,7 @@ pub(super) const ID_TRAY_TYPE_VECTOR: u16 = 1069;
 /// where the text preview's own `100%` begins, and the block of gates there is two sizes wide.
 pub(super) const ID_TRAY_TYPE_AUDIO: u16 = 1098;
 /// The `Cache` submenu: one command per size it offers, in the order it lists
-/// them, for each of the three caches it sizes. They start past the range the `theme`
+/// them, for each of the four caches it sizes. They start past the range the `theme`
 /// folder's own items occupy (see `ID_TRAY_THEME_CUSTOM_BASE`).
 pub(super) const ID_TRAY_IMAGE_CACHE_BASE: u16 = 1300;
 /// The `Cache → Document` sizes: how much of what an engine drew is kept between hovers. The
@@ -366,6 +366,11 @@ pub(super) const ID_TRAY_DOCUMENT_CACHE_BASE: u16 = 1320;
 /// between hovers. The other cache whose size is bytes on disk — pictures of its own, in a
 /// folder beside the documents' pages rather than a share of them (see `document_cache`).
 pub(super) const ID_TRAY_IMAGE_DISK_CACHE_BASE: u16 = 1340;
+/// The `Cache → General (Disk)` sizes: how much of what a preview asked FFmpeg to write is kept
+/// between hovers. It holds the small files a film's own subtitle tracks were copied into, with
+/// the container's fonts dumped beside them (see `subtitle_files`), which is what a hover of an
+/// embedded-subtitle film draws from instead of streaming the whole film before its first frame.
+pub(super) const ID_TRAY_GENERAL_DISK_CACHE_BASE: u16 = 1360;
 /// The `Performance → Decode Budget` submenu: one command per ceiling it offers, in
 /// the order it lists them. It sits in the slack between the `Cache` sizes and the
 /// document scale's own range.
