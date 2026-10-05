@@ -3,6 +3,56 @@
 
 use super::*;
 
+/// The films whose most recently begun player was drawing subtitles: a sidecar, the film's own
+/// track, or the small files this app copied out of it (see `subtitle_filter`).
+///
+/// What asks is the pin's take-up, and it asks because a pin does not begin a player of its
+/// own over a hover's: the `ffplay` a hover began is adopted as it stands, subtitles and all —
+/// so a player that was begun *without* them is one a pinned window would keep drawing without
+/// them, and the take-up is the moment to begin it again (see `reload_adopted_subtitles`). The
+/// list holds only the films whose player is drawing; an absence is the answer that the player
+/// last begun for that film is not — which is also the answer for a film no player was begun
+/// for at all, and the one the take-up wants for it, because a film with no player up has
+/// nothing on screen that is wrong.
+static DRAWING_SUBTITLES: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// How many films the list holds before it is emptied, the same bound and the same reasoning
+/// as the measure lists' own: a film forgotten by the clear is one whose next take-up begins
+/// its player again although it was already drawing the subtitles, which is a blink rather
+/// than a fault (see `note_player_subtitles`).
+const DRAWING_SUBTITLES_MAX_ENTRIES: usize = 64;
+
+/// Write down what the player just begun for this film was handed: subtitles drawn, or none.
+///
+/// It is asked of at the take-up rather than of the player, which cannot be asked anything
+/// once it is running — and it is written on every launch, so what stands for a film is always
+/// that film's latest player (see `reload_adopted_subtitles`).
+pub(super) fn note_player_subtitles(path: &Path, drawing: bool) {
+    let Ok(mut films) = DRAWING_SUBTITLES.lock() else {
+        return;
+    };
+
+    films.retain(|held| held != path);
+
+    if !drawing {
+        return;
+    }
+
+    if films.len() >= DRAWING_SUBTITLES_MAX_ENTRIES {
+        films.clear();
+    }
+
+    films.push(path.to_path_buf());
+}
+
+/// Whether the player most recently begun for this film was drawing subtitles.
+pub(super) fn player_draws_subtitles(path: &Path) -> bool {
+    DRAWING_SUBTITLES
+        .lock()
+        .map(|films| films.iter().any(|held| held == path))
+        .unwrap_or(false)
+}
+
 /// Start ffplay for video preview, at the level `volume` names and with the film's own measured
 /// loudness folded into it where `Normalize` is on for videos (see `normalizing_video`).
 ///
@@ -130,6 +180,12 @@ pub(super) fn start_video_playback(
         streams.count,
         subtitle.or(streams.chosen()),
     );
+
+    // What this player is drawn with is written down for the take-up that may adopt it: a pin
+    // does not begin a player of its own over a hover's, so a player begun without subtitles
+    // is one a pinned window keeps drawing without them until something begins it again — and
+    // only the take-up knows it is a pin's player now (see `reload_adopted_subtitles`).
+    note_player_subtitles(path, subtitles.is_some());
     let vf = match (vf, subtitles) {
         (None, None) => None,
         (Some(chain), None) => Some(chain),

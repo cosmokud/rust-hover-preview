@@ -605,6 +605,89 @@ pub(super) fn step_pinned_subtitle() {
     );
 }
 
+/// Begin a pinned window's player again so a film's own subtitles, copied out of it a moment
+/// ago, are drawn — where the pin is showing that film right now.
+///
+/// **This is the one reload a hover deliberately does not have.** A hover whose copy was still
+/// coming was answered without subtitles and is not begun again under the pointer — that was the
+/// user's own choice, and the small files are what the hover *after* it draws (see
+/// `video_launch::subtitle_filter`). A pinned window is a different answer: the user has said
+/// with the pin that this film is the one being watched, so what its player was handed is worth
+/// correcting the moment it can be, and a player replaced at the second the bar is showing is
+/// the same relaunch a track change already is (see `restart_pinned_player`). What the swap
+/// costs is the blink every other relaunch costs, and the window is the pin's throughout.
+///
+/// Everything else is refused rather than attempted: no pin, a pin on another file, a pin whose
+/// media is not a film this app plays with FFmpeg (the engine's own videos are not this app's to
+/// reload, and no extraction runs for one), and a pin whose file has no player up are all
+/// nothing to begin again.
+///
+/// Answers whether a player was begun again, which is what the tests read.
+pub(super) fn reload_pinned_subtitles(path: &Path) -> bool {
+    if current_media_type() != Some(MediaType::Video) {
+        return false;
+    }
+
+    let Some((pinned, content, transport, _)) = pinned_playback_state() else {
+        return false;
+    };
+
+    if pinned.as_path() != path {
+        return false;
+    }
+
+    restart_pinned_player(
+        &pinned,
+        content,
+        pinned_playhead().unwrap_or(0.0),
+        transport.paused_at.is_some(),
+    );
+
+    true
+}
+
+/// Begin the adopted player of a freshly made pin again, where the film's copied subtitles are
+/// ready and the player predates them.
+///
+/// **This is the corner the ready-message cannot reach.** A copy that landed while a pin was up
+/// is answered by `reload_pinned_subtitles` there and then; a copy that landed with no pin up
+/// has already had its message and gone — and the hover player that predates it is adopted by
+/// the pin as it stands (a take-up re-parents the `ffplay` the hover began rather than starting
+/// one, see `take_up_pinned_window`), so the pinned window would draw on without the subtitles
+/// for as long as nothing else begins the player again. The take-up is the moment to correct
+/// that, and what it asks is the two facts the correction is made of: the copy is ready (see
+/// `video_copy_ready`) and the player was begun without subtitles (see
+/// `player_draws_subtitles`).
+///
+/// A film whose copy is still coming is deliberately not this: there is nothing to draw yet,
+/// and the message will find the pin when there is.
+pub(super) fn reload_adopted_subtitles(path: &Path) -> bool {
+    if current_media_type() != Some(MediaType::Video) {
+        return false;
+    }
+
+    let Some((pinned, content, transport, _)) = pinned_playback_state() else {
+        return false;
+    };
+
+    if pinned.as_path() != path {
+        return false;
+    }
+
+    if !video_copy_ready(path) || player_draws_subtitles(path) {
+        return false;
+    }
+
+    restart_pinned_player(
+        &pinned,
+        content,
+        pinned_playhead().unwrap_or(0.0),
+        transport.paused_at.is_some(),
+    );
+
+    true
+}
+
 /// Write an answer about the transport back into the pin, if there is still one.
 pub(super) fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
     with_pin(|pin| change(&mut pin.transport));

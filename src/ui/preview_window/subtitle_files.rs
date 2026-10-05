@@ -394,12 +394,15 @@ fn copy_out(args: &[String], workdir: &Path) -> bool {
 /// The extraction of this film is done: hold what it wrote, or hold that it failed.
 ///
 /// Both outcomes are remembered in the geometry cache entry for this file and version, which is
-/// the whole of how a later hover hears about either without this thread being waited on. What
-/// a success leaves is the derived files themselves, so the next hover draws them. What a
-/// failure leaves is the flag that opens the slow route: the film's own embedded track, which
-/// draws a frame in fourteen seconds rather than not at all. A missing entry is not written
-/// here — a probe that has not answered yet is answered by its own resolution a moment later,
-/// and an entry this thread wrote alone could race the probe's own answer.
+/// the whole of how a later hover hears about either without this thread being waited on — and
+/// a success is also the one thing a pinned window is told, because a pin has its film on
+/// screen already and begins its player again to draw what just landed (see
+/// `reload_pinned_subtitles`). What a success leaves is the derived files themselves, so the
+/// next hover draws them. What a failure leaves is the flag that opens the slow route: the
+/// film's own embedded track, which draws a frame in fourteen seconds rather than not at all. A
+/// missing entry is not written here — a probe that has not answered yet is answered by its own
+/// resolution a moment later, and an entry this thread wrote alone could race the probe's own
+/// answer.
 fn finish(path: &Path, codecs: &[String], ok: bool) {
     end(path);
 
@@ -416,9 +419,29 @@ fn finish(path: &Path, codecs: &[String], ok: bool) {
         return;
     };
 
-    match derived {
-        Some(derived) => geometry.derived = Some(derived),
-        None => geometry.subtitle_extraction_failed = true,
+    let ready = match derived {
+        Some(derived) => {
+            geometry.derived = Some(derived);
+            true
+        }
+        None => {
+            geometry.subtitle_extraction_failed = true;
+            false
+        }
+    };
+    drop(cache);
+
+    // **A pinned window is told, because it is the one thing that can use the answer now.** A
+    // pin showing this film has a player that was begun before the copy existed, and the frame
+    // it draws next is drawn without the subtitles the user is watching for; the message is
+    // what begins that player again, at the second the bar is showing (see
+    // `reload_pinned_subtitles`). A hover is told nothing — that is the user's own choice, and
+    // the hover after this one is the one that draws the files (see
+    // `video_launch::subtitle_filter`) — and a pass that *failed* tells nothing either: the
+    // route a relaunch would take is the film's own track, which is the whole read this whole
+    // arrangement exists to take off the hover.
+    if ready {
+        super::requests::notify_video_subtitles_ready(path);
     }
 }
 
