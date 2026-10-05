@@ -97,8 +97,9 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForSystem, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT, VK_MBUTTON,
-    VK_NEXT, VK_PRIOR, VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP, VK_XBUTTON1, VK_XBUTTON2,
+    GetAsyncKeyState, GetDoubleClickTime, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT,
+    VK_MBUTTON, VK_NEXT, VK_PRIOR, VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP, VK_XBUTTON1,
+    VK_XBUTTON2,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 use windows::Win32::UI::Shell::{

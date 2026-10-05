@@ -59,6 +59,17 @@ pub(super) fn mouse_buttons() -> MouseButtons {
     state
 }
 
+/// How close together two presses have to be in time for the machine to call them one gesture.
+///
+/// The system's own answer rather than a number chosen here, and read from the mouse settings
+/// rather than written down because it is the very window Explorer reads the double-click that
+/// opens a folder in. A rule wider than it would answer a pick to a press the shell has already
+/// said is part of a gesture; one narrower would answer a gesture's second press as a pick of its
+/// own (see `PinUpdateWatch::press_is_a_pick`).
+pub(super) fn double_click_ms() -> u64 {
+    u64::from(unsafe { GetDoubleClickTime() })
+}
+
 /// Enter opens the focused item, so it drives folder changes without any
 /// pointer input at all.
 pub(super) fn activation_key_input_state() -> (bool, bool) {
