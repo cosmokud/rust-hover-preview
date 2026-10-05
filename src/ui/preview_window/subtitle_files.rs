@@ -31,6 +31,15 @@
 //! (see `discard`), and is not remembered as a failure, so the next time the film is shown the
 //! copy is started again.
 //!
+//! **A folder is an answer only where the pass that wrote it said it finished.** What a probe
+//! reads back is `sub<i>.<ext>` files under a folder carrying the pass's own `finished` mark,
+//! and only where those files hold bytes. A pass cut short with its outputs already open, a
+//! folder an older build left behind after a failure — those hold zero-byte or half-written
+//! files, and naming one to the `subtitles` filter is a filtergraph that fails to build and
+//! takes the film's picture down with it, on every showing and for good. Anything without the
+//! mark is ignored rather than read, and the next showing deletes the folder and copies the
+//! tracks again (see `resolve` and `discard`).
+//!
 //! **The files are a folder per film, under a key of the film and its version**, which is the
 //! shape `document_cache` uses for the pages its engines draw and `image_cache` uses for
 //! decoded pictures: `<key>/sub<i>.<ext>` for each subtitle track and `<key>/fonts/` for the
@@ -79,6 +88,11 @@ pub(super) const FONTS_FOLDER: &str = "fonts";
 /// The prefix of every subtitle file under a film's key: `sub<i>.<ext>`, where `i` is the
 /// subtitle-relative index — the index `-map 0:s:<i>` and the filter's own `si=` count in.
 const SUBTITLE_PREFIX: &str = "sub";
+
+/// The file the one pass writes after its last output, and the whole of what makes a folder an
+/// answer: what a folder holds is read back only where the pass that wrote it left this beside
+/// the files (see `resolve`).
+const FINISHED_MARKER: &str = "finished";
 
 /// How long one extraction is given before it is killed and the pass counted as failed.
 ///
@@ -272,18 +286,40 @@ fn limit_bytes() -> u64 {
 /// the slots are counted against: a track whose codec has no small form was never written, so
 /// its slot stays `None` while its index is still the one `si=` counts to.
 ///
-/// **Only the files the filter can draw are read**, whatever a folder happens to hold (see
+/// **A folder is an answer only where the pass that wrote it said it finished, and only where
+/// the files it names hold bytes.** Both halves are the repair for the same fault, measured on a
+/// machine whose cache the builds before this one had written: a pass that was killed, or that
+/// failed after FFmpeg had opened its outputs, leaves files behind — twenty-three of the thirty
+/// folders on that machine held zero-byte copies, a film with twenty-nine subtitle streams
+/// holding twenty-nine empty `sub<i>.ass` — and naming one of those to the `subtitles` filter is
+/// a filtergraph that fails to build, which takes the player, and with it the preview, down for
+/// good. The marker is written after the pass's last file (see `spawn_subtitle_extraction`), so
+/// a folder carrying it is a folder of whole files; anything else is ignored here rather than
+/// read, and the next launch deletes it and copies the tracks again.
+///
+/// **And only the files the filter can draw are read**, whatever a folder happens to hold (see
 /// `drawable_copy`): a folder an older build left a PGS copy in is not an answer, and naming one
-/// of those to the filter is a filter that fails to build — which is the film's picture taken
-/// down with it, and a state caching would make permanent.
+/// of those to the filter is the same failed graph by another road.
 pub(super) fn resolve(path: &Path, codecs: &[String]) -> Option<DerivedSubtitles> {
     let folder = film_folder(path);
+
+    if !folder.join(FINISHED_MARKER).is_file() {
+        return None;
+    }
+
     let mut tracks: Vec<Option<PathBuf>> = vec![None; codecs.len()];
     let mut any = false;
 
     if let Ok(read) = std::fs::read_dir(&folder) {
         for entry in read.flatten() {
             if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
+            }
+
+            // A file with no bytes is not a copy, however it got there: FFmpeg's subtitle
+            // demuxers cannot open one, so a filter handed it fails to build its graph and the
+            // player goes with it (see the note above).
+            if !entry.metadata().is_ok_and(|metadata| metadata.len() > 0) {
                 continue;
             }
 
@@ -500,6 +536,7 @@ pub(super) fn spawn_subtitle_extraction(path: &Path, codecs: &[String], attachme
     let path = path.to_path_buf();
     let codecs = codecs.to_vec();
     let fonts = folder.join(FONTS_FOLDER);
+    let marker = folder.join(FINISHED_MARKER);
 
     std::thread::spawn(move || {
         // The task this one displaced ends first, so that the film it was reading is not being
@@ -514,21 +551,38 @@ pub(super) fn spawn_subtitle_extraction(path: &Path, codecs: &[String], attachme
         // A task dropped while it was waiting for the one before it never reached the folder,
         // so there is nothing to kill, nothing to remove and nothing to write down.
         if !extraction.dropped.load(Ordering::Acquire) {
+            // **A folder a pass before this one left is given up rather than written over.**
+            // Nothing reads it (see `resolve`), and what it holds — the zero-byte outputs a pass
+            // that failed with them open leaves, a copy of a shape this build no longer writes —
+            // is what a name this pass does not happen to write again would keep forever. The
+            // pass starts from nothing.
+            discard(&path);
+
             // The fonts folder is created even where the container attached none, because it is
             // the working directory the pass runs in and a pass that writes nothing there leaves
             // it empty rather than absent — `resolve` names it only when it holds files.
             let ran =
                 std::fs::create_dir_all(&fonts).is_ok() && copy_out(&args, &fonts, &extraction);
             let dropped = extraction.dropped.load(Ordering::Acquire);
-            let ok = ran && !dropped && resolve(&path, &codecs).is_some();
 
-            // A pass that failed or was dropped leaves nothing: a half-written folder is an
-            // answer a later probe would read and trust (see `discard`).
+            // **A pass that finished says so before it is read back.** The marker goes down after
+            // the last file FFmpeg closed, so a folder that carries it is a folder of whole
+            // files; a pass that was killed, or that failed with its outputs already open,
+            // leaves files and no marker, and both are given up below.
+            let finished = ran && std::fs::write(&marker, b"").is_ok();
+            let ok = finished && resolve(&path, &codecs).is_some();
+
+            // A pass that failed or came to nothing leaves no folder at all, marked or not: a
+            // half-written answer is one a later probe would read were it not for the marker,
+            // and the disk is better off without either (see `discard`).
             if !ok {
                 discard(&path);
             }
 
-            if !dropped {
+            // A drop that produced nothing is not a failure and is not written down: the film is
+            // asked for again the next time it is shown. A drop that raced a pass which did
+            // finish keeps what it wrote — the marker and the answer with it (see `finish`).
+            if !dropped || ok {
                 finish(&path, &codecs, ok);
             }
 
@@ -704,12 +758,14 @@ fn finish(path: &Path, codecs: &[String], ok: bool) {
     }
 }
 
-/// Give up a film's folder: what a pass that failed or was dropped leaves behind.
+/// Give up a film's folder: what a pass that failed or was dropped leaves behind, and what the
+/// next pass gives up before it writes.
 ///
-/// A half-written folder is worse than no folder at all, because a later probe reads it as an
-/// answer (see `resolve`) and draws files that were never finished. The removal is best-effort:
-/// a folder that cannot be given up is one the trim will reach in the end, and nothing here is
-/// worth failing an extraction thread over.
+/// A half-written folder is worse than no folder at all, because a later probe would read it as
+/// an answer were it not for the pass's own mark (see `resolve`) — and the folder a build before
+/// this one poisoned a film's preview with is exactly that, so it goes here rather than staying
+/// on the disk. The removal is best-effort: a folder that cannot be given up is one the trim
+/// will reach in the end, and nothing here is worth failing an extraction thread over.
 fn discard(path: &Path) {
     let _ = std::fs::remove_dir_all(film_folder(path));
 }
