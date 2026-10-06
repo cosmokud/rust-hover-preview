@@ -1000,7 +1000,6 @@ fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
             Some((space, work_area_at(pin.content.0, pin.content.1), dpi))
         })
         .expect("a pin to swap away from");
-    let scale = effective_preview_scale(&next, current_hover_scales());
     let Some(PinBox::Measured(planned)) = pin_update_content(space, &next, bounds_at, dpi)
     else {
         panic!("a picture of a shape of its own is measured, not waited for")
@@ -1012,7 +1011,7 @@ fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
     );
     assert_eq!(
         planned,
-        pin_update_box(space.room.region(), (4000, 3000), scale),
+        pin_update_box(space.room.region(), (4000, 3000), PreviewScale::FitToScreen),
         "the file after the card is fitted to the room the display has, as the window \
          it follows was maximized"
     );
