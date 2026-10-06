@@ -10,20 +10,14 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 ## Highlights
 
-- Mouse-hover and keyboard-navigation previews in Explorer.
-- Previews appear beside the cursor or focused item and are kept on screen.
-- Press a key and a preview becomes a window of its own — captioned, movable, resizable, and always on top, where it stays until you close it.
-- Supports previews for images, design documents, camera raw, vector drawings, fonts, videos, PDFs, ebooks, comics, text/code, archives, Office documents, and more.
-- A file’s preview depends on what’s really inside it—not its name—so renamed files still show correctly, unreadable content gets no preview, and ambiguous types are resolved by extension or content.
-- Scaling from 25% to 400%, or fit-to-screen. Separate scaling for images and videos, and for vector drawings, PDFs, documents, fonts, and design documents.
-- Tray menu and hand-editable `config.ini`.
-- DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
+- Mouse-hover and keyboard-navigation previews in Explorer, beside the cursor or the focused item and kept on screen.
+- Press a key and a preview becomes a window of its own — captioned, movable, resizable, always on top, where it stays until you close it.
+- Supports images, design documents, camera raw, vector drawings, fonts, videos, PDFs, ebooks, comics, text/code, archives, Office documents, and more.
+- A file's preview depends on what's really inside it, not its name — so renamed files still show correctly, unreadable content gets no preview, and ambiguous types are resolved by extension or content.
+- Scaling from 25% to 400%, or fit-to-screen, with separate scaling for images and videos and for vector drawings, PDFs, documents, fonts, and design documents.
+- Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
 
 ## Supported Formats
-
-Which files preview is a list per kind in `config.ini`, written on first run and read back, so you can add or remove a format without a rebuild. The lists are the built-in ones, and the gate modules beside them own them; open the file and the section a kind is under says what that kind covers. An unsupported format shows no preview, except text, which the app will try to force-read.
-
-Almost everything is previewed by **Windows 11 and this app alone** — a codec Windows ships, WebView2, the drawing layer that plays metafiles, the Windows PDF engine, or a reader written into the app. Six things are not, and they are the app's largest optional dependencies. The tables below follow the tray's **Preview Types** menu — one table per kind, one row per `config.ini` section, and the engine beside the default extensions that section holds on first run:
 
 ### Images
 
@@ -41,10 +35,6 @@ Almost everything is previewed by **Windows 11 and this app alone** — a codec 
 | The media engine Windows 11 ships | `[video]` | 3g2, 3gp, 3gpp, asf, avi, dvr-ms, m1v, m2t, m2ts, m2v, m4v, mkv, mov, mp4, mpe, mpeg, mpg, mts, qt, ts, vob, webm, wmv |
 | [FFmpeg](#optional-enable-video-preview-with-ffmpeg)'s player (`ffplay`) | `[ffmpeg]` | 264, 265, 266, apv, av1, avc, avs, avs2, avs3, bik, bk2, c93, cavs, cdg, cdxl, cin, cpk, dav, dif, divx, drc, dv, evc, f4v, flm, flv, gxf, h261, h263, h264, h265, h266, h26l, hevc, ifv, imx, ismv, ivf, ivr, kux, m2p, mj2, mjpeg, mjpg, mk3d, moflex, mpv, mve, mvi, mxf, mxg, nsv, nut, obu, ogm, ogv, pmp, psp, rcv, rm, rmvb, roq, rsd, smk, str, swf, thp, tod, tp, tr, ty, ty+, usm, vc1, vc2, viv, vro, vvc, vw, wtv, xl, xmv, y4m, yop |
 
-Which engine plays a film is **Engine → Select Engine → Video**, a setting rather than the machine's answer. **Best** (`default`) is the machine's own answer: a film at or under 3.2 megapixels is drawn in the preview window by the media engine Windows has, and a larger one — or one that could not be measured — is handed to FFmpeg's player where FFmpeg is installed. **Native** names the media engine alone, **FFmpeg** names `ffplay` alone, and **Native (FFmpeg above 3.2MP)** states that size rule plainly. A **Fallback** switch at the top of the submenu (`default` on) lets a chosen engine that cannot play a given file fall through to the other; with it off, the engine you chose stands alone. The lists still decide which engine is *asked* about a name: an `[ffmpeg]` name is FFmpeg's alone, and on a machine without FFmpeg it shows no preview at all.
-
-A video's letterboxed picture is cropped to what is in it, whichever engine plays it, so a black-barred file fills its box instead of growing bars inside it, and a film smaller than its box is scaled up to fill it rather than drawn at its native size in the middle.
-
 ### Audio
 
 | Engine | `config.ini` | Default extensions |
@@ -57,8 +47,6 @@ A video's letterboxed picture is cropped to what is in it, whichever engine play
 | --- | --- | --- |
 | This app, syntax-highlighted | `[text]` `extensions` | adb, adoc, ads, asciidoc, asm, asp, aspx, astro, awk, bash, bat, bib, bzl, c, cc, cfg, cg, cjs, clj, cljc, cljs, cmake, cmd, comp, conf, cpp, cs, csh, cshtml, css, csv, csx, cts, cxx, d, dart, diff, diz, edn, ejs, el, elm, env, erb, erl, ex, exs, f, f03, f77, f90, f95, fish, for, frag, fs, fsi, fsx, ftn, fx, geom, glsl, go, gql, gradle, graphql, groovy, h, haml, hbs, hcl, hh, hlsl, hpp, hrl, hs, htm, html, hxx, inc, ini, ipynb, java, jl, js, json, json5, jsonc, jsonl, jsp, jsx, ksh, kt, kts, latex, less, lhs, liquid, lisp, ll, lock, log, lsp, lua, m, mak, man, markdown, md, mdown, metal, mjs, mk, mkd, ml, mli, mm, mts, mustache, nasm, nfo, nim, ninja, nix, njk, org, pas, patch, php, phtml, pl, plist, pm, properties, proto, ps1, psd1, psm1, py, pyi, pyw, r, rake, rb, rkt, rmd, rs, rst, rtf, s, sass, scala, scm, scss, sh, slim, sol, sql, srt, ss, styl, sv, svelte, svh, swift, tcl, tex, text, tf, tfvars, toml, ts, tsv, tsx, twig, txt, v, vbs, vert, vhd, vhdl, vtt, vue, wat, wgsl, xhtml, xml, xsd, xsl, xslt, yaml, yml, zig, zsh |
 | This app, as plain text | `[text]` `names` | authors, .babelrc, brewfile, caddyfile, changelog, changes, .clang-format, .clang-tidy, cmakelists.txt, code_of_conduct, containerfile, contributing, contributors, copying, copyright, dockerfile, .dockerignore, .editorconfig, .env, .env.example, .env.local, .eslintignore, .eslintrc, gemfile, .gitattributes, .gitconfig, .gitignore, .gitkeep, .gitmodules, gnumakefile, .golangci.yml, history, .htaccess, install, jenkinsfile, justfile, licence, license, .mailmap, makefile, makefile.am, makefile.in, notice, .npmignore, .prettierignore, .prettierrc, procfile, rakefile, readme, .rustfmt.toml, security, .stylelintrc, unlicense, vagrantfile |
-
-`htm` and `html` are previewed as the pages they hold when **Render HTML** is on, and as markup like the rest when it is off. `.ts` and `.mts` are TypeScript here — a real MPEG transport stream is claimed by the video gate, by its content.
 
 ### Ebook
 
@@ -73,8 +61,6 @@ A video's letterboxed picture is cropped to what is in it, whichever engine play
 | --- | --- | --- |
 | This app, from each archive's own table of contents | `[archive]` | 7z, apk, jar, rar, tar, tar.gz, tgz, xpi, zip, zipx |
 | [PeaZip](#optional-enable-niche-archives-peazip) | `[peazip]` | 001, apfs, ar, arc, arj, bcm, br, bz2, bzip2, cab, chm, cpio, cramfs, deb, dmg, esd, gz, gzip, hfs, hfsx, hxs, iso, lha, lpaq8, lzh, lzma, msi, msp, pkg, ppkg, qcow, qcow2, rpm, squashfs, swm, taz, tbz, tbz2, tpz, txz, tzst, udf, udeb, vdi, vhd, vhdx, vmdk, wim, xar, xip, xz, z, zpaq, zst |
-
-`tar.gz` is a name rather than an extension: an entry containing a dot is matched against the end of the file's whole name.
 
 ### Document
 
@@ -101,26 +87,6 @@ A video's letterboxed picture is cropped to what is in it, whichever engine play
 | --- | --- | --- |
 | This app, from the flattened picture each format keeps of the whole document | `[design]` | ai, fig, kra, ora, procreate, psb, psd, sketch, xd |
 
-Animated GIF, APNG and WebP play. `hdr` and `exr` are tone-mapped for preview. `dds` previews BC1–BC7, both BC6H variants and uncompressed textures — including packed HDR and depth — at the first face and the nearest-size mip.
-
-**Still and moving are different questions, and the four codec-dependent stills are the case where they differ.** A **still** `heic`, `heif`, `avif` or `jxl` is decoded by a codec Windows provides rather than one shipped with the app, so each of those four needs its Store extension installed once. An **animated** JPEG XL is decoded by the app and needs none of them, and a **moving** `.avif` or a **HEIF image sequence** is not decoded at all: the app asks the media engine Windows already has, and that engine has no demuxer for the `avis` and `msf1` image-sequence brands, so it declines the file and the still path draws what it always drew. A multi-image file that is not one of those — a HEIC burst, say — shows its first frame for the same reason, and `TODO.md` records what a decoder for the sequences would take.
-
-### Needs Microsoft Office, or LibreOffice
-
-Office documents are drawn in the background by an installed Office so previews appear quickly after the first hover; they are the `[office]` list. Excel needs a print queue to export a page — **Microsoft Print to PDF** is enough, and the Print Spooler service must be enabled; without one, Excel falls back to the sheet’s top-left corner. Where no Office is installed, an installed LibreOffice draws them instead. To have LibreOffice draw them all — with Microsoft Office installed as well — use **Engine → Select Engine → Office** and pick **LibreOffice**.
-
-**Normalize** needs FFmpeg: what measures a sound's loudness and what applies it are FFmpeg's, so on a machine without it the row is greyed and every sound plays as the file holds it.
-
-See `TODO.md` for the names each engine can read that are deliberately not in its list, and why.
-
-### Themes
-
-Text, code, and archive listings use Atom One Light by default, One Dark Pro, or any `.tmTheme` file placed in:
-
-```text
-%APPDATA%\rust-hover-preview\theme
-```
-
 ## Installation
 
 Each release provides two options:
@@ -128,14 +94,12 @@ Each release provides two options:
 - `rust-hover-preview_<version>_x64-setup.exe` — NSIS installer. Installs to `%LOCALAPPDATA%\rust-hover-preview` with an optional startup entry.
 - `rust-hover-preview.exe` — portable standalone binary. Run it from any folder.
 
-Steps:
-
 1. Open [Releases](../../releases).
 2. Download your preferred asset.
 3. Run the installer, or place the portable binary wherever you like.
 4. Launch Rust Hover Preview.
 
-No Rust toolchain is needed. If upgrading from an earlier version, the installer cleans up the old `%LOCALAPPDATA%\Rust Hover Preview` folder automatically.
+No Rust toolchain is needed.
 
 ### Optional: Enable Video Preview with FFmpeg
 
@@ -160,10 +124,9 @@ ffplay -version
 ffprobe -version
 ```
 
-### Optional: Enable More Video Codecs (Windows Codecs) — They are not needed while FFmpeg is installed.
+### Optional: Enable More Video Codecs (Windows Codecs)
 
-The media engine decodes H.264, MPEG-4, and WMV out of the box. Each codec below is a separate free extension from the Microsoft Store:
-
+The media engine decodes H.264, MPEG-4, and WMV out of the box; each codec below is a separate free extension from the Microsoft Store, and none of them is needed while FFmpeg is installed.
 
 | Codec                                  | Needs                                                                    |
 | -------------------------------------- | ------------------------------------------------------------------------ |
@@ -173,23 +136,20 @@ The media engine decodes H.264, MPEG-4, and WMV out of the box. Each codec below
 | MPEG-1 and MPEG-2                      | [MPEG-2 Video Extension](https://apps.microsoft.com/detail/9N95Q1ZZPMH4) |
 | Theora, Vorbis and Opus in an Ogg file | [Web Media Extensions](https://apps.microsoft.com/detail/9N5TDP8VCMHS)   |
 
-
-All are free. Windows 11 usually has HEVC, VP9, and AV1 already. Installing one takes effect the next time the tray’s **Codecs** menu is opened — no restart, nothing to configure.
+All are free, official from Microsoft. Windows 11 usually has HEVC, VP9, and AV1 already. Installing one takes effect the next time the tray's **Codecs** menu is opened — no restart, nothing to configure.
 
 ### Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview (Windows Codecs)
 
 A **still** `heic`, `heif`, `avif`, `jxl`, and still `webp` is decoded by a codec Windows provides rather than one shipped with the app. Each still needs its extension installed once from the Microsoft Store:
 
-
 | Still format | Needs                                                                                                                                           |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `heic`, `heif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ) |
 | `avif`         | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)   |
 | `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
 | `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG) — optional: the app decodes WebP without it                               |
 
-
-All are free. Windows 11 often has HEIF, AV1, and WebP already. Where one is missing, hovering such a file shows no preview rather than an error.
+All are free, official from Microsoft. Windows 11 often has HEIF, AV1, and WebP already. Where one is missing, hovering such a file shows no preview rather than an error.
 
 Which of these a moving file needs is under [Supported Formats](#supported-formats) above.
 
@@ -235,7 +195,7 @@ winget install -e --id calibre.calibre
 
 Or download the official installer from [https://calibre-ebook.com/download\_windows](https://calibre-ebook.com/download_windows) and run the suggested file (`calibre-*-64bit.msi`).
 
-> \[!WARNING\]
+> [!WARNING]
 > If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
 >
 > If that is refused as well, open **Terminal as administrator** (right-click the Start button → *Terminal (Admin)*) and run the same command from there.
@@ -253,70 +213,185 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 
 - **Enable Preview** — Turn previews on or off.
 - **Pin Mode** — Everything about pinning, in one place.
-  - **Enable (Space)** — Turn pinning on or off. Pressing the key while a preview is up turns it into a window of its own: captioned, movable, always on top, and still there when the pointer leaves. Its edges resize it, **Maximize** fits it to the screen, and **Minimize** collapses it into a round bubble. The caption also carries **Previous**, **Next**, **Open With** and **Open With...**: the first two step the pin through the sibling files in the folder it was taken up in, in the order the listing is showing them — stepping over any one of them that will not open rather than stopping there, so a press always lands on a file you can look at — the third opens the file in whatever program Windows has registered for it, and the fourth asks you to pick one from the list Windows keeps of the programs that could — the way out of a pin and into the editor or player that owns the format. The two hand-off buttons name themselves while the pointer rests on them, and **Open With** names the program it would use. Clicking the window gives it the keyboard, and then the arrow keys step it and `Escape` closes it — the pin key itself only ever puts a pin up and brings back a bubble; it never hides one. A pinned video carries a transport bar of its own — play/pause, a draggable seek bar and the two clocks, with a read-out bar instead where FFmpeg's player is the one playing it, since that player can be told nothing — and a pinned sound's card carries four buttons of its own: **Previous**, **Play/Pause** and **Next**, and a **Volume** button. `Space` holds a sound where it stood and sets it going again from there, and a click on a sound's bar takes the file to that second. A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied. The key is named in the item and can be changed in `config.ini` (`pin_key`).
+  - **Enable (Space)** — Turn pinning on or off.
+    - Pressing the key while a preview is up turns it into a window of its own: captioned, movable, resizable, always on top, and still there when the pointer leaves.
+    - The caption carries **Previous**, **Next**, **Open With**, and **Open With...**.
+      - **Previous** / **Next** — Step the pin through the sibling files in the folder it was taken up in, in the order the listing is showing them; step over any one that will not open rather than stopping there.
+      - **Open With** — Opens the file in whatever program Windows has registered for it.
+      - **Open With...** — Asks you to pick one from the list Windows keeps of the programs that could.
+      - The two hand-off buttons name themselves while the pointer rests on them; **Open With** names the program it would use.
+    - Its edges resize it; what that does depends on what is inside.
+      - A picture, video, or rendered page keeps its own shape.
+      - A document or listing is laid out to whatever box it is given.
+      - A sound's card, or a video `ffplay` has, is not resized at all.
+    - A picture's caption and bar are drawn over the media rather than in bands around it, and fade in as the pointer arrives; only the strip under the pointer is shown.
+    - A pinned video carries a transport bar of its own: play/pause, a draggable seek bar, and the two clocks.
+      - Where FFmpeg's player is the one playing it, a read-out bar appears instead, since that player can be told nothing.
+    - A pinned sound's card carries four buttons of its own: **Previous**, **Play/Pause**, **Next**, and **Volume**.
+      - `Space` holds a sound where it stood and sets it going again from there.
+      - A click on a sound's bar takes the file to that second.
+    - A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied.
+      - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected.
+    - A pinned video has a transport bar with a volume of its own, set on the window; it does not change **Volume → Video**.
+    - **Maximize** fits the window to the screen.
+    - **Minimize** collapses it into a round bubble that can be dragged anywhere and clicked to bring the window back; a right-click on the bubble closes it.
+    - Clicking the window gives it the keyboard; then the arrow keys step it and `Escape` closes it.
+    - The pin key itself only ever puts a pin up and brings back a bubble; it never hides one.
+    - The key is named in the item and can be changed in `config.ini` (`pin_key`).
   - **Update Preview** — Whether a pin that is up is shown the file you pick next.
-    - **Enabled** — On by default. A file you click, or one the keyboard selects, is shown where the window already stands, rather than as a second preview beside it. A file named this way that cannot be shown leaves the window on the file it already had — stepping over a file that will not open belongs to the caption's own **Previous** and **Next**, which you pressed. A sound's card is drawn at its own size, in the middle of that box. The keyboard half follows Explorer, so it pauses while a pinned window holds the keyboard — click back into the listing and it carries on.
-    - **On Hover** — Off by default. On, the pointer's own hover is one of the ways a pin is told about a file, the way a Quick Look window follows a listing. Greyed while **Enabled** is off.
-  - **Pause Preview** — What a window collapsed into its bubble does with what it was playing. Both on by default: the media engine is paused where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
+    - **Enabled** — On by default.
+      - A file you click, or one the keyboard selects, is shown where the window already stands, rather than as a second preview beside it.
+      - A file named this way that cannot be shown leaves the window on the file it already had.
+      - Stepping over a file that will not open belongs to the caption's own **Previous** and **Next**, which you pressed.
+      - A sound's card is drawn at its own size, in the middle of that box.
+      - The keyboard half follows Explorer, so it pauses while a pinned window holds the keyboard; click back into the listing and it carries on.
+    - **On Hover** — Off by default.
+      - On, the pointer's own hover is one of the ways a pin is told about a file, the way a Quick Look window follows a listing.
+      - Greyed while **Enabled** is off.
+  - **Pause Preview** — What a window collapsed into its bubble does with what it was playing.
+    - Both on by default: the media engine is paused where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
     - **Audio**
     - **Video**
-  - **Nav File Types** — What **Previous** and **Next** on the caption step through. Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them. The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front. `Space` in a pinned sound pauses and resumes it, on the same terms, and `Escape` in a pinned window closes it.
+  - **Nav File Types** — What **Previous** and **Next** on the caption step through.
+    - Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them.
+    - The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front.
+    - `Space` in a pinned sound pauses and resumes it, on the same terms.
+    - `Escape` in a pinned window closes it.
     - **All** (`default`) — Every file this build can preview, in the folder the pin was taken up in and not any subfolder of it, in the order the Explorer listing is showing them. A video sits beside a sound.
-    - **Category** — Only the files of the pinned file's own kind of thing: pictures, video, audio, documents, archives, text, fonts, or design. A camera raw is a picture and a book is a document, because that is what you call them. A kind switched off under **Preview Types**, or one with no engine installed on the machine, is not a step either way — and a file this build *could* preview but that will not open is a step the window steps over rather than one it stops on.
-- **Preview Types** — Choose which file kinds can preview: Images, Videos, Audio, Text, Ebook, Archives, Document, Vector, Fonts, Design. A switch is a switch over behaviour, not over files: the lists deciding which files are previewed are untouched, so switching a kind off and back on restores what was configured. One switch covers both the original file and the engine-drawn preview — camera raw uses **Images**; a LibreOffice document uses **Document**; a PeaZip archive uses **Archives**; a Calibre book uses **Ebook**, as do the app-drawn PDF and comic pages.
+    - **Category** — Only the files of the pinned file's own kind of thing: pictures, video, audio, documents, archives, text, fonts, or design.
+      - A camera raw is a picture and a book is a document, because that is what you call them.
+      - A kind switched off under **Preview Types**, or one with no engine installed on the machine, is not a step either way.
+      - A file this build *could* preview but that will not open is a step the window steps over rather than one it stops on.
+- **Preview Types** — Choose which file kinds can preview: Images, Videos, Audio, Text, Ebook, Archives, Document, Vector, Fonts, Design.
+  - A switch is a switch over behaviour, not over files: the lists deciding which files are previewed are untouched, so switching a kind off and back on restores what was configured.
+  - One switch covers both the original file and the engine-drawn preview.
+    - Camera raw uses **Images**.
+    - A LibreOffice document uses **Document**.
+    - A PeaZip archive uses **Archives**.
+    - A Calibre book uses **Ebook**, as do the app-drawn PDF and comic pages.
 - **Text Preview**
-  - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in the theme folder.
+  - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in `%APPDATA%\rust-hover-preview\theme`.
   - **Font Size** — `400%` at the top down to `70%` at the bottom.
   - **Markdown** — Rendered or Source.
-  - **Render HTML** — Off by default. On, a `.htm` or `.html` file is previewed as the page it holds rather than as its markup, run by the browser engine: a page is the one thing previewed as a page rather than as a picture, so it is the one thing that runs, and a page that draws itself with script has nothing to show without a run. What it may still do is bounded — the frame it is shown in cannot open forms or popups or navigate, and nothing a page links to is fetched — while SVG documents and font specimens, which a browser is handed as an image, are still drawn rather than run. A running page can be pointed at, clicked into and typed into; a document, a specimen and every other preview still cannot. Without the engine on the machine it stays a text preview.
+  - **Render HTML** — Off by default.
+    - On, a `.htm` or `.html` file is previewed as the page it holds rather than as its markup, run by the browser engine.
+    - A page is the one thing previewed as a page rather than as a picture, so it is the one thing that runs, and a page that draws itself with script has nothing to show without a run.
+    - What it may still do is bounded: the frame it is shown in cannot open forms or popups or navigate, and nothing a page links to is fetched.
+    - SVG documents and font specimens, which a browser is handed as an image, are still drawn rather than run.
+    - A running page can be pointed at, clicked into and typed into; a document, a specimen and every other preview still cannot.
+    - Without the engine on the machine it stays a text preview.
 - **Timing**
-  - **Prioritize Keyboard** — On by default. The file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview. The pointer takes the screen back when it is moved, when the wheel is turned, or when a folder change hands it over. Off, the pointer's own hover always wins.
+  - **Prioritize Keyboard** — On by default.
+    - The file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview.
+    - The pointer takes the screen back when it is moved, when the wheel is turned, or when a folder change hands it over.
+    - Off, the pointer's own hover always wins.
   - **Trigger Key (Alt)** — The key is named in the item.
     - **Enable Trigger Key** — Whether the key is watched.
-    - **Affect Pin Mode** — Off by default, and off at the start: a pinned window is one you put there, so the key that holds back hovers is not read while one is up. On, holding it brings the pin down along with the previews it stops. It speaks for **Hold to Disable Preview**.
+    - **Affect Pin Mode** — Off by default, and off at the start.
+      - A pinned window is one you put there, so the key that holds back hovers is not read while one is up.
+      - On, holding it brings the pin down along with the previews it stops.
+      - It speaks for **Hold to Disable Preview**.
     - **Hold to Disable Preview** / **Hold to Enable Preview** — What holding the key does.
   - **Delay** — How long the pointer rests before a preview opens: `0 ms` at the top down to `1000 ms` at the bottom. Default `0 ms`.
   - **Rehover Delay** — Wait before the same file can preview again. Default `200 ms`.
-  - **Settling Delay** — How still the pointer must be before previewing what it is on. Default `0 ms` means a new file can preview while the hand is still moving. Keyboard previews ignore this.
+  - **Settling Delay** — How still the pointer must be before previewing what it is on.
+    - Default `0 ms` means a new file can preview while the hand is still moving.
+    - Keyboard previews ignore this.
 - **Placement**
   - **Position** — Follow Cursor or Best Position. Default **Best Position**.
-  - **Avoid** — Avoid Nothing, Avoid Filename (`default`), Avoid Filename Column, or Avoid Details. Keeps a preview off the item it is about. Keyboard previews have no cursor, so **Avoid Nothing** acts like **Avoid Filename**.
+  - **Avoid** — Avoid Nothing, Avoid Filename (`default`), Avoid Filename Column, or Avoid Details.
+    - Keeps a preview off the item it is about.
+    - Keyboard previews have no cursor, so **Avoid Nothing** acts like **Avoid Filename**.
 - **Scaling**
-  - **Image Scaling** — Fit to Screen or `25%`–`400%` of the image’s own size.
+  - **Image Scaling** — Fit to Screen or `25%`–`400%` of the image's own size.
   - **Video Scaling** — Same shares for a video. Default `100%`.
-  - **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery. A still GIF or PNG uses **Image Scaling**. Default `100%`.
+  - **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery.
+    - A still GIF or PNG uses **Image Scaling**.
+    - Default `100%`.
   - **Vector Scaling** — Fit to Screen (`default`), or `75%`, `50%`, `25%`, `10%` of the display.
-  - **Text Scaling** — Same display shares for a text preview — a plain text file, code, or Markdown. It caps how much of the screen the preview box may take when it opens; a short file still gets the small box its own text needs. Default **Fit to Screen**.
-  - **Ebook Scaling** — Fit to Screen (`default`), or the same display shares for a PDF page, a comic’s first page, and a Calibre-converted book.
-  - **Document Scaling** — Same display shares for a document drawn as a page, whether by its own Office app or by LibreOffice. A workbook’s fallback bitmap is never enlarged.
+  - **Text Scaling** — Same display shares for a text preview — a plain text file, code, or Markdown.
+    - It caps how much of the screen the preview box may take when it opens; a short file still gets the small box its own text needs.
+    - Default **Fit to Screen**.
+  - **Ebook Scaling** — Fit to Screen (`default`), or the same display shares for a PDF page, a comic's first page, and a Calibre-converted book.
+  - **Document Scaling** — Same display shares for a document drawn as a page, whether by its own Office app or by LibreOffice.
+    - A workbook's fallback bitmap is never enlarged.
   - **Font Scaling** — Same shares for a font specimen. Default `50%`.
   - **Design Scaling** — Same display shares for design documents: Photoshop, Illustrator, Krita, OpenRaster, Procreate. Default **Fit to Screen**.
 - **Background**
   - **Image Background** — Transparent, Black, White, or Checkerboard. Default **Checkerboard**.
   - **Vector Background** — Same backdrops for an SVG document or metafile. Default **Checkerboard**.
-  - **HTML Background** — White, Black, or Checkerboard for a page of HTML. Default **White**. The see-through backdrop is not offered: a page is drawn on a page, whether it runs or not, and the backdrop is behind the page rather than behind what it paints.
+  - **HTML Background** — White, Black, or Checkerboard for a page of HTML. Default **White**.
+    - The see-through backdrop is not offered: a page is drawn on a page, whether it runs or not, and the backdrop is behind the page rather than behind what it paints.
   - **Font Background** — Same backdrops for a font specimen. Default **White**.
-  - **DDS Background** — Black or White for `.dds` textures. Default **White**. The two see-through backdrops are not offered.
+  - **DDS Background** — Black or White for `.dds` textures. Default **White**.
+    - The two see-through backdrops are not offered.
   - **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
-- **Volume** — **Video** and **Audio**, each offering `100%`, `80%`, `65%`, `50%`, `35%`, `20%`, `10%`, `5%`, `1%` and `0%`, loudest first. A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `10%`: a video is looked at and a song is listened to, so the two are settings of their own. A sound at `0%` still shows its card, silently.
-  - **Normalize** — The first row of each half, above the levels: a file's integrated loudness is measured (ITU-R BS.1770 LUFS, by FFmpeg's `ebur128`) and brought to `-14 LUFS` before it plays, so a folder of sounds — or a set of films — is heard at one level rather than at each file's own. A file is not lifted past its own true peak, so a quiet one is corrected as far as its headroom allows rather than clipped. On by default for **Audio** and off for **Video**, whose soundtrack is heard beside a picture that was asked for and whose measurement is a decode of the film. Both are greyed out unless FFmpeg is installed — FFmpeg is what measures the loudness and what applies the gain. The loudness is measured once per file and kept, so only a file's first hover waits for it.
-  - **Remember** — The row under **Normalize**, above the levels: whether a level moved with a pinned window's own volume knob is the level the next preview is played at. Off by default for both halves, so a knob belongs to the window it was turned on and the level in the list above it is what every preview starts from. With it on, letting go of the knob writes the level to `config.ini` and the next hover — or the next film — is played at it; nothing is rebuilt on screen and a preview already playing is left where it is. A pinned window also keeps that level across the other kind: a sound turned up to 100% and then stepped onto a film and back is played at 100% again, where a knob left on a film is kept for films rather than for the sounds either side of it.
-  - **Audio Seek** — Where in a file a hovered sound starts playing: **Remember** (`default`) picks it up where the last hover left it, **From the Start** always begins at the beginning, **From the Middle** drops it half way in, and **Random** anywhere at all. The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen. Whatever a sound is started at, it goes back to the beginning of the file when it reaches the end of it and loops from there for as long as the hover lasts. A video is always played from its beginning.
+- **Volume** — **Video** and **Audio**, each offering `100%`, `80%`, `65%`, `50%`, `35%`, `20%`, `10%`, `5%`, `1%`, and `0%`, loudest first.
+  - A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `10%`.
+  - A video is looked at and a song is listened to, so the two are settings of their own.
+  - A sound at `0%` still shows its card, silently.
+  - **Normalize** — The first row of each half, above the levels.
+    - A file's integrated loudness is measured (ITU-R BS.1770 LUFS, by FFmpeg's `ebur128`) and brought to `-14 LUFS` before it plays, so a folder of sounds — or a set of films — is heard at one level rather than at each file's own.
+    - A file is not lifted past its own true peak, so a quiet one is corrected as far as its headroom allows rather than clipped.
+    - On by default for **Audio** and off for **Video**, whose soundtrack is heard beside a picture that was asked for and whose measurement is a decode of the film.
+    - Both are greyed out unless FFmpeg is installed — FFmpeg is what measures the loudness and what applies the gain.
+    - The loudness is measured once per file and kept, so only a file's first hover waits for it.
+  - **Remember** — The row under **Normalize**, above the levels.
+    - Whether a level moved with a pinned window's own volume knob is the level the next preview is played at.
+    - Off by default for both halves, so a knob belongs to the window it was turned on and the level in the list above it is what every preview starts from.
+    - With it on, letting go of the knob writes the level to `config.ini` and the next hover — or the next film — is played at it; nothing is rebuilt on screen and a preview already playing is left where it is.
+    - A pinned window also keeps that level across the other kind: a sound turned up to 100% and then stepped onto a film and back is played at 100% again, where a knob left on a film is kept for films rather than for the sounds either side of it.
+  - **Audio Seek** — Where in a file a hovered sound starts playing.
+    - **Remember** (`default`) — Picks it up where the last hover left it.
+    - **From the Start** — Always begins at the beginning.
+    - **From the Middle** — Drops it half way in.
+    - **Random** — Anywhere at all.
+    - The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen.
+    - Whatever a sound is started at, it goes back to the beginning of the file when it reaches the end of it and loops from there for as long as the hover lasts.
+    - A video is always played from its beginning.
 - **Performance**
-  - **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files. **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files. **`General (Disk)`** = the subtitle tracks a film's embedded ones are copied into, kept as temp files; `0` draws a film without its subtitles.
+  - **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`.
+    - **`Image (RAM)`** = decoded frames kept in memory.
+    - **`Document (Disk)`** = engine-drawn pages kept as temp files.
+    - **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
+    - **`General (Disk)`** = the subtitle tracks a film's embedded ones are copied into, kept as temp files; `0` draws a film without its subtitles.
   - **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
-  - **Tick** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`. Lower answers a move sooner; higher is lighter on CPU and Explorer.
-  - **Hardware Acceleration** — **Video** (checked by default): a video FFmpeg's player has is decoded on the graphics card rather than on a core. It is a setting about this build's FFmpeg rather than about a kind of file — a file the media engine plays is decoded by Windows either way, and a machine with no device FFmpeg can decode on is the one the setting is for, where FFmpeg falls back by itself.
+  - **Tick** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`.
+    - Lower answers a move sooner; higher is lighter on CPU and Explorer.
+  - **Hardware Acceleration** — **Video** (checked by default): a video FFmpeg's player has is decoded on the graphics card rather than on a core.
+    - It is a setting about this build's FFmpeg rather than about a kind of file — a file the media engine plays is decoded by Windows either way.
+    - A machine with no device FFmpeg can decode on is the one the setting is for, where FFmpeg falls back by itself.
 - **Engine**
-  - **AFK Timer** — How long Explorer may be unreachable before a non-**Persistent** engine is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`. Counts time when no Explorer window is reachable on any monitor. A second Explorer window keeps engines warm. Each **`… TTL`** submenu has a **Persistent** toggle at the top.
-  - **Select Engine → Office** — Which engine draws Office documents: **Microsoft Office** (`default`) uses the format’s own app and falls back to LibreOffice; **LibreOffice** draws every Office document. LibreOffice is greyed out if not installed.
-  - **Select Engine → Video** — Which engine plays a video: **Best** (`default`), the machine's own answer — the media engine for a film at or under 3.2 megapixels, FFmpeg's player for a larger one or one it could not measure; **Native** — the media engine alone; **FFmpeg** — `ffplay` alone; **Native (FFmpeg above 3.2MP)** — that size rule stated plainly. A **Fallback** switch at the top (`default` on) lets a chosen engine that cannot play a given file fall through to the other; off, the engine you chose stands alone. **FFmpeg** and **Native (FFmpeg above 3.2MP)** are greyed out where `ffplay` is not installed.
-  - **Microsoft Office TTL** — With **Persistent** on: how long a family’s Office app stays warm: Indefinitely, `1 hour`, `30 minutes`, `10 minutes` (`default`), `5 minutes`, `1 minute`, `0 seconds`. Off: kept while Explorer is reachable, then let go by **AFK Timer**.
-  - **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats. A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB. `0 seconds` means one engine per document. Both TTLs apply to **Persistent** engines; non-persistent ones use **AFK Timer**. Greyed out if LibreOffice is not installed.
-  - **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm. Off: let go by **AFK Timer**. Greyed out if WebView2 is missing.
+  - **AFK Timer** — How long Explorer may be unreachable before a non-**Persistent** engine is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`.
+    - Counts time when no Explorer window is reachable on any monitor.
+    - A second Explorer window keeps engines warm.
+    - Each **`… TTL`** submenu has a **Persistent** toggle at the top.
+  - **Select Engine → Office** — Which engine draws Office documents.
+    - **Microsoft Office** (`default`) — Uses the format's own app and falls back to LibreOffice.
+    - **LibreOffice** — Draws every Office document.
+    - LibreOffice is greyed out if not installed.
+  - **Select Engine → Video** — Which engine plays a video.
+    - **Best** (`default`) — The machine's own answer: the media engine for a film at or under 3.2 megapixels, FFmpeg's player for a larger one or one it could not measure.
+    - **Native** — The media engine alone.
+    - **FFmpeg** — `ffplay` alone.
+    - **Native (FFmpeg above 3.2MP)** — That size rule stated plainly.
+    - A **Fallback** switch at the top (`default` on) lets a chosen engine that cannot play a given file fall through to the other; off, the engine you chose stands alone.
+    - **FFmpeg** and **Native (FFmpeg above 3.2MP)** are greyed out where `ffplay` is not installed.
+  - **Microsoft Office TTL** — With **Persistent** on: how long a family's Office app stays warm: Indefinitely, `1 hour`, `30 minutes`, `10 minutes` (`default`), `5 minutes`, `1 minute`, `0 seconds`.
+    - Off: kept while Explorer is reachable, then let go by **AFK Timer**.
+  - **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats.
+    - A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB.
+    - `0 seconds` means one engine per document.
+    - Both TTLs apply to **Persistent** engines; non-persistent ones use **AFK Timer**.
+    - Greyed out if LibreOffice is not installed.
+  - **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm.
+    - Off: let go by **AFK Timer**.
+    - Greyed out if WebView2 is missing.
   - No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
-- **Codecs** — What this machine has: Videos, Audio, Images, Engines. A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
-- **Run at Startup** — Add or remove the Windows startup entry. On every start, an entry that names another copy of the app — a portable copy, an older version, a path that has moved — is pointed back at the one you are running.
+- **Codecs** — What this machine has: Videos, Audio, Images, Engines.
+  - A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
+- **Run at Startup** — Add or remove the Windows startup entry.
+  - On every start, an entry that names another copy of the app — a portable copy, an older version, a path that has moved — is pointed back at the one you are running.
 - **Config.ini** — Open the configuration file; named for the running version.
 - **Exit** — Close the app.
 
@@ -432,22 +507,30 @@ hdr_tone_map=reinhard
 spinner_delay_ms=250
 ```
 
-Here’s what this .INI does:
+## Here's what this .INI does:
 
-**Look and text**
+### Look and text
 
 - `theme`: `light`, `dark`, or `custom:<name>`.
 - `markdown_mode`: show Markdown as `rendered` or `source`.
 - `text_font_scale`: 1–1000%, default `125`; archive lists follow it too.
-- `render_html`: `false` by default. On, `.htm` and `.html` files are run as the pages they hold by the browser engine, at the share of the screen **Document Scaling** names, and that is the one kind of preview a pointer and a keyboard reach: the page's own box holds the pointer, and a click into it gives it the keys. Without that engine, they are text like before.
+- `render_html`: `false` by default.
+  - On, `.htm` and `.html` files are run as the pages they hold by the browser engine, at the share of the screen **Document Scaling** names.
+  - That is the one kind of preview a pointer and a keyboard reach: the page's own box holds the pointer, and a click into it gives the keys.
+  - Without that engine, they are text like before.
 
-**What can preview**
+### What can preview
 
 - `*_preview_enabled`: turn each preview type on or off. File lists stay normal.
-- `extensions` under each kind's section: which files that kind previews — `image`, `video`, `ffmpeg`, `audio`, `text` (which also carries a `names` key for files with no extension), `archive`, `office`, `font`, `design`, `vector`, `ebook`, `libre`, `magick`, `peazip`, `calibre`. No dots. An entry with a dot, like `tar.gz`, matches the end of the file name. A name two sections hold belongs to the earlier kind, so the kind decides which switch applies to it.
-- Which engine plays a sound is the machine's answer rather than a setting: the media engine Windows has is asked first and an installed FFmpeg second. A video's engine is the `video_engine` setting; the two lists decide which engine is *asked* about a name — the media engine takes only `[video]` names, and an `[ffmpeg]` name is FFmpeg's alone.
+- `extensions` under each kind's section: which files that kind previews.
+  - Kinds: `image`, `video`, `ffmpeg`, `audio`, `text` (which also carries a `names` key for files with no extension), `archive`, `office`, `font`, `design`, `vector`, `ebook`, `libre`, `magick`, `peazip`, `calibre`.
+  - No dots.
+  - An entry with a dot, like `tar.gz`, matches the end of the file name.
+  - A name two sections hold belongs to the earlier kind, so the kind decides which switch applies to it.
+- Which engine plays a sound is the machine's answer rather than a setting: the media engine Windows has is asked first and an installed FFmpeg second.
+- A video's engine is the `video_engine` setting; the two lists decide which engine is *asked* about a name — the media engine takes only `[video]` names, and an `[ffmpeg]` name is FFmpeg's alone.
 
-**Memory and cache**
+### Memory and cache
 
 - `image_cache_mb`: memory for decoded image frames. Default `64`, max `2048`; `0` holds nothing.
 - `document_cache_mb`: disk cache for rendered document pages. Default `256`, max `2048`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
@@ -455,64 +538,77 @@ Here’s what this .INI does:
 - `general_disk_cache_mb`: disk cache for the subtitle tracks a film's embedded ones are copied into. Default `128`, max `2048`; `0` extracts nothing, and a film whose subtitles are embedded is drawn without them. Files live under `%TEMP%\rust-hover-preview\general`, least recently used first.
 - `decode_budget_gb`: most memory one hover may use. Default `1`, range `0.25`–`64`. A file over the limit shows no preview.
 
-**Performance**
+### Performance
 
-- `video_hw_accel`: whether a video FFmpeg's player has is decoded on the graphics card rather than on a core — the tray's **Performance → Hardware Acceleration → Video**. Default `true`. It is a setting about this build's FFmpeg rather than about a kind of file: a file the media engine plays is decoded by Windows either way, and a machine with no device FFmpeg can decode on is the one the setting is for, where FFmpeg falls back by itself.
+- `video_hw_accel`: whether a video FFmpeg's player has is decoded on the graphics card rather than on a core — the tray's **Performance → Hardware Acceleration → Video**.
+  - Default `true`.
+  - It is a setting about this build's FFmpeg rather than about a kind of file: a file the media engine plays is decoded by Windows either way, and a machine with no device FFmpeg can decode on is the one the setting is for, where FFmpeg falls back by itself.
 
-**HDR**
+### HDR
 
 - `hdr_tone_map`: how HDR/EXR light becomes screen values: `reinhard` default, `aces`, `srgb`, or `off`. PNG/JPEG are not affected.
 - `hdr_exposure`: stops shifted before that curve. Default `0`, range `-10` to `10`.
 
-**Waiting and engines**
+### Waiting and engines
 
-- `spinner_delay_ms`: wait before showing the loading spinner. Default `250`; `0` shows it immediately. One delay covers all preview types, and a pinned window being shown another file with it: a pin that has to wait shows a spinner of its own in the middle of itself, drawn over the file it is still showing rather than in place of it, and the window is never hidden while it waits.
+- `spinner_delay_ms`: wait before showing the loading spinner. Default `250`; `0` shows it immediately.
+  - One delay covers all preview types, and a pinned window being shown another file with it.
+  - A pin that has to wait shows a spinner of its own in the middle of itself, drawn over the file it is still showing rather than in place of it, and the window is never hidden while it waits.
 - `office_engine`: `microsoft_office` default, falls back to LibreOffice when needed; or `libreoffice`, which always uses LibreOffice. If LibreOffice is missing, it falls back and the tray row is greyed out.
-- `video_engine`: which engine plays a video: `best` (default), `native`, `ffmpeg`, or `hybrid`. **Best** is the machine's own answer — `hybrid` where FFmpeg is installed (the media engine draws a film at or under 3.2 megapixels, FFmpeg's player takes a larger one or one it could not measure) and `native` where it is not. `native` names the media engine alone, `ffmpeg` names `ffplay` alone, and `hybrid` states that size rule plainly. A choice this machine cannot supply is read as `best`.
+- `video_engine`: which engine plays a video: `best` (default), `native`, `ffmpeg`, or `hybrid`.
+  - **Best** is the machine's own answer — `hybrid` where FFmpeg is installed (the media engine draws a film at or under 3.2 megapixels, FFmpeg's player takes a larger one or one it could not measure) and `native` where it is not.
+  - `native` names the media engine alone, `ffmpeg` names `ffplay` alone, and `hybrid` states that size rule plainly.
+  - A choice this machine cannot supply is read as `best`.
 - `video_engine_fallback`: `true` (default) lets a chosen engine that cannot play a given file fall through to the other; `false` makes the engine you chose stand alone. Read only where `video_engine` names an engine — **Best** walks both either way.
-- `libreoffice_idle`: seconds LibreOffice is kept after its last page, or `indefinitely`. Default `600`; `0` launches it per document.
-- `office_engine_idle`: same idea for the Office engine. Default `600`; `0` lets it go after drawing a page.
+- `libreoffice_idle` / `office_engine_idle`: seconds the engine is kept after its last page, or `indefinitely`. Default `600`; `0` launches it per document.
 - `afk_timer_seconds`: seconds with no Explorer window before a non-persistent engine is released. Default `60`, max one day. `0` releases immediately.
 - `office_engine_persistent`, `libreoffice_persistent`, `webview_persistent`: `true` keeps that engine always, bounded only by its `…_idle` time. `false` default keeps it while Explorer is reachable, bounded by `afk_timer_seconds`.
 
-**Trigger and position**
+### Trigger and position
 
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
 - `trigger_key_affect_pin_mode`: whether the trigger key reaches a pinned preview. Default `false` — the key is not read while a preview is pinned, up or collapsed into its bubble, since a pin is a window you put there rather than a hover for the key to hold back. `true` lets holding the key bring the pin down with the previews it stops. It speaks for `disable`; the `enable` mode is left as it is.
-- `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. A pinned preview is a window of its own: a caption with minimize, maximize and close beside its own **Previous**, **Next**, **Open With** and **Open With...** (which asks Windows for the list of programs that could open the file, rather than handing it to the registered one), draggable by the caption or by the picture, and previews are held back until it is closed. Its edges resize it and what that does depends on what is inside — a picture, a video or a rendered page keeps its own shape, a document or a listing is laid out to whatever box it is given, and a sound's card or a video FFmpeg's player has is not resized at all. A picture's caption and bar are drawn over the media rather than in bands around it, and fade in as the pointer arrives; only the strip under the pointer is shown. A pinned text preview comes up in full mode: it scrolls, its text can be selected, `Ctrl+A` selects all of it, and `Ctrl+C` copies what is selected. A pinned video has a transport bar with a volume of its own, which is set on the window and does not change **Volume → Video**. Minimize collapses it into a round bubble that can be dragged anywhere and clicked to bring the window back; a right-click on the bubble closes it. Clicking the window gives it the keyboard — the arrow keys then step it and `Escape` closes it. The key that pins never hides a pin: it only puts one up, and brings a bubble back with Explorer in front.
-- `pin_update_enabled`: whether a pin that is up is shown the file picked next, by click or by keyboard, without moving the window. Default `true`. Off, the pin keeps the file it was taken up on until it is closed — a pin is also a window to read in, and one that swapped its file out from under the hand on every keystroke would be unreadable. The keyboard half follows Explorer, so it is inert while a pinned window holds the keyboard — click back into the listing and it resumes.
+- `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. See **Pin Mode** above for what a pin does.
+- `pin_update_enabled`: whether a pin that is up is shown the file picked next, by click or by keyboard, without moving the window. Default `true`.
+  - Off, the pin keeps the file it was taken up on until it is closed — a pin is also a window to read in, and one that swapped its file out from under the hand on every keystroke would be unreadable.
+  - The keyboard half follows Explorer, so it is inert while a pinned window holds the keyboard — click back into the listing and it resumes.
 - `pin_update_on_hover`: whether that following includes the pointer's own hover, or only what a click or a key asks for. Default `false`; greyed in the tray while `pin_update_enabled` is off.
-- `pin_nav_file_types`: what the caption's **Previous** and **Next** buttons step through. `all` (default) is every file this build can preview, so a video steps to the sound beside it; `category` narrows the walk to the pinned file's own kind of thing — pictures, video, audio, documents, archives, text, fonts, or design, where a camera raw is a picture and a book is a document. The walk is the folder the pin was taken up in and no subfolder of it, is in the order the Explorer listing is showing, wraps at both ends, and is held per folder, read on the first press rather than when the pin is taken up. A file it reaches that the window cannot show is stepped over, and the walk is bounded by the folder: each other file is offered at most once, so a folder of nothing this build can read ends the walk instead of going round for ever. A file written before this setting existed is read as `all`.
+- `pin_nav_file_types`: what the caption's **Previous** and **Next** buttons step through.
+  - `all` (default) is every file this build can preview, so a video steps to the sound beside it.
+  - `category` narrows the walk to the pinned file's own kind of thing — pictures, video, audio, documents, archives, text, fonts, or design, where a camera raw is a picture and a book is a document.
+  - The walk is the folder the pin was taken up in and no subfolder of it, is in the order the Explorer listing is showing, wraps at both ends, and is held per folder, read on the first press rather than when the pin is taken up.
+  - A file it reaches that the window cannot show is stepped over, and the walk is bounded by the folder: each other file is offered at most once, so a folder of nothing this build can read ends the walk instead of going round for ever.
+  - A file written before this setting existed is read as `all`.
 - `pin_pause_video` / `pin_pause_audio`: whether a pin collapsed into its bubble holds what it was playing where it stands, and starts it again at the second it stopped at when the window comes back up. Both default `true`. They are two switches because a video and a sound are two different things to want quiet.
 - `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.
 - `avoid_mode`: `filename` default, `filename_column`, `details`, or `off` — what the preview avoids.
 
-**Scaling**
+### Scaling
 
-- `preview_scale`: percentage or `fit`, based on the picture’s own size.
+- `preview_scale`: percentage or `fit`, based on the picture's own size.
 - `video_scale`: same for video. Default `100`.
 - `animated_scale`: same for animated GIF, WebP, or PNG — and for an animated JPEG XL, which is played as a picture rather than as a video. Default `100`. Still GIF/PNG follow `preview_scale`.
 - `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
 - `text_scale`: how much of the screen a text preview box may take when it opens, for plain text, code, and Markdown. Default `fit`; `100` or more reads as `fit`. `Text Size` still scales the text inside that box.
 - `ebook_scale`: PDF page scale against the screen. Default `fit`; `100` or more reads as `fit`.
-- `document_scale`: document page scale against the screen. Default `fit`. A workbook’s fallback bitmap keeps its own size and is never enlarged.
+- `document_scale`: document page scale against the screen. Default `fit`. A workbook's fallback bitmap keeps its own size and is never enlarged.
 - `font_scale`: font preview scale against the screen. Default `50`; `fit` means all of it; `100` or more reads as `fit`.
 - `design_scale`: design document scale against the screen. Default `fit`.
 
-**Fonts**
+### Fonts
 
 - `ttc_face`: which face of a `.ttc` is drawn. `1` is first, max `10`. The heading shows which face came out.
 
-**Backgrounds**
+### Backgrounds
 
 - `image_background`: `checkerboard` default, `black`, `white`, or `transparent`. Also used for PDF pages, painted text frames, and document pages. Old `transparent_background` is ignored and removed.
 - `font_background`: `white` default, `black`, `checkerboard`, or `transparent`.
 - `dds_background`: `white` default or `black`, and only those two. Any other value reads as `white`.
 - `vector_background`: `checkerboard` default, `white`, `black`, or `transparent`. Used for SVG pages and metafiles. Old `svg_background` is ignored and removed.
-- `html_background`: `white` default, `black`, or `checkerboard`, and only those three. Any other value reads as `white`. Used for a page of HTML previewed by `render_html`, run or not; a page is drawn on a page, so transparency is not one of the backdrops it is offered.
+- `html_background`: `white` default, `black`, or `checkerboard`, and only those three — a page is drawn on a page, so transparency is not one of the backdrops it is offered. Used for a page of HTML previewed by `render_html`, run or not; any other value reads as `white`.
 - `design_background`: `checkerboard` default, `white`, `black`, or `transparent`.
 
-**Old or removed names**
+### Old or removed names
 
 - `magick_preview_enabled` and `peazip_preview_enabled`: not read. ImageMagick pictures use `image_preview_enabled`; PeaZip archives use `archive_preview_enabled`.
 - `libre_preview_enabled` and `libre_scale`: gone. Use `document_preview_enabled` and `document_scale`.
@@ -520,7 +616,7 @@ Here’s what this .INI does:
 - `text_preview_full_mode`: gone. A pinned text preview comes up in full mode instead, so it scrolls and its text can be selected and copied.
 - No `magick_idle`, `peazip_idle`, or `calibre_idle`. ImageMagick, PeaZip, and Calibre are converters, not engines kept open. A second hover usually costs only a cache hit.
 
-**Extension list behavior**
+### Extension list behavior
 
 - A deleted `extensions=` line or whole section comes back with built-in entries.
 - An `extensions=` line left empty stays empty.
@@ -538,7 +634,7 @@ The release binary is written to `target/release/rust-hover-preview.exe`. A rele
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item. GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives’ own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, camera raw and the pictures beside it are developed by ImageMagick, and video is played by FFmpeg where installed and by Windows’ own media engine where it is not.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, and GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, camera raw and the pictures beside it are developed by ImageMagick, and video is played by FFmpeg where installed and by Windows' own media engine where it is not.
 
 ## TODO
 
@@ -546,10 +642,10 @@ See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 
 ## Privacy
 
-Rust Hover Preview is local-first, previews work without an internet connection, and the only network request is an update check, which runs only when you open the tray menu and at most once an hour. There is no telemetry, analytics, ads, accounts, or crash reporting. It reads only the item you hover or focus in Explorer, locally and only for enabled preview types. Cloud-only placeholders are skipped on purpose; password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use locally installed FFmpeg, LibreOffice, or ImageMagick when available, plus Microsoft Office, Windows' own media engine, and the Windows PDF engine. Caches are bounded by `config.ini`: decoded images stay in memory, while the page an engine drew for a document — an Office export, a converted PDF — is kept as a file under the temp folder, where Windows is free to clear it. See `PRIVACY.md` for full details.
+Rust Hover Preview is local-first: previews work without an internet connection, and the only network request is an update check, which runs only when you open the tray menu and at most once an hour. There is no telemetry, analytics, ads, accounts, or crash reporting; it reads only the item you hover or focus in Explorer, locally and only for enabled preview types, and cloud-only placeholders are skipped on purpose while password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use locally installed FFmpeg, LibreOffice, or ImageMagick when available, plus Microsoft Office, Windows' own media engine, and the Windows PDF engine; caches are bounded by `config.ini` — decoded images stay in memory, while the page an engine drew for a document is kept as a file under the temp folder, where Windows is free to clear it. See `PRIVACY.md` for full details.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
-The app is built out of other people’s code as much as its own — the Windows bindings, the image decoders, the syntax highlighter, the archive readers, the browser bindings — and each of those carries its own licence, with the notices MIT and BSD ask to be reproduced. [THIRD-PARTY.md](THIRD-PARTY.md) lists every dependency grouped by licence, with the copyright holders beside it, and the full texts are in [`LICENSES/`](LICENSES). Both are generated from the dependency tree rather than kept by hand; `generate-attribution.ps1` refreshes them.
+The app is built out of other people's code as much as its own — the Windows bindings, the image decoders, the syntax highlighter, the archive readers, the browser bindings — and each of those carries its own licence, with the notices MIT and BSD ask to be reproduced. [THIRD-PARTY.md](THIRD-PARTY.md) lists every dependency grouped by licence, with the copyright holders beside it, and the full texts are in [`LICENSES/`](LICENSES). Both are generated from the dependency tree rather than kept by hand; `generate-attribution.ps1` refreshes them.
