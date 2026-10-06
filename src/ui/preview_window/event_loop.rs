@@ -1123,10 +1123,16 @@ pub fn run_preview_window() {
                     first_frame_wait = None;
 
                     // The paint the question above already accounted for: this arm's own paint
-                    // is at the box this hover was laid out at, and the tick's was at the window's,
-                    // so where the two differ it is this one that has to be the last (see
-                    // `first_frame_lands`).
-                    if !pinned() && first_frame_landed.is_none() {
+                    // is at the box this hover was laid out at, and the tick's was at the
+                    // window's, so where the two differ it is this one that has to be the
+                    // last (see `first_frame_lands`). The question answered that *this* tick
+                    // is the reveal's own — a frame in hand on this hover's wait, no pin up —
+                    // so it is this paint that runs and the tick's that stands down for it.
+                    // The window below is put up on the strength of this paint, and a reveal
+                    // that showed it without one would put the window up on the surface it is
+                    // still holding, which for a hover that followed another preview is that
+                    // preview's frame, one tick early.
+                    if !pinned() && first_frame_landed.is_some() {
                         render_layered_preview_at(hwnd, wait.pos.0, wait.pos.1);
                     }
 
