@@ -139,7 +139,7 @@ fn the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them() {
 fn a_transport_bar_is_taken_hold_of_where_it_was_pressed() {
     let layout = transport_layout(800, 30, 96, true);
     let middle = (layout.bar.left + layout.bar.right) / 2;
-    let share = transport_share_at(middle, 800, 96, true);
+    let share = transport_share_at(middle, 800, 30, 96, true);
     assert!(
         (share - 0.5).abs() < 0.05,
         "the middle of the bar is half of it"
@@ -147,8 +147,34 @@ fn a_transport_bar_is_taken_hold_of_where_it_was_pressed() {
 
     // A press past either end is the end it is past, which is what keeps a drag from asking
     // for a second of a file that is not there.
-    assert_eq!(transport_share_at(0, 800, 96, true), 0.0);
-    assert_eq!(transport_share_at(800, 800, 96, true), 1.0);
+    assert_eq!(transport_share_at(0, 800, 30, 96, true), 0.0);
+    assert_eq!(transport_share_at(800, 800, 30, 96, true), 1.0);
+}
+
+/// A thumb is drawn where the bar *draws* the playhead, and a press is read against the bar the
+/// *bar itself* is: the two layouts are the same arithmetic, so the share a press is turned into
+/// and the pixel the thumb lands on are one number read twice. A layout built from a different
+/// height than the one the bar is drawn at is not that, and it fails at the two ends and nowhere
+/// else — the middle of a wrongly-laid-out bar is the middle of the right one by accident, which
+/// is exactly why a bar that is right in the middle reads as right.
+#[test]
+fn a_press_puts_the_thumb_under_the_hand_wherever_it_landed() {
+    for (width, height, dpi) in [(800, 30, 96), (640, 40, 144), (480, 30, 96)] {
+        let layout = transport_layout(width, height, dpi, true);
+        let span = (layout.bar.right - layout.bar.left) as f64;
+
+        for x in layout.bar.left..layout.bar.right {
+            let share = transport_share_at(x, width, height, dpi, true);
+            // Where `paint_transport` draws the thumb for that share.
+            let thumb = layout.bar.left + (span * share).round() as i32;
+
+            assert_eq!(
+                thumb, x,
+                "at {width}x{height} dpi {dpi}, a press at {x} of [{}, {}) drew the thumb at {thumb}",
+                layout.bar.left, layout.bar.right,
+            );
+        }
+    }
 }
 
 /// The volume button is the last thing on the bar and it answers a press whatever the player
