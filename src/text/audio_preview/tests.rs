@@ -839,13 +839,18 @@ fn the_window_buttons_stand_in_the_top_corner_over_the_name_line() {
         let _ = DeleteDC(dc);
     }
 
-    // The name line begins at the card's own top margin again: the band the
-    // buttons stand in is no longer room the card grows to hold them, because
-    // they stand in the name's own rows instead, which the card has already.
+    // The name line is centred between the window's own top border
+    // and the rule under it: the ink of its glyphs — the neon circle
+    // and the name — is as far from the one as from the other. The
+    // buttons stand in the name's own rows, which the card has
+    // already, so they stand over a line that is centred rather than
+    // one that begins at the margin.
+    let ink_top = metrics.ink_top[HEADER_LEVEL as usize];
+    let ink_bottom = metrics.ink_bottom[HEADER_LEVEL as usize];
     assert_eq!(
-        page.header_top,
-        metrics_padding(),
-        "the name line begins at the margin it has always begun at"
+        page.header_top + ink_top,
+        page.rule_top - (page.header_top + ink_bottom) - 1,
+        "the name line's ink is centred between the window's top border and the rule"
     );
 
     // A button is a square stood back from the window's own top edge by the
@@ -981,14 +986,19 @@ fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
 
     // The minimize's own box, which is the one the name's end lands
     // inside, and the row its mark is drawn in: the middle of the
-    // box, which is a row of the margin above the name line, where
-    // no glyph of the name sits.
+    // box, which is the name line's own top row or the margin's
+    // last row above it — a row the name's ink never stands in,
+    // because a line's ink begins below the leading its box
+    // leaves above it.
     let drawn = boxes.minimize.drawn;
     let middle_row = (drawn.top + drawn.bottom) / 2;
-    let name_rows = page.header_top..drawn.bottom;
+    // The rows of the name's own ink the box reaches: from the
+    // first row its glyphs stand in to the box's bottom, with
+    // the mark's row above them left out.
+    let name_rows = page.header_top + metrics.ink_top[HEADER_LEVEL as usize]..drawn.bottom;
 
     // While the buttons are up, the mark is drawn in the middle of
-    // the box, and every row of the name line the box reaches is
+    // the box, and every row of the name's ink the box reaches is
     // the page's own colour: the name is painted first and
     // cleared out of the box, so it runs underneath the button
     // rather than under its mark.

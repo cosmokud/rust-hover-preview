@@ -482,12 +482,19 @@ pub(super) fn build_page(
         },
     ];
 
-    let mut top = padding;
-    let header_top = top;
-    top += header_height + rule_gap;
-    let rule_top = top;
-    top += rule_height + rule_gap;
-    let facts_top = top;
+    // The name line is centred between the window's own top border
+    // and the rule under it, so the ink of its glyphs — the neon
+    // circle and the name — is as far from the one as from the
+    // other. The rule keeps the place it has always had: the
+    // line's own box moves within the room above it, and the card
+    // keeps the height it has always had.
+    let rule_top = padding + header_height + rule_gap;
+    let header_top = (rule_top
+        - metrics.ink_top[HEADER_LEVEL as usize]
+        - metrics.ink_bottom[HEADER_LEVEL as usize]
+        - 1)
+        / 2;
+    let facts_top = rule_top + rule_height + rule_gap;
 
     let bar_width = content_right - content_left;
     let mut facts = fact_runs(
