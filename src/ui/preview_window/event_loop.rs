@@ -723,12 +723,8 @@ pub fn run_preview_window() {
             // never came up — one that died, one that took longer than a start ever does
             // — is ended here rather than left playing behind nothing (see `player_wait`).
             if let Some(start) = video_start.take() {
-                // A window this app has found but is still holding back is not the video being
-                // up: the wait goes on, and the spinner standing in for it with it, rather than
-                // ending over a hole in the desktop shaped like a video (see
-                // `VIDEO_FIRST_FRAME_HOLD`).
-                let window_up =
-                    VIDEO_PID.load(Ordering::SeqCst) == start.pid && player_window_is_up();
+                let window_up = VIDEO_HWND.load(Ordering::SeqCst) != 0
+                    && VIDEO_PID.load(Ordering::SeqCst) == start.pid;
                 let alive = is_ffplay_pid_alive(start.pid);
 
                 // The hover this player was started for may have moved on before its
@@ -3257,16 +3253,6 @@ pub fn run_preview_window() {
                                         media.cancel_background_work();
                                         stop_video_playback(media);
                                     }
-                                    // What is being replaced goes with it, as it does on
-                                    // every other branch that replaces a preview. A video
-                                    // played by FFmpeg's player is drawn in a window of
-                                    // its own, so there is nothing of this app's that
-                                    // ought to be holding the last one's frame — and
-                                    // leaving it there gave a repaint during the player's
-                                    // start something to compose: the frame before, into
-                                    // whatever box the wait had put this window in (see
-                                    // `show_loading_spinner`).
-                                    *media_guard = None;
                                 }
 
                                 // The previous ffplay may have survived its stop
