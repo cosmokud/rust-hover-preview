@@ -273,8 +273,23 @@ pub(crate) fn volume_thumb_row(track: RECT, volume: u32) -> i32 {
 
 /// Where along a transport bar a point is, as a share of the file: what a press on the bar asks
 /// the player to be taken to.
-pub(crate) fn transport_share_at(x: i32, width: i32, dpi: u32, interactive: bool) -> f64 {
-    let layout = transport_layout(width, 0, dpi, interactive);
+///
+/// The layout is built at the strip's own height, which is the whole of what makes this the same
+/// bar the thumb is drawn on. The play button is sized from the height it is drawn at, and the
+/// track is laid out between the button and the clocks that button leaves behind, so a layout
+/// built at any other height is a bar of a different length somewhere else on the strip: the
+/// share it reads off a press is then measured across a track that is not the one drawn, and the
+/// thumb lands short of the hand at one end of the bar and past it at the other, while the middle
+/// stays where it is by the accident that the two tracks share a centre (see
+/// `a_press_puts_the_thumb_under_the_hand_wherever_it_landed`).
+pub(crate) fn transport_share_at(
+    x: i32,
+    width: i32,
+    height: i32,
+    dpi: u32,
+    interactive: bool,
+) -> f64 {
+    let layout = transport_layout(width, height, dpi, interactive);
     let span = (layout.bar.right - layout.bar.left).max(1) as f64;
 
     ((x - layout.bar.left) as f64 / span).clamp(0.0, 1.0)

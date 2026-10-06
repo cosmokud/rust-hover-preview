@@ -248,7 +248,7 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             update_pin_transport(|transport| transport.pressed = Some(part));
         }
         pin_chrome::TransportPart::Seek => {
-            let share = pin_chrome::transport_share_at(x, bar.width, bar.dpi, bar.live);
+            let share = pin_chrome::transport_share_at(x, bar.width, bar.height, bar.dpi, bar.live);
             let aim = pin_state().and_then(|pinned| {
                 pinned
                     .pin()
@@ -347,7 +347,7 @@ pub(super) unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
         return false;
     }
 
-    let share = pin_chrome::transport_share_at(x, bar.width, bar.dpi, bar.live);
+    let share = pin_chrome::transport_share_at(x, bar.width, bar.height, bar.dpi, bar.live);
     update_pin_transport(|transport| transport.seeking = pin_seconds_at(transport, share));
     render_layered_preview(hwnd);
     true
