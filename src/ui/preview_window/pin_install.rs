@@ -843,12 +843,16 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
     // pointer or the keyboard while it was up (see `PinUpdate`) — is the same
     // window showing another file, so what belongs to the window rather than to
     // the file is carried over: a maximized pin stays maximized and restores to
-    // the box it would have restored to — a sound's card excepted, which is
-    // shown no maximize to stay in and is given the state up as it arrives
-    // (`pin_restore_after`) — a level moved on its own bar stays where it was
-    // moved to, and chrome that is showing over a picture is not brought back as
-    // if the window had just arrived. There is nothing to carry for a first pin,
-    // which is why the take-up below reads exactly as it always did.
+    // the box it would have restored to, a level moved on its own bar stays where it
+    // was moved to, and chrome that is showing over a picture is not brought back as
+    // if the window had just arrived. A sound's card is the one kind that shows no
+    // maximize of its own — a card is its own size, offers no maximize to stay in
+    // (`PinFrame::None`) — but the state the window was in when the card arrived is
+    // the state the file after the card is laid out under, which is the box that
+    // file is fitted to (see `pin_update_content`); a walk through a sound that
+    // un-maximized the window would be a window the user maximized once and every
+    // file after the sound came at its own bound. There is nothing to carry for a
+    // first pin, which is why the take-up below reads exactly as it always did.
 
     // The length the probe read is asked before the pin's own lock is taken:
     // the answer comes from the geometry cache, which is a lock and the
@@ -869,9 +873,9 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         })
     });
 
-    // The three facts that have to be read before the pin's own lock is
+    // The two facts that have to be read before the pin's own lock is
     // taken, because each of them is a read of the machine rather than of
-    // the state in hand: `pin_keeps_its_box` and `drawn_as_audio` are
+    // the state in hand: `pin_keeps_its_box` is
     // answered by a content probe that takes `CONFIG` over a file read,
     // and the Shell's own answer to "which program opens this" is two
     // `AssocQueryStringW` calls. None of them belongs inside a guard
@@ -887,7 +891,6 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
     // pin, so it is the arrow keys, the two step buttons and a pick in the
     // listing alike that pay it.
     let keeps_its_box = pin_keeps_its_box(path);
-    let card = drawn_as_audio(path);
 
     // The name the hand-off button says is asked of the planner rather
     // than here, for the same reason and by the same rule: it is a
@@ -913,7 +916,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
             keeps_its_box,
             content,
         ),
-        restore: pin_restore_after(carried.and_then(|(restore, ..)| restore), card),
+        restore: carried.and_then(|(restore, ..)| restore),
         dpi,
         transport_bar,
         // Both kinds of video carry a bar that does something, and for

@@ -99,8 +99,9 @@ fn a_sound_picked_into_a_pin_is_the_wait_for_its_probe_until_that_has_answered()
     );
 
     // A maximize is no part of it either: a card offers no maximize to stay in, so a swap to
-    // one takes the card's own box even where the window is maximized — and the take-up gives
-    // the maximize up with it (see `pin_restore_after`).
+    // one takes the card's own box even where the window is maximized — and the maximize the
+    // window was in is a state about the window, which the take-up carries for the file after
+    // the card (see `take_up_pinned_window`).
     let maximized = PinSwapSpace {
         current: (0, 30, 1920, 1050),
         bound: Some(1400),
@@ -250,27 +251,6 @@ fn a_pin_taken_up_on_a_file_drawn_to_its_box_takes_a_bound_from_the_first_shaped
     // not by one drawn to its own box, which keeps the box it is given.
     assert_eq!(pin_bound_after(Some(800), false, page), Some(800));
     assert_eq!(pin_bound_after(Some(800), true, card), Some(800));
-}
-
-/// The maximize a swap leaves behind, which is what the file after a card is laid out from: a
-/// window shown a picture stays maximized, and one shown a sound's card gives the maximize up —
-/// a card is its own size, offers no maximize to stay in, and the box it stands in is no box
-/// for a maximum that is still standing (see `pin_restore_after`).
-#[test]
-fn a_swap_to_a_card_gives_up_the_maximize_the_window_was_in() {
-    let restore = (100, 100, 500, 400);
-
-    assert_eq!(
-        pin_restore_after(Some(restore), false),
-        Some(restore),
-        "a kind a maximize can be shown for keeps the state the window was in"
-    );
-    assert_eq!(
-        pin_restore_after(Some(restore), true),
-        None,
-        "a card offers no maximize to stay in"
-    );
-    assert_eq!(pin_restore_after(None, true), None);
 }
 
 /// The case the rule above is for: a pin taken up on a sound's card — a 400 by 200 box with no
