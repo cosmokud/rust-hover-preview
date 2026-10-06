@@ -850,3 +850,189 @@ fn the_box_a_swap_measures_is_the_box_the_take_up_installs() {
         *current = previous_media;
     }
 }
+
+/// The walk a maximized window takes through a sound's card, which is the one
+/// kind a swap lays out at its own size rather than in the box the window is
+/// standing in. The card is never a maximized window — there is no box for it
+/// to fill, and its caption draws no maximize to press — but the maximize the
+/// window was in when the card arrived is the state the file after the card is
+/// laid out under: that file is fitted to the room the display has, which is
+/// the box a maximized window's file is given (see `pin_update_content`, and
+/// the take-up that installs what a swap planned, `take_up_pinned_window`,
+/// which carries what belongs to the window rather than to the file it is
+/// showing).
+#[test]
+fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_media = stand_a_picture();
+    clean_slate();
+
+    let folder = std::env::temp_dir().join("rhp-ws-m-card-maximize");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    // The display this runs on, which is the room a maximized window's file
+    // is laid out against.
+    let display = work_area_at(40, 40);
+    let bounds = ScreenBounds {
+        left: display.left,
+        top: display.top,
+        right: display.right,
+        bottom: display.bottom,
+    };
+
+    // The picture the pin is taken up on, at a box of its own shape — which
+    // is where a pin gets the bound the files after it are fitted into.
+    let first = folder.join("ws-m-card-maximize-first.png");
+    let next = folder.join("ws-m-card-maximize-next.png");
+    write_a_png_of_size(&first, 700, 300);
+    write_a_png_of_size(&next, 4000, 3000);
+    let left = bounds.left + 40;
+    let top = bounds.top;
+    stand_a_kind(700, 300, MediaType::StaticImage);
+    install(take_up_pinned_window(
+        &first,
+        (left, top, left + 700, top + 300),
+    ));
+
+    // The window maximized: the room is the box, and the box it had is the
+    // one a restore puts back.
+    let mut request = None;
+    toggle_pin_maximized(&mut request);
+    assert!(
+        matches!(request.take(), Some(PreviewMessage::PinBox(_))),
+        "a maximize asks for the box it gave the window"
+    );
+    assert!(
+        pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.restore))
+            .expect("a pin up")
+            .is_some(),
+        "a maximized window has a box to restore to"
+    );
+
+    // The sound the walk steps onto: a probe answered for it, and the box its
+    // card came out at is held against the file the way the measure thread
+    // holds it.
+    let song = folder.join("ws-m-card-maximize-song.mp3");
+    std::fs::write(
+        &song,
+        b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00",
+    )
+    .expect("a written file");
+    audio_track::remember(
+        &song,
+        audio_track::Probed::Track(audio_track::Track {
+            player: audio_track::Player::Ffmpeg,
+            codec: Some("MP3".to_string()),
+            rate: Some(44_100),
+            channels: Some(2),
+            bitrate: Some(192_000),
+            duration: Some(180.0),
+        }),
+    );
+    let scope = {
+        let options = current_audio_options();
+        MeasureScope::Room {
+            cap_width: (bounds.right - bounds.left).max(1) as u32,
+            cap_height: bounds.height().max(1) as u32,
+            dpi: 96,
+            theme: options.theme,
+            font_scale_percent: options.font_scale_percent,
+        }
+    };
+    hold_box(&song, &file_version(&song), &scope, Some((240, 200)));
+
+    // The step onto the card: the card is laid out at its own size, in the
+    // middle of the box the pin has — no part of the room a maximized window
+    // fills is the card's to take.
+    let (space, bounds_at, dpi) = pin_state()
+        .and_then(|pinned| {
+            let pin = pinned.pin()?;
+            let space = pin_swap_space(pin);
+            let dpi = pin.dpi;
+            Some((space, work_area_at(pin.content.0, pin.content.1), dpi))
+        })
+        .expect("a pin to swap away from");
+    let Some(PinBox::Measured(card)) = pin_update_content(space, &song, bounds_at, dpi)
+    else {
+        panic!("a measured card is its own size, not a wait")
+    };
+    assert_eq!(
+        (card.2 - card.0, card.3 - card.1),
+        (240, 200),
+        "a card is laid out at its own size even where the window is maximized"
+    );
+
+    // And the take-up of it: the card is what is on screen, at the box it was
+    // planned at, and the maximize the window was in is what the take-up
+    // carries — a state about the window, not about the file it is showing.
+    stand_a_kind(240, 200, MediaType::Audio);
+    install(take_up_pinned_window(&song, card));
+    assert!(
+        pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.restore))
+            .expect("a pin up")
+            .is_some(),
+        "a card is shown no maximize to stay in, but the window's own maximize is not \
+         given up by the step onto it"
+    );
+    let card_window = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+        .expect("a pin up");
+    assert!(
+        (card_window.2 - card_window.0) * 2 < bounds.right - bounds.left,
+        "the card on screen is its own size, where the box a maximized window fills is \
+         the room's"
+    );
+
+    // The step off the card onto a picture: the window is still the maximized
+    // one the card stepped over, so the picture is fitted to the room the
+    // display has — the box a maximized window's file is given — and not to
+    // the bound the picture before the card left, which is a ceiling the room
+    // is not.
+    let (space, bounds_at, dpi) = pin_state()
+        .and_then(|pinned| {
+            let pin = pinned.pin()?;
+            let space = pin_swap_space(pin);
+            let dpi = pin.dpi;
+            Some((space, work_area_at(pin.content.0, pin.content.1), dpi))
+        })
+        .expect("a pin to swap away from");
+    let scale = effective_preview_scale(&next, current_hover_scales());
+    let Some(PinBox::Measured(planned)) = pin_update_content(space, &next, bounds_at, dpi)
+    else {
+        panic!("a picture of a shape of its own is measured, not waited for")
+    };
+    assert_ne!(
+        space.room.region(),
+        pin_swap_room(space, bounds, dpi),
+        "the bound the picture before the card left is a ceiling the room is not"
+    );
+    assert_eq!(
+        planned,
+        pin_update_box(space.room.region(), (4000, 3000), scale),
+        "the file after the card is fitted to the room the display has, as the window \
+         it follows was maximized"
+    );
+
+    // And the take-up of that picture keeps what the window is: maximized,
+    // with the box to restore to it has had since before the card.
+    stand_a_kind(4000, 3000, MediaType::StaticImage);
+    install(take_up_pinned_window(&next, planned));
+    assert!(
+        pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.restore))
+            .expect("a pin up")
+            .is_some(),
+        "a picture shown after a card is shown the maximized window the card stepped \
+         over"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
+    stand_pin(None);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}

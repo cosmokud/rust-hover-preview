@@ -570,23 +570,6 @@ pub(super) fn pin_bound_after(
     Some((content.2 - content.0).max(content.3 - content.1).max(1))
 }
 
-/// The maximize a pin has once the file just taken up is on screen: the state the window was in,
-/// kept by every kind but a sound's card.
-///
-/// A maximize is a state about the box rather than about the file, and a card is the one kind a
-/// swap does not lay the new file out in the pin's own box: a card is its own size and offers no
-/// maximize to stay in (`PinFrame::None`), so the file after it is laid out from the box the card
-/// stands in, exactly as it is for any other card window — and a restore carried onto one would be
-/// a state about a box the card has just left, with no button anywhere to reach it and the file
-/// after the card measured by a maximum that is no longer standing (see `pin_update_content`).
-pub(super) fn pin_restore_after(carried: Option<ScreenRegion>, card: bool) -> Option<ScreenRegion> {
-    if card {
-        return None;
-    }
-
-    carried
-}
-
 /// What a swap of a pinned window's file has come to, in whichever of the three shapes it can
 /// take: the file the window is shown next, a video the pin is held for until the engine has
 /// drawn a frame of it, or a file there is nothing to show.
