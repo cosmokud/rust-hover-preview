@@ -188,6 +188,9 @@ pub(crate) struct CardChrome {
     pub volume: u32,
     pub hovered: Option<CardControl>,
     pub pressed: Option<CardControl>,
+    /// Whether the two window buttons are showing, which is what the card is painted
+    /// from: a hand near the window's top border or near the buttons themselves.
+    pub window_buttons: bool,
 }
 
 /// A name scrolled across a card that has no room for it: how far it has moved, which way it

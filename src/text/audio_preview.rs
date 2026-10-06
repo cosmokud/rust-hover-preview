@@ -21,9 +21,9 @@
 //!
 //! The card carries its own controls when it is the card a pinned window is showing: the three
 //! buttons at the left of its bar row, the bar itself, the volume button at the bar's right, and
-//! the pin's own two window buttons in the band above the name line — the minimize that shrinks
-//! the pin into its bubble and the close that ends it — stood in a top margin grown to hold
-//! buttons twice the side the margin alone would (see `window_button_band`).
+//! the pin's own two window buttons — the minimize that shrinks the pin into its bubble and the
+//! close that ends it — stood in the top corner, in the name line's own rows, at twice the side
+//! the card's own top margin would hold (see `window_button_boxes`).
 //! Every question about where one of them is is answered against the card's own layout (see
 //! [`control_at`], [`control_box`] and [`bar_share_at`]) rather than against anything kept beside
 //! it, because a button laid out by one arithmetic and hit-tested by another answers a press in
@@ -32,8 +32,11 @@
 //! shows is the card it has always been — no buttons, and a bar from margin to margin (see
 //! [`Card::controls`]). The row the buttons stand in is the bar's own line either way, so what
 //! those buttons cost is the width of the bar, not the height of the card (see `bar_row`). The
-//! two window buttons cost height instead: the band they stand in is room the card grew to hold
-//! them, and a hover's card grew with it, so a pin's card is still the size a hover's is.
+//! two window buttons cost no height either: they stand in the name's own rows, which is room the
+//! card has already, and they come and go with the hand — a hand near the window's top border or
+//! near the buttons themselves is what asks for them (see `window_button_band`) — so a pin's card
+//! is still the size a hover's is, and a name too long for the card runs underneath the buttons
+//! while they are up, its box and its scroll unchanged.
 //!
 //! The card a sound is previewed as lives in two files below: `card` for what the card says and
 //! the two calls that draw it, and `page` for the page it is laid out and painted from. What is
@@ -47,13 +50,14 @@ pub(crate) use card::{
     bar_share_at, control_at, control_box, facts_of, measure, name_of, render, AudioPreviewOptions,
     Card, CardChrome, CardControl, NameScroll,
 };
+pub(crate) use page::window_button_band;
 
 #[cfg(test)]
 use crate::config::config::TextTheme;
 #[cfg(test)]
 use crate::readers::audio_track::Track;
 #[cfg(test)]
-use crate::text::text_paint::{rgb, readable, scaled, TextMetrics};
+use crate::text::text_paint::{readable, rgb, scaled, TextMetrics};
 #[cfg(test)]
 use crate::text::text_theme;
 #[cfg(test)]
@@ -63,9 +67,7 @@ use card::{
     WINDOW_BUTTON_GAP_PIXELS,
 };
 #[cfg(test)]
-use page::{
-    bar_band, bar_row, build_page, clock_runs, fill_span, window_button_band, CardBoxes, Page,
-};
+use page::{bar_band, bar_row, build_page, clock_runs, fill_span, CardBoxes, Page};
 #[cfg(test)]
 use std::path::Path;
 #[cfg(test)]

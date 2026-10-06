@@ -311,6 +311,7 @@ fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
             volume: current_audio_volume(),
             hovered: None,
             pressed: None,
+            window_buttons: false,
         }),
     )
     .expect("a card with its controls on it");
@@ -417,6 +418,7 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
                 volume: 40,
                 hovered: None,
                 pressed: None,
+                window_buttons: false,
             }),
         }),
         PinRelayoutRoad::TakeUp,
@@ -1022,8 +1024,7 @@ fn a_sounds_window_buttons_are_answered_over_the_margin_they_stand_in() {
 
 /// What a press left armed on the pin's card, if anything.
 fn the_pressed_control() -> Option<CardControl> {
-    pin_state()
-        .and_then(|pinned| pinned.pin().and_then(|pin| pin.audio_pressed))
+    pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.audio_pressed))
 }
 
 /// A press on one of the two window buttons arms it, and a release on
@@ -1081,12 +1082,147 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
             Some(command),
             "which asks for the command the button exists to ask for"
         );
-        assert_eq!(
-            the_pressed_control(),
-            None,
-            "and the button is let go of"
-        );
+        assert_eq!(the_pressed_control(), None, "and the button is let go of");
     }
+
+    stand_pin(previous_pin);
+}
+
+/// The two window buttons come and go with the hand's every move: a
+/// pointer move into the top band — the band as tall as the buttons'
+/// own hit boxes, which is the window's own top border and the buttons
+/// both — brings them up and asks for the card again, and a move below
+/// the band puts them away and asks for it again too.
+#[test]
+fn a_hand_near_the_top_border_brings_a_sounds_window_buttons_up() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+
+    stand_pin(Some(sound_pin()));
+    let band = audio_preview::window_button_band(96, current_audio_options());
+    let (width, _) = sound_pin().window_size();
+    let middle = width / 2;
+
+    // A hand on the window's own top row: in the band, and away
+    // from the buttons themselves, so what changes is the buttons
+    // alone.
+    AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), middle, 0) };
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_window_buttons)),
+        Some(true),
+        "a hand in the top band is a hand asking for the two window buttons"
+    );
+    assert!(
+        AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+        "and the buttons coming up is a change of the card, which is what shows them"
+    );
+
+    // A hand one row below the band: out of it, so the buttons go
+    // away and the name's corner is the card's own again.
+    unsafe { pinned_mouse_move(HWND(0x1000 as *mut _), middle, band) };
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_window_buttons)),
+        Some(false),
+        "a hand below the band is a hand asking for the corner back"
+    );
+    assert!(
+        AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+        "and their going away is a change of the card as well"
+    );
+
+    stand_pin(previous_pin);
+}
+
+/// The tick asks the same question of the pointer the move asks: a
+/// screen cursor in the top band brings a sound's two window buttons
+/// up, and a cursor below the band — or off the window — puts them
+/// away.
+#[test]
+fn the_tick_asks_for_the_window_buttons_where_a_hand_is_near_the_top_border() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+
+    let pin = sound_pin();
+    let window = pin.window_box();
+    let band = audio_preview::window_button_band(96, current_audio_options());
+    stand_pin(Some(pin));
+
+    // A screen cursor in the top band, in the window's own left
+    // margin: near the top border, and away from the buttons
+    // themselves, so what changes is the buttons alone.
+    let in_the_band = (window.0 + 10, window.1 + 1);
+    AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+    let changed = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(pin_audio_hover_refresh(pin, Some(in_the_band)))
+    });
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_window_buttons)),
+        Some(true),
+        "a screen cursor in the top band is a hand near the top border"
+    );
+    assert_eq!(
+        changed,
+        Some(true),
+        "and the tick owes the card a repaint, which is what shows them"
+    );
+    assert!(
+        AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+        "and the card is asked for by name"
+    );
+
+    // The same cursor resting there is not a change worth a repaint.
+    let changed = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(pin_audio_hover_refresh(pin, Some(in_the_band)))
+    });
+    assert_eq!(
+        changed,
+        Some(false),
+        "the same answer twice is not a change"
+    );
+    assert!(
+        !AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+        "and nothing is asked of the card"
+    );
+
+    // A cursor one row below the band, in the window: the buttons
+    // go away.
+    let below_the_band = (window.0 + 10, window.1 + band);
+    let changed = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(pin_audio_hover_refresh(pin, Some(below_the_band)))
+    });
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_window_buttons)),
+        Some(false),
+        "a screen cursor below the band is a hand asking for the corner back"
+    );
+    assert_eq!(
+        changed,
+        Some(true),
+        "and the tick owes the card a repaint again"
+    );
+    assert!(
+        AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+        "and the card is asked for by name"
+    );
+
+    // A cursor off the window is a hand nowhere near the border:
+    // nothing changes, because the buttons are already away.
+    let off_the_window = (window.0 - 10, window.1 + 1);
+    let changed = pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(pin_audio_hover_refresh(pin, Some(off_the_window)))
+    });
+    assert_eq!(changed, Some(false), "a hand off the window is nothing new");
 
     stand_pin(previous_pin);
 }
@@ -1124,11 +1260,7 @@ fn a_press_that_slides_off_a_sounds_window_button_asks_for_nothing() {
         None,
         "a press that slid off asks for nothing"
     );
-    assert_eq!(
-        the_pressed_control(),
-        None,
-        "and no button is left held"
-    );
+    assert_eq!(the_pressed_control(), None, "and no button is left held");
 
     stand_pin(previous_pin);
 }
@@ -1176,10 +1308,7 @@ fn a_sounds_bubble_takes_the_place_of_the_minimize_button() {
         centre.0 > (window.0 + window.2) / 2,
         "and its centre is in the window's right half"
     );
-    assert!(
-        centre.1 < (window.1 + window.3) / 2,
-        "and in its top half"
-    );
+    assert!(centre.1 < (window.1 + window.3) / 2, "and in its top half");
 
     // Every other kind keeps the bubble it has always had: one centred
     // on the caption's own minimize button, which is a button a kind

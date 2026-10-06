@@ -7,10 +7,10 @@
 //! is the whole of why a bar a person aims at and a bar drawn under a name are the same line.
 
 use super::card::{
-    clock, Card, CardChrome, CardControl, Fact, FactKind, BAR_GAP_PIXELS, BAR_PIXELS,
-    BAR_REACH_PIXELS, BULLET, BULLET_CELL_ADVANCES, CHASE_DIVISOR, CHASE_SECONDS, CLOCK_ADVANCES,
-    CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, MIN_CONTENT_ADVANCES, RULE_GAP_PIXELS,
-    RULE_PIXELS, TIME_GAP_ADVANCES, TRACK_PIXELS, WINDOW_BUTTON_CUSHION_PIXELS,
+    clock, AudioPreviewOptions, Card, CardChrome, CardControl, Fact, FactKind, BAR_GAP_PIXELS,
+    BAR_PIXELS, BAR_REACH_PIXELS, BULLET, BULLET_CELL_ADVANCES, CHASE_DIVISOR, CHASE_SECONDS,
+    CLOCK_ADVANCES, CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, MIN_CONTENT_ADVANCES,
+    RULE_GAP_PIXELS, RULE_PIXELS, TIME_GAP_ADVANCES, TRACK_PIXELS, WINDOW_BUTTON_CUSHION_PIXELS,
     WINDOW_BUTTON_GAP_PIXELS,
 };
 use crate::text::pin_chrome::{self, stroke_segment, surface_pixels, ControlGlyph};
@@ -20,6 +20,7 @@ use crate::text::text_paint::{
 };
 use crate::text::text_theme::LoadedTheme;
 use windows::Win32::Foundation::RECT;
+use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC};
 
 // ----------------------------------------------------------------------- page
 
@@ -73,10 +74,9 @@ pub(super) struct BarRow {
 /// out of the bar's line instead of the card growing to hold them (see `control_boxes`).
 pub(super) fn bar_row(metrics: &TextMetrics) -> BarRow {
     BarRow {
-        // The same walk down the page `build_page` makes, from the top band to the bar: the
-        // window buttons' margin, the name, the rule under it, the facts, and the gap the
-        // bar is set out after.
-        top: window_button_band(metrics)
+        // The same walk down the page `build_page` makes, from the top margin to the bar: the
+        // name, the rule under it, the facts, and the gap the bar is set out after.
+        top: metrics.padding
             + metrics.line_height[HEADER_LEVEL as usize]
             + scaled(RULE_GAP_PIXELS, metrics.scale)
             + scaled(RULE_PIXELS, metrics.scale)
@@ -124,7 +124,7 @@ pub(super) fn bar_band(row: BarRow, left: i32, right: i32, metrics: &TextMetrics
 
 /// The boxes of the controls a pinned card carries, laid out across the card's own content box:
 /// the three buttons at its left, the bar filling what is left of the row, the volume button
-/// against its right edge, and the two window buttons standing in the top margin.
+/// against its right edge, and the two window buttons standing in the top corner.
 ///
 /// They are one walk rather than five numbers each because the card is drawn from these boxes and
 /// pressed against them: a button laid out here and hit-tested elsewhere answers a press in the
@@ -142,7 +142,7 @@ pub(super) struct CardBoxes {
     pub(super) close: WindowButtonBox,
 }
 
-/// One of the two window buttons a pinned card carries in its top margin, with the
+/// One of the two window buttons a pinned card carries in its top corner, with the
 /// two boxes it has: the one its glyph is drawn in, and the one a press on it is
 /// answered against.
 ///
@@ -254,40 +254,61 @@ pub(super) fn control_boxes(
 
 /// The side one of the two window buttons is drawn at: twice what the card's own top
 /// margin would hold on its own — the margin's height less the gap above the button
-/// and the gap below it — which is the whole of why the band the buttons stand in is
-/// grown past the margin (see [`window_button_band`]).
+/// and the gap below it — which is room the margin does not have, so a button stands
+/// in the name line's own rows as well (see [`window_button_boxes`]).
 fn window_button_side(metrics: &TextMetrics) -> i32 {
     let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
     (metrics.padding - gap * 2).max(0) * 2
 }
 
-/// The band the two window buttons stand in: the side a button is drawn at, plus the
-/// gap above it to the window's own top edge and the gap below it to the name line's
-/// top — which is where the name line begins, and the room the card grew by to hold
-/// buttons twice the side the margin alone would hold (see [`window_button_side`]).
-pub(super) fn window_button_band(metrics: &TextMetrics) -> i32 {
+/// The bottom of the box a press on a window button is answered against: the drawn
+/// box's own bottom plus the cushion below it, which is the bottom of the band the
+/// two buttons stand in (see [`window_button_boxes`]).
+fn window_button_reach(metrics: &TextMetrics) -> i32 {
     let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
-    window_button_side(metrics) + gap * 2
+    window_button_side(metrics) + gap + scaled(WINDOW_BUTTON_CUSHION_PIXELS, metrics.scale)
 }
 
-/// The two window buttons a pinned card carries in its top margin: the minimize that shrinks the
+/// The band a pointer is near the window's own top border in, at the display's scale
+/// and font size: the bottom of the box a press on either window button is answered
+/// against. A hand anywhere in it is a hand near the top border or near the buttons
+/// themselves, which is the one thing that asks for the two window buttons — the one
+/// thing on a sound's card that comes and goes, because a button twice the margin's
+/// own side stands in the name's own rows (see [`window_button_reach`]).
+pub(crate) fn window_button_band(dpi: u32, options: AudioPreviewOptions) -> i32 {
+    let dc = unsafe { CreateCompatibleDC(None) };
+    if dc.0.is_null() {
+        return 0;
+    }
+
+    let band = TextMetrics::new(dc, dpi, options.font_scale_percent)
+        .map(|metrics| window_button_reach(&metrics))
+        .unwrap_or(0);
+
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    band
+}
+
+/// The two window buttons a pinned card carries in its top corner: the minimize that shrinks the
 /// pin into the bubble it leaves, and the close that ends the pin, the player and the window
 /// together.
 ///
-/// The card's top margin is the band the name line begins below, so each button is a square
-/// stood against the card's right border with the same gap on every side — above it to the
-/// window's own top edge, below it to the name line, between the two of them, and to the
-/// border — and a side twice what the margin alone would hold, which is the room the band
-/// grew to hold (see [`window_button_band`]). The name keeps the whole width of the card to
-/// scroll across, and the buttons stand above the line it scrolls in, so no name ever runs
-/// under one at any length or any scroll offset (see `build_page`).
+/// Each button is a square stood against the card's right border with the same gap on every
+/// side that has room — above it to the window's own top edge, between the two of them, and
+/// to the border — and a side twice what the margin alone would hold, which is room the
+/// margin does not have: the buttons stand in the name line's own rows, and the name runs
+/// underneath them while they are up, its box and its scroll unchanged (see `paint`).
 ///
 /// A button's *hit* box is its drawn box widened upward to the window's own top edge and by the
 /// cushion below it: the two buttons are small, so a hand is given the room above them and
-/// a pixel of the name line's invisible leading — the one band of the line the name's glyphs do
-/// not sit in. The leading is read off the font the name is set in, and where a display scale
-/// yields a font with none of it the cushion stops at the line's own top instead, so a hit box
-/// never reaches the glyphs (see [`TextMetrics::internal_leading`]).
+/// a pixel of the name line's invisible leading, and the name's own rows below that as well —
+/// the room the buttons stand in, which a hit box that stopped at the name line's top would
+/// cut off, leaving a box smaller than the button it answers for. The cushion is a logical
+/// pixel like the gap it is counted from, so it is the same share of the button at every
+/// scale (see `WINDOW_BUTTON_CUSHION_PIXELS`).
 pub(super) fn window_button_boxes(
     metrics: &TextMetrics,
     width: i32,
@@ -310,14 +331,14 @@ pub(super) fn window_button_boxes(
         bottom: gap + side,
     };
 
-    // The cushion: up to the window's own top edge, and down by the gap plus a
-    // pixel of the name line's invisible leading — clamped to the line's own top
-    // where the font at this scale has no leading to borrow. A logical pixel like
-    // the gap it is counted from, so the cushion is the same share of the button
-    // at every scale (see `WINDOW_BUTTON_CUSHION_PIXELS`).
-    let leading = metrics.internal_leading[HEADER_LEVEL as usize];
-    let cushion = scaled(WINDOW_BUTTON_CUSHION_PIXELS, metrics.scale);
-    let bottom = (minimize.bottom + cushion).min(window_button_band(metrics) + leading);
+    // The cushion below the drawn box: the gap the button stands in, plus a pixel
+    // of the name line's invisible leading — a logical pixel like the gap it is
+    // counted from, so the cushion is the same share of the button at every scale
+    // (see `WINDOW_BUTTON_CUSHION_PIXELS`). The hit box it ends reaches into the
+    // name's own rows, which is the room the buttons stand in: they are twice the
+    // margin's own side, and a hit box that stopped at the name line's top would
+    // answer for less than the button it is asked about.
+    let bottom = window_button_reach(metrics);
 
     (
         WindowButtonBox {
@@ -419,10 +440,9 @@ pub(super) fn build_page(
     let width = (content + padding * 2).clamp(1, box_width.max(1) as i32) as u32;
 
     // A card with no room for a name and a line under it is a card that cannot be drawn, which
-    // is the answer an archive page gives in the same place. The name begins below the window
-    // buttons' band, so that band is room a drawable card has to hold.
+    // is the answer an archive page gives in the same place.
     if (width as i32) < padding * 2 + body_advance
-        || (box_height as i32) < window_button_band(metrics) + padding + header_height
+        || (box_height as i32) < padding * 2 + header_height
     {
         return empty_page(width, padding);
     }
@@ -462,9 +482,7 @@ pub(super) fn build_page(
         },
     ];
 
-    // The walk begins below the band the two window buttons stand in — the top
-    // margin grown to hold them (see `window_button_band`).
-    let mut top = window_button_band(metrics);
+    let mut top = padding;
     let header_top = top;
     top += header_height + rule_gap;
     let rule_top = top;
@@ -833,24 +851,35 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
             }
         }
 
-        // The two window buttons in the top margin, painted last of all and painted as
+        // The two window buttons in the top corner, painted last of all and painted as
         // nothing but their marks: no wash under them and no box around them in any
         // state, the ink being the only thing that changes. At rest it is the card's
         // own foreground, which is the ink the row's glyphs are painted in, and while
         // the pointer is on one or holding it it is the accent, which is the color the
-        // played part of the bar is drawn in (see `build_page`).
-        for (control, button) in [
-            (CardControl::Minimize, &boxes.minimize),
-            (CardControl::Close, &boxes.close),
-        ] {
-            let lit = chrome.hovered == Some(control) || chrome.pressed == Some(control);
-            paint_window_button(
-                surface,
-                button.drawn,
-                control,
-                if lit { accent } else { foreground },
-                scale,
-            );
+        // played part of the bar is drawn in.
+        //
+        // They are the one thing on the card that comes and goes: a button twice the
+        // margin's own side stands in the name's own rows, so a hand near the window's
+        // top border or near the buttons themselves is what asks for them (see
+        // `window_button_band`), and while they are up the name runs underneath them —
+        // the box each stands in is the page's own colour, which is what keeps a name
+        // scrolling under one from running under its mark.
+        if chrome.window_buttons {
+            for (control, button) in [
+                (CardControl::Minimize, &boxes.minimize),
+                (CardControl::Close, &boxes.close),
+            ] {
+                fill_rect(surface, button.drawn, page_color);
+
+                let lit = chrome.hovered == Some(control) || chrome.pressed == Some(control);
+                paint_window_button(
+                    surface,
+                    button.drawn,
+                    control,
+                    if lit { accent } else { foreground },
+                    scale,
+                );
+            }
         }
     }
 }
