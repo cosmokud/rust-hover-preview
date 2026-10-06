@@ -401,8 +401,24 @@ pub(super) fn pin_audio_hover_refresh(pin: &mut PinnedPreview, cursor: Option<(i
             .flatten()
     });
 
-    let changed = pin.audio_hovered != hovered;
+    // The two window buttons come and go with the hand as well, and are
+    // asked here as well as on every move because the tick is what paints
+    // the card again: a hand in the top band — the band as tall as the
+    // buttons' own hit boxes, which covers them — is a hand near the
+    // window's top border or near the buttons themselves, and a hand
+    // anywhere else is a hand asking for the name's corner back (see
+    // `pin_audio_window_buttons`).
+    let shown = cursor.is_some_and(|(x, y)| {
+        x >= window.0
+            && x < window.2
+            && y >= window.1
+            && y < window.3
+            && pin_audio_window_buttons(pin, y - window.1)
+    });
+
+    let changed = pin.audio_hovered != hovered || pin.audio_window_buttons != shown;
     pin.audio_hovered = hovered;
+    pin.audio_window_buttons = shown;
 
     // The card is a media frame and not chrome, so repainting the window alone would redraw the
     // *old* card with the old button still lit under it: what shows the wash is the card's own

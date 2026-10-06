@@ -148,11 +148,6 @@ const LEVEL_METRICS_MAX_ENTRIES: usize = 16;
 struct LevelMetrics {
     advance: [i32; SIZE_LEVELS],
     line_height: [i32; SIZE_LEVELS],
-    /// The font's own invisible leading at each level: the part of the
-    /// line height above the glyphs, which a card's top margin borrows a
-    /// pixel of for the hit box of a window button without ever reaching
-    /// the name's glyphs (see `audio_preview`).
-    internal_leading: [i32; SIZE_LEVELS],
 }
 
 static LEVEL_METRICS: Lazy<Mutex<HashMap<(u32, u32), LevelMetrics>>> =
@@ -166,11 +161,6 @@ pub(crate) struct TextMetrics {
     pub(crate) quote_bar: i32,
     pub(crate) advance: [i32; SIZE_LEVELS],
     pub(crate) line_height: [i32; SIZE_LEVELS],
-    /// The font's own invisible leading at each level: the part of the line
-    /// height above the glyphs. A pinned sound's card borrows a pixel of the
-    /// header's for the hit box of its two window buttons, which is the one
-    /// thing outside this module that reads it (see `audio_preview`).
-    pub(crate) internal_leading: [i32; SIZE_LEVELS],
 }
 
 impl TextMetrics {
@@ -195,7 +185,6 @@ impl TextMetrics {
             quote_bar: scaled(QUOTE_BAR_PIXELS, scale),
             advance: levels.advance,
             line_height: levels.line_height,
-            internal_leading: levels.internal_leading,
         })
     }
 
@@ -239,7 +228,6 @@ fn level_metrics(dc: HDC, key: (u32, u32), scale: f32) -> Option<LevelMetrics> {
 fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
     let mut advance = [0i32; SIZE_LEVELS];
     let mut line_height = [0i32; SIZE_LEVELS];
-    let mut internal_leading = [0i32; SIZE_LEVELS];
 
     for level in 0..SIZE_LEVELS {
         let pixels = scaled(LEVEL_FONT_PIXELS[level], scale);
@@ -269,7 +257,6 @@ fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
                 line_height[level] = metrics.tmHeight
                     + metrics.tmExternalLeading
                     + scaled(LEVEL_EXTRA_LEADING[level], scale);
-                internal_leading[level] = metrics.tmInternalLeading;
                 keep = true;
             }
         }
@@ -282,7 +269,6 @@ fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
     Some(LevelMetrics {
         advance,
         line_height,
-        internal_leading,
     })
 }
 
