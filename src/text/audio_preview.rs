@@ -49,7 +49,7 @@ use crate::config::config::TextTheme;
 #[cfg(test)]
 use crate::readers::audio_track::Track;
 #[cfg(test)]
-use crate::text::text_paint::{scaled, TextMetrics};
+use crate::text::text_paint::{rgb, readable, scaled, TextMetrics};
 #[cfg(test)]
 use crate::text::text_theme;
 #[cfg(test)]
@@ -63,6 +63,8 @@ use page::{bar_band, bar_row, build_page, clock_runs, fill_span, CardBoxes, Page
 use std::path::Path;
 #[cfg(test)]
 use std::time::{Duration, Instant};
+#[cfg(test)]
+use windows::Win32::Foundation::RECT;
 #[cfg(test)]
 use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC};
 
