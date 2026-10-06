@@ -1020,6 +1020,12 @@ fn a_sounds_window_buttons_are_answered_over_the_margin_they_stand_in() {
     }
 }
 
+/// What a press left armed on the pin's card, if anything.
+fn the_pressed_control() -> Option<CardControl> {
+    pin_state()
+        .and_then(|pinned| pinned.pin().and_then(|pin| pin.audio_pressed))
+}
+
 /// A press on one of the two window buttons arms it, and a release on
 /// it asks the pin's own command — the minimize that shrinks the pin
 /// into its bubble and the close that ends the pin, the player and the
@@ -1049,10 +1055,14 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
             "a hand on {control:?} is the card's to act on"
         );
         assert_eq!(
-            pin_state()
-                .and_then(|pinned| pinned.pin().and_then(|pin| pin.audio_pressed)),
+            the_pressed_control(),
             Some(control),
             "so the press armed it"
+        );
+        assert_eq!(
+            take_pin_command(),
+            None,
+            "and a press alone asks for nothing — the command is the release's to ask for"
         );
         assert!(
             pin_state()
@@ -1072,8 +1082,7 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
             "which asks for the command the button exists to ask for"
         );
         assert_eq!(
-            pin_state()
-                .and_then(|pinned| pinned.pin().and_then(|pin| pin.audio_pressed)),
+            the_pressed_control(),
             None,
             "and the button is let go of"
         );
@@ -1116,8 +1125,7 @@ fn a_press_that_slides_off_a_sounds_window_button_asks_for_nothing() {
         "a press that slid off asks for nothing"
     );
     assert_eq!(
-        pin_state()
-            .and_then(|pinned| pinned.pin().and_then(|pin| pin.audio_pressed)),
+        the_pressed_control(),
         None,
         "and no button is left held"
     );
