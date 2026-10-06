@@ -2014,6 +2014,17 @@ pub fn run_preview_window() {
 
                 if changed == Some(true) {
                     refresh_requested = true;
+
+                    // A strip that has just come up is painted into the pin's own rows,
+                    // which for a video FFmpeg plays are rows of that window — and that
+                    // window is the one on top for as long as no strip is showing. Both
+                    // of its raises are held off from here on (see `pin_chrome_up`), so
+                    // this is the one raise the pin owes on the way up; the way out needs
+                    // none, the first raise through either caller once the last strip has
+                    // gone puts the player back on top.
+                    if pin_chrome_up() {
+                        raise_pinned_window(hwnd);
+                    }
                 }
             }
 
