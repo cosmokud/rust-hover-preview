@@ -106,96 +106,14 @@ pub(super) fn player_ex_style(current: isize) -> isize {
         | WS_EX_TRANSPARENT.0 as isize
 }
 
-/// How long a player's window is kept off the screen from the moment it is first seen.
-///
-/// FFmpeg's player makes its window before it opens the file — SDL builds it, and the film is
-/// demuxed and decoded into it afterwards — so for the first moments of its life the window is
-/// a rectangle of the video's own size with nothing in it. An SDL window has no background of
-/// its own to erase, so what the compositor holds for that rectangle is composited until the
-/// player paints: whatever preview was on screen there a moment earlier, at its own size and
-/// with black around it, inside a window the size of the video. It lasted a few milliseconds
-/// and it was the previous file's frame, whichever kind it was.
-///
-/// Nothing on this side can ask the player whether it has a frame — `PrintWindow` reads blank
-/// for the window, because its content is a GPU surface — so this is a bound rather than an
-/// observation. It is deliberately short, because the wait it sits inside is not free: a window
-/// held back is a hole in the desktop shaped like a video, which is the thing the pin's own cover
-/// exists for (see `compose_parked_band`) and which a hover has never had. Too short leaves the
-/// window being raised empty, which is what it did before; too long is a hole nobody is covering,
-/// which is the same fault a few milliseconds wider.
-pub(super) const VIDEO_FIRST_FRAME_HOLD: Duration = Duration::from_millis(120);
-
-/// The player's window, and the moment this app first laid eyes on it. One player plays at a
-/// time, so one slot is the whole of it, and it is keyed on the window rather than on the pid for
-/// the reason the rest of this file is careful about handles: two players are alive at once
-/// during a relaunch, and a handle says nothing about which one is behind it (see
-/// `video_window_for`). A pid's own wait is started over rather than inherited, which is what
-/// `forget_player_window_wait` is for.
-static PLAYER_WINDOW_SEEN: Lazy<Mutex<Option<(isize, Instant)>>> = Lazy::new(|| Mutex::new(None));
-
-/// Whether a window that has been standing for `seen_for` may go on the screen.
-fn player_window_is_ready(seen_for: Duration) -> bool {
-    seen_for >= VIDEO_FIRST_FRAME_HOLD
-}
-
-/// How long `hwnd` has been standing, which is this call that notes down the moment it was
-/// first seen — a window other than the one held starts its wait over.
-fn player_window_standing_for(hwnd: HWND) -> Duration {
-    let key = hwnd.0 as isize;
-    let mut seen = PLAYER_WINDOW_SEEN
-        .lock()
-        .unwrap_or_else(|slot| slot.into_inner());
-
-    match seen.as_mut() {
-        Some((held, since)) if *held == key => since.elapsed(),
-        _ => {
-            *seen = Some((key, Instant::now()));
-            Duration::ZERO
-        }
-    }
-}
-
-/// Forget the wait a player's window was holding, so the next one this app finds starts its own
-/// rather than inheriting a clock that has been running since the last film.
-fn forget_player_window_wait() {
-    PLAYER_WINDOW_SEEN
-        .lock()
-        .unwrap_or_else(|slot| slot.into_inner())
-        .take();
-}
-
-/// Whether the player's window is up, which is not the same question as whether it exists: a
-/// window this app is still holding back is a window it has found and nothing more, and the wait
-/// for a player starting reads this so that it goes on standing — with this app's own spinner at
-/// the pointer — until there is a film to see rather than a hole in the desktop (see `player_wait`).
-pub(super) fn player_window_is_up() -> bool {
-    let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
-    hwnd_val != 0 && player_window_is_ready(player_window_standing_for(HWND(hwnd_val as *mut _)))
-}
-
 /// Style and raise a known ffplay window.
 pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
-    // Store the video window HWND for cursor-over-preview detection. This is published before the
-    // window is on screen, and has to be: `try_apply_noactivate_style` reaches the window again
-    // through this handle, and `enum_windows_callback` skips hidden windows, so a window that was
-    // held back and not published could never be found a second time to be let up. What the rest
-    // of this app asks of it is therefore asked through `player_window_is_up`, which knows the
-    // difference between a window that exists and one that is showing.
+    // Store the video window HWND for cursor-over-preview detection
     VIDEO_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
 
-    // Add WS_EX_NOACTIVATE and WS_EX_TOPMOST to its extended style. This goes on before anything
-    // else here, and whether or not the window is on screen: `WS_EX_NOACTIVATE` is what keeps the
-    // player from taking the keyboard, and a window that is being held back for the want of a
-    // frame is still a window that can take it (see the note over `try_apply_noactivate_style`).
+    // Add WS_EX_NOACTIVATE and WS_EX_TOPMOST to its extended style
     let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, player_ex_style(current_style));
-
-    // A window the player has made and not yet painted in is put away rather than raised, which
-    // is the whole of what this hold is for (see `VIDEO_FIRST_FRAME_HOLD`).
-    if !player_window_is_ready(player_window_standing_for(hwnd)) {
-        let _ = ShowWindow(hwnd, SW_HIDE);
-        return true;
-    }
 
     // The style is put on whatever else is happening, and the *raise* is not. This is the one
     // place every raise of the player's window goes through — the monitor thread calls it about
@@ -384,10 +302,6 @@ pub(super) fn wake_noactivate_monitor() {
 
 pub(super) fn set_noactivate_for_process(pid: u32) {
     VIDEO_PID.store(pid, Ordering::SeqCst);
-    // A player this app has not seen before starts its own wait, whichever handle it turns up
-    // with: a window that was held back for a film that has ended must not be let straight on
-    // to the screen because the next one reuses its handle (see `player_window_is_ready`).
-    forget_player_window_wait();
 
     // First, do a few immediate synchronous checks with very tight timing
     // This minimizes the window where focus can be stolen
@@ -717,77 +631,5 @@ pub fn kill_stray_video_process() {
 
     if !is_ffplay_pid_alive(pid) {
         clear_video_process_state(pid);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A window the player has made is not put on screen until it has stood long enough to
-    /// have been painted into, and that is the whole of the rule.
-    ///
-    /// Both ends are the point. A window let up at the moment it is found is composited with
-    /// nothing in it, and an SDL window has no background of its own to erase, so what the
-    /// compositor holds for that rectangle — which is the preview that was on screen there a
-    /// moment earlier, at its own size and with black around it — is what the hand sees, at the
-    /// video's own resolution, for as long as the first frame takes. And a window held back for
-    /// good is a hover that never shows its video, which is why the answer is a bound rather than
-    /// a refusal.
-    #[test]
-    fn a_players_window_is_held_off_the_screen_until_it_can_have_a_frame() {
-        assert!(
-            !player_window_is_ready(Duration::ZERO),
-            "a window found this instant has nothing in it yet: showing it now is what composited \
-             the previous preview's frame inside the video's box"
-        );
-        assert!(
-            !player_window_is_ready(VIDEO_FIRST_FRAME_HOLD / 2),
-            "and it is a wait rather than a single tick: half the bound is still a window that \
-             has not been painted into"
-        );
-        assert!(
-            player_window_is_ready(VIDEO_FIRST_FRAME_HOLD),
-            "the bound itself is the moment the window may go up, or the film never arrives"
-        );
-        assert!(
-            player_window_is_ready(VIDEO_FIRST_FRAME_HOLD * 4),
-            "and a window past the bound is never held back again, however long it has been up"
-        );
-    }
-
-    /// The wait belongs to the window, and a window this app has not seen starts its own.
-    ///
-    /// The second window here is one Windows handed back the handle the first film used, which
-    /// is the case that lets a film's own clock carry over: nothing about the handle says which
-    /// player is behind it, so the wait has to be taken on the window being different rather
-    /// than on the handle being different. The wait running rather than restarting is what the
-    /// bound above already covers.
-    #[test]
-    fn a_window_that_is_not_the_one_being_held_starts_its_own_wait() {
-        forget_player_window_wait();
-
-        let first = HWND(0x1000 as *mut _);
-        let second = HWND(0x2000 as *mut _);
-
-        assert!(
-            !player_window_is_ready(player_window_standing_for(first)),
-            "a window found this instant has nothing in it, whatever the handle says"
-        );
-        assert!(
-            !player_window_is_ready(player_window_standing_for(first)),
-            "and asking again while it is still inside the bound is not a new window"
-        );
-
-        forget_player_window_wait();
-        assert!(
-            !player_window_is_ready(player_window_standing_for(first)),
-            "forgetting the wait puts the next film back at the start of it, so a film that ends \
-             inside the bound does not leave the next one already held past it"
-        );
-        assert!(
-            !player_window_is_ready(player_window_standing_for(second)),
-            "and a window this app has not seen before is not answered off an old film's clock"
-        );
     }
 }
