@@ -602,6 +602,7 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         volume: PinVolume::default(),
         audio_hovered: None,
         audio_pressed: None,
+        audio_window_buttons: false,
     };
     let (width, height) = pin.window_size();
 

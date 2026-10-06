@@ -22,9 +22,9 @@ use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, ExtTextOutW,
     GetTextExtentPoint32W, GetTextMetricsW, SelectObject, SetBkColor, SetBkMode, SetTextColor,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
-    DIB_RGB_COLORS, ETO_CLIPPED, ETO_OPAQUE, FF_MODERN, FIXED_PITCH, HBITMAP, HDC, HFONT, HGDIOBJ,
-    OPAQUE, OUT_TT_PRECIS, TEXTMETRICW,
+    TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
+    DEFAULT_CHARSET, DIB_RGB_COLORS, ETO_CLIPPED, ETO_OPAQUE, FF_MODERN, FIXED_PITCH, HBITMAP, HDC,
+    HFONT, HGDIOBJ, OPAQUE, OUT_TT_PRECIS, TEXTMETRICW, TRANSPARENT,
 };
 
 /// Size steps the document model uses: body text, four heading levels.
@@ -148,19 +148,25 @@ const LEVEL_METRICS_MAX_ENTRIES: usize = 16;
 struct LevelMetrics {
     advance: [i32; SIZE_LEVELS],
     line_height: [i32; SIZE_LEVELS],
+    ink_top: [i32; SIZE_LEVELS],
+    ink_bottom: [i32; SIZE_LEVELS],
 }
 
 static LEVEL_METRICS: Lazy<Mutex<HashMap<(u32, u32), LevelMetrics>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Font metrics for one display scale and font scale, taken from GDI once per
-/// scale and font size.
+/// scale and font size. The ink rows are the rows of a line box the level's
+/// bold face fills with ink, measured as drawn rather than as the box is
+/// laid out, because a layout that centres a line centres the ink itself.
 pub(crate) struct TextMetrics {
     pub(crate) scale: f32,
     pub(crate) padding: i32,
     pub(crate) quote_bar: i32,
     pub(crate) advance: [i32; SIZE_LEVELS],
     pub(crate) line_height: [i32; SIZE_LEVELS],
+    pub(crate) ink_top: [i32; SIZE_LEVELS],
+    pub(crate) ink_bottom: [i32; SIZE_LEVELS],
 }
 
 impl TextMetrics {
@@ -185,6 +191,8 @@ impl TextMetrics {
             quote_bar: scaled(QUOTE_BAR_PIXELS, scale),
             advance: levels.advance,
             line_height: levels.line_height,
+            ink_top: levels.ink_top,
+            ink_bottom: levels.ink_bottom,
         })
     }
 
@@ -223,11 +231,14 @@ fn level_metrics(dc: HDC, key: (u32, u32), scale: f32) -> Option<LevelMetrics> {
     Some(measured)
 }
 
-/// Measure the five size levels against `dc`, leaving no font behind: each level
-/// is created, asked for its advance and line height, and deleted again.
+/// Measure the five size levels against `dc`, leaving no font behind: each
+/// level is created, asked for its advance and line height, and deleted
+/// again, and each level's bold face is asked where its ink stands.
 fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
     let mut advance = [0i32; SIZE_LEVELS];
     let mut line_height = [0i32; SIZE_LEVELS];
+    let mut ink_top = [0i32; SIZE_LEVELS];
+    let mut ink_bottom = [0i32; SIZE_LEVELS];
 
     for level in 0..SIZE_LEVELS {
         let pixels = scaled(LEVEL_FONT_PIXELS[level], scale);
@@ -257,6 +268,10 @@ fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
                 line_height[level] = metrics.tmHeight
                     + metrics.tmExternalLeading
                     + scaled(LEVEL_EXTRA_LEADING[level], scale);
+                let (top, bottom) =
+                    bold_ink_band(level as u8, scale, advance[level], line_height[level])?;
+                ink_top[level] = top;
+                ink_bottom[level] = bottom;
                 keep = true;
             }
         }
@@ -269,7 +284,77 @@ fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
     Some(LevelMetrics {
         advance,
         line_height,
+        ink_top,
+        ink_bottom,
     })
+}
+
+/// The rows of a line box that a level's bold face fills with ink: where
+/// the ink of its tallest glyphs — a capital and an ascender — begins and
+/// ends, counted from the line's own top. The box around ink is not the
+/// ink: the leading above the glyphs and the room the descent leaves
+/// below the baseline are not ink, and a layout that centres a line
+/// centres the ink itself. The ink is measured as it is drawn, by
+/// rendering the glyphs into a bitmap and scanning the rows they stand
+/// in, because the face's own metrics say where the box is, not where
+/// the ink stands in it. The bold face is the one measured, because the
+/// name line a layout centres is the bold face of its level.
+fn bold_ink_band(level: u8, scale: f32, advance: i32, line_height: i32) -> Option<(i32, i32)> {
+    // A capital and an ascender: the tallest glyphs a line stands in.
+    let sample = [b'H' as u16, b'l' as u16];
+    let width = advance * sample.len() as i32 + 2;
+    // The sample is drawn a line's own height into the bitmap, so its
+    // ink stands well inside it whatever the face does above its box.
+    let margin = line_height;
+    let height = line_height * 3;
+
+    let surface = DibSurface::create(width as u32, height as u32)?;
+    let font = create_font(
+        scaled(LEVEL_FONT_PIXELS[level as usize], scale),
+        &TextStyle {
+            bold: true,
+            ..plain_style(level)
+        },
+    );
+
+    let mut band = None;
+    unsafe {
+        // The bitmap's own bits are nothing until the glyphs stand
+        // in them, so they are cleared to black first: the ink is
+        // told apart from the page by being white.
+        let stride = width as usize * 4;
+        std::ptr::write_bytes(surface.bits, 0, stride * height as usize);
+
+        let previous_font = SelectObject(surface.dc, font);
+        // Only the glyphs' own ink is asked about, so nothing
+        // under them is painted.
+        SetBkMode(surface.dc, TRANSPARENT);
+        SetTextColor(surface.dc, COLORREF(0x00FF_FFFF));
+        let drawn = TextOutW(surface.dc, 0, margin, &sample).as_bool();
+        let _ = SelectObject(surface.dc, previous_font);
+        let _ = DeleteObject(font);
+
+        if drawn {
+            let rows = height as usize;
+            let bytes = std::slice::from_raw_parts(surface.bits as *const u8, stride * rows);
+            let mut first = None;
+            let mut last = None;
+            for row in 0..rows {
+                let ink = (0..width as usize).any(|column| {
+                    let at = row * stride + column * 4;
+                    bytes[at] != 0 || bytes[at + 1] != 0 || bytes[at + 2] != 0
+                });
+                if ink {
+                    first = first.or(Some(row as i32));
+                    last = Some(row as i32);
+                }
+            }
+            if let (Some(first), Some(last)) = (first, last) {
+                band = Some((first - margin, last - margin));
+            }
+        }
+    }
+    band
 }
 
 // ------------------------------------------------------------------ painting
