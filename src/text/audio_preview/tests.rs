@@ -31,7 +31,9 @@ fn card() -> Card {
 
 /// The same card as a pinned window shows it: the four controls it carries, and the state
 /// they are drawn from. Nothing is hovered or held, because what a test is about is where the
-/// buttons are rather than how a lit one looks.
+/// buttons are rather than how a lit one looks. The window buttons are up, because a test
+/// painting a card is a card a hand is near — the top border of the window, where the card's
+/// own rows begin.
 fn pinned() -> Card {
     Card {
         controls: Some(CardChrome {
@@ -39,6 +41,7 @@ fn pinned() -> Card {
             volume: 40,
             hovered: None,
             pressed: None,
+            window_buttons: true,
         }),
         ..card()
     }
@@ -800,4 +803,446 @@ fn the_controls_are_carved_out_of_the_bar_rather_than_out_of_the_card() {
 /// both the painting and the hit test read, which is what the test above is about.
 fn control_boxes_for(card: &Card, width: u32) -> Option<CardBoxes> {
     scrolled(card, width, 0).boxes
+}
+
+/// The pinned card with one of its two window buttons lit, the way the card is
+/// handed to the paint that draws a pointer resting on one.
+fn lit(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
+    Card {
+        controls: Some(CardChrome {
+            playing: false,
+            volume: 40,
+            hovered,
+            pressed,
+            window_buttons: true,
+        }),
+        ..pinned()
+    }
+}
+
+/// The two window buttons stand in the card's top corner, over the name line: the
+/// drawn boxes begin at the gap below the window's own top edge and reach into the
+/// name line's own rows — room the margin does not have, a button being twice the
+/// side the margin alone would hold — and the name keeps the box and the scroll it
+/// has always had, running underneath the buttons while they are up (see
+/// `the_name_runs_underneath_the_window_buttons_while_they_are_up`).
+#[test]
+fn the_window_buttons_stand_in_the_top_corner_over_the_name_line() {
+    let (width, _) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+    let page = scrolled(&pinned(), width, 0);
+    let boxes = page.boxes.as_ref().expect("a card that carries controls");
+
+    let dc = unsafe { CreateCompatibleDC(None) };
+    let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+    let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    // The name line is centred between the window's own top border
+    // and the rule under it: the ink of its glyphs — the neon circle
+    // and the name — is as far from the one as from the other. The
+    // buttons stand in the name's own rows, which the card has
+    // already, so they stand over a line that is centred rather than
+    // one that begins at the margin.
+    let ink_top = metrics.ink_top[HEADER_LEVEL as usize];
+    let ink_bottom = metrics.ink_bottom[HEADER_LEVEL as usize];
+    assert_eq!(
+        page.header_top + ink_top,
+        page.rule_top - (page.header_top + ink_bottom) - 1,
+        "the name line's ink is centred between the window's top border and the rule"
+    );
+
+    // A button is a square stood back from the window's own top edge by the
+    // gap, with the same gap to the card's right border and between the two of
+    // them — and a side twice what the margin alone would hold, which is room
+    // the margin does not have: the drawn box reaches into the name line's own
+    // rows, which is where a button that size ends.
+    let margin_side = metrics.padding - gap * 2;
+    for button in [&boxes.minimize, &boxes.close] {
+        assert_eq!(
+            button.drawn.top, gap,
+            "a drawn box stood back by the gap from the window's own top edge: {:?}",
+            button.drawn
+        );
+        assert_eq!(
+            button.drawn.bottom,
+            gap + margin_side * 2,
+            "and reaching into the name line's own rows, where a button twice the \
+             margin's own side ends: {:?}",
+            button.drawn
+        );
+        assert_eq!(
+            button.drawn.right - button.drawn.left,
+            margin_side * 2,
+            "a drawn side twice what the margin alone holds: {:?}",
+            button.drawn
+        );
+        assert!(
+            button.drawn.left >= 0 && button.drawn.right <= page.width as i32,
+            "and inside the card: {:?} against a card {} wide",
+            button.drawn,
+            page.width
+        );
+    }
+    assert_eq!(
+        boxes.close.drawn.right,
+        page.width as i32 - gap,
+        "the close stands back from the card's right border by the gap"
+    );
+    assert_eq!(
+        boxes.minimize.drawn.right,
+        boxes.close.drawn.left - gap,
+        "and the minimize stands beside it with the same gap between the two"
+    );
+
+    // The name's own box is the card's content box — the same box it is drawn
+    // in on a card with no buttons on it — and a name too long for it still has
+    // the whole width of it to scroll along.
+    let name = page.header.last().expect("the run the name is drawn in");
+    let plain = scrolled(&card(), width, 0);
+    let plain_name = plain.header.last().expect("the run the name is drawn in");
+    assert_eq!(
+        (name.x, name.width),
+        (plain_name.x, plain_name.width),
+        "the name's box is the box it has always been"
+    );
+    let long = "18 - The Longest Track Name On This Album (Remastered, 2026).flac";
+    assert!(
+        NameScroll::of(long, width, 96, options()).moves(),
+        "and a name the card has no room for still has a runway to scroll along"
+    );
+}
+
+/// While the two window buttons are up, the name runs underneath them:
+/// the box each stands in is the page's own colour, which is what keeps
+/// a name scrolling under one from running under its mark. The name's
+/// box and its scroll are unchanged, so a name the card has no room for
+/// still travels the whole width of the card — under the buttons and off
+/// the card's own edge.
+#[test]
+fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
+    let long = "18 - The Longest Track Name On This Album (Remastered, 2026).flac";
+    let mut named = card();
+    named.name = long.to_string();
+    named.controls = Some(CardChrome {
+        playing: false,
+        volume: 40,
+        hovered: None,
+        pressed: None,
+        window_buttons: true,
+    });
+
+    let (width, height) = measure(&named, 4096, 2160, 96, options()).expect("a measured card");
+    let page = scrolled(&named, width, 0);
+    let boxes = page.boxes.as_ref().expect("a card that carries controls");
+    let name_run = page.header.last().expect("the run the name is drawn in");
+
+    // The name scrolled to the end of its runway, where its last
+    // glyphs stand at the right edge of the card — inside the
+    // corner the buttons stand in.
+    let dc = unsafe { CreateCompatibleDC(None) };
+    let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+    let header_advance = metrics.advance[HEADER_LEVEL as usize];
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+    let offset = super::page::text_width(long, header_advance) - name_run.width;
+
+    let mut up = named.clone();
+    up.name_offset = offset;
+    let mut down = named;
+    down.name_offset = offset;
+    let chrome = down.controls.expect("a card that carries controls");
+    down.controls = Some(CardChrome {
+        window_buttons: false,
+        ..chrome
+    });
+
+    let up_painted = render(&up, width, height, 96, options()).expect("a painted card");
+    let down_painted = render(&down, width, height, 96, options()).expect("a painted card");
+
+    // The colors the paint reads, worked out here the same way: the
+    // page's own color, and the card's foreground — the ink the
+    // name's glyphs and the buttons' marks are painted in at rest,
+    // which is the same ink, so the two are told apart by row
+    // rather than by colour.
+    let theme = text_theme::loaded(options().theme).expect("the bundled theme");
+    let page_color = rgb(theme.background());
+    let foreground = rgb(theme.foreground());
+
+    // The ink of a pixel is its color read backwards: the buffer is
+    // blue, green, red, alpha, and a color is red, green, blue.
+    let pixel = |painted: &(Vec<u8>, u32, u32), x: i32, y: i32| -> [u8; 4] {
+        let index = (y as usize * width as usize + x as usize) * 4;
+        [
+            painted.0[index],
+            painted.0[index + 1],
+            painted.0[index + 2],
+            painted.0[index + 3],
+        ]
+    };
+    let ink = |color: [u8; 3]| [color[2], color[1], color[0], 255];
+
+    // The minimize's own box, which is the one the name's end lands
+    // inside, and the row its mark is drawn in: the middle of the
+    // box, which is the name line's own top row or the margin's
+    // last row above it — a row the name's ink never stands in,
+    // because a line's ink begins below the leading its box
+    // leaves above it.
+    let drawn = boxes.minimize.drawn;
+    let middle_row = (drawn.top + drawn.bottom) / 2;
+    // The rows of the name's own ink the box reaches: from the
+    // first row its glyphs stand in to the box's bottom, with
+    // the mark's row above them left out.
+    let name_rows = page.header_top + metrics.ink_top[HEADER_LEVEL as usize]..drawn.bottom;
+
+    // While the buttons are up, the mark is drawn in the middle of
+    // the box, and every row of the name's ink the box reaches is
+    // the page's own colour: the name is painted first and
+    // cleared out of the box, so it runs underneath the button
+    // rather than under its mark.
+    assert!(
+        (drawn.left..drawn.right).any(|x| pixel(&up_painted, x, middle_row) == ink(foreground)),
+        "the minimize's dash is drawn in the box's middle row while it is up"
+    );
+    for y in name_rows {
+        for x in drawn.left..drawn.right {
+            assert_eq!(
+                pixel(&up_painted, x, y),
+                ink(page_color),
+                "the name is cleared out of the box at ({x}, {y})"
+            );
+        }
+    }
+
+    // While the buttons are down, the corner is the name's own: no
+    // mark in the middle row, and the name's ink in the rows the box
+    // stands in — the 'l' of '.flac', an ascender with ink at the
+    // glyph's top rows, at the end of the runway inside this very box.
+    assert!(
+        (drawn.left..drawn.right).all(|x| pixel(&down_painted, x, middle_row) == ink(page_color)),
+        "no mark is drawn in the box's middle row while they are down"
+    );
+    assert!(
+        (page.header_top..drawn.bottom).any(|y| (drawn.left..drawn.right).any(|x| pixel(
+            &down_painted,
+            x,
+            y
+        ) != ink(
+            page_color
+        ))),
+        "and the name's ink stands in the corner where the button stood"
+    );
+}
+
+/// The two window buttons are answered where their glyphs are drawn and a little
+/// beyond them: the middle of a drawn box is the button, the hit box reaches the
+/// window's own top edge above it and a cushion below it, and a row past the
+/// cushion is nothing at all.
+#[test]
+fn a_window_button_is_answered_where_its_glyph_is_and_a_little_beyond_it() {
+    let (width, _) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+    let page = scrolled(&pinned(), width, 0);
+    let boxes = page.boxes.as_ref().expect("a card that carries controls");
+
+    // The gap between the two buttons, which is the card's own margin as far as
+    // a press is concerned: a button is a box, not a band.
+    let between = (boxes.minimize.drawn.right + boxes.close.drawn.left) / 2;
+
+    for (control, button) in [
+        (CardControl::Minimize, &boxes.minimize),
+        (CardControl::Close, &boxes.close),
+    ] {
+        let drawn = button.drawn;
+        let hit = boxes.rect(control).expect("a box to press");
+        let middle = (drawn.left + drawn.right) / 2;
+        let at = |x: i32, y: i32| control_at(x, y, width, 96, options(), true);
+
+        // The middle of the drawn box, and the window's own top row above it:
+        // the cushion the hit box reaches to is part of the button, which is
+        // what makes a mark this small a thing a hand can hit at all.
+        assert_eq!(
+            at(middle, (drawn.top + drawn.bottom) / 2),
+            Some(control),
+            "the middle of the drawn box is {control:?}"
+        );
+        assert_eq!(
+            at(middle, 0),
+            Some(control),
+            "and so is the window's own top row, where the cushion reaches"
+        );
+
+        // The rows under the drawn box, down to the hit box's own last row — the
+        // cushion below — and nothing past it.
+        assert_eq!(
+            at(middle, drawn.bottom),
+            Some(control),
+            "a row under the drawn box is still {control:?}"
+        );
+        assert_eq!(
+            at(middle, hit.bottom - 1),
+            Some(control),
+            "and so is the cushion's last row"
+        );
+        assert_eq!(
+            at(middle, hit.bottom),
+            None,
+            "while a row past it is nothing at all"
+        );
+
+        // The cushion below the drawn box is the gap the button stands in
+        // plus a pixel of the name line's invisible leading — the same share
+        // of the button at every scale — and the hit box it ends reaches into
+        // the name's own rows, which is the room the buttons stand in: they
+        // are twice the margin's own side, and a hit box that stopped at the
+        // name line's top would answer for less than the button it is asked
+        // about.
+        let dc = unsafe { CreateCompatibleDC(None) };
+        let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+        let scale = metrics.scale;
+        unsafe {
+            let _ = DeleteDC(dc);
+        }
+        assert_eq!(
+            hit.bottom,
+            drawn.bottom + drawn.top + scaled(1, scale),
+            "the cushion is the gap above the button plus a pixel of the leading"
+        );
+
+        // And the margin beside the buttons answers nothing, nor does the gap
+        // between the two of them.
+        assert_eq!(
+            at(0, (drawn.top + drawn.bottom) / 2),
+            None,
+            "the margin the buttons do not stand in is the card's own"
+        );
+        assert_eq!(
+            at(between, (drawn.top + drawn.bottom) / 2),
+            None,
+            "and so is the gap between the two buttons"
+        );
+    }
+}
+
+/// The two window buttons wear nothing but their marks: at rest each is drawn in
+/// the card's own ink, the one the pointer is on or holds is drawn in the accent
+/// the played part of the bar is drawn in, and the corner around them is the
+/// page's own color in every state — no wash, no box, no fill, in any state.
+#[test]
+fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
+    let (width, height) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+    let page = scrolled(&pinned(), width, 0);
+    let boxes = page.boxes.as_ref().expect("a card that carries controls");
+
+    // The colors the paint reads, worked out here the same way: the page's own
+    // color, the card's foreground, and the accent the played part of the bar is
+    // drawn in.
+    let theme = text_theme::loaded(options().theme).expect("the bundled theme");
+    let page_color = rgb(theme.background());
+    let foreground = rgb(theme.foreground());
+    let accent = readable(
+        rgb(theme.style_for_scopes(&["support.function"]).foreground),
+        page_color,
+    );
+
+    let resting = render(&pinned(), width, height, 96, options()).expect("a painted card");
+    let hovered = render(
+        &lit(Some(CardControl::Minimize), None),
+        width,
+        height,
+        96,
+        options(),
+    )
+    .expect("a painted card");
+    let held = render(
+        &lit(None, Some(CardControl::Close)),
+        width,
+        height,
+        96,
+        options(),
+    )
+    .expect("a painted card");
+
+    // The ink of a pixel is its color read backwards: the buffer is blue, green,
+    // red, alpha, and a color is red, green, blue.
+    let pixel = |painted: &(Vec<u8>, u32, u32), x: i32, y: i32| -> [u8; 4] {
+        let index = (y as usize * width as usize + x as usize) * 4;
+        [
+            painted.0[index],
+            painted.0[index + 1],
+            painted.0[index + 2],
+            painted.0[index + 3],
+        ]
+    };
+    let ink = |color: [u8; 3]| [color[2], color[1], color[0], 255];
+    let holds = |painted: &(Vec<u8>, u32, u32), box_: RECT, want: [u8; 4]| -> bool {
+        (box_.top..box_.bottom)
+            .any(|y| (box_.left..box_.right).any(|x| pixel(painted, x, y) == want))
+    };
+
+    // At rest, both buttons are drawn in the card's own ink — the ink the row's
+    // glyphs are painted in, verbatim.
+    for button in [&boxes.minimize, &boxes.close] {
+        assert!(
+            holds(&resting, button.drawn, ink(foreground)),
+            "a resting button is drawn in the card's own ink: {:?}",
+            button.drawn
+        );
+    }
+
+    // The one the pointer is on, and the one it holds, are drawn in the accent —
+    // and the button next to the one the pointer is on keeps the ink it had.
+    assert!(
+        holds(&hovered, boxes.minimize.drawn, ink(accent)),
+        "a hovered button is drawn in the accent"
+    );
+    assert!(
+        holds(&hovered, boxes.close.drawn, ink(foreground)),
+        "and the one beside it keeps the card's ink"
+    );
+    assert!(
+        holds(&held, boxes.close.drawn, ink(accent)),
+        "and a held button is drawn in the accent as well"
+    );
+
+    // The corner is the page's own color everywhere but the two drawn boxes, in
+    // every state: nothing of a button is drawn but its mark, so there is no
+    // wash under one and no box around one.
+    for painted in [&resting, &hovered, &held] {
+        for y in 0..page.header_top {
+            for x in 0..width as i32 {
+                let on_a_button = [&boxes.minimize.drawn, &boxes.close.drawn]
+                    .iter()
+                    .any(|drawn| {
+                        x >= drawn.left && x < drawn.right && y >= drawn.top && y < drawn.bottom
+                    });
+                if on_a_button {
+                    continue;
+                }
+                assert_eq!(
+                    pixel(painted, x, y),
+                    ink(page_color),
+                    "the corner is the page's own color at ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    // The minimize is one dash: a single pixel row of ink inside its box. The
+    // close is two strokes crossing, which is more than one row.
+    let rows_of_ink = |painted: &(Vec<u8>, u32, u32), box_: RECT| -> Vec<i32> {
+        (box_.top..box_.bottom)
+            .filter(|&y| (box_.left..box_.right).any(|x| pixel(painted, x, y) != ink(page_color)))
+            .collect()
+    };
+    assert_eq!(
+        rows_of_ink(&resting, boxes.minimize.drawn).len(),
+        1,
+        "the minimize is one dash, one pixel row thick"
+    );
+    assert!(
+        rows_of_ink(&resting, boxes.close.drawn).len() > 1,
+        "and the close is two strokes crossing, more than one row of them"
+    );
 }

@@ -830,6 +830,7 @@ pub(super) fn pinned_audio_chrome(playing: bool) -> Option<CardChrome> {
         volume: pin.volume.level,
         hovered: pin.audio_hovered,
         pressed: pin.audio_pressed,
+        window_buttons: pin.audio_window_buttons,
     })
 }
 
@@ -862,6 +863,7 @@ pub(super) fn pinned_audio_card_box(rect: ScreenRegion, path: &Path, dpi: u32) -
         volume: current_audio_volume(),
         hovered: None,
         pressed: None,
+        window_buttons: false,
     });
     let Some(card) = audio_card(path, None, None, 0, chrome) else {
         return rect;
@@ -911,6 +913,16 @@ pub(super) fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Optio
         current_audio_options(),
         true,
     )
+}
+
+/// Whether the card's two window buttons are showing at `y`, the pointer's row in
+/// the window's own coordinates: the top band as tall as the buttons' own hit boxes,
+/// which is the one band of the window a hand in is a hand near the window's top
+/// border or near the buttons themselves — the one thing on a sound's card that
+/// comes and goes, because a button twice the margin's own side stands in the name's
+/// own rows (see `audio_preview::window_button_band`).
+pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
+    y < audio_preview::window_button_band(pin.dpi, current_audio_options())
 }
 
 /// Put a window of somebody else's — the player's — where a pinned window's media band is.
