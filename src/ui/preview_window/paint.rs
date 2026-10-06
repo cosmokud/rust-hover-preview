@@ -148,12 +148,14 @@ pub(super) unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
 /// starts at rather than at the top of the surface, and the window is as large as the media
 /// plus what was added above and below it.
 ///
-/// Three kinds leave the media band empty, because the thing really drawn there is a window of
-/// its own placed over it: a video FFmpeg's player plays, and the two kinds the browser engine
-/// draws. What the band is then is nothing at all — alpha zero, which is what lets the window
-/// underneath be seen through it and, more to the point, be *clicked*: hit testing of a layered
-/// window is answered by the shape of its pixels, so a band of transparent ones is a band the
-/// player keeps for itself.
+/// Three kinds leave the band empty of this app's own pixels, because the thing really
+/// drawn there is a window of somebody else's: the two the browser engine draws, whose
+/// windows stand in the band, and a video FFmpeg's player plays, whose window stands in
+/// the whole of it — a pin whose chrome is drawn over its media is media the whole of the
+/// window down (see `pinned_band_rows`). What the band is then is nothing at all — alpha
+/// zero, which is what lets the window underneath be seen through it and, more to the
+/// point, be *clicked*: hit testing of a layered window is answered by the shape of its
+/// pixels, so a band of transparent ones is a band the player keeps for itself.
 pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     let Some(paint) = pinned_paint() else {
         return;
