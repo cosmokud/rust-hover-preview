@@ -818,27 +818,50 @@ fn lit(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
 
 /// The two window buttons stand in the card's top margin, above the name line:
 /// the drawn boxes are wholly inside the margin band and inside the card, and the
-/// name keeps the box and the scroll it has always had — the buttons are carved
-/// out of margin the card already has, and nothing of the name moves for them.
+/// name keeps the box and the scroll it has always had — the band is the margin
+/// grown to hold buttons twice the side the margin alone would hold, and nothing
+/// of the name moves for them.
 #[test]
 fn the_window_buttons_stand_in_the_top_margin_above_the_name_line() {
     let (width, _) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
     let page = scrolled(&pinned(), width, 0);
     let boxes = page.boxes.as_ref().expect("a card that carries controls");
 
-    // The margin is the band above the name line, and the name line begins at
-    // its bottom: a drawn box that reached the name would be a name running
-    // under a button at some scroll offset, which is the one thing the buttons
-    // must never do.
+    let dc = unsafe { CreateCompatibleDC(None) };
+    let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+    let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    // The band the buttons stand in is the room above the name line, and the name
+    // line begins at its bottom: a drawn box that reached the name would be a name
+    // running under a button at some scroll offset, which is the one thing the
+    // buttons must never do. The band is the margin grown to hold a button twice
+    // the side the margin alone would hold — that side doubled, stood back by the
+    // same gap above it and the same gap below it — which is the room the card
+    // itself grew by.
     assert_eq!(
         page.header_top,
-        metrics_padding(),
-        "the name line begins at the margin's bottom"
+        window_button_band(&metrics),
+        "the name line begins at the band's bottom"
+    );
+    let margin_side = metrics.padding - gap * 2;
+    assert_eq!(
+        page.header_top,
+        margin_side * 2 + gap * 2,
+        "the band is a doubled button stood back by its two gaps"
     );
     for button in [&boxes.minimize, &boxes.close] {
+        assert_eq!(
+            button.drawn.right - button.drawn.left,
+            margin_side * 2,
+            "a drawn side twice what the margin alone holds: {:?}",
+            button.drawn
+        );
         assert!(
             button.drawn.top >= 0 && button.drawn.bottom <= page.header_top,
-            "a drawn box wholly inside the margin: {:?}",
+            "a drawn box wholly inside the band: {:?}",
             button.drawn
         );
         assert!(

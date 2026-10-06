@@ -73,9 +73,10 @@ pub(super) struct BarRow {
 /// out of the bar's line instead of the card growing to hold them (see `control_boxes`).
 pub(super) fn bar_row(metrics: &TextMetrics) -> BarRow {
     BarRow {
-        // The same walk down the page `build_page` makes, from the top margin to the bar: the
-        // name, the rule under it, the facts, and the gap the bar is set out after.
-        top: metrics.padding
+        // The same walk down the page `build_page` makes, from the top band to the bar: the
+        // window buttons' margin, the name, the rule under it, the facts, and the gap the
+        // bar is set out after.
+        top: window_button_band(metrics)
             + metrics.line_height[HEADER_LEVEL as usize]
             + scaled(RULE_GAP_PIXELS, metrics.scale)
             + scaled(RULE_PIXELS, metrics.scale)
@@ -146,9 +147,9 @@ pub(super) struct CardBoxes {
 /// answered against.
 ///
 /// The two are not the same box, and that is the whole of the shape: the button is
-/// very small — the margin's own height less the room around it — so a hand is
-/// given the window's own top edge above the drawn box and a sliver of the name
-/// line's invisible leading below it (see [`window_button_boxes`]).
+/// small — twice the side the top margin alone would hold — so a hand is given the
+/// window's own top edge above the drawn box and a sliver of the name line's
+/// invisible leading below it (see [`window_button_boxes`]).
 #[derive(Clone, Copy)]
 pub(super) struct WindowButtonBox {
     /// The box the button's glyph is drawn in.
@@ -251,19 +252,38 @@ pub(super) fn control_boxes(
     })
 }
 
+/// The side one of the two window buttons is drawn at: twice what the card's own top
+/// margin would hold on its own — the margin's height less the gap above the button
+/// and the gap below it — which is the whole of why the band the buttons stand in is
+/// grown past the margin (see [`window_button_band`]).
+fn window_button_side(metrics: &TextMetrics) -> i32 {
+    let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
+    (metrics.padding - gap * 2).max(0) * 2
+}
+
+/// The band the two window buttons stand in: the side a button is drawn at, plus the
+/// gap above it to the window's own top edge and the gap below it to the name line's
+/// top — which is where the name line begins, and the room the card grew by to hold
+/// buttons twice the side the margin alone would hold (see [`window_button_side`]).
+pub(super) fn window_button_band(metrics: &TextMetrics) -> i32 {
+    let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
+    window_button_side(metrics) + gap * 2
+}
+
 /// The two window buttons a pinned card carries in its top margin: the minimize that shrinks the
 /// pin into the bubble it leaves, and the close that ends the pin, the player and the window
 /// together.
 ///
-/// The card's top margin is the band the name line begins below, so each button is a square the
-/// margin's own height less the gap above it and the gap below it, stood against the card's right
-/// border with the same gap on that side and between the two of them. They are carved out of
-/// margin the card already has — the bargain the bar-row controls make as well — so a card that
-/// carries them is the card a hover's is and the name keeps the whole width of the card to
-/// scroll across (see `build_page`).
+/// The card's top margin is the band the name line begins below, so each button is a square
+/// stood against the card's right border with the same gap on every side — above it to the
+/// window's own top edge, below it to the name line, between the two of them, and to the
+/// border — and a side twice what the margin alone would hold, which is the room the band
+/// grew to hold (see [`window_button_band`]). The name keeps the whole width of the card to
+/// scroll across, and the buttons stand above the line it scrolls in, so no name ever runs
+/// under one at any length or any scroll offset (see `build_page`).
 ///
 /// A button's *hit* box is its drawn box widened upward to the window's own top edge and by the
-/// cushion below it: the two buttons are very small, so a hand is given the room above them and
+/// cushion below it: the two buttons are small, so a hand is given the room above them and
 /// a pixel of the name line's invisible leading — the one band of the line the name's glyphs do
 /// not sit in. The leading is read off the font the name is set in, and where a display scale
 /// yields a font with none of it the cushion stops at the line's own top instead, so a hit box
@@ -273,9 +293,7 @@ pub(super) fn window_button_boxes(
     width: i32,
 ) -> (WindowButtonBox, WindowButtonBox) {
     let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
-    // The margin's own height less the gap above and the gap below, which is what
-    // fixes the side: a button is never taller than the band it stands in.
-    let side = (metrics.padding - gap * 2).max(0);
+    let side = window_button_side(metrics);
 
     // The close against the right border, and the minimize beside it with the same
     // gap between them as each has to the border.
@@ -299,7 +317,7 @@ pub(super) fn window_button_boxes(
     // at every scale (see `WINDOW_BUTTON_CUSHION_PIXELS`).
     let leading = metrics.internal_leading[HEADER_LEVEL as usize];
     let cushion = scaled(WINDOW_BUTTON_CUSHION_PIXELS, metrics.scale);
-    let bottom = (minimize.bottom + cushion).min(metrics.padding + leading);
+    let bottom = (minimize.bottom + cushion).min(window_button_band(metrics) + leading);
 
     (
         WindowButtonBox {
@@ -401,9 +419,10 @@ pub(super) fn build_page(
     let width = (content + padding * 2).clamp(1, box_width.max(1) as i32) as u32;
 
     // A card with no room for a name and a line under it is a card that cannot be drawn, which
-    // is the answer an archive page gives in the same place.
+    // is the answer an archive page gives in the same place. The name begins below the window
+    // buttons' band, so that band is room a drawable card has to hold.
     if (width as i32) < padding * 2 + body_advance
-        || (box_height as i32) < padding * 2 + header_height
+        || (box_height as i32) < window_button_band(metrics) + padding + header_height
     {
         return empty_page(width, padding);
     }
@@ -443,7 +462,9 @@ pub(super) fn build_page(
         },
     ];
 
-    let mut top = padding;
+    // The walk begins below the band the two window buttons stand in — the top
+    // margin grown to hold them (see `window_button_band`).
+    let mut top = window_button_band(metrics);
     let header_top = top;
     top += header_height + rule_gap;
     let rule_top = top;
