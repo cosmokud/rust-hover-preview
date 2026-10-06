@@ -41,7 +41,9 @@ Almost everything is previewed by **Windows 11 and this app alone** — a codec 
 | The media engine Windows 11 ships | `[video]` | 3g2, 3gp, 3gpp, asf, avi, dvr-ms, m1v, m2t, m2ts, m2v, m4v, mkv, mov, mp4, mpe, mpeg, mpg, mts, qt, ts, vob, webm, wmv |
 | [FFmpeg](#optional-enable-video-preview-with-ffmpeg)'s player (`ffplay`) | `[ffmpeg]` | 264, 265, 266, apv, av1, avc, avs, avs2, avs3, bik, bk2, c93, cavs, cdg, cdxl, cin, cpk, dav, dif, divx, drc, dv, evc, f4v, flm, flv, gxf, h261, h263, h264, h265, h266, h26l, hevc, ifv, imx, ismv, ivf, ivr, kux, m2p, mj2, mjpeg, mjpg, mk3d, moflex, mpv, mve, mvi, mxf, mxg, nsv, nut, obu, ogm, ogv, pmp, psp, rcv, rm, rmvb, roq, rsd, smk, str, swf, thp, tod, tp, tr, ty, ty+, usm, vc1, vc2, viv, vro, vvc, vw, wtv, xl, xmv, y4m, yop |
 
-Which engine plays a name is the machine's answer: the media engine Windows has is asked first and an installed FFmpeg second, and where FFmpeg is installed its player plays every video there is — both lists or neither. On a machine without it, an `[ffmpeg]` name shows no preview at all.
+Which engine plays a film is **Engine → Select Engine → Video**, a setting rather than the machine's answer. **Best** (`default`) is the machine's own answer: a film at or under 3.2 megapixels is drawn in the preview window by the media engine Windows has, and a larger one — or one that could not be measured — is handed to FFmpeg's player where FFmpeg is installed. **Native** names the media engine alone, **FFmpeg** names `ffplay` alone, and **Native (FFmpeg above 3.2MP)** states that size rule plainly. A **Fallback** switch at the top of the submenu (`default` on) lets a chosen engine that cannot play a given file fall through to the other; with it off, the engine you chose stands alone. The lists still decide which engine is *asked* about a name: an `[ffmpeg]` name is FFmpeg's alone, and on a machine without FFmpeg it shows no preview at all.
+
+A video's letterboxed picture is cropped to what is in it, whichever engine plays it, so a black-barred file fills its box instead of growing bars inside it, and a film smaller than its box is scaled up to fill it rather than drawn at its native size in the middle.
 
 ### Audio
 
@@ -137,7 +139,7 @@ No Rust toolchain is needed. If upgrading from an earlier version, the installer
 
 ### Optional: Enable Video Preview with FFmpeg
 
-FFmpeg adds the video formats and the audio ones Windows does not decode — the `[ffmpeg]`, `[video]` and `[audio]` lists. `ffplay` and `ffprobe` need to be in your `PATH`.
+FFmpeg adds the video formats and the audio ones Windows does not decode — the `[ffmpeg]` list, and the `[audio]` names Windows' own decoders do not reach. It also plays any `[video]` name the media engine turns down, or every video there is, where **Engine → Select Engine → Video** names FFmpeg. `ffplay` and `ffprobe` need to be in your `PATH`.
 
 **Option A: winget**
 
@@ -251,7 +253,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 
 - **Enable Preview** — Turn previews on or off.
 - **Pin Mode** — Everything about pinning, in one place.
-  - **Enable (Space)** — Turn pinning on or off. Pressing the key while a preview is up turns it into a window of its own: captioned, movable, always on top, and still there when the pointer leaves. Its edges resize it, **Maximize** fits it to the screen, and **Minimize** collapses it into a round bubble. The caption also carries **Previous**, **Next**, **Open With** and **Open With...**: the first two step the pin through the sibling files in the folder it was taken up in, in the order the listing is showing them — stepping over any one of them that will not open rather than stopping there, so a press always lands on a file you can look at — the third opens the file in whatever program Windows has registered for it, and the fourth asks you to pick one from the list Windows keeps of the programs that could — the way out of a pin and into the editor or player that owns the format. The two hand-off buttons name themselves while the pointer rests on them, and **Open With** names the program it would use. Clicking the window gives it the keyboard, and then the arrow keys step it and `Escape` closes it — the pin key itself only ever puts a pin up and brings back a bubble; it never hides one. A pinned sound is the one kind that carries controls of its own, and both are on the card: `Space` holds the sound where it stood and sets it going again from there, and a click on the bar under the clock takes the file to that second. A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied. The key is named in the item and can be changed in `config.ini` (`pin_key`).
+  - **Enable (Space)** — Turn pinning on or off. Pressing the key while a preview is up turns it into a window of its own: captioned, movable, always on top, and still there when the pointer leaves. Its edges resize it, **Maximize** fits it to the screen, and **Minimize** collapses it into a round bubble. The caption also carries **Previous**, **Next**, **Open With** and **Open With...**: the first two step the pin through the sibling files in the folder it was taken up in, in the order the listing is showing them — stepping over any one of them that will not open rather than stopping there, so a press always lands on a file you can look at — the third opens the file in whatever program Windows has registered for it, and the fourth asks you to pick one from the list Windows keeps of the programs that could — the way out of a pin and into the editor or player that owns the format. The two hand-off buttons name themselves while the pointer rests on them, and **Open With** names the program it would use. Clicking the window gives it the keyboard, and then the arrow keys step it and `Escape` closes it — the pin key itself only ever puts a pin up and brings back a bubble; it never hides one. A pinned video carries a transport bar of its own — play/pause, a draggable seek bar and the two clocks, with a read-out bar instead where FFmpeg's player is the one playing it, since that player can be told nothing — and a pinned sound's card carries four buttons of its own: **Previous**, **Play/Pause** and **Next**, and a **Volume** button. `Space` holds a sound where it stood and sets it going again from there, and a click on a sound's bar takes the file to that second. A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied. The key is named in the item and can be changed in `config.ini` (`pin_key`).
   - **Update Preview** — Whether a pin that is up is shown the file you pick next.
     - **Enabled** — On by default. A file you click, or one the keyboard selects, is shown where the window already stands, rather than as a second preview beside it. A file named this way that cannot be shown leaves the window on the file it already had — stepping over a file that will not open belongs to the caption's own **Previous** and **Next**, which you pressed. A sound's card is drawn at its own size, in the middle of that box. The keyboard half follows Explorer, so it pauses while a pinned window holds the keyboard — click back into the listing and it carries on.
     - **On Hover** — Off by default. On, the pointer's own hover is one of the ways a pin is told about a file, the way a Quick Look window follows a listing. Greyed while **Enabled** is off.
@@ -301,12 +303,14 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Remember** — The row under **Normalize**, above the levels: whether a level moved with a pinned window's own volume knob is the level the next preview is played at. Off by default for both halves, so a knob belongs to the window it was turned on and the level in the list above it is what every preview starts from. With it on, letting go of the knob writes the level to `config.ini` and the next hover — or the next film — is played at it; nothing is rebuilt on screen and a preview already playing is left where it is. A pinned window also keeps that level across the other kind: a sound turned up to 100% and then stepped onto a film and back is played at 100% again, where a knob left on a film is kept for films rather than for the sounds either side of it.
   - **Audio Seek** — Where in a file a hovered sound starts playing: **Remember** (`default`) picks it up where the last hover left it, **From the Start** always begins at the beginning, **From the Middle** drops it half way in, and **Random** anywhere at all. The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen. Whatever a sound is started at, it goes back to the beginning of the file when it reaches the end of it and loops from there for as long as the hover lasts. A video is always played from its beginning.
 - **Performance**
-  - **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files. **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
+  - **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`. **`Image (RAM)`** = decoded frames kept in memory. **`Document (Disk)`** = engine-drawn pages kept as temp files. **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files. **`General (Disk)`** = the subtitle tracks a film's embedded ones are copied into, kept as temp files; `0` draws a film without its subtitles.
   - **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
   - **Tick** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`. Lower answers a move sooner; higher is lighter on CPU and Explorer.
+  - **Hardware Acceleration** — **Video** (checked by default): a video FFmpeg's player has is decoded on the graphics card rather than on a core. It is a setting about this build's FFmpeg rather than about a kind of file — a file the media engine plays is decoded by Windows either way, and a machine with no device FFmpeg can decode on is the one the setting is for, where FFmpeg falls back by itself.
 - **Engine**
   - **AFK Timer** — How long Explorer may be unreachable before a non-**Persistent** engine is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`. Counts time when no Explorer window is reachable on any monitor. A second Explorer window keeps engines warm. Each **`… TTL`** submenu has a **Persistent** toggle at the top.
   - **Select Engine → Office** — Which engine draws Office documents: **Microsoft Office** (`default`) uses the format’s own app and falls back to LibreOffice; **LibreOffice** draws every Office document. LibreOffice is greyed out if not installed.
+  - **Select Engine → Video** — Which engine plays a video: **Best** (`default`), the machine's own answer — the media engine for a film at or under 3.2 megapixels, FFmpeg's player for a larger one or one it could not measure; **Native** — the media engine alone; **FFmpeg** — `ffplay` alone; **Native (FFmpeg above 3.2MP)** — that size rule stated plainly. A **Fallback** switch at the top (`default` on) lets a chosen engine that cannot play a given file fall through to the other; off, the engine you chose stands alone. **FFmpeg** and **Native (FFmpeg above 3.2MP)** are greyed out where `ffplay` is not installed.
   - **Microsoft Office TTL** — With **Persistent** on: how long a family’s Office app stays warm: Indefinitely, `1 hour`, `30 minutes`, `10 minutes` (`default`), `5 minutes`, `1 minute`, `0 seconds`. Off: kept while Explorer is reachable, then let go by **AFK Timer**.
   - **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats. A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB. `0 seconds` means one engine per document. Both TTLs apply to **Persistent** engines; non-persistent ones use **AFK Timer**. Greyed out if LibreOffice is not installed.
   - **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm. Off: let go by **AFK Timer**. Greyed out if WebView2 is missing.
@@ -343,6 +347,7 @@ run_at_startup=true
 
 ; Preview Types
 archive_preview_enabled=true
+audio_preview_enabled=true
 design_preview_enabled=true
 document_preview_enabled=true
 ebook_preview_enabled=true
@@ -403,9 +408,11 @@ video_volume=0
 ; Performance
 decode_budget_gb=1
 document_cache_mb=256
+general_disk_cache_mb=128
 image_cache_mb=64
 image_disk_cache_mb=512
 tick_ms=15
+video_hw_accel=true
 
 ; Engine
 afk_timer_seconds=60
@@ -414,6 +421,8 @@ libreoffice_persistent=false
 office_engine=microsoft_office
 office_engine_idle=600
 office_engine_persistent=false
+video_engine=best
+video_engine_fallback=true
 webview_idle=600
 webview_persistent=false
 
@@ -436,14 +445,19 @@ Here’s what this .INI does:
 
 - `*_preview_enabled`: turn each preview type on or off. File lists stay normal.
 - `extensions` under each kind's section: which files that kind previews — `image`, `video`, `ffmpeg`, `audio`, `text` (which also carries a `names` key for files with no extension), `archive`, `office`, `font`, `design`, `vector`, `ebook`, `libre`, `magick`, `peazip`, `calibre`. No dots. An entry with a dot, like `tar.gz`, matches the end of the file name. A name two sections hold belongs to the earlier kind, so the kind decides which switch applies to it.
-- Which engine plays a video or a sound is the machine's answer rather than a setting: the media engine Windows has is asked first and an installed FFmpeg second, and the two lists only decide which engine is *asked* about a name first.
+- Which engine plays a sound is the machine's answer rather than a setting: the media engine Windows has is asked first and an installed FFmpeg second. A video's engine is the `video_engine` setting; the two lists decide which engine is *asked* about a name — the media engine takes only `[video]` names, and an `[ffmpeg]` name is FFmpeg's alone.
 
 **Memory and cache**
 
 - `image_cache_mb`: memory for decoded image frames. Default `64`, max `2048`; `0` holds nothing.
 - `document_cache_mb`: disk cache for rendered document pages. Default `256`, max `2048`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
 - `image_disk_cache_mb`: disk cache for the pictures ImageMagick developed. Default `512`, max `2048`; `0` keeps nothing between hovers but still develops the current one. Pictures live under `%TEMP%\rust-hover-preview\image`; the least recently read one is removed first, and they survive a restart.
+- `general_disk_cache_mb`: disk cache for the subtitle tracks a film's embedded ones are copied into. Default `128`, max `2048`; `0` extracts nothing, and a film whose subtitles are embedded is drawn without them. Files live under `%TEMP%\rust-hover-preview\general`, least recently used first.
 - `decode_budget_gb`: most memory one hover may use. Default `1`, range `0.25`–`64`. A file over the limit shows no preview.
+
+**Performance**
+
+- `video_hw_accel`: whether a video FFmpeg's player has is decoded on the graphics card rather than on a core — the tray's **Performance → Hardware Acceleration → Video**. Default `true`. It is a setting about this build's FFmpeg rather than about a kind of file: a file the media engine plays is decoded by Windows either way, and a machine with no device FFmpeg can decode on is the one the setting is for, where FFmpeg falls back by itself.
 
 **HDR**
 
@@ -454,6 +468,8 @@ Here’s what this .INI does:
 
 - `spinner_delay_ms`: wait before showing the loading spinner. Default `250`; `0` shows it immediately. One delay covers all preview types, and a pinned window being shown another file with it: a pin that has to wait shows a spinner of its own in the middle of itself, drawn over the file it is still showing rather than in place of it, and the window is never hidden while it waits.
 - `office_engine`: `microsoft_office` default, falls back to LibreOffice when needed; or `libreoffice`, which always uses LibreOffice. If LibreOffice is missing, it falls back and the tray row is greyed out.
+- `video_engine`: which engine plays a video: `best` (default), `native`, `ffmpeg`, or `hybrid`. **Best** is the machine's own answer — `hybrid` where FFmpeg is installed (the media engine draws a film at or under 3.2 megapixels, FFmpeg's player takes a larger one or one it could not measure) and `native` where it is not. `native` names the media engine alone, `ffmpeg` names `ffplay` alone, and `hybrid` states that size rule plainly. A choice this machine cannot supply is read as `best`.
+- `video_engine_fallback`: `true` (default) lets a chosen engine that cannot play a given file fall through to the other; `false` makes the engine you chose stand alone. Read only where `video_engine` names an engine — **Best** walks both either way.
 - `libreoffice_idle`: seconds LibreOffice is kept after its last page, or `indefinitely`. Default `600`; `0` launches it per document.
 - `office_engine_idle`: same idea for the Office engine. Default `600`; `0` lets it go after drawing a page.
 - `afk_timer_seconds`: seconds with no Explorer window before a non-persistent engine is released. Default `60`, max one day. `0` releases immediately.
@@ -501,6 +517,7 @@ Here’s what this .INI does:
 - `magick_preview_enabled` and `peazip_preview_enabled`: not read. ImageMagick pictures use `image_preview_enabled`; PeaZip archives use `archive_preview_enabled`.
 - `libre_preview_enabled` and `libre_scale`: gone. Use `document_preview_enabled` and `document_scale`.
 - `office_cache_mb` and `libre_cache_mb`: gone. Use `document_cache_mb`. If both old ones exist, the larger is read once, then both are removed.
+- `text_preview_full_mode`: gone. A pinned text preview comes up in full mode instead, so it scrolls and its text can be selected and copied.
 - No `magick_idle`, `peazip_idle`, or `calibre_idle`. ImageMagick, PeaZip, and Calibre are converters, not engines kept open. A second hover usually costs only a cache hit.
 
 **Extension list behavior**
