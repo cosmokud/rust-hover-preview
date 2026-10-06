@@ -70,6 +70,20 @@ pub(super) const BAR_REACH_PIXELS: i32 = 8;
 pub(super) const CONTROL_SIDE_PIXELS: i32 = 16;
 pub(super) const CONTROL_GAP_PIXELS: i32 = 2;
 
+/// The room around the two window buttons a pinned card carries in its top
+/// margin: between each of them and the card's own border, and between the
+/// two of them. A logical pixel, like every other pixel of the card — at
+/// 200% it is two physical pixels, and the buttons stay the same proportion
+/// of the card they are part of.
+pub(super) const WINDOW_BUTTON_GAP_PIXELS: i32 = 2;
+
+/// How far below a drawn window button a press is still answered as a press
+/// on it: the gap below the drawn box, plus a pixel of the name line's own
+/// invisible leading — room the line has and the name's glyphs do not, which
+/// is what keeps the cushion from ever reaching the glyphs (see
+/// `window_button_boxes`).
+pub(super) const WINDOW_BUTTON_CUSHION_PIXELS: i32 = 3;
+
 /// How long the block takes to cross a bar of unknown length, in seconds, and the share of the
 /// bar it takes.
 pub(super) const CHASE_SECONDS: f64 = 2.0;
@@ -137,7 +151,8 @@ pub(crate) struct Card {
 }
 
 /// The parts of a pinned sound's card a pointer can be on: the three buttons at the left of the
-/// bar, the bar itself, and the volume button at its right.
+/// bar, the bar itself, the volume button at its right, and the two window buttons standing in
+/// the card's top margin.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CardControl {
     /// The file before the one pinned, the walk the caption's own arrow starts.
@@ -151,6 +166,14 @@ pub(crate) enum CardControl {
     /// The button that opens the volume popup, which is the pin's own control rather than the
     /// player's.
     Volume,
+    /// The window button that shrinks the pin into the bubble it leaves, which stands where
+    /// the button did (see `pinned_minimize_box`). It is a window button rather than one of
+    /// the card's own controls because what it acts on is the pin rather than the sound: it
+    /// is asked for as the pin's own minimize command (see `pinned_audio_control_release`).
+    Minimize,
+    /// The window button that ends the pin, the player and the window together, which is the
+    /// pin's own close command asked for (see `pinned_audio_control_release`).
+    Close,
 }
 
 /// What a card's own controls are saying, and what a pointer is doing on them: whether a player
@@ -400,11 +423,18 @@ pub(crate) fn bar_share_at(
 /// by one arithmetic and drawn by another answers a press in the middle of the facts line (see
 /// `BarRow`).
 ///
-/// The volume button is answered first, and the order is not arbitrary: it is this app's own
-/// control rather than the player's, exactly as the transport bar's own volume button is answered
-/// before that bar's play button (see `pin_chrome::transport_part_at`), and the two are the same
-/// control drawn in two places. The seek is answered last because its band is a band rather than a
-/// box, and a band is only worth asking about once every box in the row has been.
+/// The two window buttons in the top margin are answered before anything else, and the order is
+/// not arbitrary: a press on one is a press on a button of the window, which is a thing a hand
+/// is on before it is a hand on the card, and the cushion above a drawn button reaches into the
+/// name line's own leading — the one band of the card the row's controls do not share rows with,
+/// which is what keeps the two questions apart even where they overlap (see `window_button_boxes`).
+///
+/// The volume button is answered next, and the order after that is not arbitrary either: it is
+/// this app's own control rather than the player's, exactly as the transport bar's own volume
+/// button is answered before that bar's play button (see `pin_chrome::transport_part_at`), and
+/// the two are the same control drawn in two places. The seek is answered last because its band
+/// is a band rather than a box, and a band is only worth asking about once every box in the row
+/// has been.
 pub(crate) fn control_at(
     x: i32,
     y: i32,
@@ -422,10 +452,16 @@ pub(crate) fn control_at(
         let boxes = control_boxes(&metrics, width, controls)?;
         let row = bar_row(&metrics);
 
+        // The two window buttons, which a hand on the top margin is on before
+        // it is on anything the card carries lower down (see the order above).
         boxes
-            .rect(CardControl::Volume)
-            .filter(|rect| holds(*rect, x, y))
-            .map(|_| CardControl::Volume)
+            .window_button_at(x, y)
+            .or_else(|| {
+                boxes
+                    .rect(CardControl::Volume)
+                    .filter(|rect| holds(*rect, x, y))
+                    .map(|_| CardControl::Volume)
+            })
             .or_else(|| {
                 boxes
                     .rect(CardControl::Previous)
@@ -461,6 +497,11 @@ pub(crate) fn control_at(
 /// The box one of a pinned card's own controls is drawn in, in the card's own coordinates — the
 /// box a press on it is answered against, read back out of the same arithmetic (see
 /// [`control_at`]).
+///
+/// For the two window buttons in the top margin this is the box a press is answered against
+/// rather than the box the glyph is drawn in: the drawn box plus the cushion above it (see
+/// [`WindowButtonBox`]), which is the box the bubble a minimize leaves stands on (see
+/// `pinned_minimize_box`).
 ///
 /// A card that carries no controls has no box for any of them, which is the answer a hover's card
 /// gives for every one: a hover's window is a window nobody is in.

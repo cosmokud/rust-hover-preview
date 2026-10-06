@@ -80,7 +80,7 @@ pub(super) const GLYPH_PIXELS: f32 = 10.0;
 /// until the slice built from this has ended. A raw pointer rather than a `&mut`, because
 /// the surface is reached by shared reference and the pixels behind it are the only thing
 /// written: the caller gets a slice for the length of its own block, and nothing else.
-pub(super) unsafe fn surface_pixels(surface: &DibSurface) -> *mut u8 {
+pub(crate) unsafe fn surface_pixels(surface: &DibSurface) -> *mut u8 {
     surface.bits()
 }
 
@@ -422,7 +422,11 @@ pub(super) fn stroke_arc(
 }
 
 /// A line between two points, drawn as the pixels within half its thickness of it.
-pub(super) fn stroke_segment(
+///
+/// Every mark here is drawn through it, and so is a pinned sound's card's own two
+/// window buttons, whose marks are a dash and a cross this size cannot be told
+/// apart from anything else (see `audio_preview::paint_window_button`).
+pub(crate) fn stroke_segment(
     buffer: &mut [u8],
     width: i32,
     from: (f32, f32),

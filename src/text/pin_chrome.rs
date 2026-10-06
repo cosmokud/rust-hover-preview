@@ -34,7 +34,7 @@ pub(crate) use bubble::{
 pub(crate) use caption::{
     button_at, button_boxes, measure_caption_text, paint_caption, Caption, CaptionButton,
 };
-pub(crate) use primitives::ChromePalette;
+pub(crate) use primitives::{stroke_segment, surface_pixels, ChromePalette};
 pub(crate) use transport::{
     paint_card_control, paint_transport, paint_volume_popup, transport_part_at, transport_share_at,
     volume_popup_from_button, volume_popup_layout, volume_share_at, ControlGlyph, TransportPart,

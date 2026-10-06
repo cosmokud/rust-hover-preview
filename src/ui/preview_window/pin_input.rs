@@ -931,6 +931,13 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
             // The panel is over this app's own card rather than over a player's window, so raising
             // the pin's window for it is harmless rather than necessary (see `toggle_pin_volume`).
             CardControl::Volume => toggle_pin_volume(hwnd),
+            // The two window buttons in the top margin act on the pin rather than on the sound,
+            // and are the one way out of a pinned sound that does not ask for the keyboard: the
+            // minimize shrinks the pin into the bubble it leaves, and the close ends the pin, the
+            // player and the window together. Both are the pin's own commands, which the loop
+            // answers the way it answers a caption button (see `pin_command_request`).
+            CardControl::Minimize => ask_pin(PinCommand::Minimize),
+            CardControl::Close => ask_pin(PinCommand::Close),
             CardControl::Seek => {}
         }
     }

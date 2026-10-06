@@ -95,8 +95,32 @@ pub(super) fn collapse_pin() {
 /// nothing to maximize carries two buttons where another carries three, which moves the minimize
 /// without moving the corner (see `pin_chrome::button_boxes`). What the buttons are laid out in is
 /// the caption strip across the top of the window (see `pinned_caption_height`).
+///
+/// A sound has no caption, and its minimize is one of the two window buttons its card carries in
+/// its top margin instead: the box a press on it is answered against, which reaches to the window's
+/// own top edge and so puts the bubble in the top-right corner where every other pin's bubble
+/// stands (see `audio_preview::control_box`).
 pub(super) fn pinned_minimize_box(pin: &PinnedPreview) -> ScreenRegion {
     let window = pin.window_box();
+
+    if pin_shows_an_audio_card(pin) {
+        let (width, _) = pin.window_size();
+        if let Some(box_) = audio_preview::control_box(
+            CardControl::Minimize,
+            width as u32,
+            pin.dpi,
+            current_audio_options(),
+            true,
+        ) {
+            return (
+                window.0 + box_.left,
+                window.1 + box_.top,
+                window.0 + box_.right,
+                window.1 + box_.bottom,
+            );
+        }
+    }
+
     let caption = pin.caption;
 
     let minimize = pin_chrome::button_boxes(
