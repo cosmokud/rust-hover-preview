@@ -586,12 +586,13 @@ fn the_card_asks_to_be_repainted_when_its_hover_changes() {
 #[test]
 fn a_sound_has_no_transport_strip_and_no_caption() {
     // The video the media engine plays: a strip of chrome over a picture, both of which the
-    // pointer asks for. A video FFmpeg plays keeps its bands and shows them always, because the
-    // band is where the player's own window stands.
+    // pointer asks for. A video FFmpeg plays is asked for the same way: the band is the whole
+    // of its window, and the pin's own window is the one on top for as long as any strip of
+    // its chrome is showing (see `pin_overlay_chrome`).
     assert!(pin_transport_kind(Some(MediaType::NativeVideo)));
     assert!(pin_hides_chrome(Some(MediaType::NativeVideo)));
     assert!(pin_transport_kind(Some(MediaType::Video)));
-    assert!(!pin_hides_chrome(Some(MediaType::Video)));
+    assert!(pin_hides_chrome(Some(MediaType::Video)));
     assert!(!pin_hides_chrome(None));
 
     assert!(
@@ -619,9 +620,11 @@ fn a_sound_has_no_transport_strip_and_no_caption() {
 
 #[test]
 fn the_chrome_is_drawn_over_the_media_of_the_kinds_this_app_draws_itself() {
-    // A picture, a texture, an animation, a drawing, a page of a document or a book, and the
-    // video the media engine decodes: this app holds the band of every one of them, so a strip
-    // of chrome can be painted over it.
+    // A picture, a texture, an animation, a drawing, a page of a document or a book, and
+    // either video there is — the one the media engine decodes and the one FFmpeg's player
+    // plays: the band of every one of them is this app's to paint a strip of chrome over
+    // (the player's own window stands behind the pin's for as long as any strip is showing,
+    // see `pin_overlay_chrome`).
     for kind in [
         MediaType::StaticImage,
         MediaType::Dds,
@@ -630,18 +633,18 @@ fn the_chrome_is_drawn_over_the_media_of_the_kinds_this_app_draws_itself() {
         MediaType::Vector,
         MediaType::Pdf,
         MediaType::NativeVideo,
+        MediaType::Video,
     ] {
         assert!(pin_overlay_chrome(Some(kind)), "{kind:?}");
     }
 
-    // The kinds that keep their chrome in bands around the media: the two windows this app
-    // does not own (the player's video, and the page an SVG or a font is drawn on), a page that
-    // is laid out to whatever box it is given, and a sound's card.
+    // The kinds that keep their chrome in bands around the media: the page the browser
+    // engine draws an SVG or a font on, a page that is laid out to whatever box it is
+    // given, and a sound's card.
     for kind in [
         MediaType::Text,
         MediaType::Archive,
         MediaType::Audio,
-        MediaType::Video,
         MediaType::EngineSvg,
         MediaType::EngineFont,
     ] {

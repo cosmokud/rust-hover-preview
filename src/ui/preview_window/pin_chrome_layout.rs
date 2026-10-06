@@ -168,6 +168,23 @@ pub(super) fn pin_volume_open() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the pin that is up is showing any strip of its chrome — a pin that is up
+/// rather than collapsed into its bubble, with its caption or its transport bar drawn.
+/// This is the popup's hold-off, generalized: a strip is painted into the pin's own
+/// rows, and the rows of a video FFmpeg plays are that window, which is the one on top
+/// for as long as no strip is showing. Both raises of it are held off while any strip
+/// is up (see `apply_noactivate_to_hwnd`, `ensure_video_window_topmost`), and the tick
+/// answers a strip coming up with a raise of the pin's own window in return.
+pub(super) fn pin_chrome_up() -> bool {
+    pin_state()
+        .and_then(|pinned| {
+            pinned
+                .pin()
+                .map(|pin| !pin.collapsed && (pin.chrome.caption || pin.chrome.bar))
+        })
+        .unwrap_or(false)
+}
+
 /// Put the pin's volume popup away, answering whether it was open — which is whether the window
 /// owes a repaint for it.
 pub(super) fn close_pin_volume() -> bool {
@@ -475,25 +492,24 @@ pub(super) fn pin_chrome_near(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -
 /// Whether a pinned window's chrome — the caption and the transport bar — is drawn *over* the
 /// media rather than in bands above and below it.
 ///
-/// Two things have to be true of a kind for that. The band has to be this app's own pixels: the
-/// window FFmpeg's player has, and the page the browser draws an SVG or a font on, are windows of
-/// somebody else's standing *in* the band and asserted over this one, so a caption this app drew
-/// over one of those would be a caption underneath it. And the frame has to be the media's own
-/// shape, which is what makes the window box and the media box the same box: the strips the chrome
-/// is drawn in are then inside the picture rather than beside it, and there is no band of empty
-/// window where a bar used to be.
+/// Two things have to be true of a kind for that. The band has to be one this app can
+/// paint on: the page the browser draws an SVG or a font on is a window of somebody else's
+/// standing *in* the band, so a caption this app drew over one of those would be a caption
+/// underneath it. The window FFmpeg's player has is the other window of somebody else's, and it
+/// is drawn over all the same: the pin's own window is the one on top for as long as any strip
+/// of its chrome is showing, and the player's own raise is held off for that while (see
+/// `pin_chrome_up`), so what this app paints in the band is what is seen. And the frame has to
+/// be the media's own shape, which is what makes the window box and the media box the same box:
+/// the strips the chrome is drawn in are then inside the picture rather than beside it, and
+/// there is no band of empty window where a bar used to be.
 ///
 /// A page that is laid out to whatever box it is given — a text preview, an archive listing — and
-/// a sound's card are neither, and neither is a video below a minimized one: the first two keep
-/// their bars the way they have always had them, and the player's window keeps the band it stands
-/// in.
+/// a sound's card are neither: the first two keep their bars the way they have always had them,
+/// the card is its own size with no band to fill, and a pin collapsed into its bubble has no
+/// chrome of either kind.
 pub(super) fn pin_overlay_chrome(kind: Option<MediaType>) -> bool {
     match kind {
-        Some(kind) => {
-            !kind.is_engine()
-                && kind != MediaType::Video
-                && pin_frame(Some(kind)) == PinFrame::Shaped
-        }
+        Some(kind) => !kind.is_engine() && pin_frame(Some(kind)) == PinFrame::Shaped,
         None => false,
     }
 }

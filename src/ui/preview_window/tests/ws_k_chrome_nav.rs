@@ -25,8 +25,9 @@ fn playing_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
     pin
 }
 
-/// A banded video pin (caption above, transport below — what a video pin is,
-/// since its chrome is not drawn over its media), for the bar's own questions.
+/// A video pin whose chrome stands in bands — a caption above, a transport below —
+/// for the bar's own questions, which are asked of the arrangement rather than of
+/// the kind.
 fn banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
     PinnedPreview {
         path: PathBuf::from("ws-k-chrome-nav.mkv"),

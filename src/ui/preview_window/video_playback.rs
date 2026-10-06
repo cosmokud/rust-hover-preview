@@ -485,10 +485,13 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
 /// Put the ffplay window where it belongs and on top of everything, re-discovering and re-asserting
 /// its style by pid so that a window ffplay recreated is styled again rather than inherited.
 ///
-/// **This is the one place a player's window is raised, and the volume popup is guarded here rather
-/// than by its callers.** That is the whole of the arrangement: what the popup floats over is the
-/// media, and the media of a video FFmpeg plays *is* this window, so a raise while the popup is open
-/// puts the film over the thing the user is adjusting its level with. The tick was guarding this,
+/// **This is the one place a player's window is raised, and the volume popup and the pin's
+/// chrome are guarded here rather than by their callers.** That is the whole of the
+/// arrangement: what either one floats over is the media, and the media of a video FFmpeg
+/// plays *is* this window — a popup is drawn over the band, and a strip of chrome is
+/// painted into the pin's own rows, which for this kind are rows of this same window, so
+/// a raise while either is up puts the film over the thing the user is looking at. The
+/// tick was guarding the popup here,
 /// which covered the periodic re-assertion and nothing else — a seek, a resize settling and the
 /// first appearance of a pinned player all raise the window from their own call sites, and those are
 /// exactly the moments a popup is most likely to be open, because all three of them are things a
@@ -504,10 +507,12 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
 /// the same flag (see `pin_player_is_parked`); the monitor thread's own raise, which nobody can hold
 /// off from outside, is guarded where it is raised (see `apply_noactivate_to_hwnd`).
 pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
-    // For as long as a volume popup is open the player is left where it is, and the pin's window is
-    // the one on top. Nothing is asked of the order on the way out — the next tick of the caller asks
-    // for the player again once the popup is closed (see `pin_volume_open`, `toggle_pin_volume`).
-    if pin_volume_open() {
+    // For as long as a volume popup is open, or any strip of the pin's chrome is showing,
+    // the player is left where it is, and the pin's window is the one on top. Nothing is
+    // asked of the order on the way out — the next tick of the caller asks for the player
+    // again once the popup is closed and the last strip has gone (see `pin_volume_open`,
+    // `pin_chrome_up`).
+    if pin_volume_open() || pin_chrome_up() {
         return false;
     }
 
