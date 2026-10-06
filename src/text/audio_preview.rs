@@ -20,16 +20,20 @@
 //! playing (see `repaint_audio_card`).
 //!
 //! The card carries its own controls when it is the card a pinned window is showing: the three
-//! buttons at the left of its bar row, the bar itself, and the volume button at the bar's right.
+//! buttons at the left of its bar row, the bar itself, the volume button at the bar's right, and
+//! the pin's own two window buttons in the band above the name line — the minimize that shrinks
+//! the pin into its bubble and the close that ends it — stood in a top margin grown to hold
+//! buttons twice the side the margin alone would (see `window_button_band`).
 //! Every question about where one of them is is answered against the card's own layout (see
 //! [`control_at`], [`control_box`] and [`bar_share_at`]) rather than against anything kept beside
 //! it, because a button laid out by one arithmetic and hit-tested by another answers a press in
 //! the middle of the facts line. Only a pinned window asks: a hover's own window is a window
 //! nobody is in, and a click on one of those lands on the file behind it, so the card a hover
 //! shows is the card it has always been — no buttons, and a bar from margin to margin (see
-//! [`Card::controls`]). The row the buttons stand in is the bar's own line either way, so the
-//! card a pin shows is the size the card a hover shows is: what the buttons cost is the width of
-//! the bar, not the height of the card (see `bar_row`).
+//! [`Card::controls`]). The row the buttons stand in is the bar's own line either way, so what
+//! those buttons cost is the width of the bar, not the height of the card (see `bar_row`). The
+//! two window buttons cost height instead: the band they stand in is room the card grew to hold
+//! them, and a hover's card grew with it, so a pin's card is still the size a hover's is.
 //!
 //! The card a sound is previewed as lives in two files below: `card` for what the card says and
 //! the two calls that draw it, and `page` for the page it is laid out and painted from. What is
@@ -56,9 +60,12 @@ use crate::text::text_theme;
 use card::{
     bitrate_label, channel_label, clock, rate_label, Fact, FactKind, BAR_GAP_PIXELS, BAR_PIXELS,
     BAR_REACH_PIXELS, CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, NAME_HOLD,
+    WINDOW_BUTTON_GAP_PIXELS,
 };
 #[cfg(test)]
-use page::{bar_band, bar_row, build_page, clock_runs, fill_span, CardBoxes, Page};
+use page::{
+    bar_band, bar_row, build_page, clock_runs, fill_span, window_button_band, CardBoxes, Page,
+};
 #[cfg(test)]
 use std::path::Path;
 #[cfg(test)]
