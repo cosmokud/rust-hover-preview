@@ -121,14 +121,17 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // anything — and that is what made a pinned window's volume popup open and vanish: the popup is
     // drawn over the media band, the media band of a video is this very window, and a raise puts
     // this window on top of the pin's own window every hundred milliseconds however carefully the
-    // tick is holding off. The tick's hold-off was the right idea against the wrong caller.
+    // tick is holding off. The tick's hold-off was the right idea against the wrong caller. A strip
+    // of the pin's chrome is painted over the same band for a kind whose chrome is drawn over its
+    // media, so a raise buries a showing strip the same way (see `pin_overlay_chrome`).
     //
-    // So the raise waits while the popup is up, and the style does not: `WS_EX_NOACTIVATE` is what
-    // keeps the player from taking the keyboard, and that has to keep being asserted throughout,
-    // because the player's window is created without it and this is the only thing that ever puts
-    // it on (see `Bug 2`'s note over `try_apply_noactivate_style`). Nothing is asked for on the way
-    // out — the popup's closing raises the pin's own window, and the next raise through here
-    // settles the order (see `toggle_pin_volume`).
+    // So the raise waits while the popup is up or any strip of the pin's chrome is showing, and the
+    // style does not: `WS_EX_NOACTIVATE` is what keeps the player from taking the keyboard, and that
+    // has to keep being asserted throughout, because the player's window is created without it and
+    // this is the only thing that ever puts it on (see `Bug 2`'s note over `try_apply_noactivate_style`).
+    // Nothing is asked for on the way out — the popup's closing raises the pin's own window, and a
+    // strip coming up is answered by the tick's chrome block with the same raise (see
+    // `toggle_pin_volume`, `pin_chrome_up`); the next raise through here settles the order either way.
     //
     // **And it waits while a drag is parking the window, which is the same arrangement for the same
     // reason: this is a thread of its own, asking every hundred milliseconds whether the player's
@@ -138,7 +141,7 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // hundred milliseconds of a drag with the film back on screen and the compositor re-blitting it
     // at the pointer's rate: the stutter the park was written for, and a band painted flat under a
     // window that is standing in it (see `pin_player_is_parked`).
-    if pin_volume_open() || pin_player_is_parked() {
+    if pin_volume_open() || pin_chrome_up() || pin_player_is_parked() {
         return true;
     }
 
