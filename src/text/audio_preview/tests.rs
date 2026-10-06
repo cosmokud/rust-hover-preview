@@ -922,6 +922,30 @@ fn a_window_button_is_answered_where_its_glyph_is_and_a_little_beyond_it() {
             "while a row past it is nothing at all"
         );
 
+        // The cushion below the drawn box is the gap the button stands in
+        // plus a pixel of the name line's invisible leading — the same share
+        // of the button at every scale — and the clamp that keeps a hit box
+        // out of the glyphs holds: the cushion never reaches the name line's
+        // own rows, leading and all.
+        let dc = unsafe { CreateCompatibleDC(None) };
+        let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+        let leading = metrics.internal_leading[HEADER_LEVEL as usize];
+        let scale = metrics.scale;
+        unsafe {
+            let _ = DeleteDC(dc);
+        }
+        assert_eq!(
+            hit.bottom,
+            drawn.bottom + drawn.top + scaled(1, scale),
+            "the cushion is the gap above the button plus a pixel of the leading"
+        );
+        assert!(
+            hit.bottom <= page.header_top + leading,
+            "and the cushion never reaches the name line's glyphs: {} against {}",
+            hit.bottom,
+            page.header_top + leading
+        );
+
         // And the margin beside the buttons answers nothing, nor does the gap
         // between the two of them.
         assert_eq!(

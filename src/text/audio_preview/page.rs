@@ -294,9 +294,12 @@ pub(super) fn window_button_boxes(
 
     // The cushion: up to the window's own top edge, and down by the gap plus a
     // pixel of the name line's invisible leading — clamped to the line's own top
-    // where the font at this scale has no leading to borrow.
+    // where the font at this scale has no leading to borrow. A logical pixel like
+    // the gap it is counted from, so the cushion is the same share of the button
+    // at every scale (see `WINDOW_BUTTON_CUSHION_PIXELS`).
     let leading = metrics.internal_leading[HEADER_LEVEL as usize];
-    let bottom = (minimize.bottom + WINDOW_BUTTON_CUSHION_PIXELS).min(metrics.padding + leading);
+    let cushion = scaled(WINDOW_BUTTON_CUSHION_PIXELS, metrics.scale);
+    let bottom = (minimize.bottom + cushion).min(metrics.padding + leading);
 
     (
         WindowButtonBox {

@@ -55,7 +55,7 @@ use crate::text::text_theme;
 #[cfg(test)]
 use card::{
     bitrate_label, channel_label, clock, rate_label, Fact, FactKind, BAR_GAP_PIXELS, BAR_PIXELS,
-    BAR_REACH_PIXELS, CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, NAME_HOLD,
+    BAR_REACH_PIXELS, CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, NAME_HOLD,
 };
 #[cfg(test)]
 use page::{bar_band, bar_row, build_page, clock_runs, fill_span, CardBoxes, Page};

@@ -56,6 +56,13 @@ pub(super) fn collapse_pin() {
             return;
         }
 
+        // The bubble takes the place of the button the hand went for, which is
+        // looked up in the layout of what the pin is showing — a sound's
+        // minimize is one of the two window buttons its card carries, and that
+        // question is asked while the pin still shows its card, before the
+        // collapse below takes it off it (see `pinned_minimize_box`).
+        let anchor = pinned_minimize_box(pin);
+
         pin.collapsed = true;
 
         // A bubble has no bar and no level to be read off: the popup goes with the window it was
@@ -63,10 +70,7 @@ pub(super) fn collapse_pin() {
         pin.volume.open = false;
         pin.volume.dragging = false;
 
-        // The bubble takes the place of the button the hand went for, which is looked up in the
-        // caption's own layout rather than taken to be the window's corner (see
-        // `pinned_minimize_box`).
-        pinned_minimize_box(pin)
+        anchor
     };
 
     // A window that is being taken off the screen is not a window the user is in, and the bubble
