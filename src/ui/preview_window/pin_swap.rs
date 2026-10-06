@@ -348,10 +348,17 @@ fn pin_update_content_measured(
         // glyph, because the maximize is a state about the room and never stopped being one.
         // Measured against the room every time, a walk of shapes is a window of the same
         // size showing something else — which is what every other swap in this file is for.
+        //
+        // The scale is the fit's own, and not the one the hover scale names: a maximize
+        // fits the file to the room up as well as down (see `pinned_media_box`), and the
+        // walk of a window that never stopped being maximized is laid out by the same rule
+        // the maximize was. A percentage kept here would draw a file smaller than the room
+        // at its own size while the caption went on drawing the restore glyph — the button
+        // saying maximized and the preview not being it.
         return Some(PinBox::Measured(pin_update_box(
             space.room.region(),
             shape,
-            scale,
+            PreviewScale::FitToScreen,
         )));
     }
 

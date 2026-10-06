@@ -290,6 +290,76 @@ fn a_maximized_pin_walks_its_files_against_the_room_and_not_the_last_box() {
     let _ = std::fs::remove_dir_all(&folder);
 }
 
+/// A maximized window walks onto a file smaller than the room, and the file
+/// is drawn as large as the display can show it.
+///
+/// The maximize itself fits the file to the room — up as well as down (see
+/// `pinned_media_box`) — and the walk a maximized window takes is laid out by
+/// the same rule, because the maximize is a state about the room and never
+/// stopped being one. A swap that kept the percentage the hover scale names
+/// instead would draw a small file at its own size while the caption went on
+/// drawing the restore glyph: the button would say maximized and the preview
+/// would not be, which is the one thing a maximize is not.
+#[test]
+fn a_maximized_pin_fits_a_file_smaller_than_the_room_to_the_room() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-maximized-small");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    let bounds = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+
+    // The room a maximized window's media is laid out in: the display's own,
+    // less the caption above it (see `pinned_room`).
+    let room = pinned_room(bounds, 96, false, false, pinned_caption_height(96, None));
+
+    // A picture smaller than the room in both directions — the one shape a
+    // percentage of its own size and a fit to the room disagree about, and so
+    // the one a wrong scale is shown by.
+    let path = folder.join("400x300.png");
+    image::save_buffer(
+        &path,
+        &vec![0x40u8; (400 * 300 * 3) as usize],
+        400,
+        300,
+        image::ExtendedColorType::Rgb8,
+    )
+    .expect("a written picture");
+
+    let space = PinSwapSpace {
+        current: room_bounds_as_region(room),
+        bound: None,
+        transport_bar: false,
+        overlay: false,
+        caption: pinned_caption_height(96, None),
+        maximized: true,
+        room,
+    };
+
+    let Some(PinBox::Measured(laid_out)) = pin_update_content(space, &path, bounds, 96) else {
+        panic!("a measured picture was not laid out");
+    };
+
+    // The room is 1920 by 1050. A 4:3 picture fitted to it is height-bound —
+    // 1050 of height, and 4:3 of that is 1400 of width — which is the box the
+    // maximize the window is in gives it, and not the 400 by 300 a percentage
+    // of its own size would.
+    assert_eq!(
+        (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1),
+        (1400, 1050),
+        "a maximized window's small file is fitted to the room, up as well as down"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 fn room_bounds_as_region(room: ScreenBounds) -> ScreenRegion {
     (room.left, room.top, room.right, room.bottom)
 }
