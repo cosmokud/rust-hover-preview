@@ -430,7 +430,7 @@ fn take_digits(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
 /// verbatim `\\?\` path and a plain one are the same file, and a walk handed the other
 /// spelling of the pinned file's path must not decide it is not on its own list — which
 /// would send the first `Next` to the top of the folder rather than to the file beside it.
-fn same_file(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
     a == b || plain_path(a).eq_ignore_ascii_case(&plain_path(b))
 }
 

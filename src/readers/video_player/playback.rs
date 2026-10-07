@@ -15,7 +15,7 @@ use windows::core::implement;
 use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFMediaEngineNotify, IMFMediaEngineNotify_Impl, MFCreateAttributes,
     MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Video, MFVideoFormat_RGB32,
-    MFVideoNormalizedRect, MFARGB, MF_MEDIA_ENGINE_EVENT_ERROR,
+    MFVideoNormalizedRect, MFARGB, MF_MEDIA_ENGINE_EVENT_ENDED, MF_MEDIA_ENGINE_EVENT_ERROR,
     MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
     MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
     MF_SOURCE_READER_FIRST_VIDEO_STREAM,
@@ -118,17 +118,23 @@ const ENLARGEMENT_WORTH_RESAMPLING: f64 = 1.02;
 /// The engine's event sink, which is what the engine needs before it will run at all —
 /// `MF_MEDIA_ENGINE_CALLBACK` is required in every mode.
 ///
-/// Two events are acted on and the rest are thrown away: an engine that reports an error has
+/// Three events are acted on and the rest are thrown away: an engine that reports an error has
 /// nothing left to hand over, and what this side does about that is stop asking it for
 /// frames; an engine that reports its first frame has a picture to give, which is the only
-/// thing that makes a frame transfer worth asking for. The callback arrives on a thread of the
-/// engine's own, so what it touches is an atomic and nothing else.
+/// thing that makes a frame transfer worth asking for; and an engine that reports the end of
+/// its file has said the one thing a sound asked not to loop is waiting to hear (see
+/// [`audio_ended`]). The callback arrives on a thread of the engine's own, so what it
+/// touches is an atomic and nothing else.
 #[implement(IMFMediaEngineNotify)]
 pub(super) struct Notify {
     pub(super) failed: Arc<AtomicBool>,
     /// That the engine has decoded a frame of the file and handed it over, which is its own word
     /// about the file and the one thing here that means a picture exists to be taken.
     pub(super) first_frame: Arc<AtomicBool>,
+    /// That the engine played the file to its end, which is only ever set where the
+    /// session was asked not to loop: a looping engine reports no end, so the flag
+    /// stays down and nothing asks it.
+    pub(super) ended: Arc<AtomicBool>,
 }
 
 impl IMFMediaEngineNotify_Impl for Notify_Impl {
@@ -145,6 +151,16 @@ impl IMFMediaEngineNotify_Impl for Notify_Impl {
         // about a file the engine cannot play; this is about one it can.
         if event == MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY.0 as u32 {
             self.first_frame.store(true, Ordering::Release);
+        }
+
+        // The engine saying it played the file to the end, which only a session asked
+        // not to loop ever says: the loop the engine runs on its own otherwise ends
+        // nothing. The end is a word and not a stop — the engine stays ready to be
+        // asked of — so it is a flag set rather than a session taken (see
+        // [`audio_ended`]).
+        if event == MF_MEDIA_ENGINE_EVENT_ENDED.0 as u32 {
+            let _ = (param1, param2);
+            self.ended.store(true, Ordering::Release);
         }
 
         Ok(())
@@ -293,13 +309,15 @@ pub fn play(path: &Path, width: u32, height: u32, volume: u32, picture: Picture)
         return;
     }
 
-    if let Some(session) = Session::begin(path, Some((width, height)), picture, volume, 0.0) {
+    if let Some(session) = Session::begin(path, Some((width, height)), picture, volume, 0.0, true) {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
 }
 
-/// Start playing `path` as a sound at `volume` per cent and `start` seconds in: the same engine,
-/// the same file and the same loop, with no surface and nothing to draw.
+/// Start playing `path` as a sound at `volume` per cent and `start` seconds in:
+/// the same engine and the same file, with no surface and nothing to draw, and
+/// the file gone round for as long as the sound is on screen where `loop_`
+/// says so.
 ///
 /// Anything already playing is stopped first, so a sound is never two sounds. A call that could
 /// not start one leaves nothing behind rather than a session that will never make a noise:
@@ -309,7 +327,11 @@ pub fn play(path: &Path, width: u32, height: u32, volume: u32, picture: Picture)
 /// length is, and what the tray has been asked for, are questions this side is not asked (see
 /// `audio_seek`). What it is handed is a number of seconds, and a sound that starts at the
 /// beginning is handed zero.
-pub fn play_audio(path: &Path, volume: u32, start: f64) {
+///
+/// A sound asked not to loop is one the engine plays once, and the end of it
+/// is what a pinned sound whose loop switch is off is advanced by (see
+/// [`audio_ended`]).
+pub fn play_audio(path: &Path, volume: u32, start: f64, loop_: bool) {
     stop();
 
     if !codecs::mf_started() {
@@ -318,7 +340,7 @@ pub fn play_audio(path: &Path, volume: u32, start: f64) {
 
     // A sound has no picture, so there is no frame for a crop to be a part of and none is
     // handed over: the argument is a video's question and is answered as one by the caller.
-    if let Some(session) = Session::begin(path, None, Picture::default(), volume, start) {
+    if let Some(session) = Session::begin(path, None, Picture::default(), volume, start, loop_) {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
 }
@@ -498,6 +520,54 @@ pub fn is_playing() -> bool {
         slot.borrow()
             .as_ref()
             .is_some_and(|session| !session.failed.load(Ordering::Acquire))
+    })
+}
+
+/// Whether a sound has ended, in the sense [`audio_ended`] uses the words: the
+/// engine's own word for the end of a file it was asked to play once, or a clock
+/// that has run to the length the engine says the file is while the sound is
+/// still going.
+///
+/// Four values rather than a `&Session` because the question has to be answerable
+/// without one: the session is a thread-local the preview thread holds, and a
+/// question that has to be asked with a borrow of it is a question that cannot be
+/// asked in a test at all — the same shape as `engine_is_failing` above.
+pub(super) fn a_sound_that_has_played_to_its_end(
+    ended: bool,
+    paused: bool,
+    at: Option<f64>,
+    length: Option<f64>,
+) -> bool {
+    ended || (!paused && at.zip(length).is_some_and(|(at, length)| at >= length))
+}
+
+/// Whether the sound being played has run to the end of its file.
+///
+/// Only a sound asked not to loop ever ends: a looping engine reports no end, so this
+/// is the one answer a pinned sound whose loop switch is off is advanced by (see
+/// `pin_mode_audio_loop_off_for`), and every other sound answers no for as long as it
+/// is on screen.
+///
+/// The engine's own word is the answer where it has been given — a session asked not
+/// to loop is told when it has played its file through. Where it has not, the clock is
+/// the answer: a sound that is not paused and has run to the length the engine says its
+/// file is has ended it, whether or not the engine has said so, which is what keeps the
+/// answer working on an engine that never reports the end. Both clock accessors answer
+/// nothing where the engine is not talking, so a sound of no known length is a sound
+/// that has not ended (see [`position`] and [`duration`]).
+pub fn audio_ended() -> bool {
+    SESSION.with(|slot| {
+        let slot = slot.borrow();
+        let Some(session) = slot.as_ref() else {
+            return false;
+        };
+
+        a_sound_that_has_played_to_its_end(
+            session.ended.load(Ordering::Acquire),
+            unsafe { session.engine.IsPaused() }.as_bool(),
+            position(),
+            duration(),
+        )
     })
 }
 

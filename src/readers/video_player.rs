@@ -211,9 +211,9 @@ mod session;
 pub use frame_copy::audio_probe;
 pub(crate) use frame_copy::{force_opaque, open_stream, unpack_pair};
 pub use playback::{
-    apply_seek, copy_frame_into, dimensions, duration, failing_before_a_frame, failing_path,
-    is_playing, mark_unplayable, play, play_audio, playing_path, plays, position, resize, seek,
-    set_paused, set_volume, stop, Crop, Picture,
+    apply_seek, audio_ended, copy_frame_into, dimensions, duration, failing_before_a_frame,
+    failing_path, is_playing, mark_unplayable, play, play_audio, playing_path, plays, position,
+    resize, seek, set_paused, set_volume, stop, Crop, Picture,
 };
 
 // Reached from the preview window's own tests rather than from the app, so it is only here
@@ -227,8 +227,8 @@ use frame_copy::{
 };
 #[cfg(test)]
 use playback::{
-    a_run_of_refusals_is_a_failure, engine_is_failing, scales_here, Notify, FIRST_FRAME_GIVE_UP,
-    TRANSFER_FAILURES_GIVE_UP,
+    a_run_of_refusals_is_a_failure, a_sound_that_has_played_to_its_end, engine_is_failing,
+    scales_here, Notify, FIRST_FRAME_GIVE_UP, TRANSFER_FAILURES_GIVE_UP,
 };
 #[cfg(test)]
 use session::is_a_new_frame;
@@ -247,7 +247,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 #[cfg(test)]
 use windows::Win32::Media::MediaFoundation::{
-    IMFMediaEngineNotify_Impl, MF_MEDIA_ENGINE_EVENT_ERROR, MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY,
+    IMFMediaEngineNotify_Impl, MF_MEDIA_ENGINE_EVENT_ENDED, MF_MEDIA_ENGINE_EVENT_ERROR,
+    MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY,
 };
 
 #[cfg(test)]

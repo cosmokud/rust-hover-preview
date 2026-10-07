@@ -55,6 +55,13 @@ pub(super) struct Session {
     /// transfer was *asked for*: a surface the engine has not drawn into is a bitmap of zeros,
     /// and a frame taken from one is a picture of nothing (see `copy_into`).
     first_frame: Arc<AtomicBool>,
+    /// The engine's own word that it played the file to its end.
+    ///
+    /// It is only set where the engine was asked *not* to loop — a looping
+    /// engine never ends, so the flag stays down and nothing reads it — and
+    /// it is what a sound's card is advanced by when the pin's own loop
+    /// switch is off (see [`audio_ended`](super::playback::audio_ended)).
+    pub(super) ended: Arc<AtomicBool>,
     /// Whether a frame of the file has been handed over at all: a session is not a promise that
     /// a picture will come of it, since the engine accepts a file whose decoder and converter
     /// are both there and whose *pipeline* is not (see [`failing_path`](super::playback::failing_path)).
@@ -96,6 +103,7 @@ impl Session {
         picture: Picture,
         volume: u32,
         start: f64,
+        loop_: bool,
     ) -> Option<Self> {
         let byte_stream = open_stream(path)?;
 
@@ -130,6 +138,7 @@ impl Session {
 
         let failed = Arc::new(AtomicBool::new(false));
         let first_frame = Arc::new(AtomicBool::new(false));
+        let ended = Arc::new(AtomicBool::new(false));
 
         let mut attributes: Option<IMFAttributes> = None;
         unsafe { MFCreateAttributes(&mut attributes, 3) }.ok()?;
@@ -138,6 +147,7 @@ impl Session {
         let notify: IUnknown = Notify {
             failed: Arc::clone(&failed),
             first_frame: Arc::clone(&first_frame),
+            ended: Arc::clone(&ended),
         }
         .into();
         unsafe { attributes.SetUnknown(&MF_MEDIA_ENGINE_CALLBACK, &notify) }.ok()?;
@@ -176,7 +186,7 @@ impl Session {
         let url = BSTR::from(plain_path(path).as_str());
         unsafe { engine_ex.SetSourceFromByteStream(&byte_stream, &url) }.ok()?;
 
-        unsafe { engine.SetLoop(true) }.ok()?;
+        unsafe { engine.SetLoop(loop_) }.ok()?;
 
         // A preview is muted by default, and a muted one is asked for as mute rather than
         // as a volume of nothing: the engine is then free to leave the audio path out
@@ -204,6 +214,7 @@ impl Session {
             path: path.to_path_buf(),
             failed,
             first_frame,
+            ended,
             drew: false,
             transfer_failures: 0,
             // The first frame of a session is the first picture the caller has of the file,

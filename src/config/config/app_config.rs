@@ -24,7 +24,8 @@ use super::setting_types::{
     DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND,
     DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
     DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_LOOP,
+    DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO,
     DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_TEXT_SCALE,
     DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
@@ -219,6 +220,20 @@ pub struct AppConfig {
     /// where a hover left it is not moved by a change to either (see
     /// `AudioSeek`).
     pub pin_mode_audio_seek: AudioSeek,
+    /// Whether a *pinned* sound's next file is a random one of the
+    /// folder's sounds, rather than the one beside it — the pin's own
+    /// answer to the question the step a caption's next button takes is
+    /// asked, and a setting of its own for the same reason: what a step
+    /// of a pin's is worth is the pin's to decide, and a sound already
+    /// playing is not moved by a change to it (see
+    /// `DEFAULT_PIN_MODE_AUDIO_SHUFFLE`).
+    pub pin_mode_audio_shuffle: bool,
+    /// Whether a *pinned* sound goes round to the start of its file at
+    /// the end of it, rather than ending on the next file — the pin's
+    /// own answer to the question of what the end of a file is, and a
+    /// setting of its own for the same reason (see
+    /// `DEFAULT_PIN_MODE_AUDIO_LOOP`).
+    pub pin_mode_audio_loop: bool,
     /// Whether a sound's loudness is measured and brought to one level before it is played —
     /// the one thing that asks a file to be as loud as the next rather than as loud as it was
     /// recorded.
@@ -626,6 +641,8 @@ impl Default for AppConfig {
             audio_volume: DEFAULT_AUDIO_VOLUME,
             audio_seek: DEFAULT_AUDIO_SEEK,
             pin_mode_audio_seek: DEFAULT_PIN_MODE_AUDIO_SEEK,
+            pin_mode_audio_shuffle: DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+            pin_mode_audio_loop: DEFAULT_PIN_MODE_AUDIO_LOOP,
             normalize_volume: DEFAULT_NORMALIZE_VOLUME,
             normalize_video_volume: DEFAULT_NORMALIZE_VIDEO_VOLUME,
             remember_audio_volume: DEFAULT_REMEMBER_AUDIO_VOLUME,

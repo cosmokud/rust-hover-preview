@@ -990,14 +990,31 @@ pub fn run_preview_window() {
                         // found rather than on the next card repaint a quarter of a second
                         // away: what stands between two passes is the time it takes to start
                         // a player, and nothing of this side is to be added to it (see
-                        // `wrap_audio_player`).
+                        // `wrap_audio_player`). A pinned sound whose loop switch is off
+                        // is not put round at all — its end asks for the next file of the
+                        // folder there, with the walk's own wait.
                         if let Some(path) = current_show.as_ref().and_then(self::show_path) {
                             wrap_audio_player(
                                 media,
                                 path,
                                 &mut audio_started,
                                 &mut audio_start_offset,
+                                &mut pin_walk_wait,
                             );
+
+                            // A sound the engine Windows has was asked to play the pinned
+                            // file once where the pin's loop switch is off, so the end the
+                            // engine reports for it is the end of the sound: the session is
+                            // let go — which is also what stops the end being read again on
+                            // the sixty ticks a second this loop turns — and the next file
+                            // of the folder is asked for, the same ask the caption's own
+                            // **Next** button makes and the same wait for its answer (see
+                            // `pinned_native_audio_ended`).
+                            if pinned_native_audio_ended(path) {
+                                video_player::stop();
+                                ask_pin_walk(path.to_path_buf(), 1);
+                                pin_walk_wait = Some(PinWait::new());
+                            }
                         }
 
                         let cadence = match &audio_name_scroll {

@@ -1551,6 +1551,8 @@ fn a_pinned_film_the_engine_failed_at_is_stepped_over_rather_than_closed() {
             PathBuf::from("C:\\folder\\broken.mp4"),
             PathBuf::from("C:\\folder\\next.mp4"),
         ],
+        shuffle: false,
+        sounds: Vec::new(),
     });
     let load: Option<PinLoad> = None;
     let awaiting_box: Option<PathBuf> = None;

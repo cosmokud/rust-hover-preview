@@ -63,6 +63,8 @@ fn a_walk_offers_every_other_file_of_the_folder_once_and_then_ends() {
         // The list is what the planner read off the preview thread, handed in rather
         // than looked up again on every step (see `PinStep`).
         list: list.clone(),
+        shuffle: false,
+        sounds: Vec::new(),
     };
 
     // Every step, and the one that ends the walk: the end is part of what is being asked
@@ -103,6 +105,8 @@ fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
         step: 1,
         left: 1,
         list: vec![folder.join("a.png"), folder.join("b.png")],
+        shuffle: false,
+        sounds: Vec::new(),
     };
 
     pin_step_off(Some(walk), &mut held);
@@ -279,6 +283,169 @@ fn a_failed_file_with_nowhere_to_step_to_is_left_standing_as_the_mark() {
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
     }
+}
+
+/// A folder of a test's own with sounds and pictures in it, so that a
+/// shuffled walk has sounds to pick from and files that are not sounds
+/// beside them: which extension is a sound is the `[audio]` list of
+/// `config.ini` (see `lists::AUDIO`), and a folder of a test's own is
+/// one nothing has hovered, so the walk of it is the name order.
+fn sounded_folder(name: &str) -> PathBuf {
+    let folder = std::env::temp_dir()
+        .join("rust-hover-preview-pin-walk-tests")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).expect("a folder a test can write to");
+
+    for sound in ["a.mp3", "b.mp3", "c.mp3"] {
+        std::fs::write(folder.join(sound), vec![0u8; 8]).expect("a file a test can write");
+    }
+    for picture in ["a.png", "b.png"] {
+        std::fs::write(folder.join(picture), vec![0u8; 8]).expect("a file a test can write");
+    }
+
+    folder
+}
+
+/// The pin's own shuffle switch, set for a test and put back when the
+/// guard is dropped, for the same reason `WalkEveryFile` is: the walk is
+/// read under the app's own configuration, so a test says what it wants
+/// walked rather than taking whatever the machine it runs on has set.
+struct ShuffleThePin(bool);
+
+impl ShuffleThePin {
+    fn set() -> Self {
+        let mut config = CONFIG.lock().expect("the configuration");
+        let was = config.pin_mode_audio_shuffle;
+        config.pin_mode_audio_shuffle = true;
+
+        ShuffleThePin(was)
+    }
+}
+
+impl Drop for ShuffleThePin {
+    fn drop(&mut self) {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.pin_mode_audio_shuffle = self.0;
+        }
+    }
+}
+
+/// A shuffled step lands on a sound of the folder other than the one the
+/// pin is showing, and on nothing else: a shuffle is a walk through the
+/// folder's sounds in an order of their own choosing, so every roll names
+/// one of the sounds, and the file on screen is not a file a step is for
+/// (see `walk_budget`).
+#[test]
+fn a_shuffled_step_lands_on_a_sound_other_than_the_one_pinned() {
+    let folder = sounded_folder("shuffle-pick");
+    let sounds = vec![
+        folder.join("a.mp3"),
+        folder.join("b.mp3"),
+        folder.join("c.mp3"),
+    ];
+    let pinned = folder.join("b.mp3");
+
+    for roll in 0..64 {
+        let landed = shuffle_step(&pinned, &sounds, roll)
+            .expect("a folder of sounds has one to land on");
+
+        assert!(
+            sounds.contains(&landed),
+            "a shuffled step lands on a sound of the folder: {landed:?}"
+        );
+        assert_ne!(
+            landed, pinned,
+            "the file the pin is showing is not a file a step is for"
+        );
+    }
+
+    // Every sound of the folder but the pinned one is one some roll names,
+    // which is what makes the step a shuffle rather than a walk that
+    // skips files.
+    let mut landed_on = Vec::new();
+    for roll in 0..64 {
+        landed_on.push(shuffle_step(&pinned, &sounds, roll).expect("a sound"));
+    }
+    for sound in sounds.iter().filter(|sound| *sound != &pinned) {
+        assert!(
+            landed_on.contains(sound),
+            "every sound but the pinned one is one a roll lands on: {sound:?}"
+        );
+    }
+}
+
+/// A folder whose only sound is the one the pin is showing is a folder a
+/// shuffled step has nowhere to go in: the file on screen is not a file a
+/// step is for, and there is no other sound to step onto, so the walk ends
+/// rather than stepping onto a file that is not a sound — the one answer a
+/// shuffle has that keeps it inside the `[audio]` category.
+#[test]
+fn a_folder_whose_only_sound_is_the_pinned_one_has_nowhere_to_shuffle() {
+    let folder = sounded_folder("shuffle-alone");
+    let only = folder.join("only.mp3");
+    let sounds = vec![only.clone()];
+
+    assert_eq!(
+        shuffle_step(&only, &sounds, 0),
+        None,
+        "the one sound of the folder is the one on screen"
+    );
+    assert_eq!(
+        shuffle_step(&only, &[], 0),
+        None,
+        "and a folder of no sounds at all is the same answer"
+    );
+}
+
+/// The walk a shuffled pin's planner answers carries the folder's sounds
+/// and nothing else: the list is every file the walk steps through, and
+/// the sounds are the `[audio]` category of it — the files whose extension
+/// is in the `[audio]` list of `config.ini` — so a shuffled step is a
+/// random one of the sounds and never a file that is not a sound.
+#[test]
+fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
+    let _every_file = WalkEveryFile::set();
+    let _shuffle = ShuffleThePin::set();
+    let folder = sounded_folder("planner-shuffle");
+
+    let answer = answer_pin_job(&PinJob::Walk {
+        at: folder.join("b.mp3"),
+        step: 1,
+        config: Box::new(CONFIG.lock().expect("the configuration").clone()),
+    });
+    let Some(PinPlanned::Walk(walk)) = answer else {
+        panic!("a walk is always answered");
+    };
+
+    assert!(walk.shuffle, "the walk shuffles when the pin's shuffle is on");
+    assert_eq!(
+        walk.sounds,
+        vec![
+            folder.join("a.mp3"),
+            folder.join("b.mp3"),
+            folder.join("c.mp3"),
+        ],
+        "the sounds are the folder's `[audio]` files, and no file of another kind is one"
+    );
+
+    // And a walk that does not shuffle carries no sounds to pick from,
+    // which is the walk every step of a pin's was before the setting.
+    let mut config = CONFIG.lock().expect("the configuration");
+    config.pin_mode_audio_shuffle = false;
+    let answer = answer_pin_job(&PinJob::Walk {
+        at: folder.join("b.mp3"),
+        step: 1,
+        config: Box::new(config.clone()),
+    });
+    let Some(PinPlanned::Walk(walk)) = answer else {
+        panic!("a walk is always answered");
+    };
+    assert!(!walk.shuffle, "and the walk does not shuffle with the shuffle off");
+    assert!(
+        walk.sounds.is_empty(),
+        "a walk that steps to the file beside it has no sounds to pick from"
+    );
 }
 
 /// the mark behind a bubble, and behind a pin that has come apart for some other /// reason, is still a kind this app draws.
@@ -476,6 +643,8 @@ fn a_walk_the_planner_answers_carries_the_list_it_walked() {
         step: 1,
         left: walk_budget(&list),
         list: list.clone(),
+        shuffle: false,
+        sounds: Vec::new(),
     };
 
     assert_eq!(

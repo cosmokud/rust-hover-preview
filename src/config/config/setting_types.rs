@@ -820,6 +820,25 @@ pub const DEFAULT_AUDIO_SEEK: AudioSeek = AudioSeek::Remember;
 /// the beginning rather than being picked up where a hover left it.
 pub const DEFAULT_PIN_MODE_AUDIO_SEEK: AudioSeek = AudioSeek::Start;
 
+/// Whether a pinned sound's next file is a random one of the folder's
+/// sounds unless the configuration says otherwise.
+///
+/// The pin's own answer to the question of where a step lands: a
+/// shuffle that is off is the file beside the one pinned, which is what
+/// a step was before there was a setting, so off is what a fresh
+/// configuration starts at.
+pub const DEFAULT_PIN_MODE_AUDIO_SHUFFLE: bool = false;
+
+/// Whether a pinned sound goes round to the start of its file at the end
+/// of it, unless the configuration says otherwise.
+///
+/// The pin's own answer to the question of what the end of a file is: a
+/// loop that is on is the sound beginning again, which is what a pinned
+/// sound did before there was a setting, so on is what a fresh
+/// configuration starts at. A loop that is off is an end that moves to
+/// the next file, which is the same step a next button takes.
+pub const DEFAULT_PIN_MODE_AUDIO_LOOP: bool = true;
+
 /// How far a preview is placed clear of the item it is about.
 ///
 /// A view draws an item's name, and the views that draw their items as rows draw the

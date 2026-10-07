@@ -443,6 +443,58 @@ fn a_file_whose_frames_cannot_be_taken_out_is_a_failure_after_the_first_frame_to
     );
 }
 
+/// The two answers to "has this sound ended" are the engine's own word for a
+/// file it was asked to play once and a clock that has run to the length of
+/// the file, and what they are between them is this condition: the word is
+/// the answer where it has been given, the clock is the answer where it has
+/// not, and a sound held where it is is a sound that has not ended however
+/// far its clock has gone.
+#[test]
+fn a_sound_whose_clock_has_run_to_the_length_of_its_file_is_one_that_ended() {
+    // The engine's own word is the whole answer, and it is the answer even
+    // where the clock has nothing to say: a file played through is a file
+    // played through.
+    assert!(
+        a_sound_that_has_played_to_its_end(true, false, Some(0.0), None),
+        "the end the engine reports is the end of the sound, whatever the \
+         clock says"
+    );
+
+    // The clock is the answer where the word has not arrived — an engine
+    // that does not report the end of a file it was asked to play once.
+    assert!(
+        a_sound_that_has_played_to_its_end(false, false, Some(60.0), Some(60.0)),
+        "a clock at the length the engine says the file is has ended it"
+    );
+    assert!(
+        a_sound_that_has_played_to_its_end(false, false, Some(61.0), Some(60.0)),
+        "and a clock past that length has ended it too"
+    );
+    assert!(
+        !a_sound_that_has_played_to_its_end(false, false, Some(59.9), Some(60.0)),
+        "while a clock short of the length is a sound still going"
+    );
+
+    // A sound held where it is is not a sound that has ended: the pin's own
+    // pause is a hold, not the end of the file.
+    assert!(
+        !a_sound_that_has_played_to_its_end(false, true, Some(60.0), Some(60.0)),
+        "a sound held where it is has not ended, whatever its clock says"
+    );
+
+    // And a clock either side will not say: a length is a container's own
+    // reading of a header, and an engine that is not talking about one is
+    // not one to read an end from.
+    assert!(
+        !a_sound_that_has_played_to_its_end(false, false, Some(60.0), None),
+        "a sound of no known length is a sound that has not ended"
+    );
+    assert!(
+        !a_sound_that_has_played_to_its_end(false, false, None, Some(60.0)),
+        "and a clock that will not move is one that has not ended it"
+    );
+}
+
 /// What this side costs to take a frame of a video: frames actually drawn, wall time, and
 /// the CPU the process burned while it did — against a real file, played at the box the
 /// layout would have placed it at.
@@ -699,12 +751,14 @@ fn cpu_hundred_nanoseconds() -> Option<u64> {
 fn only_the_engines_own_report_of_a_first_frame_is_taken_as_one() {
     let failed = Arc::new(AtomicBool::new(false));
     let first_frame = Arc::new(AtomicBool::new(false));
+    let ended = Arc::new(AtomicBool::new(false));
 
     // The callback as the engine reaches it: behind a COM object, called by the name the
     // vtable calls it by.
     let notify = windows::core::ComObject::new(Notify {
         failed: Arc::clone(&failed),
         first_frame: Arc::clone(&first_frame),
+        ended: Arc::clone(&ended),
     });
 
     notify
@@ -737,5 +791,16 @@ fn only_the_engines_own_report_of_a_first_frame_is_taken_as_one() {
     assert!(
         failed.load(Ordering::Acquire),
         "an error is still an error, recorded on its own flag beside this one"
+    );
+
+    // The end of a file the engine was asked to play once, which is
+    // the word a pinned sound whose loop switch is off is advanced by.
+    notify
+        .EventNotify(MF_MEDIA_ENGINE_EVENT_ENDED.0 as u32, 0, 0)
+        .expect("the callback");
+    assert!(
+        ended.load(Ordering::Acquire),
+        "the end of the file is recorded on its own flag, which is the \
+         one `audio_ended` reads"
     );
 }
