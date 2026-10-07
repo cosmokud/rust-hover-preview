@@ -24,8 +24,8 @@ use super::super::ids::{
     DECODE_BUDGET_CHOICES_GB, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CUSTOM_THEMES,
 };
 use super::super::submenus::{
-    afk_timer_secs_at, background_at, dds_background_at, document_scale_at, engine_idle_at,
-    html_background_at,
+    afk_timer_secs_at, audio_scale_at, background_at, dds_background_at, document_scale_at,
+    engine_idle_at, html_background_at,
 };
 
 use crate::app::dialogs;
@@ -669,6 +669,22 @@ pub(in super::super) fn set_document_scale(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.document_scale = scale;
+        config.save();
+    }
+}
+
+/// How much of the display a sound's card is laid out over, by the position the
+/// item was listed at — the card is filled with the room the share names rather
+/// than drawn from a bitmap of the file, so the question is the one the document
+/// scales beside it answer. The same rule as the ones beside it: the next hover,
+/// not the one that is up.
+pub(in super::super) fn set_audio_scale(index: u16) {
+    let Some(scale) = audio_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.audio_scale = scale;
         config.save();
     }
 }

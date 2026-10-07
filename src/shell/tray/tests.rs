@@ -697,9 +697,11 @@ fn the_document_scale_ranges_are_not_another_submenus_range() {
 /// The `Image Scaling`, `Video Scaling` and `Animated Scaling` submenus are one
 /// range each, and none of them reaches into another or into the display shares the
 /// document scales beside them hand out: a click on a share of a bitmap is never read
-/// as a click on another setting's share. Each lists every share the setting can be
-/// asked for, in order, and every id resolves back to the share its item was listed
-/// for — which is what makes a click select what it named.
+/// as a click on another setting's share. The `Audio Scaling` submenu beside
+/// them is one range of the display shares, and it overlaps none of those or
+/// of the bitmap ranges either. Each lists every share the setting can be
+/// asked for, in order, and every id resolves back to the share its item was
+/// listed for — which is what makes a click select what it named.
 #[test]
 fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
     let bitmap_bases = [
@@ -735,6 +737,10 @@ fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
         ID_TRAY_TEXT_SCALE_BASE,
         ID_TRAY_TEXT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
     );
+    let audio_scales = (
+        ID_TRAY_AUDIO_SCALE_BASE,
+        ID_TRAY_AUDIO_SCALE_BASE + AUDIO_SCALE_CHOICES.len() as u16,
+    );
 
     let overlaps = |ours: (u16, u16), theirs: (u16, u16)| {
         (ours.0 < theirs.1 && theirs.0 < ours.1).then_some((ours, theirs))
@@ -756,6 +762,7 @@ fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
             document_scales,
             vector_scales,
             text_scales,
+            audio_scales,
         ] {
             assert_eq!(
                 overlaps(*range, document),
@@ -776,6 +783,34 @@ fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
             "an id past the last item of the range at {base} is not one it offered"
         );
     }
+
+    // The sound's shares answer the question the document scales answer —
+    // of the display rather than of a file's own size — so the range sits
+    // in their block, and it overlaps none of those either.
+    for document in [
+        font_scales,
+        design_scales,
+        ebook_scales,
+        document_scales,
+        vector_scales,
+        text_scales,
+    ] {
+        assert_eq!(
+            overlaps(audio_scales, document),
+            None,
+            "the range {audio_scales:?} and the display shares {document:?} overlap"
+        );
+    }
+
+    for (index, scale) in AUDIO_SCALE_CHOICES.iter().enumerate() {
+        assert_eq!(audio_scale_at(index as u16), Some(*scale));
+    }
+
+    assert_eq!(
+        audio_scale_at(AUDIO_SCALE_CHOICES.len() as u16),
+        None,
+        "an id past the last item of the range at {ID_TRAY_AUDIO_SCALE_BASE} is not one it offered"
+    );
 }
 
 /// The `Image Scaling` and `Video Scaling` submenus offer the shares a bitmap can be
@@ -824,6 +859,49 @@ fn every_offered_bitmap_scale_is_one_the_setting_keeps() {
 
         assert_eq!(
             PreviewScale::from_str(&written),
+            Some(scale),
+            "`{written}` read back"
+        );
+    }
+}
+
+/// The `Audio Scaling` submenu offers the shares of the display a sound's card
+/// is laid out over — the share of the room rather than of a file's own size —
+/// in one order, and the labels are the document scale's, which name the same
+/// question: what a share is called does not depend on which of the two is
+/// asking, and exactly one label — the share the setting starts at — reads as
+/// the default. Every share an item can pick is one the setting keeps, so a
+/// choice made here is still the choice after a restart.
+#[test]
+fn every_offered_audio_scale_is_one_the_setting_keeps() {
+    assert_eq!(
+        AUDIO_SCALE_CHOICES.map(|scale| document_scale_label(scale, DEFAULT_AUDIO_SCALE)),
+        [
+            "25%".to_string(),
+            "20%".to_string(),
+            "15%".to_string(),
+            "10% (Default)".to_string(),
+            "5%".to_string(),
+        ]
+    );
+
+    let marked: Vec<PreviewScale> = AUDIO_SCALE_CHOICES
+        .iter()
+        .copied()
+        .filter(|scale| document_scale_label(*scale, DEFAULT_AUDIO_SCALE).ends_with(" (Default)"))
+        .collect();
+
+    assert_eq!(
+        marked,
+        [DEFAULT_AUDIO_SCALE],
+        "one share is the default at {DEFAULT_AUDIO_SCALE:?}"
+    );
+
+    for scale in AUDIO_SCALE_CHOICES {
+        let written = scale.as_str();
+
+        assert_eq!(
+            PreviewScale::from_audio_str(&written),
             Some(scale),
             "`{written}` read back"
         );

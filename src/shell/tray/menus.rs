@@ -13,11 +13,11 @@
 use super::ids::{
     EngineIdleIds, BACKGROUND_CHOICES, CACHE_SIZE_CHOICES_MB, DDS_BACKGROUND_CHOICES,
     DECODE_BUDGET_CHOICES_GB, FONT_SIZE_CHOICES, HTML_BACKGROUND_CHOICES,
-    ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE,
-    ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE,
-    ID_TRAY_DESIGN_BACKGROUND_BASE, ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE,
-    ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE,
-    ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_ENGINE_PERSISTENT_BASE, ID_TRAY_EXIT,
+    ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_VOLUME_BASE,
+    ID_TRAY_AVOID_BASE, ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DECODE_BUDGET_BASE,
+    ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE, ID_TRAY_DESIGN_SCALE_BASE,
+    ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE,
+    ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_ENGINE_PERSISTENT_BASE, ID_TRAY_EXIT,
     ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE,
     ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE,
     ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
@@ -38,30 +38,32 @@ use super::ids::{
     MAX_TRAY_CUSTOM_THEMES, TRAY_CUSTOM_THEMES,
 };
 use super::submenus::{
-    append_afk_timer_menu, append_audio_seek_menu, append_avoid_menu, append_background_menu,
-    append_bitmap_scale_menu, append_codecs_menu, append_document_scale_menu,
-    append_engine_idle_menu, append_labeled_item, append_select_engine_menu, append_tick_menu,
-    cache_size_label, decode_budget_label, default_label, timing_delay_menu,
+    append_afk_timer_menu, append_audio_scale_menu, append_audio_seek_menu, append_avoid_menu,
+    append_background_menu, append_bitmap_scale_menu, append_codecs_menu,
+    append_document_scale_menu, append_engine_idle_menu, append_labeled_item,
+    append_select_engine_menu, append_tick_menu, cache_size_label, decode_budget_label,
+    default_label, timing_delay_menu,
 };
 
 use crate::app::updates;
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
     PinNavFileTypes, PreviewType, TextTheme, TriggerKeyMode, DEFAULT_ANIMATED_SCALE,
-    DEFAULT_AUDIO_SEEK, DEFAULT_AUDIO_VOLUME, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND,
-    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
-    DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
-    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_GENERAL_DISK_CACHE_MB,
-    DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS,
-    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
-    DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
-    DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_PREVIEW_SCALE,
-    DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML,
-    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
-    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE,
-    DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS, VOLUME_CHOICES,
+    DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AUDIO_VOLUME, DEFAULT_AVOID_MODE,
+    DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND,
+    DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE,
+    DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
+    DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB,
+    DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
+    DEFAULT_PREVIEW_SCALE, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
+    DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
+    DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
+    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
+    VOLUME_CHOICES,
 };
 use crate::config::theme_files;
 use crate::engines::libreoffice_render;
@@ -750,18 +752,23 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // rather than where it lands.
     let scaling_menu = CreatePopupMenu().unwrap();
 
-    // Add the Image Scaling, Video Scaling and Animated Scaling submenus: how large a
-    // picture, a video and an animated picture is drawn, each at a share of its own size
-    // rather than of the display. One builder serves all three — the shares are the same
-    // shares, and so is what a click on one means — and each is a submenu of its own
-    // because the sizes are settings of their own: what does not move, what plays, and
-    // what moves inside its frame are three questions.
-    let (preview_scale, video_scale, animated_scale) = CONFIG
+    // Add the Image Scaling, Video Scaling, Audio Scaling and Animated Scaling
+    // submenus: how large a picture, a video, a sound's card and an animated
+    // picture is drawn. The three that hold a bitmap of the file are each at a
+    // share of its own size rather than of the display — one builder serves all
+    // three, the shares are the same shares, and so is what a click on one means —
+    // and the sound's card is at a share of the display, through the builder the
+    // document scales use, because a card holds nothing of the sound to take a
+    // share of. Each is a submenu of its own because the sizes are settings of
+    // their own: what does not move, what plays, what is heard, and what moves
+    // inside its frame are four questions.
+    let (preview_scale, video_scale, audio_scale, animated_scale) = CONFIG
         .lock()
-        .map(|c| (c.preview_scale, c.video_scale, c.animated_scale))
+        .map(|c| (c.preview_scale, c.video_scale, c.audio_scale, c.animated_scale))
         .unwrap_or((
             DEFAULT_PREVIEW_SCALE,
             DEFAULT_VIDEO_SCALE,
+            DEFAULT_AUDIO_SCALE,
             DEFAULT_ANIMATED_SCALE,
         ));
 
@@ -778,6 +785,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_VIDEO_SCALE_BASE,
         video_scale,
         DEFAULT_VIDEO_SCALE,
+    );
+    append_audio_scale_menu(
+        scaling_menu,
+        w!("Audio Scaling"),
+        ID_TRAY_AUDIO_SCALE_BASE,
+        audio_scale,
+        DEFAULT_AUDIO_SCALE,
     );
     append_bitmap_scale_menu(
         scaling_menu,
