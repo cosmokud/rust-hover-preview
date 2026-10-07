@@ -35,6 +35,7 @@ fn banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
         bound: Some(400),
         restore: None,
         dpi: 96,
+        audio_options: None,
         transport_bar: true,
         transport_live: true,
         frame: PinFrame::Shaped,

@@ -525,12 +525,14 @@ pub(super) fn pinned_audio_volume_popup(pin: &PinnedPreview) -> Option<pin_chrom
 
     // The button's own box, from the card's own arithmetic rather than from anything kept beside
     // it: a popup hung off a button that has moved is a popup that is not where its button is
-    // (see `audio_preview::control_box`).
+    // (see `audio_preview::control_box`). The button is asked of the options the card is
+    // drawn with rather than of the configuration, so a popup opened after a change to
+    // Audio Scaling hangs off the button as the card drew it (see `pinned_audio_options`).
     let button = audio_preview::control_box(
         CardControl::Volume,
         (pin.content.2 - pin.content.0).max(1) as u32,
         pin.dpi,
-        current_audio_options(),
+        pinned_audio_options(pin),
         true,
     )?;
 
@@ -833,10 +835,15 @@ pub(super) unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> b
     // Asked of the pin's own three facts rather than of the media's kind, so that this procedure —
     // which the media's own lock can be held while, since the loop's audio block repaints the card
     // under it — never has to take that lock to know what the window is showing (see
-    // `pin_shows_an_audio_card`).
-    let shows = pin_state()
-        .and_then(|pinned| pinned.pin().map(pin_shows_an_audio_card))
-        .unwrap_or(false);
+    // `pin_shows_an_audio_card`). The pin's remembered options are taken in the same look,
+    // because they are the options the card is drawn at — the press is answered against the
+    // layout the card is drawn in, not the configuration's (see `pinned_audio_options`).
+    let (shows, options) = pin_state()
+        .and_then(|pinned| {
+            let pin = pinned.pin()?;
+            Some((pin_shows_an_audio_card(pin), pinned_audio_options(pin)))
+        })
+        .unwrap_or((false, current_audio_options()));
     if !shows {
         return false;
     }
@@ -862,7 +869,7 @@ pub(super) unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> b
 
     let (media_x, media_y) = media_point(x, y);
     let Some(control) =
-        audio_preview::control_at(media_x, media_y, width, dpi, current_audio_options(), true)
+        audio_preview::control_at(media_x, media_y, width, dpi, options, true)
     else {
         return false;
     };
@@ -874,7 +881,7 @@ pub(super) unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> b
                 media_y,
                 width,
                 dpi,
-                current_audio_options(),
+                options,
                 true,
             ) else {
                 return false;

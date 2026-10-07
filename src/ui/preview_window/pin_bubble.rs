@@ -113,7 +113,7 @@ pub(super) fn pinned_minimize_box(pin: &PinnedPreview) -> ScreenRegion {
             CardControl::Minimize,
             width as u32,
             pin.dpi,
-            current_audio_options(),
+            pinned_audio_options(pin),
             true,
         ) {
             return (

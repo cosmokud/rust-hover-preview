@@ -889,6 +889,18 @@ pub(super) fn pinned_audio_card_box(rect: ScreenRegion, path: &Path, dpi: u32) -
     )
 }
 
+/// The options a pinned sound's card is drawn with: the ones its card was
+/// taken up with, kept beside the dpi and the box it was taken up at (see
+/// `PinnedPreview::audio_options`), so the card's own arithmetic — the press,
+/// the seek, the volume popup's geometry, the window buttons' band — is
+/// answered against the layout the card is drawn in rather than the
+/// configuration's, and a change to Audio Scaling reaches the next take-up.
+/// A pin that remembers none — one that shows no sound's card — is answered
+/// with the configuration's.
+pub(super) fn pinned_audio_options(pin: &PinnedPreview) -> AudioPreviewOptions {
+    pin.audio_options.unwrap_or_else(current_audio_options)
+}
+
 /// The card's own control the pointer is over, asked of the card's own layout and answered in the
 /// window's own coordinates: the card fills the pin's media box and is drawn at the media band's
 /// own row, so the point is taken to the card the way a press on it is (see `media_point` and
@@ -911,7 +923,7 @@ pub(super) fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Optio
         y - top,
         (pin.content.2 - pin.content.0).max(1) as u32,
         pin.dpi,
-        current_audio_options(),
+        pinned_audio_options(pin),
         true,
     )
 }
@@ -923,7 +935,7 @@ pub(super) fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Optio
 /// comes and goes, because a button twice the margin's own side stands in the name's
 /// own rows (see `audio_preview::window_button_band`).
 pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
-    y < audio_preview::window_button_band(pin.dpi, current_audio_options())
+    y < audio_preview::window_button_band(pin.dpi, pinned_audio_options(pin))
 }
 
 /// Put a window of somebody else's — the player's — where a pinned window's media band is.
