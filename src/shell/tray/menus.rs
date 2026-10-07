@@ -771,14 +771,14 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // Add the Image, Video, Animated Image and Audio submenus: how large
     // a picture, a video, a frame that moves and a sound's card are
     // drawn. The three that hold a bitmap of the file are each at a
-    // share of its own size rather than of the display — one builder
-    // serves all three, the shares are the same shares, and so is what
-    // a click on one means — and the sound's card is at a share of the
-    // display, through the builder the document scales use, because a
-    // card holds nothing of the sound to take a share of. Each is a
-    // submenu of its own because the sizes are settings of their own:
-    // what does not move, what plays, what moves inside its frame, and
-    // what is heard are four questions.
+    // share of the display's fitted size or of the file's own size —
+    // one builder serves all three, the shares are the same shares, and
+    // so is what a click on one means — and the sound's card is at a
+    // share of the display, through the builder the document scales
+    // use, because a card holds nothing of the sound to take a share
+    // of. Each is a submenu of its own because the sizes are settings
+    // of their own: what does not move, what plays, what moves inside
+    // its frame, and what is heard are four questions.
     let (preview_scale, video_scale, audio_scale, animated_scale) = CONFIG
         .lock()
         .map(|c| (c.preview_scale, c.video_scale, c.audio_scale, c.animated_scale))

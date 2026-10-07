@@ -44,11 +44,14 @@ pub(super) const ID_TRAY_PIN_PAUSE_VIDEO: u16 = 1019;
 /// buttons walk every file this build can preview or only those of the pinned file's own kind
 /// of thing (see `PinNavFileTypes`).
 ///
-/// They sit in the slack the `Scaling` range leaves before it begins at 1041, which is the
-/// one gap this block has left: a walk's two answers belong under the pin's own row rather
-/// than in a range of their own, since a setting of two ways is two ids and not a list.
-pub(super) const ID_TRAY_PIN_NAV_ALL: u16 = 1025;
-pub(super) const ID_TRAY_PIN_NAV_CATEGORY: u16 = 1026;
+/// They sit in the slack above the pin's own rows, which begin at
+/// 1016 — the one gap this block has left between the HTML
+/// backdrop's half, which ends at 1012, and the pin's own rows:
+/// a walk's two answers belong under the pin's own row rather
+/// than in a range of their own, since a setting of two ways is
+/// two ids and not a list.
+pub(super) const ID_TRAY_PIN_NAV_ALL: u16 = 1014;
+pub(super) const ID_TRAY_PIN_NAV_CATEGORY: u16 = 1015;
 pub(super) const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 pub(super) const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 pub(super) const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all
@@ -277,11 +280,16 @@ pub(super) const CODEC_COMMANDS: u16 = 64;
 /// waiting: it puts the installer `updates` fetched on, and the app ends itself as the
 /// installer takes over rather than being the copy that has to be terminated.
 pub(super) const ID_TRAY_UPDATE: u16 = 1007;
-/// The `Scaling → Image` submenu: one command per share of its own size a
-/// picture is drawn at, in the order it lists them — the first of the three bitmap
-/// submenus, each with a range of its own so a click on one is never read as a click
-/// on the other.
-pub(super) const ID_TRAY_SCALE_BASE: u16 = 1041;
+/// The `Scaling → Image` submenu: one command per share a picture is
+/// drawn at, in the order it lists them — the first of the three bitmap
+/// submenus, each with a range of its own so a click on one is never read
+/// as a click on the other. The shares are of two bases, the display's
+/// fitted size and the file's own, and the range is in the stretch past
+/// the `Audio` one, which ends at 1534 — the first run of twelve the
+/// stretch has, with the reset rows and the toggles owning the ids below
+/// it — so a click on a share is never read as a row of another
+/// submenu's.
+pub(super) const ID_TRAY_SCALE_BASE: u16 = 1536;
 /// `Vector`, the second of them, in the range the `Scaling` submenus share: a
 /// drawing is asked for a share of the display rather than for a share of a size the file
 /// asks for, and both halves of the kind — a document the browser draws and a metafile the
@@ -295,17 +303,18 @@ pub(super) const ID_TRAY_DOCUMENT_SCALE_BASE: u16 = 1415;
 /// `Font`, in the range after the Document one: a specimen is drawn at a share of
 /// the display the same way a document is.
 pub(super) const ID_TRAY_FONT_SCALE_BASE: u16 = 1420;
-/// `Video`, the `Image` submenu's twin below it, in the range directly
-/// after the font one: it lists the same shares, so the two share a table and a builder,
-/// and it is a range of its own because a click on a video's scale is never a click on a
-/// picture's.
-pub(super) const ID_TRAY_VIDEO_SCALE_BASE: u16 = 1425;
-/// `Animated Image`, the third of them, in the range after the video one: an animated
-/// picture is a bitmap like the two above it, so it lists the same shares through the
-/// same builder, and the range is its own because what moves has a size apart from what
-/// does not.
-pub(super) const ID_TRAY_ANIMATED_SCALE_BASE: u16 = 1435;
-/// `Design`, in the range after the animated one: a design document is previewed
+/// `Video`, the `Image` submenu's twin below it: it lists the same
+/// shares, so the two share a table and a builder, and it is a range of
+/// its own because a click on a video's scale is never a click on a
+/// picture's. It sits in the stretch past the image's own range, the
+/// second run of twelve the `Audio` scale's end at 1534 leaves.
+pub(super) const ID_TRAY_VIDEO_SCALE_BASE: u16 = 1550;
+/// `Animated Image`, the third of them, in the range after the video
+/// one: an animated picture is a bitmap like the two above it, so it
+/// lists the same shares through the same builder, and the range is its
+/// own because what moves has a size apart from what does not.
+pub(super) const ID_TRAY_ANIMATED_SCALE_BASE: u16 = 1564;
+/// `Design`, in the range after the font one: a design document is previewed
 /// from a picture the file keeps of the whole of itself, so it is asked for a share of the
 /// display the way a page is rather than for a share of its own size.
 pub(super) const ID_TRAY_DESIGN_SCALE_BASE: u16 = 1445;
@@ -326,13 +335,23 @@ pub(super) const DOCUMENT_SCALE_CHOICES: [PreviewScale; 5] = [
     PreviewScale::Percent(25),
     PreviewScale::Percent(10),
 ];
-/// The shares the `Image` and `Video` submenus offer, in the order they
-/// list them: a bitmap is drawn at a share of its own size rather than of the display, so
-/// the percentages are the ones that mean something for one. Nothing is marked as the
-/// default here — the default is passed to the labels rather than written into the table,
-/// because which share a setting starts at is the setting's own business.
-pub(super) const BITMAP_SCALE_CHOICES: [PreviewScale; 8] = [
+/// The shares the `Image`, `Video` and `Animated Image` submenus offer, in
+/// the order they list them: the shares of the display's fitted size at the
+/// top — the whole room a fit takes, then the room reduced to a share of
+/// it — and the shares of a bitmap's own size below, which are the ones
+/// that mean something for a picture a video's first frame and a moving
+/// frame are. Nothing is marked as the default here — the default is passed
+/// to the labels rather than written into the table, because which share a
+/// setting starts at is the setting's own business. The two groups are one
+/// table because they are one question — how large a bitmap is drawn — with
+/// two bases, and the submenu says which is which around the items
+/// themselves (see `append_bitmap_scale_menu`).
+pub(super) const BITMAP_SCALE_CHOICES: [PreviewScale; 12] = [
     PreviewScale::FitToScreen,
+    PreviewScale::FitToScreenReduced(75),
+    PreviewScale::FitToScreenReduced(50),
+    PreviewScale::FitToScreenReduced(25),
+    PreviewScale::FitToScreenReduced(10),
     PreviewScale::Percent(400),
     PreviewScale::Percent(300),
     PreviewScale::Percent(200),

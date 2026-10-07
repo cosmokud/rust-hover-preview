@@ -64,7 +64,8 @@ fn every_kind_follows_the_one_setting_it_names() {
 /// good as the pixels it holds, and stretching a worksheet's corner over a display produces
 /// a preview that is larger and no more readable. So `Fit to Screen` means the whole of the
 /// room for a page and the picture at the size it is for a bitmap, and the difference is the
-/// whole of what `bitmap_at_display_scale` is for.
+/// whole of what `bitmap_at_display_scale` is for. A reduced fit is the one share the two
+/// rules read differently: half the room for a page, half the picture for a bitmap.
 ///
 /// Asserted against the two rules rather than against the table of kinds above, because they
 /// live in different functions and the bug this rules out is one being reached where the
@@ -84,6 +85,9 @@ fn a_page_takes_the_display_and_a_bitmap_takes_its_own_size() {
                 PreviewScale::Percent(percent) if percent < 100 => {
                     PreviewScale::FitToScreenReduced(percent)
                 }
+                // A reduced fit the configuration itself holds is the
+                // answer already, kept as it is.
+                PreviewScale::FitToScreenReduced(_) => configured,
                 _ => PreviewScale::FitToScreen,
             },
             "a page at {configured:?} is a share of the display's room"
@@ -93,10 +97,10 @@ fn a_page_takes_the_display_and_a_bitmap_takes_its_own_size() {
             match configured {
                 PreviewScale::Percent(percent) => PreviewScale::Percent(percent),
                 // Which is the half of the rule a fit is: the whole of the display as the
-                // picture's own size, and never more of the picture than it has.
-                PreviewScale::FitToScreen | PreviewScale::FitToScreenReduced(_) => {
-                    PreviewScale::Percent(100)
-                }
+                // picture's own size, and never more of the picture than it has — a
+                // reduced fit included, whose share is of that own size.
+                PreviewScale::FitToScreenReduced(percent) => PreviewScale::Percent(percent),
+                PreviewScale::FitToScreen => PreviewScale::Percent(100),
             },
             "and a bitmap at {configured:?} is a share of its own, so a fit never enlarges \
                  one to fill a display"
@@ -365,6 +369,31 @@ fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
              still does not"
     );
 
+    // A reduced fit of the display is the room's fitted size reduced to the
+    // share it names, and a bitmap's fitted size is its own — so a hover is
+    // asked for that share of the film's own size, and a film smaller than the
+    // room is still never stretched over it.
+    let at_half_fit = HoverScales {
+        video: PreviewScale::FitToScreenReduced(50),
+        ..hover_scales()
+    };
+    assert_eq!(
+        hover_preview_scale_of(&hover, at_half_fit),
+        PreviewScale::Percent(50),
+        "a reduced fit asks a video for half of its own size, not half of the room"
+    );
+    assert_eq!(
+        scale_dimensions(
+            1920,
+            1080,
+            room.0,
+            room.1,
+            hover_preview_scale_of(&hover, at_half_fit)
+        ),
+        (960, 540),
+        "a 1080p film at half of its fitted size is 960x540, not half of the display"
+    );
+
     // And the pin is not one of these hovers: the same file fitted for a pinned window is
     // still stretched to the room, which is the answer `pinned_media_box` is written for.
     assert_eq!(
@@ -378,6 +407,21 @@ fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
         (3840, 2160),
         "a pinned window is fitted to its media at a fit, media and all, and a maximize is \
              a maximize"
+    );
+
+    // The pin keeps the whole of the fit's bargain at a reduced fit too: the
+    // room is what is reduced, so a pinned film at half of a fitted room is
+    // half of the display rather than half of the film.
+    assert_eq!(
+        scale_dimensions(
+            1920,
+            1080,
+            room.0,
+            room.1,
+            effective_preview_scale(&small, at_half_fit)
+        ),
+        (1920, 1080),
+        "a pinned window is fitted to the room a reduced fit names, reduced"
     );
 }
 

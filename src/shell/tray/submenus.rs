@@ -499,14 +499,32 @@ fn append_by_screen_info_row(menu: HMENU) {
     let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
 }
 
-/// The `Image`, `Video` and `Animated Image` submenus: the shares of its own size
-/// a bitmap — a picture, a video's first frame and the player window over it, or
-/// a frame that moves — is drawn at, with the one the setting is on marked and
-/// nothing marked for a share the menu does not offer, which is what a
-/// hand-edited `config.ini` can ask for. One builder serves all three because the
-/// three are the same question asked of three kinds of file: the shares are one
-/// list, the labels are one function, and what differs is only which setting the
-/// submenu writes and the id its items carry.
+/// The `By Own Size` row a bitmap's submenu puts its own-size shares
+/// under, and the separator above it: the shares that follow are of a
+/// bitmap's own size rather than of the display, and the row names the
+/// basis the same way `By Screen` names the one above. It carries no
+/// command either, for the same reason (see `append_by_screen_info_row`).
+fn append_by_own_size_info_row(menu: HMENU) {
+    let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
+
+    append_labeled_item(menu, MF_STRING, 0, "By Own Size");
+}
+
+/// The `Image`, `Video` and `Animated Image` submenus: the shares a
+/// bitmap — a picture, a video's first frame and the player window
+/// over it, or a frame that moves — is drawn at, with the one the
+/// setting is on marked and nothing marked for a share the menu does
+/// not offer, which is what a hand-edited `config.ini` can ask for.
+/// One builder serves all three because the three are the same
+/// question asked of three kinds of file: the shares are one list,
+/// the labels are one function, and what differs is only which
+/// setting the submenu writes and the id its items carry.
+///
+/// The shares are of two bases, and the submenu says which is which
+/// around the items themselves: the shares of the display's fitted
+/// size open it, under a `By Screen` row, and the shares of a
+/// bitmap's own size close it, under a `By Own Size` row, with a
+/// separator between the groups.
 pub(super) fn append_bitmap_scale_menu(
     parent: HMENU,
     label: PCWSTR,
@@ -515,6 +533,16 @@ pub(super) fn append_bitmap_scale_menu(
     default: PreviewScale,
 ) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    append_by_screen_info_row(menu);
+
+    // Where the own-size group begins: the first share of a size of
+    // the file's own, which is the boundary the separator and the
+    // `By Own Size` row stand at.
+    let own_size_begin = BITMAP_SCALE_CHOICES
+        .iter()
+        .position(|choice| matches!(choice, PreviewScale::Percent(_)))
+        .unwrap_or(BITMAP_SCALE_CHOICES.len());
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
@@ -530,18 +558,32 @@ pub(super) fn append_bitmap_scale_menu(
         .collect();
 
     for (index, choice) in BITMAP_SCALE_CHOICES.iter().enumerate() {
-        let flags = MF_STRING
-            | if *choice == scale {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
+        if index == own_size_begin {
+            append_by_own_size_info_row(menu);
+        }
+
         let _ = unsafe {
             AppendMenuW(
                 menu,
-                flags,
+                MF_STRING,
                 (base + index as u16) as usize,
                 PCWSTR(labels[index].as_ptr()),
+            )
+        };
+    }
+
+    // One of the shares is the setting, so one of them carries the radio mark; a
+    // share the menu does not list is marked by nothing rather than by the wrong
+    // one. The mark is over the ids the items carry, which are one run of the
+    // base however the two groups and their rows are interleaved.
+    if let Some(index) = BITMAP_SCALE_CHOICES.iter().position(|choice| *choice == scale) {
+        let _ = unsafe {
+            CheckMenuRadioItem(
+                menu,
+                base as u32,
+                (base + BITMAP_SCALE_CHOICES.len() as u16 - 1) as u32,
+                (base + index as u16) as u32,
+                MF_BYCOMMAND.0,
             )
         };
     }
@@ -601,12 +643,17 @@ pub(super) fn append_audio_scale_menu(
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
 }
 
-/// What a share of a bitmap's own size is called in the menu: the percentage itself, with
-/// the one the setting starts at marked as the default. Taking the whole of it is not a
-/// percentage, so it is named for what it does.
+/// What a share a bitmap is drawn at is called in the menu: the
+/// percentage itself, with the one the setting starts at marked as
+/// the default. Both bases name a share by the same number — the
+/// `By Screen` and `By Own Size` rows say which basis it is of — and
+/// taking the whole of either is not a percentage, so it is named
+/// for what it does.
 pub(super) fn bitmap_scale_label(scale: PreviewScale, default: PreviewScale) -> String {
     let label = match scale {
-        PreviewScale::Percent(percent) => format!("{percent}%"),
+        PreviewScale::FitToScreenReduced(percent) | PreviewScale::Percent(percent) => {
+            format!("{percent}%")
+        }
         _ => "Fit to Screen".to_string(),
     };
 

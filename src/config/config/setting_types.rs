@@ -26,11 +26,13 @@ pub enum PreviewScale {
     /// Scale as large as the available display area allows, then reduced to this
     /// share of it.
     ///
-    /// This is a scale the app derives rather than one the configuration holds: a
-    /// source that is drawn at any size it is asked for — a PDF page, an SVG
+    /// A source that is drawn at any size it is asked for — a PDF page, an SVG
     /// document, a page Office rendered — is laid out at fit-to-screen, because the
     /// display's room is free quality there, and a configured percentage below `100`
-    /// is answered by reducing that size rather than ignored.
+    /// is answered by reducing that size rather than ignored. A bitmap's settings
+    /// hold the same shares, where the fitted size is the bitmap's own rather than
+    /// the room's (see `bitmap_at_display_scale`), which is why this is a value the
+    /// configuration keeps and writes back as the share it names.
     FitToScreenReduced(u32),
     /// Scale by a percentage of the media's native size.
     Percent(u32),
@@ -40,10 +42,9 @@ impl PreviewScale {
     pub fn as_str(self) -> String {
         match self {
             Self::FitToScreen => "fit".to_string(),
-            // Never written: the reduced fit is derived from the configured scale,
-            // and what a file would be read back as is the plain fit it is a share
-            // of.
-            Self::FitToScreenReduced(_) => "fit".to_string(),
+            // The reduced fit is a scale the bitmap settings hold, and what a
+            // file would be read back as is the share it asks for.
+            Self::FitToScreenReduced(percent) => format!("screen {percent}"),
             Self::Percent(percent) => sanitize_preview_scale_percent(percent).to_string(),
         }
     }
@@ -101,11 +102,35 @@ impl PreviewScale {
             "fit" | "fit to screen" | "fit-to-screen" | "fit_to_screen" | "fittoscreen" => {
                 Some(Self::FitToScreen)
             }
-            _ => normalized
-                .parse::<u32>()
-                .ok()
-                .map(|percent| Self::Percent(sanitize(percent))),
+            _ => Self::reduced_fit_from_str(&normalized, sanitize).or_else(|| {
+                normalized
+                    .parse::<u32>()
+                    .ok()
+                    .map(|percent| Self::Percent(sanitize(percent)))
+            }),
         }
+    }
+
+    /// The reduced fit a `config.ini` value names: the share the fit is
+    /// reduced to, written around the word for the room it is a share of.
+    /// The words are as lenient as the fit's own are, and the share is
+    /// read through the bounds the caller's setting holds, which is the one
+    /// difference a picture's scale and a sound's have — the cascade that
+    /// turns a written value into one of them is the same either way.
+    fn reduced_fit_from_str(normalized: &str, sanitize: fn(u32) -> u32) -> Option<Self> {
+        let percent = normalized
+            .strip_prefix("screen")
+            .map(|rest| rest.trim_matches([' ', '-']))
+            .or_else(|| {
+                normalized
+                    .strip_suffix("of screen")
+                    .map(|rest| rest.trim())
+            })?;
+
+        percent
+            .parse::<u32>()
+            .ok()
+            .map(|percent| Self::FitToScreenReduced(sanitize(percent)))
     }
 }
 

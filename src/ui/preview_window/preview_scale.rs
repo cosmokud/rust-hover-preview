@@ -361,14 +361,16 @@ pub(super) fn image_is_animated(path: &Path) -> bool {
 /// holds, and a worksheet's corner is a few hundred pixels across rather than a
 /// screenful. So a share of the display is read for a bitmap as the same share of its
 /// own size, and the whole of the display — a fit — as the bitmap at the size it is,
-/// which is what `100%` means for a picture. Nothing here is ever enlarged to fill the
+/// which is what `100%` means for a picture. A reduced fit asks for the room reduced
+/// to its share, so a bitmap is asked for that share of its own size — the size the
+/// plain fit would have left it at, reduced — and still never enlarged to fill the
 /// room.
 pub(super) fn bitmap_at_display_scale(display_scale: PreviewScale) -> PreviewScale {
     match display_scale {
-        PreviewScale::Percent(percent) => PreviewScale::Percent(percent),
-        PreviewScale::FitToScreen | PreviewScale::FitToScreenReduced(_) => {
-            PreviewScale::Percent(100)
+        PreviewScale::Percent(percent) | PreviewScale::FitToScreenReduced(percent) => {
+            PreviewScale::Percent(percent)
         }
+        PreviewScale::FitToScreen => PreviewScale::Percent(100),
     }
 }
 
@@ -380,12 +382,17 @@ pub(super) fn bitmap_at_display_scale(display_scale: PreviewScale) -> PreviewSca
 /// quality there. A configured percentage at or above `100%` asks for at least
 /// that room and is answered with it, so those settings are one setting for such
 /// a source; one below `100%` is a size the user picked, and is answered by
-/// reducing the fitted size — `50%` halves it — rather than being ignored.
+/// reducing the fitted size — `50%` halves it — rather than being ignored. A reduced
+/// fit the configuration itself holds — a bitmap scale a menu offered, or a
+/// hand-edited `config.ini` wrote — is the answer already and is kept as it is: the
+/// reduction is the setting, and answering it with the plain fit would take the
+/// size back to the whole room.
 pub(super) fn fit_reduced(preview_scale: PreviewScale) -> PreviewScale {
     match preview_scale {
         PreviewScale::Percent(percent) if percent < 100 => {
             PreviewScale::FitToScreenReduced(percent)
         }
+        PreviewScale::FitToScreenReduced(_) => preview_scale,
         _ => PreviewScale::FitToScreen,
     }
 }
