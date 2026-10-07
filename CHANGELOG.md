@@ -36,6 +36,7 @@
 - **Pinned picture caption/bar on top** — The window is exactly picture-sized, caption and bar fade in/out with the pointer, and only the strip under the pointer shows.
 - **Pinned video volume own** — Speaker button opens a knob over the video, level belongs to that window alone and is independent of hover `Volume → Video`.
 - **`Volume → Video → Remember` and `Volume → Audio → Remember`** — Off by default; on, the pin knob level is written to `config.ini` (`remember_audio_volume`, `remember_video_volume`) and the next hover uses it, including across a sound-to-film-and-back walk.
+- **`Scaling → Audio Scaling`** — A sound's card is sized as a share of the display, the way every other preview kind is: `25%`, `20%`, `15%`, `10%` (default) or `5%`, in a new submenu between **Video Scaling** and **Animated Scaling**. The card fills the share its setting names — its seek bar stretches with it — while its height stays the card's own and its width never drops below the smallest card that fits a pin's controls. The card is drawn at the default text size (125%) on every machine, so **Text Preview → Font Size** no longer resizes it; the card still follows the Theme setting. The choice is written to `config.ini` as `audio_scale` and read back on startup, and a hand-edited value is sanitized rather than fatal.
 
 ### Changed
 
