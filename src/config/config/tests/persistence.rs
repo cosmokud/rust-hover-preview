@@ -158,6 +158,7 @@ fn a_file_the_app_wrote_is_one_it_reads_back_as_itself() {
         decode_budget_gb: 0.5,
         office_engine_idle: EngineIdle::Indefinite,
         webview_idle: EngineIdle::Seconds(60),
+        audio_scale: PreviewScale::Percent(20),
         ebook_scale: PreviewScale::Percent(25),
         image_background: TransparentBackground::Transparent,
         text_scroll_far_edge_grace_pixels: 12.5,
