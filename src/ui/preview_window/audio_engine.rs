@@ -49,6 +49,21 @@ pub(super) fn current_audio_options() -> AudioPreviewOptions {
         })
 }
 
+/// The theme a sound's card is painted with, read the way
+/// `current_audio_options` reads it: from the configuration, for the
+/// one setting that still reaches a card already on screen. The Audio
+/// Scaling share a card is drawn at is the share it was drawn with for
+/// as long as that drawing is on screen (see `MediaData::audio_options`),
+/// but the theme is not a size — it is a re-styling, and the repaints
+/// of a card on screen compose it over the remembered font size (see
+/// `MediaData::refresh_audio_card` and `MediaData::relayout_audio_card`).
+pub(super) fn current_audio_theme() -> TextTheme {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.theme)
+        .unwrap_or(TextTheme::Light)
+}
+
 /// The share of the display a sound's card is laid out over, read the way the
 /// options are: from the configuration at the moment a box is measured, so a
 /// change in the tray reaches the next hover rather than a card already on
@@ -141,8 +156,15 @@ pub(super) fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) ->
     // No controls: this is the card a *hover* shows, whose own window is a window nobody is in
     // (see `audio_card`).
     let card = audio_card(path, None, None, 0, None)?;
+    // The options the frame is painted with are the frame's own from
+    // here on: every repaint of it paints with these rather than asking
+    // the configuration again (see `MediaData::audio_options`), so a
+    // change to Audio Scaling reaches the next hover and the next pin
+    // only — and the pin taken up over this hover remembers the very
+    // same value (see `take_up_pinned_window`).
+    let options = current_audio_options();
     let (pixels, width, height) =
-        audio_preview::render(&card, width, height, dpi, current_audio_options())?;
+        audio_preview::render(&card, width, height, dpi, options)?;
 
     Some(MediaData {
         frames: vec![Arc::new(ImageFrame::new(pixels, width, height, 0))],
@@ -155,6 +177,7 @@ pub(super) fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) ->
         video_process: None,
         loading_start: None,
         text_state: None,
+        audio_options: Some(options),
     })
 }
 

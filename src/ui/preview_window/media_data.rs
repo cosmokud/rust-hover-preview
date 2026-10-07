@@ -72,6 +72,25 @@ pub(super) struct MediaData {
     pub(super) loading_start: Option<Instant>,
     /// Where a text preview is scrolled to, when it scrolls at all.
     pub(super) text_state: Option<TextPreviewState>,
+    /// The options the sound's card frame was painted with, when this media
+    /// is a sound's card: the theme and the font size the frame was first
+    /// painted at, which are part of the drawing rather than of the
+    /// configuration (see `load_audio_card`, the one writer).
+    ///
+    /// A card on screen is drawn at the options it was drawn with for as
+    /// long as that drawing is on screen: every repaint of it — the
+    /// clock-and-bar repaint (`refresh_audio_card`) and the relayout a
+    /// maximize or a resize asks for (`relayout_audio_card`) — paints with
+    /// these remembered ones rather than asking the configuration again, so
+    /// a change to Audio Scaling reaches the next hover and the next pin
+    /// only, the bargain every other Scaling setting already makes. A pin
+    /// keeps its own copy of the same value, taken up from this one (see
+    /// `PinnedPreview::audio_options`), which is why the two cannot drift
+    /// apart the way the pin's dpi and its box do not.
+    ///
+    /// Nothing at all for a media of another kind, whose frame is not a
+    /// sound's card and is never painted from the configuration.
+    pub(super) audio_options: Option<AudioPreviewOptions>,
 }
 
 /// Paint a band of a layered window one flat opaque colour, for a window whose media is not there.
@@ -147,8 +166,26 @@ impl MediaData {
         let Some(card) = audio_card(path, elapsed, duration, name_offset, chrome) else {
             return false;
         };
+        // The clock and the creeping bar keep their own cadence, but the
+        // size they are painted at stays where the frame was first painted:
+        // the options are part of the drawing, so this repaint paints with
+        // the frame's remembered ones rather than asking the configuration
+        // again — a change to Audio Scaling does not reach a card already
+        // on screen, only the next hover and the next pin. The theme is the
+        // one exception, and the Theme setting's own: it still re-styles a
+        // card on screen, composed over the remembered font size (see
+        // `current_audio_theme`). A frame that remembers none — a media of
+        // another kind — is painted with the configuration's, as it always
+        // was.
+        let options = self
+            .audio_options
+            .map(|remembered| AudioPreviewOptions {
+                theme: current_audio_theme(),
+                font_scale_percent: remembered.font_scale_percent,
+            })
+            .unwrap_or_else(current_audio_options);
         let Some((pixels, width, height)) =
-            audio_preview::render(&card, width, height, dpi, current_audio_options())
+            audio_preview::render(&card, width, height, dpi, options)
         else {
             return false;
         };
@@ -174,12 +211,26 @@ impl MediaData {
         else {
             return false;
         };
+        // The layout a maximize or a resize asks for is asked of the frame
+        // as it stands: the card is still one card at the share it was
+        // painted at, whatever the configuration has moved on to, so the
+        // options are the frame's remembered ones here too (see
+        // `refresh_audio_card` for the composition, which this paints with
+        // as well — the theme still follows the configuration, the font size
+        // still does not).
+        let options = self
+            .audio_options
+            .map(|remembered| AudioPreviewOptions {
+                theme: current_audio_theme(),
+                font_scale_percent: remembered.font_scale_percent,
+            })
+            .unwrap_or_else(current_audio_options);
         let Some((pixels, width, height)) = audio_preview::render(
             &card,
             size.0.max(1),
             size.1.max(1),
             clock.dpi,
-            current_audio_options(),
+            options,
         ) else {
             return false;
         };
@@ -564,6 +615,7 @@ pub(super) fn engine_svg_media() -> MediaData {
         video_process: None,
         loading_start: None,
         text_state: None,
+        audio_options: None,
     }
 }
 
@@ -614,5 +666,6 @@ pub(super) fn static_image_media(frame: Arc<ImageFrame>, kind: MediaType) -> Med
         video_process: None,
         loading_start: None,
         text_state: None,
+        audio_options: None,
     }
 }

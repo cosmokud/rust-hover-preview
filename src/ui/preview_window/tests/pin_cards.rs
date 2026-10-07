@@ -53,6 +53,65 @@ impl Drop for CardFontSettings {
     }
 }
 
+/// The theme a sound's card is painted with, stood where a test wants it
+/// and put back when the guard is dropped, the way `CardFontSettings`
+/// stands the share and the text font size. The theme is the one setting
+/// a repaint of a card on screen still answers to, so the test that
+/// exercises that stands it where it is not, and a test that fails on the
+/// way still leaves the machine's own theme behind it.
+struct CardThemeSettings {
+    theme: TextTheme,
+}
+
+impl CardThemeSettings {
+    /// Stands the theme where a test wants it, holding what the machine's
+    /// own theme was to put back.
+    fn stood_at(theme: TextTheme) -> Self {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = CardThemeSettings {
+            theme: config.theme,
+        };
+        config.theme = theme;
+
+        was
+    }
+}
+
+impl Drop for CardThemeSettings {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.theme = self.theme;
+        }
+    }
+}
+
+/// A sound on disk, probed and remembered the way a hover finds one: the
+/// card a test paints is the card of a file the audio track cache knows,
+/// with a length and four facts a card is worth showing.
+///
+/// The folder is named per test, so a test's file is its own, and the
+/// file is the test's to take away when it is done with it.
+fn a_remembered_sound(folder: &str) -> PathBuf {
+    let folder = std::env::temp_dir().join(folder);
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("song.mp3");
+    std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
+        .expect("a file");
+    audio_track::remember(
+        &path,
+        audio_track::Probed::Track(audio_track::Track {
+            player: audio_track::Player::Ffmpeg,
+            codec: Some("MP3".to_string()),
+            rate: Some(44_100),
+            channels: Some(2),
+            bitrate: Some(192_000),
+            duration: Some(180.0),
+        }),
+    );
+
+    path
+}
+
 /// The three things a pin's end settles that are not the pin, from every road out of it.
 ///
 /// The walk the planner is working on, the bubble's drag latch and the box a drag had left
@@ -516,6 +575,324 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
         frame,
         (content.2 - content.0) as u32,
         "the card is drawn into the pin's own box rather than the hover's"
+    );
+
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = previous_media;
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A repaint of a card on screen keeps the frame it was painted
+/// at: the options a sound's card is drawn with are part of the
+/// drawing, so the clock-and-bar repaint paints with the options
+/// the frame was first painted with, and a change to Audio
+/// Scaling — the configuration moved on to another share — reaches
+/// the next hover and the next pin only, the bargain every other
+/// Scaling setting already makes. The card's clock and its creeping
+/// bar keep their own cadence; only the size they are painted at
+/// stays where it was.
+#[test]
+fn a_repaint_keeps_the_frame_it_was_painted_at() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _settings = CardFontSettings::stood_the_share_at(DEFAULT_AUDIO_SCALE);
+
+    let path = a_remembered_sound("rust-hover-preview-pin-sound-repaint");
+
+    // The card a hover shows, loaded into the media slot: the
+    // frame's first painting, at the anchor's options.
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let painted_with = current_audio_options();
+    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let (width, height) =
+        audio_preview::measure(&hover, 4096, 2160, 96, painted_with).expect("a measured card");
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = load_audio_card(&path, width, height, 96);
+    }
+    let mut media = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|mut media| media.take())
+        .expect("a card in the media slot");
+
+    // The configuration moves on to another share.
+    drop(_settings);
+    let _moved = CardFontSettings::stood_the_share_at(PreviewScale::Percent(25));
+
+    // The clock-and-bar repaint, handed a clock, a chrome and a
+    // name offset the way the loop hands them over.
+    let chrome = Some(CardChrome {
+        playing: false,
+        volume: 40,
+        hovered: None,
+        pressed: None,
+        window_buttons: true,
+    });
+    assert!(
+        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome),
+        "the card is repainted"
+    );
+
+    // The frame it leaves is the frame the anchor's font paints:
+    // the same box, and the same pixels as a render of the same
+    // card into the same box at the anchor's options — with the
+    // theme the configuration now answers, which is the one
+    // setting a repaint still follows. A render is deterministic,
+    // so the pixel equality holds, and it is the assertion that
+    // the repaint did not follow the configuration.
+    let frame = media.frames.first().expect("a frame").clone();
+    assert_eq!(
+        (frame.width, frame.height),
+        (width, height),
+        "the repainted frame keeps the box it was painted at"
+    );
+    let card = audio_card(&path, Some(67.0), Some(180.0), 0, chrome).expect("a card");
+    let (pixels, ..) = audio_preview::render(
+        &card,
+        width,
+        height,
+        96,
+        AudioPreviewOptions {
+            theme: current_audio_theme(),
+            font_scale_percent: painted_with.font_scale_percent,
+        },
+    )
+    .expect("a painted card");
+    assert_eq!(
+        frame.pixels, pixels,
+        "the repaint painted at the share the frame was painted at"
+    );
+
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = previous_media;
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A pin answers its controls at the share it was taken up at:
+/// the options the card was taken up with are the options the
+/// card is drawn at for as long as the pin is up, so the card's
+/// own arithmetic — the control a press is answered with, the
+/// window buttons' band, the volume popup's geometry — is
+/// answered against the layout the card is drawn in after the
+/// configuration has moved on to another share, so a press lands
+/// on the control as drawn. A walk is a fresh take-up — its media
+/// is freshly loaded — so it takes up the new share.
+#[test]
+fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _settings = CardFontSettings::stood_the_share_at(DEFAULT_AUDIO_SCALE);
+
+    let path = a_remembered_sound("rust-hover-preview-pin-sound-take-up");
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    // A card in the media slot at the anchor, which is what a
+    // take-up of a sound takes its options from: the frame's
+    // first painting, at the share the card is to be drawn at.
+    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let (width, height) =
+        audio_preview::measure(&hover, 4096, 2160, 96, current_audio_options())
+            .expect("a measured card");
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = load_audio_card(&path, width, height, 96);
+    }
+    let pin = take_up_pinned_window(
+        &path,
+        (100, 100, 100 + width as i32, 100 + height as i32),
+    );
+    let anchor = current_audio_options();
+
+    // The configuration moves on to another share.
+    drop(_settings);
+    let _moved = CardFontSettings::stood_the_share_at(PreviewScale::Percent(25));
+
+    // The control a press is answered with, at the centre of the
+    // anchor's volume button: the button the card's own
+    // arithmetic puts there at the share the card is drawn at,
+    // which is the share the pin remembers rather than the share
+    // the configuration now answers.
+    let button = audio_preview::control_box(
+        CardControl::Volume,
+        (pin.content.2 - pin.content.0).max(1) as u32,
+        pin.dpi,
+        anchor,
+        true,
+    )
+    .expect("a box on a card that carries its controls");
+    let (_, window_height) = pin.window_size();
+    let (top, _) = pinned_band_rows(window_height, pin.caption, 0, pin.overlay);
+    assert_eq!(
+        pin_audio_control_at(
+            &pin,
+            (button.left + button.right) / 2,
+            (button.top + button.bottom) / 2 + top,
+        ),
+        Some(CardControl::Volume),
+        "the press is answered against the layout the card is drawn in"
+    );
+
+    // The window buttons' band is the anchor's: a hand in the
+    // band the anchor's buttons stand in is a hand near the top
+    // border, and a hand one row past it is not.
+    let band = audio_preview::window_button_band(pin.dpi, anchor);
+    assert!(
+        pin_audio_window_buttons(&pin, band - 1),
+        "a hand in the anchor's band is a hand near the top border"
+    );
+    assert!(
+        !pin_audio_window_buttons(&pin, band),
+        "while a hand one row below it is a hand past the buttons"
+    );
+
+    // And the volume popup hangs off the anchor's button box —
+    // the panel floating over the very button it was opened from,
+    // not over where the moved share's button would have been.
+    let popup =
+        pinned_audio_volume_popup(&pin).expect("a popup over the card's own button");
+    let expected = pin_chrome::volume_popup_from_button(
+        RECT {
+            top: button.top + top,
+            ..button
+        },
+        pin.window_size().0,
+        pin.dpi,
+    );
+    assert_eq!(
+        popup.panel, expected.panel,
+        "the popup's panel is hung off the button as the card drew it"
+    );
+    assert_eq!(
+        popup.track, expected.track,
+        "and its groove with it"
+    );
+
+    // Then walk: the media slot is given a card freshly loaded at
+    // the moved share, and the pin taken up over it is a fresh
+    // take-up, which asks the configuration — the next pin gets
+    // the new share, and its controls are answered at the new
+    // share's layout.
+    stand_pin(Some(pin));
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = load_audio_card(&path, width, height, 96);
+    }
+    let walked = take_up_pinned_window(
+        &path,
+        (100, 100, 100 + width as i32, 100 + height as i32),
+    );
+    let moved = current_audio_options();
+    let walked_button = audio_preview::control_box(
+        CardControl::Volume,
+        (walked.content.2 - walked.content.0).max(1) as u32,
+        walked.dpi,
+        moved,
+        true,
+    )
+    .expect("a box on a card that carries its controls");
+    let (_, walked_height) = walked.window_size();
+    let (walked_top, _) =
+        pinned_band_rows(walked_height, walked.caption, 0, walked.overlay);
+    assert_eq!(
+        pin_audio_control_at(
+            &walked,
+            (walked_button.left + walked_button.right) / 2,
+            (walked_button.top + walked_button.bottom) / 2 + walked_top,
+        ),
+        Some(CardControl::Volume),
+        "a fresh take-up asks the configuration, so the walk gets the new share"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = previous_media;
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A repaint still follows the Theme setting: what the remembered
+/// options freeze is the size the card is drawn at, not the theme,
+/// so a change to the theme re-styles a card on screen — the
+/// repaint composes the configuration's theme over the remembered
+/// font size — even as a change to the share leaves the card
+/// where it is.
+#[test]
+fn a_repaint_still_follows_the_theme_setting() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _settings = CardFontSettings::stood_the_share_at(DEFAULT_AUDIO_SCALE);
+
+    let path = a_remembered_sound("rust-hover-preview-pin-sound-theme");
+
+    // The frame's first painting, at the anchor's options.
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let painted_with = current_audio_options();
+    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let (width, height) =
+        audio_preview::measure(&hover, 4096, 2160, 96, painted_with).expect("a measured card");
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = load_audio_card(&path, width, height, 96);
+    }
+    let mut media = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|mut media| media.take())
+        .expect("a card in the media slot");
+
+    // The share moved on, and the theme stood where it is not: the
+    // configuration's opposite of the painted one, so the repaint
+    // has a theme to follow that the frame it is repainting did
+    // not paint with.
+    drop(_settings);
+    let _moved = CardFontSettings::stood_the_share_at(PreviewScale::Percent(25));
+    let opposite = match painted_with.theme {
+        TextTheme::Dark => TextTheme::Light,
+        TextTheme::Light | TextTheme::Custom(_) => TextTheme::Dark,
+    };
+    let _theme = CardThemeSettings::stood_at(opposite);
+    assert_ne!(
+        current_audio_theme(),
+        painted_with.theme,
+        "the theme is stood where the card was not painted with"
+    );
+
+    let chrome = Some(CardChrome {
+        playing: false,
+        volume: 40,
+        hovered: None,
+        pressed: None,
+        window_buttons: true,
+    });
+    assert!(
+        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome),
+        "the card is repainted"
+    );
+
+    // The pixels are a render at the *configuration's* theme over
+    // the *remembered* font size — the composition, externally. A
+    // render at the moved share's font, or at the painted theme,
+    // is a different painting, so the equality is the assertion
+    // that the repaint followed the theme and nothing else.
+    let frame = media.frames.first().expect("a frame").clone();
+    let card = audio_card(&path, Some(67.0), Some(180.0), 0, chrome).expect("a card");
+    let (pixels, ..) = audio_preview::render(
+        &card,
+        width,
+        height,
+        96,
+        AudioPreviewOptions {
+            theme: current_audio_theme(),
+            font_scale_percent: painted_with.font_scale_percent,
+        },
+    )
+    .expect("a painted card");
+    assert_eq!(
+        frame.pixels, pixels,
+        "the repaint painted the configuration's theme over the remembered font"
     );
 
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {

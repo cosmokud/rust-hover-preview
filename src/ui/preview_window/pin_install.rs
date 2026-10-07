@@ -796,10 +796,20 @@ pub(super) fn take_pin_load(pin_load: &mut Option<PinLoad>) -> Option<PinAnswer>
 /// laid the incoming file out in for the other road. Everything else is read off the machine and
 /// off the pin being replaced, and the caller publishes the result.
 pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPreview {
-    let kind = CURRENT_MEDIA
+    // The media's kind, and the options its sound's card frame was
+    // painted with, read in one look: the take-up is the moment a
+    // pin's card is first its own, and the pin remembers the options
+    // that moment painted with, so the pin's remembered options and
+    // its frame's are one value (see `PinnedPreview::audio_options`).
+    let (kind, audio_options) = CURRENT_MEDIA
         .lock()
         .ok()
-        .and_then(|media| media.as_ref().map(|media| media.media_type));
+        .and_then(|media| {
+            media
+                .as_ref()
+                .map(|media| (Some(media.media_type), media.audio_options))
+        })
+        .unwrap_or((None, None));
     let dpi = dpi_at(rect.0, rect.1);
     let transport_bar = pin_transport_kind(kind);
     let overlay = pin_overlay_chrome(kind);
@@ -918,6 +928,17 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         ),
         restore: carried.and_then(|(restore, ..)| restore),
         dpi,
+        // The options the card was taken up with, which the card is
+        // drawn at for as long as this pin is up: written only for a
+        // sound, whose card is the one kind every repaint of it and
+        // every piece of its own control arithmetic asks the options
+        // of (see `pinned_audio_options`). A pin of another kind has
+        // no card to remember, and a take-up that finds no media in
+        // the slot has no options to remember either.
+        audio_options: match kind {
+            Some(MediaType::Audio) => audio_options,
+            _ => None,
+        },
         transport_bar,
         // Both kinds of video carry a bar that does something, and for
         // opposite reasons: the engine answers every question the bar asks,

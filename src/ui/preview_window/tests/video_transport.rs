@@ -81,6 +81,7 @@ fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() 
             content: (0, 0, 320, 240),
             restore: None,
             dpi: 96,
+            audio_options: None,
             transport_bar: true,
             transport_live: true,
             frame: PinFrame::Shaped,
