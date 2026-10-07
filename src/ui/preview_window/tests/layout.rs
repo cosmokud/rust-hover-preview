@@ -513,7 +513,9 @@ fn a_document_with_no_page_yet_waits_in_the_spinners_own_box() {
 /// A page's share of the display is read for a bitmap — a workbook's corner where
 /// no page can be exported — as the same share of its own size, and the whole of
 /// the display as the bitmap at the size it is: a quarter of the room is a quarter
-/// of the picture, and a fit never stretches one to fill the screen.
+/// of the picture, and a fit never stretches one to fill the screen. A reduced fit
+/// asks for the room reduced to its share, so a bitmap is asked for that share of
+/// its own size — the size the plain fit would have left it at, reduced.
 #[test]
 fn a_bitmap_follows_a_pages_share_without_being_enlarged() {
     for percent in [75, 50, 25, 10] {
@@ -522,16 +524,17 @@ fn a_bitmap_follows_a_pages_share_without_being_enlarged() {
             PreviewScale::Percent(percent),
             "{percent}% of the picture"
         );
+        assert_eq!(
+            bitmap_at_display_scale(PreviewScale::FitToScreenReduced(percent)),
+            PreviewScale::Percent(percent),
+            "{percent}% of the fitted picture"
+        );
     }
 
     assert_eq!(
         bitmap_at_display_scale(PreviewScale::FitToScreen),
         PreviewScale::Percent(100),
         "the whole room is the picture at its own size"
-    );
-    assert_eq!(
-        bitmap_at_display_scale(PreviewScale::FitToScreenReduced(50)),
-        PreviewScale::Percent(100)
     );
 }
 

@@ -613,7 +613,8 @@ pub(in super::super) fn set_preview_scale(index: u16) {
 
 /// The same for a video, at the share `video_scale` names: the frame that stands in for
 /// one is a bitmap like a picture, so the shares its submenu offers are the picture's
-/// shares, and the setting written is the video's own.
+/// shares — of the display's fitted size and of the frame's own size both — and the
+/// setting written is the video's own.
 pub(in super::super) fn set_video_scale(index: u16) {
     let Some(scale) = bitmap_scale_at(index) else {
         return;
@@ -747,9 +748,11 @@ pub(in super::super) fn set_text_scale(index: u16) {
     }
 }
 
-/// The share of its own size an item of the `Image` or `Video` submenu
-/// stands for, by the position it was listed at. An id past the last choice the menu
-/// offered is one that is not there.
+/// The share an item of the `Image`, `Video` or `Animated Image`
+/// submenu stands for, by the position it was listed at — a share of
+/// the display's fitted size or of a bitmap's own size, which is the
+/// one question the three submenus ask with one table. An id past the
+/// last choice the menu offered is one that is not there.
 pub(in super::super) fn bitmap_scale_at(index: u16) -> Option<PreviewScale> {
     BITMAP_SCALE_CHOICES.get(index as usize).copied()
 }

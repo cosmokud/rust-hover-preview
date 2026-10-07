@@ -364,7 +364,9 @@ fn a_pages_scale_starts_at_the_whole_room() {
 
 /// The scale is written the way the picture scale is, so the words a person
 /// would write by hand are the words it reads: `fit`, a number, either with a
-/// percent sign or without.
+/// percent sign or without — and a reduced fit of the display, which is the
+/// share the fit is reduced to, written around the word for the room it is a
+/// share of.
 #[test]
 fn a_drawing_scale_takes_the_words_a_person_would_write() {
     for (written, expected) in [
@@ -373,6 +375,11 @@ fn a_drawing_scale_takes_the_words_a_person_would_write() {
         (" 75 ", PreviewScale::Percent(75)),
         ("25%", PreviewScale::Percent(25)),
         ("10", PreviewScale::Percent(10)),
+        ("screen 75", PreviewScale::FitToScreenReduced(75)),
+        ("Screen 50", PreviewScale::FitToScreenReduced(50)),
+        ("75 of screen", PreviewScale::FitToScreenReduced(75)),
+        ("screen-25", PreviewScale::FitToScreenReduced(25)),
+        ("screen10", PreviewScale::FitToScreenReduced(10)),
     ] {
         let mut ini = Ini::new();
         ini.set(CONFIG_SECTION, "vector_scale", Some(written.to_string()));
@@ -381,6 +388,76 @@ fn a_drawing_scale_takes_the_words_a_person_would_write() {
 
         assert_eq!(config.vector_scale, expected, "`{written}` read back");
     }
+}
+
+/// A bitmap's reduced fit is a scale of its own — `screen 75`, the display's
+/// fitted size reduced to a share of it — and the three bitmap settings read
+/// it through the one cascade every scale is read by, so which of them a
+/// `config.ini` key belongs to changes nothing. A plain number keeps meaning
+/// a share of the file's own size, which is what it has always meant, and a
+/// value that names no scale is not one.
+#[test]
+fn a_bitmaps_reduced_fit_takes_the_words_a_person_would_write() {
+    for (written, expected) in [
+        ("screen 75", PreviewScale::FitToScreenReduced(75)),
+        (" 75 of screen ", PreviewScale::FitToScreenReduced(75)),
+        ("Screen-50", PreviewScale::FitToScreenReduced(50)),
+        ("screen10", PreviewScale::FitToScreenReduced(10)),
+        ("50", PreviewScale::Percent(50)),
+        ("fit", PreviewScale::FitToScreen),
+    ] {
+        for key in ["preview_scale", "video_scale", "animated_scale"] {
+            let mut ini = Ini::new();
+            ini.set(CONFIG_SECTION, key, Some(written.to_string()));
+
+            let config = read_file(&mut ini);
+
+            let scale = match key {
+                "preview_scale" => config.preview_scale,
+                "video_scale" => config.video_scale,
+                _ => config.animated_scale,
+            };
+
+            assert_eq!(scale, expected, "`{key}` at `{written}` read back");
+        }
+    }
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "video_scale", Some("screen".to_string()));
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.video_scale, DEFAULT_VIDEO_SCALE,
+        "a share with no number in it is not one, so the setting is left where it was"
+    );
+}
+
+/// A reduced fit is written back as the share it asks for, so a share picked
+/// from the `By Screen` group of a bitmap's submenu is still the share after
+/// a restart: what the file holds is the scale the setting is.
+#[test]
+fn a_bitmaps_reduced_fit_reads_back_what_it_writes() {
+    for scale in [
+        PreviewScale::FitToScreen,
+        PreviewScale::FitToScreenReduced(75),
+        PreviewScale::FitToScreenReduced(10),
+        PreviewScale::Percent(50),
+    ] {
+        let written = scale.as_str();
+
+        assert_eq!(
+            PreviewScale::from_str(&written),
+            Some(scale),
+            "`{written}` read back"
+        );
+    }
+
+    assert_eq!(
+        PreviewScale::FitToScreenReduced(75).as_str(),
+        "screen 75",
+        "the share a reduced fit asks for is what the file is written with"
+    );
 }
 
 /// A specimen's scale is the fifth of them and a setting of its own like the four:

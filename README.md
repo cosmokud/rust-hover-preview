@@ -14,7 +14,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 - Press a key and a preview becomes a window of its own — captioned, movable, resizable, always on top, where it stays until you close it.
 - Supports images, design documents, camera raw, vector drawings, fonts, videos, PDFs, ebooks, comics, text/code, archives, Office documents, and more.
 - A file's preview depends on what's really inside it, not its name — so renamed files still show correctly, unreadable content gets no preview, and ambiguous types are resolved by extension or content.
-- Scaling from 25% to 400%, or fit-to-screen, with separate scaling for images and videos and for vector drawings, PDFs, documents, fonts, design documents, and sounds.
+- Scaling fit-to-screen, by a share of the display's fitted size, or from 25% to 400% of a file's own size, with separate scaling for images and videos and for vector drawings, PDFs, documents, fonts, design documents, and sounds.
 - Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
 
 ## Supported Formats
@@ -303,7 +303,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - Keeps a preview off the item it is about.
     - Keyboard previews have no cursor, so **Nothing** acts like **Filename**.
 - **Scaling**
-  - **Image** — Fit to Screen or `25%`–`400%` of the image's own size.
+  - **Image** — **Fit to Screen**, a share of the display's fitted size (`75%`, `50%`, `25%`, `10%`), or a share of the image's own size (`400%`–`25%`). The two groups are listed under **By Screen** and **By Own Size**. Default `100%`.
   - **Video** — Same shares for a video. Default `100%`.
   - **Animated Image** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery.
     - A still GIF or PNG uses **Image**.
@@ -591,9 +591,9 @@ spinner_delay_ms=250
 
 ### Scaling
 
-- `preview_scale`: percentage or `fit`, based on the picture's own size.
+- `preview_scale`: `fit`, a share of the display's fitted size (`screen 75`, `screen 50`, `screen 25` or `screen 10` — the display fitted to the media, reduced to that share of it), or a share of the picture's own size (`25`–`400`). Default `100`.
 - `video_scale`: same for video. Default `100`.
-- `audio_scale`: the share of the display a sound's card is laid out over — `25`, `20`, `15`, `10` or `5`. Default `10`. The whole card scales with the share (font, height, width), so it's the `10%` card uniformly smaller or larger, and `Text Size` no longer resizes it. A hand-edited value is sanitized rather than fatal: `100` or more reads as `100`, `0` reads as `10`, an unrecognized value is ignored.
+- `audio_scale`: the share of the display a sound's card is laid out over — `25`, `20`, `15`, `10`, `7` or `5`. Default `10`. The whole card scales with the share (font, height, width), so it's the `10%` card uniformly smaller or larger, and `Text Size` no longer resizes it. A hand-edited value is sanitized rather than fatal: `100` or more reads as `100`, `0` reads as `10`, an unrecognized value is ignored.
 - `animated_scale`: same for animated GIF, WebP, or PNG — and for an animated JPEG XL, which is played as a picture rather than as a video. Default `100`. Still GIF/PNG follow `preview_scale`.
 - `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
 - `text_scale`: how much of the screen a text preview box may take when it opens, for plain text, code, and Markdown. Default `fit`; `100` or more reads as `fit`. `Text Size` still scales the text inside that box.

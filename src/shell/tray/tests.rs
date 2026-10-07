@@ -197,11 +197,21 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
     }
 
     // And outside every range a click is read against before this row is, so a walk's
-    // two answers are never answered as an item of a submenu of their own.
+    // two answers are never answered as an item of a submenu of their own — the
+    // backdrop halves beside the pin block among them, since a row inside one would
+    // be read as that half's own backdrop.
     for (base, len) in [
         (
             ID_TRAY_LIBREOFFICE_IDLE_BASE,
             ENGINE_IDLE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_IMAGE_BACKGROUND_BASE,
+            BACKGROUND_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_HTML_BACKGROUND_BASE,
+            HTML_BACKGROUND_CHOICES.len() as u16,
         ),
         (ID_TRAY_SCALE_BASE, BITMAP_SCALE_CHOICES.len() as u16),
     ] {
@@ -1024,19 +1034,24 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
     }
 }
 
-/// The `Image` and `Video` submenus offer the shares a bitmap can be
-/// drawn at — the share of its own size, rather than the share of the display the
-/// document scales beside them are — in one order and with one set of labels: what a
-/// share is called does not depend on which of the two is asking, and exactly one
-/// label — the share each setting starts at — reads as the default. Every share an
-/// item can pick is one the setting keeps, so a choice made here is still the choice
-/// after a restart.
+/// The `Image`, `Video` and `Animated Image` submenus offer the shares a
+/// bitmap is drawn at — the shares of the display's fitted size and of a
+/// bitmap's own size, rather than the share of the display the document
+/// scales beside them are — in one order and with one set of labels: what a
+/// share is called does not depend on which of the three is asking, and
+/// exactly one label — the share each setting starts at — reads as the
+/// default. Every share an item can pick is one the setting keeps, so a
+/// choice made here is still the choice after a restart.
 #[test]
 fn every_offered_bitmap_scale_is_one_the_setting_keeps() {
     assert_eq!(
         BITMAP_SCALE_CHOICES.map(|scale| bitmap_scale_label(scale, DEFAULT_PREVIEW_SCALE)),
         [
             "Fit to Screen".to_string(),
+            "75%".to_string(),
+            "50%".to_string(),
+            "25%".to_string(),
+            "10%".to_string(),
             "400%".to_string(),
             "300%".to_string(),
             "200%".to_string(),
@@ -1045,6 +1060,22 @@ fn every_offered_bitmap_scale_is_one_the_setting_keeps() {
             "50%".to_string(),
             "25%".to_string(),
         ]
+    );
+
+    // The two groups the `By Screen` and `By Own Size` rows stand
+    // between: every share of the display's fitted size first, then
+    // every share of a bitmap's own size — the boundary the
+    // submenu's separator and its two rows are placed at (see
+    // `append_bitmap_scale_menu`).
+    let own_size_begin = BITMAP_SCALE_CHOICES
+        .iter()
+        .position(|choice| matches!(choice, PreviewScale::Percent(_)))
+        .expect("a share of a bitmap's own size is offered");
+    assert!(
+        BITMAP_SCALE_CHOICES[..own_size_begin]
+            .iter()
+            .all(|choice| !matches!(choice, PreviewScale::Percent(_))),
+        "the screen group holds the fitted-size shares alone"
     );
 
     for default in [
