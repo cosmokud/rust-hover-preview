@@ -273,6 +273,7 @@ mod engine_probes;
 mod hover;
 mod layout;
 mod media_scales;
+mod pin_audio_facts;
 mod pin_audio_seek;
 mod pin_cards;
 mod pin_edges;
