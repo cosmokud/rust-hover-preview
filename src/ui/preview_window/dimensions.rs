@@ -325,19 +325,18 @@ pub(super) fn archive_box_off_the_tick(
 pub(super) fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
     let source = path.to_path_buf();
     let room = audio_box_room(bounds, current_audio_scale(), dpi);
-    let (cap_width, cap_height) = room;
     let options = current_audio_options();
 
     measured_off_the_tick(
         path,
         MeasureScope::Room {
-            cap_width,
-            cap_height,
+            cap_width: room.width,
+            cap_height: room.height,
             dpi,
             theme: options.theme,
             font_scale_percent: options.font_scale_percent,
         },
-        room,
+        (room.width, room.height),
         move || {
             // What the machine has for the file, asked once per file and version and held for
             // the hovers that follow — a file the engine will not play costs one probe rather
@@ -356,7 +355,7 @@ pub(super) fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(
             // Nothing: this is the card a *hover* is measured with, and a hover's own window is a window
             // nobody is in (see `audio_card`).
             let card = audio_card(&source, None, None, 0, None)?;
-            audio_preview::measure(&card, cap_width, cap_height, dpi, options)
+            audio_preview::measure(&card, room.width, room.height, dpi, options)
         },
     )
 }
@@ -787,28 +786,52 @@ pub(super) fn text_box_room(bounds: ScreenBounds) -> (u32, u32) {
     (width.max(1.0) as u32, height.max(1.0) as u32)
 }
 
-/// The room a sound's card is laid out over: the work area of the display the
-/// pointer is on times the share the Audio Scaling setting names (see
-/// `audio_box`).
-///
-/// A share past the whole display is the whole display, so a hand-edited value
-/// above `100%` cannot put a card wider than the screen. The width room is that
-/// share of the width plus twice the card's own margin — the margin being the
-/// padding the card is drawn inside, because the room is the room the card's
-/// *content* spans and the card stands in the margin around it — and the margin
-/// is taken at the default text size, which is the size the card is always drawn
-/// at, so the room does not move when the text font size does. The height room is
-/// the plain share of the height: the card's height is its own, content-driven,
-/// and the share of the height is only the guard that answers a room too short
-/// to draw a card in with nothing.
-pub(super) fn audio_box_room(bounds: ScreenBounds, scale: PreviewScale, dpi: u32) -> (u32, u32) {
+/// The font size a sound's card is built at for a share: the default
+/// text size at the 10% anchor, scaled by the share's fraction of the
+/// anchor and rounded to the nearest whole percent — 63%, 125%, 188%,
+/// 250% and 313% for the five shares the menu offers. A share a hand
+/// edits past the menu's top end is past the menu but not past the
+/// metrics, which honor 1% to 1000% (see `TextMetrics::new`).
+pub(super) fn audio_font_scale_percent(scale: PreviewScale) -> u32 {
     let share = scale.target_scale().unwrap_or(1.0).min(1.0);
+    let anchor = DEFAULT_AUDIO_SCALE_PERCENT as f32 / 100.0;
 
-    // The card's own margin, at the default text size the card is always drawn
-    // at: a compatible DC to measure with, created and dropped here, the way
-    // `window_button_band` takes one.
+    (DEFAULT_TEXT_FONT_SCALE_PERCENT as f32 * share / anchor).round() as u32
+}
+
+/// What the Audio Scaling setting answers for a work area: the room a
+/// sound's card is laid out over, and the font size the card is built
+/// at (see `audio_font_scale_percent`).
+pub(super) struct AudioRoom {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) font_scale_percent: u32,
+}
+
+/// The room a sound's card is laid out over, and the font size the card
+/// is built at: the work area of the display the pointer is on times the
+/// share the Audio Scaling setting names (see `audio_box`), and the
+/// default text size scaled by the share's fraction of the 10% anchor.
+///
+/// A share past the whole display is the whole display, so a hand-edited
+/// value above `100%` cannot put a card wider than the screen. The width
+/// room is that share of the width plus twice the card's own margin — the
+/// margin being the padding the card is drawn inside, read at the font
+/// size the card is built at for the share, so the margin scales with the
+/// card the way Windows scaling scales a window's chrome — and the height
+/// room is the plain share of the height: the card's height is its own,
+/// content-driven at that font, and the share of the height is only the
+/// guard that answers a room too short to draw a card in with nothing.
+pub(super) fn audio_box_room(bounds: ScreenBounds, scale: PreviewScale, dpi: u32) -> AudioRoom {
+    let share = scale.target_scale().unwrap_or(1.0).min(1.0);
+    let font_scale_percent = audio_font_scale_percent(scale);
+
+    // The card's own margin, at the font size the card is built at for
+    // this share: a compatible DC to measure with, created and dropped
+    // here, the way `window_button_band` takes one.
     let dc = unsafe { CreateCompatibleDC(None) };
-    let padding = TextMetrics::new(dc, dpi, DEFAULT_TEXT_FONT_SCALE_PERCENT)
+    let padding = TextMetrics::new(dc, dpi, font_scale_percent)
         .map(|metrics| metrics.padding)
         .unwrap_or(0);
     unsafe {
@@ -820,7 +843,11 @@ pub(super) fn audio_box_room(bounds: ScreenBounds, scale: PreviewScale, dpi: u32
     let width = ((bounds.right - bounds.left).max(1) as f32 * share).round() + (padding * 2) as f32;
     let height = (bounds.height().max(1) as f32 * share).round();
 
-    (width.max(1.0) as u32, height.max(1.0) as u32)
+    AudioRoom {
+        width: width.max(1.0) as u32,
+        height: height.max(1.0) as u32,
+        font_scale_percent,
+    }
 }
 
 /// The box a page of text asks for: as many lines and columns as the room its own setting

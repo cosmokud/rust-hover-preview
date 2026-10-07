@@ -40,8 +40,8 @@ fn a_sound_picked_into_a_pin_is_the_wait_for_its_probe_until_that_has_answered()
         let options = current_audio_options();
         let room = audio_box_room(bounds, current_audio_scale(), 96);
         MeasureScope::Room {
-            cap_width: room.0,
-            cap_height: room.1,
+            cap_width: room.width,
+            cap_height: room.height,
             dpi: 96,
             theme: options.theme,
             font_scale_percent: options.font_scale_percent,

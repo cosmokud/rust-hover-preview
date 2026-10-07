@@ -155,7 +155,7 @@ fn a_card_fills_the_room_its_share_gives_it() {
     // the 5% room beside it, which is narrower than the narrowest card
     // worth drawing.
     let (wide, height) = measure(&card(), 374, 144, 96, options()).expect("a measured card");
-    let (narrow, floor_height) = measure(&card(), 202, 72, 96, options()).expect("a measured card");
+    let (narrow, floor_height) = measure(&card(), 188, 72, 96, options()).expect("a measured card");
 
     assert_eq!(wide, 374, "the card fills the room it is measured at");
     assert_eq!(

@@ -873,8 +873,8 @@ pub(super) fn pinned_audio_card_box(rect: ScreenRegion, path: &Path, dpi: u32) -
     let room = audio_box_room(work_area_at(rect.0, rect.1), current_audio_scale(), dpi);
     let Some((width, height)) = audio_preview::measure(
         &card,
-        room.0.max(1),
-        room.1.max(1),
+        room.width.max(1),
+        room.height.max(1),
         dpi,
         current_audio_options(),
     ) else {

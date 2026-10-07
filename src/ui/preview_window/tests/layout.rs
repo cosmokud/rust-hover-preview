@@ -287,9 +287,12 @@ fn a_document_is_drawn_at_its_share_of_the_room() {
 /// area of the display the pointer is on times that share, at the
 /// display's own DPI. The width room is the share of the width plus
 /// twice the card's own margin — the padding the card is drawn inside,
-/// at the default text size, which is the size the card is always drawn
-/// at — and the height room is the plain share of the height, which is
-/// only the guard that answers a too-short room with nothing.
+/// read at the font size the card is built at for the share, which is
+/// the default text size scaled by the share's fraction of the 10%
+/// anchor — and the height room is the plain share of the height, which
+/// is only the guard that answers a too-short room with nothing. The
+/// answer carries the font size the card is built at alongside the
+/// room.
 #[test]
 fn a_sound_is_laid_out_over_its_share_of_the_display() {
     let display = ScreenBounds {
@@ -299,17 +302,22 @@ fn a_sound_is_laid_out_over_its_share_of_the_display() {
         bottom: 1440,
     };
 
-    for (percent, room) in [
-        (5, (202, 72)),
-        (10, (374, 144)),
-        (15, (546, 216)),
-        (20, (718, 288)),
-        (25, (890, 360)),
+    for (percent, room, font) in [
+        (5, (188, 72), 63),
+        (10, (374, 144), 125),
+        (15, (562, 216), 188),
+        (20, (748, 288), 250),
+        (25, (936, 360), 313),
     ] {
+        let answered = dimensions::audio_box_room(display, PreviewScale::Percent(percent), TEST_DPI);
         assert_eq!(
-            dimensions::audio_box_room(display, PreviewScale::Percent(percent), TEST_DPI),
+            (answered.width, answered.height),
             room,
             "{percent}% of a 3440x1440 work area"
+        );
+        assert_eq!(
+            answered.font_scale_percent, font,
+            "{percent}% of a 3440x1440 work area builds its card at {font}%"
         );
     }
 }
