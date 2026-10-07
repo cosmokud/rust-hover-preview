@@ -381,6 +381,75 @@ fn every_offered_way_of_starting_a_sound_is_one_the_setting_keeps() {
     );
 }
 
+/// The `Volume → Pin Mode Audio Seek` submenu lists the same four
+/// ways of starting a sound the `Audio Seek` one does, in the order
+/// the ids are handed out in, but marks the way *this* setting
+/// starts at — the beginning — rather than the way the hover's does,
+/// and each id of its own range resolves back to the way its item
+/// was listed for, which is what makes a click start a pinned sound
+/// where it named.
+#[test]
+fn every_offered_way_of_starting_a_pinned_sound_is_one_the_setting_keeps() {
+    assert_eq!(
+        AUDIO_SEEK_CHOICES.map(pin_mode_audio_seek_label),
+        [
+            "Remember".to_string(),
+            "From the Start (Default)".to_string(),
+            "From the Middle".to_string(),
+            "Random".to_string()
+        ]
+    );
+
+    let marked: Vec<AudioSeek> = AUDIO_SEEK_CHOICES
+        .iter()
+        .copied()
+        .filter(|seek| pin_mode_audio_seek_label(*seek).ends_with(" (Default)"))
+        .collect();
+
+    assert_eq!(
+        marked,
+        [DEFAULT_PIN_MODE_AUDIO_SEEK],
+        "the way the pin's setting starts at is the way the pin's menu marks"
+    );
+
+    assert_eq!(
+        DEFAULT_PIN_MODE_AUDIO_SEEK,
+        AudioSeek::Start,
+        "the pin's menu marks the beginning, not where a sound was left"
+    );
+
+    for (index, seek) in AUDIO_SEEK_CHOICES.iter().enumerate() {
+        assert_eq!(audio_seek_at(index as u16), Some(*seek));
+    }
+
+    assert_eq!(
+        audio_seek_at(AUDIO_SEEK_CHOICES.len() as u16),
+        None,
+        "an id past the last item is not one the menu offered"
+    );
+
+    // The two `Audio Seek` submenus are two ranges of their own, so
+    // a click on one is never a click on the other — and neither is
+    // a click on a level of either volume half, which is the bargain
+    // `the_two_volume_submenus_carry_a_range_apiece` holds the
+    // hover's range to.
+    let pinned = ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE
+        ..ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16;
+    let hover = ID_TRAY_AUDIO_SEEK_BASE..ID_TRAY_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16;
+    assert!(
+        !pinned.contains(&hover.start) && !hover.contains(&pinned.start),
+        "the ranges {pinned:?} and {hover:?} overlap"
+    );
+
+    for base in [ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_AUDIO_VOLUME_BASE] {
+        let range = base..base + VOLUME_CHOICES.len() as u16;
+        assert!(
+            !range.contains(&pinned.start) && !pinned.contains(&range.start),
+            "the ranges {range:?} and {pinned:?} overlap"
+        );
+    }
+}
+
 /// The three `Timing` submenus list the same delays, one range apiece, and a range
 /// that were wider than the items in it would take an id from the submenu below it —
 /// which is a click selecting a delay that was never listed, for a setting nobody

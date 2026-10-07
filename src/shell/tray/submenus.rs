@@ -18,16 +18,16 @@ use super::ids::{
     BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES,
     ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE,
     ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS,
-    ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, TICK_CHOICES_MS,
-    TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
+    ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK,
+    TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
 };
 
 use crate::app::dialogs;
 use crate::config::config::{
     AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinNavFileTypes, PreviewScale,
     TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
-    DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_TICK_MS,
-    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
+    DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MODE_AUDIO_SEEK,
+    DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
@@ -280,6 +280,66 @@ pub(super) fn append_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
     };
 }
 
+/// The `Volume → Pin Mode Audio Seek` submenu: where in a file a
+/// *pinned* sound starts playing, with the way the setting is on
+/// marked. The same four ways as the hover's own submenu above
+/// it, because the question is one question asked twice — once of
+/// the hover's setting and once of the pin's — and the two are
+/// menus of their own for the same reason the volume halves are:
+/// what a pin is started at is the pin's to decide, and a sound
+/// already playing where a hover left it is not moved by a change
+/// to either.
+pub(super) fn append_pin_mode_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the menu is being filled out, for the same reason the
+    // `Avoid` labels are: `AppendMenuW` is handed a pointer, so the wide strings have to outlive
+    // the call that lists them.
+    let labels: Vec<Vec<u16>> = AUDIO_SEEK_CHOICES
+        .iter()
+        .map(|seek| {
+            pin_mode_audio_seek_label(*seek)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, label) in labels.iter().enumerate() {
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                (ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE + index as u16) as usize,
+                PCWSTR(label.as_ptr()),
+            )
+        };
+    }
+
+    // One of the ways is the setting, so one of them carries the radio mark; a way the menu does
+    // not list is marked by nothing rather than by the wrong one.
+    if let Some(index) = AUDIO_SEEK_CHOICES.iter().position(|way| *way == seek) {
+        let _ = unsafe {
+            CheckMenuRadioItem(
+                menu,
+                ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE as u32,
+                (ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16 - 1) as u32,
+                (ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE + index as u16) as u32,
+                MF_BYCOMMAND.0,
+            )
+        };
+    }
+
+    let _ = unsafe {
+        AppendMenuW(
+            parent,
+            MF_STRING | MF_POPUP,
+            menu.0 as usize,
+            w!("Pin Mode Audio Seek"),
+        )
+    };
+}
+
 /// What a way of starting a sound is called in the menu: the words the tray lists it under, with
 /// the way this setting starts at marked as the default.
 ///
@@ -297,6 +357,22 @@ pub(super) fn audio_seek_label(seek: AudioSeek) -> String {
     };
 
     default_label(label, seek == DEFAULT_AUDIO_SEEK)
+}
+
+/// What a way of starting a *pinned* sound is called in the menu:
+/// the words the tray lists it under, with the way *this* setting
+/// starts at marked as the default — which is not the way the
+/// hover's setting starts, so the mark is the pin's own and not
+/// the one `audio_seek_label` puts on the same words.
+pub(super) fn pin_mode_audio_seek_label(seek: AudioSeek) -> String {
+    let label = match seek {
+        AudioSeek::Remember => "Remember",
+        AudioSeek::Start => "From the Start",
+        AudioSeek::Middle => "From the Middle",
+        AudioSeek::Random => "Random",
+    };
+
+    default_label(label, seek == DEFAULT_PIN_MODE_AUDIO_SEEK)
 }
 
 /// The `Explorer Poll` submenu — the loop's own tick: how often the

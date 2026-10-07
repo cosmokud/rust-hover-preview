@@ -173,6 +173,16 @@ pub(super) const ID_TRAY_AUDIO_VOLUME_BASE: u16 = 1370;
 /// `the_two_volume_submenus_carry_a_range_apiece`, which holds all three away from the sounds
 /// gate and from each other.
 pub(super) const ID_TRAY_AUDIO_SEEK_BASE: u16 = 1390;
+/// The `Volume → Pin Mode Audio Seek` submenu: one command per
+/// way a *pinned* sound can be started, in the order it lists
+/// them — the same four ways as the hover's own submenu above
+/// it, asked of the pin's setting rather than the hover's (see
+/// `pin_mode_audio_seek`). Its range sits directly below the
+/// hover's, which is where the submenu sits below it, and is
+/// four wide for the same reason the hover's is: a way of
+/// starting a sound is one of four, and a click on one of the
+/// pin's is never a click on one of the hover's.
+pub(super) const ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE: u16 = 1394;
 /// The `Volume → Audio` submenu's first row: whether a sound's measured loudness is brought to one
 /// level before it is played (see `Normalize`).
 ///

@@ -185,6 +185,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "pin_mode_audio_seek",
+            Some(self.pin_mode_audio_seek.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "normalize_volume",
             Some(self.normalize_volume.to_string()),
         );
@@ -630,6 +635,15 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "audio_seek") {
             if let Some(seek) = AudioSeek::from_str(&value) {
                 self.audio_seek = seek;
+            }
+        }
+        // Where a *pinned* sound starts, read the way the hover's own is: a
+        // file written before the setting existed has no key for it and leaves
+        // the setting at the way this build starts — the beginning — and a
+        // value that names no way of starting one is left there too.
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_mode_audio_seek") {
+            if let Some(seek) = AudioSeek::from_str(&value) {
+                self.pin_mode_audio_seek = seek;
             }
         }
         // Whether a sound's loudness is measured and brought to one level, which a file

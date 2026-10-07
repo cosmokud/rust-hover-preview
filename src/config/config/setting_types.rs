@@ -811,6 +811,15 @@ impl AudioSeek {
 /// player does — the file picked up again rather than begun again.
 pub const DEFAULT_AUDIO_SEEK: AudioSeek = AudioSeek::Remember;
 
+/// Where a *pinned* sound starts unless the configuration says otherwise.
+///
+/// The pin's own answer to the question `DEFAULT_AUDIO_SEEK` answers for a
+/// hover, and deliberately not the same one: a pin is a sound the user asked
+/// to hear, which is the one answer of the four that does not have to be a
+/// memory for. A pinned file nothing is remembered about therefore starts at
+/// the beginning rather than being picked up where a hover left it.
+pub const DEFAULT_PIN_MODE_AUDIO_SEEK: AudioSeek = AudioSeek::Start;
+
 /// How far a preview is placed clear of the item it is about.
 ///
 /// A view draws an item's name, and the views that draw their items as rows draw the

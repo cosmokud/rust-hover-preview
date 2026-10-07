@@ -41,7 +41,8 @@ use super::submenus::{
     append_afk_timer_menu, append_audio_scale_menu, append_audio_seek_menu, append_avoid_menu,
     append_background_menu, append_bitmap_scale_menu, append_codecs_menu,
     append_document_scale_menu, append_engine_idle_menu, append_labeled_item,
-    append_office_engine_menu, append_tick_menu, append_video_engine_menu, cache_size_label,
+    append_office_engine_menu, append_pin_mode_audio_seek_menu, append_tick_menu,
+    append_video_engine_menu, cache_size_label,
     decode_budget_label, default_label, pin_nav_label, pin_update_label, remember_volume_label,
     system_menu_label, timing_delay_menu, update_available_label,
 };
@@ -57,7 +58,8 @@ use crate::config::config::{
     DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB,
     DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_MODE_AUDIO_SEEK,
+    DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_PREVIEW_SCALE, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
@@ -1007,13 +1009,21 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // at —
     // and below the sound's own sits the other half of the same question, where in a file it
     // starts playing (see `AUDIO_SEEK_CHOICES`).
-    let (video_volume, audio_volume, audio_seek) = CONFIG
+    let (video_volume, audio_volume, audio_seek, pin_mode_audio_seek) = CONFIG
         .lock()
-        .map(|c| (c.video_volume, c.audio_volume, c.audio_seek))
+        .map(|c| {
+            (
+                c.video_volume,
+                c.audio_volume,
+                c.audio_seek,
+                c.pin_mode_audio_seek,
+            )
+        })
         .unwrap_or((
             DEFAULT_VIDEO_VOLUME,
             DEFAULT_AUDIO_VOLUME,
             DEFAULT_AUDIO_SEEK,
+            DEFAULT_PIN_MODE_AUDIO_SEEK,
         ));
 
     let volume_menu = CreatePopupMenu().unwrap();
@@ -1141,6 +1151,11 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     append_audio_seek_menu(volume_menu, audio_seek);
+
+    // And the pin's own answer to the same question, directly
+    // below the hover's: where a *pinned* sound starts, which
+    // is the pin's setting's to decide (see `pin_mode_audio_seek`).
+    append_pin_mode_audio_seek_menu(volume_menu, pin_mode_audio_seek);
 
     let _ = AppendMenuW(
         menu,

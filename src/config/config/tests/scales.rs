@@ -660,6 +660,90 @@ fn reads_where_a_sound_starts_from_its_own_key() {
     );
 }
 
+/// Where a *pinned* sound starts is a setting of its own, read from its own
+/// key the way the hover's is — and it is a setting that starts at the
+/// beginning rather than at where a sound was left: a pin is a sound the
+/// user asked to hear, which is the one answer that does not have to be a
+/// memory for.
+#[test]
+fn reads_where_a_pinned_sound_starts_from_its_own_key() {
+    assert_eq!(
+        AppConfig::default().pin_mode_audio_seek,
+        DEFAULT_PIN_MODE_AUDIO_SEEK,
+        "a pinned sound starts at the beginning unless the file says otherwise"
+    );
+    assert_eq!(
+        DEFAULT_PIN_MODE_AUDIO_SEEK,
+        AudioSeek::Start,
+        "the pin's setting starts at the beginning, not where a sound was left"
+    );
+
+    let mut ini = Ini::new();
+    ini.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_seek",
+        Some("middle".to_string()),
+    );
+    assert_eq!(read_file(&mut ini).pin_mode_audio_seek, AudioSeek::Middle);
+
+    // What the menu writes is what the file reads back: every way of
+    // starting a sound is one the setting keeps, so a choice made here is
+    // still the choice after a restart.
+    for seek in [
+        AudioSeek::Remember,
+        AudioSeek::Start,
+        AudioSeek::Middle,
+        AudioSeek::Random,
+    ] {
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "pin_mode_audio_seek",
+            Some(seek.as_str().to_string()),
+        );
+        assert_eq!(
+            read_file(&mut ini).pin_mode_audio_seek,
+            seek,
+            "`{}` read back",
+            seek.as_str()
+        );
+    }
+
+    let mut older = Ini::new();
+    older.set(CONFIG_SECTION, "audio_seek", Some("random".to_string()));
+    assert_eq!(
+        read_file(&mut older).pin_mode_audio_seek,
+        DEFAULT_PIN_MODE_AUDIO_SEEK,
+        "a file written before the setting existed starts a pinned sound where a fresh one does, whatever the hover's own setting is"
+    );
+
+    let mut unknown = Ini::new();
+    unknown.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_seek",
+        Some("sideways".to_string()),
+    );
+    assert_eq!(
+        read_file(&mut unknown).pin_mode_audio_seek,
+        DEFAULT_PIN_MODE_AUDIO_SEEK,
+        "a value the app cannot read is answered with the way it starts rather than guessed at"
+    );
+
+    // The two settings are two answers to one question, so a file that names
+    // one names it alone: the hover's is left where the file put it, and the
+    // pin's where the file put that.
+    let mut both = Ini::new();
+    both.set(CONFIG_SECTION, "audio_seek", Some("random".to_string()));
+    both.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_seek",
+        Some("middle".to_string()),
+    );
+    let config = read_file(&mut both);
+    assert_eq!(config.audio_seek, AudioSeek::Random);
+    assert_eq!(config.pin_mode_audio_seek, AudioSeek::Middle);
+}
+
 /// Which files a pin's own previous/next buttons step through is one of its own keys, and
 /// it is written under the name the tray's `Nav File Types` submenu shows: `category` is
 /// the folder narrowed to the pinned file's own kind of thing, and every file this build

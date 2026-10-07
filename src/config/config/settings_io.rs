@@ -117,6 +117,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "audio_volume",
             "normalize_video_volume",
             "normalize_volume",
+            "pin_mode_audio_seek",
             "remember_audio_volume",
             "remember_video_volume",
             "video_volume",

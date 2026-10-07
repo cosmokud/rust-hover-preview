@@ -541,6 +541,25 @@ pub(in super::super) fn audio_seek_at(index: u16) -> Option<AudioSeek> {
     AUDIO_SEEK_CHOICES.get(index as usize).copied()
 }
 
+/// The `Volume → Pin Mode Audio Seek` submenu's command: where a
+/// *pinned* sound starts, which is the pin's own setting rather
+/// than the hover's.
+///
+/// Nothing on screen is rebuilt: a sound already playing is left
+/// where it is, and what a click here changes is where the *next*
+/// pinned sound starts — the same bargain the hover's `Audio Seek`
+/// beside it makes.
+pub(in super::super) fn set_pin_mode_audio_seek(index: u16) {
+    let Some(seek) = audio_seek_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_mode_audio_seek = seek;
+        config.save();
+    }
+}
+
 pub(in super::super) fn set_follow_cursor(follow: bool) {
     if let Ok(mut config) = CONFIG.lock() {
         config.follow_cursor = follow;

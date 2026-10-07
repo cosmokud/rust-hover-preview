@@ -28,6 +28,17 @@ pub(super) fn current_audio_seek() -> AudioSeek {
         .unwrap_or(DEFAULT_AUDIO_SEEK)
 }
 
+/// Where a pinned sound starts, read the way the hover's is and at
+/// the same moment: from the pin's own setting as a player is
+/// started, so a change in the tray reaches the next pin — and a
+/// sound already playing is left where it is.
+pub(super) fn current_pin_mode_audio_seek() -> AudioSeek {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.pin_mode_audio_seek)
+        .unwrap_or(DEFAULT_PIN_MODE_AUDIO_SEEK)
+}
+
 /// What a sound's card is built with: the theme, which is the one setting a painted
 /// preview answers to, and the font size the Audio Scaling share names — the default
 /// text size at the 10% anchor, scaled by the share's fraction of it (see

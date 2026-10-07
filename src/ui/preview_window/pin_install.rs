@@ -213,10 +213,11 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     }
 
     // A sound is started here, the way it is started for a hover, and where it is started *from* is
-    // read the way the hover reads it: the tray's `Volume → Audio Seek` decides, and a share of a
-    // length nothing has read yet is kept for the tick that can ask for it (see
-    // `audio_seek::start_position`). A sound no player will take is a card with no clock behind it,
-    // which is the same answer the load path gives one.
+    // read the way the pin's own setting decides: the tray's `Volume → Pin Mode
+    // Audio Seek` decides, and a share of a length nothing has read yet is kept for
+    // the tick that can ask for it (see `audio_seek::start_position`). A sound no
+    // player will take is a card with no clock behind it, which is the same answer
+    // the load path gives one.
     //
     // At the level the plan was made with rather than at the tray's, which is the level a film two
     // arms above is started at and the level the card is about to be drawn at: a knob moved on this
@@ -224,7 +225,7 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     // under a card that says otherwise is a sound the card and the user's ear disagree about (see
     // `PinVolume`).
     if file.media.media_type.is_audio() {
-        let seek = current_audio_seek();
+        let seek = current_pin_mode_audio_seek();
         let length = audio_track::playable(&file.path).and_then(|track| track.duration);
         let start = audio_seek::start_position(&file.path, seek, length);
 
