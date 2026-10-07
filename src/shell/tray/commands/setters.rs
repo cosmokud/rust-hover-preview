@@ -748,7 +748,7 @@ pub(in super::super) fn set_text_scale(index: u16) {
     }
 }
 
-/// The share an item of the `Image`, `Video` or `Animated Image`
+/// The share an item of the `Image`, `Video` or `Animated`
 /// submenu stands for, by the position it was listed at — a share of
 /// the display's fitted size or of a bitmap's own size, which is the
 /// one question the three submenus ask with one table. An id past the

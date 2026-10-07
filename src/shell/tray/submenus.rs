@@ -505,18 +505,20 @@ fn append_by_screen_info_row(menu: HMENU) {
 }
 
 /// The `By Own Size` row a bitmap's submenu puts its own-size shares
-/// under, and the separator above it: the shares that follow are of a
-/// bitmap's own size rather than of the display, and the row names the
-/// basis the same way `By Screen` names the one above. It is greyed and
-/// carries no command either, for the same reason (see
-/// `append_by_screen_info_row`).
+/// under, with a separator above it and another below: the shares
+/// that follow are of a bitmap's own size rather than of the display,
+/// and the row names the basis the same way `By Screen` names the one
+/// above. It is greyed and carries no command either, for the same
+/// reason (see `append_by_screen_info_row`).
 fn append_by_own_size_info_row(menu: HMENU) {
     let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
 
     append_labeled_item(menu, MF_STRING | MF_GRAYED, 0, "By Own Size");
+
+    let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
 }
 
-/// The `Image`, `Video` and `Animated Image` submenus: the shares a
+/// The `Image`, `Video` and `Animated` submenus: the shares a
 /// bitmap — a picture, a video's first frame and the player window
 /// over it, or a frame that moves — is drawn at, with the one the
 /// setting is on marked and nothing marked for a share the menu does
@@ -530,7 +532,7 @@ fn append_by_own_size_info_row(menu: HMENU) {
 /// around the items themselves: the shares of the display's fitted
 /// size open it, under a `By Screen` row, and the shares of a
 /// bitmap's own size close it, under a `By Own Size` row, with a
-/// separator between the groups.
+/// separator on either side of that row.
 pub(super) fn append_bitmap_scale_menu(
     parent: HMENU,
     label: PCWSTR,
@@ -543,8 +545,8 @@ pub(super) fn append_bitmap_scale_menu(
     append_by_screen_info_row(menu);
 
     // Where the own-size group begins: the first share of a size of
-    // the file's own, which is the boundary the separator and the
-    // `By Own Size` row stand at.
+    // the file's own, which is the boundary the `By Own Size` row and
+    // the separators around it stand at.
     let own_size_begin = BITMAP_SCALE_CHOICES
         .iter()
         .position(|choice| matches!(choice, PreviewScale::Percent(_)))

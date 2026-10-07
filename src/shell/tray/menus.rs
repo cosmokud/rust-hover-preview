@@ -768,7 +768,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // rather than where it lands.
     let scaling_menu = CreatePopupMenu().unwrap();
 
-    // Add the Image, Video, Animated Image and Audio submenus: how large
+    // Add the Image, Video, Animated and Audio submenus: how large
     // a picture, a video, a frame that moves and a sound's card are
     // drawn. The three that hold a bitmap of the file are each at a
     // share of the display's fitted size or of the file's own size —
@@ -805,7 +805,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     );
     append_bitmap_scale_menu(
         scaling_menu,
-        w!("Animated Image"),
+        w!("Animated"),
         ID_TRAY_ANIMATED_SCALE_BASE,
         animated_scale,
         DEFAULT_ANIMATED_SCALE,
