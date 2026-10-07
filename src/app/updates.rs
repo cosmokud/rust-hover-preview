@@ -10,9 +10,12 @@
 //! What asks is the app's own start, so that the answer is waiting by the time
 //! anyone looks for it, and the tray menu, because an opening is the one other
 //! moment a user is looking for one: `show_context_menu` asks for a check as the
-//! menu is built, the check runs on a thread of its own, and the row above `Run
-//! at Startup` reports what the last one found. Nothing here is on a hover's
-//! path, and a check that never happens costs a preview nothing.
+//! menu is built, the check runs on a thread of its own, and the row above the
+//! `System` submenu reports what the last one found. `System → Check for Updates`
+//! is the one moment a user is saying they want the answer whether an hour has
+//! passed or not, so that one is answered past the hour (see `force_check`).
+//! Nothing here is on a hover's path, and a check that never happens costs a
+//! preview nothing.
 //!
 //! What is trusted is this repository's own releases. Both addresses are this
 //! repository's own — the newest release, for the version, and the release that
@@ -128,6 +131,85 @@ pub(crate) fn request_check() {
         check();
         CHECKING.store(false, Ordering::SeqCst);
     });
+}
+
+/// Ask for a check now, past the hour the passive one waits out. The
+/// `System → Check for Updates` row is the one moment a user is saying
+/// they want the answer whether an hour has passed or not, so the
+/// interval is not consulted and the answer is the one this moment
+/// gets — which is also what the check a menu opening asks for makes
+/// use of: an asking that is answered is a check that was made, and the
+/// next passive one waits the hour out from it.
+///
+/// The owner is the tray's own window, which is what a dialog of this
+/// app's is centred over where there is one to centre over.
+pub(crate) fn force_check(owner: HWND) {
+    if CHECKING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let owner = OwnerWindow(owner);
+    std::thread::spawn(move || {
+        forced_check(owner);
+        CHECKING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// A window handle sent to the thread a forced check runs on. A handle
+/// is process-wide — all the thread does with it is own one dialog by
+/// it — so sending it across is the send of a number, not of a
+/// resource.
+struct OwnerWindow(HWND);
+
+unsafe impl Send for OwnerWindow {}
+
+/// The check a forced one is: the version the newest release is
+/// published under, offered where it is newer than the one running, and
+/// told to the user where it is not. A check that could not reach GitHub
+/// answers the same way as one that found nothing new — there is nothing
+/// to put on the menu either way — so the dialog says what it says rather
+/// than which of the two it was.
+fn forced_check(owner: OwnerWindow) {
+    // What a check comes back with is a version and nothing else: the
+    // installer for it is the click's business, so a row nobody has
+    // clicked costs the network nothing at all.
+    let found = newer_release();
+
+    // Noted however this one ended: a check asked for by hand is a check
+    // that was made, and the hour is counted from it the way it is from a
+    // passive one — a check that found nothing, and one that could not
+    // reach GitHub, are both checks that were made, and asking again on
+    // the next opening of the menu is the spam the interval is there to
+    // prevent.
+    if let Ok(mut last) = LAST_CHECK.lock() {
+        *last = Some(Instant::now());
+    }
+
+    match found {
+        Some(version) => {
+            if let Ok(mut offer) = OFFER.lock() {
+                *offer = Some(version);
+            }
+        }
+        None => up_to_date(owner.0),
+    }
+}
+
+/// What a check that found nothing to offer is told: the app is at the
+/// newest release there is, in the platform's own dialog for saying so,
+/// owned by the tray's window — the one window this app has.
+fn up_to_date(owner: HWND) {
+    let caption = wide("Rust Hover Preview");
+    let text = wide("You're up to date.");
+
+    unsafe {
+        MessageBoxW(
+            owner,
+            PCWSTR(text.as_ptr()),
+            PCWSTR(caption.as_ptr()),
+            MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
+        );
+    }
 }
 
 /// The version of the update on offer, where one is: what the menu row is built

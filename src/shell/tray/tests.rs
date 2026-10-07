@@ -444,10 +444,10 @@ fn every_offered_avoid_mode_is_one_the_setting_keeps() {
     assert_eq!(
         AVOID_CHOICES.map(avoid_label),
         [
-            "Avoid Nothing".to_string(),
-            "Avoid Filename (Default)".to_string(),
-            "Avoid Filename Column".to_string(),
-            "Avoid Details".to_string()
+            "Nothing".to_string(),
+            "Filename (Default)".to_string(),
+            "Filename Column".to_string(),
+            "Details".to_string()
         ]
     );
 
@@ -694,10 +694,10 @@ fn the_document_scale_ranges_are_not_another_submenus_range() {
     }
 }
 
-/// The `Image Scaling`, `Video Scaling` and `Animated Scaling` submenus are one
+/// The `Image`, `Video` and `Animated Image` submenus are one
 /// range each, and none of them reaches into another or into the display shares the
 /// document scales beside them hand out: a click on a share of a bitmap is never read
-/// as a click on another setting's share. The `Audio Scaling` submenu beside
+/// as a click on another setting's share. The `Audio` submenu beside
 /// them is one range of the display shares, and it overlaps none of those or
 /// of the bitmap ranges either. Each lists every share the setting can be
 /// asked for, in order, and every id resolves back to the share its item was
@@ -813,7 +813,25 @@ fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
     );
 }
 
-/// The `Audio Scaling` range sits in the stretch between the volume
+/// The rows the redesign renamed say what they do: the pin's own
+/// follow, the two walks a pin takes, the level a pin keeps, and the
+/// update a check found.
+#[test]
+fn the_renamed_rows_say_what_they_do() {
+    assert_eq!(pin_update_label(), "Follow Selection");
+    assert_eq!(
+        pin_nav_label(crate::config::config::PinNavFileTypes::All),
+        "All Files"
+    );
+    assert_eq!(
+        pin_nav_label(crate::config::config::PinNavFileTypes::Category),
+        "Same Category"
+    );
+    assert_eq!(remember_volume_label(), "Remember Level");
+    assert_eq!(update_available_label("0.3.4"), "Update Available (v0.3.4)");
+}
+
+/// The `Audio` range sits in the stretch between the volume
 /// toggles and the `Codecs` commands, and every id of it answers as a
 /// share of the display and nothing else: the range overlaps no other
 /// id the app hands out — not another scale's range, not the avoid
@@ -929,12 +947,14 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
     ];
     // The font sizes, each the one id its size carries.
     others.extend(FONT_SIZE_CHOICES.map(|(_, id)| (id, id + 1)));
-    // And the single rows: the reset pair, the volume switches, the
-    // hardware-acceleration row, and every other lone row the menu holds.
+    // And the single rows: the reset pair, the update check, the volume
+    // switches, the hardware-acceleration row, and every other lone row
+    // the menu holds.
     others.extend(
         [
             ID_TRAY_RESET_SETTINGS,
             ID_TRAY_RESET_LISTS,
+            ID_TRAY_CHECK_UPDATES,
             ID_TRAY_NORMALIZE_VOLUME,
             ID_TRAY_NORMALIZE_VIDEO_VOLUME,
             ID_TRAY_REMEMBER_VOLUME,
@@ -1004,7 +1024,7 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
     }
 }
 
-/// The `Image Scaling` and `Video Scaling` submenus offer the shares a bitmap can be
+/// The `Image` and `Video` submenus offer the shares a bitmap can be
 /// drawn at — the share of its own size, rather than the share of the display the
 /// document scales beside them are — in one order and with one set of labels: what a
 /// share is called does not depend on which of the two is asking, and exactly one
@@ -1056,7 +1076,7 @@ fn every_offered_bitmap_scale_is_one_the_setting_keeps() {
     }
 }
 
-/// The `Audio Scaling` submenu offers the shares of the display a sound's card
+/// The `Audio` submenu offers the shares of the display a sound's card
 /// is laid out over — the share of the room rather than of a file's own size —
 /// in one order, and the labels are the document scale's, which name the same
 /// question: what a share is called does not depend on which of the two is
@@ -1072,6 +1092,7 @@ fn every_offered_audio_scale_is_one_the_setting_keeps() {
             "20%".to_string(),
             "15%".to_string(),
             "10% (Default)".to_string(),
+            "7%".to_string(),
             "5%".to_string(),
         ]
     );
@@ -1140,7 +1161,7 @@ fn every_offered_idle_time_is_one_the_setting_keeps() {
     assert_eq!(engine_idle_at(0), Some(EngineIdle::Indefinite));
 }
 
-/// The `Engine -> Select Engine -> Video` rows are ids of their own, and none of them falls inside
+/// The `Engine → Video Engine` rows are ids of their own, and none of them falls inside
 /// another submenu's range: a click read as an idle time or as a backdrop would set that setting
 /// instead of the engine the user named.
 ///
