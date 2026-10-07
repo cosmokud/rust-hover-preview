@@ -24,7 +24,8 @@ use super::setting_types::{
     DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND,
     DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
     DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
+    DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_PAUSE_VIDEO,
     DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_TEXT_SCALE,
     DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
 };
@@ -211,6 +212,13 @@ pub struct AppConfig {
     /// worth depends on how much of it is heard, and a file being listened to again is
     /// usually wanted from where it was left rather than from the top (see `AudioSeek`).
     pub audio_seek: AudioSeek,
+    /// Where in a file a *pinned* sound starts playing — the pin's own
+    /// answer to the question the setting above it answers for a hover,
+    /// and a setting of its own for the same reason: what a pin is
+    /// started at is the pin's to decide, and a sound already playing
+    /// where a hover left it is not moved by a change to either (see
+    /// `AudioSeek`).
+    pub pin_mode_audio_seek: AudioSeek,
     /// Whether a sound's loudness is measured and brought to one level before it is played —
     /// the one thing that asks a file to be as loud as the next rather than as loud as it was
     /// recorded.
@@ -617,6 +625,7 @@ impl Default for AppConfig {
             video_volume: DEFAULT_VIDEO_VOLUME,
             audio_volume: DEFAULT_AUDIO_VOLUME,
             audio_seek: DEFAULT_AUDIO_SEEK,
+            pin_mode_audio_seek: DEFAULT_PIN_MODE_AUDIO_SEEK,
             normalize_volume: DEFAULT_NORMALIZE_VOLUME,
             normalize_video_volume: DEFAULT_NORMALIZE_VIDEO_VOLUME,
             remember_audio_volume: DEFAULT_REMEMBER_AUDIO_VOLUME,
