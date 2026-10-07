@@ -103,7 +103,7 @@ No Rust toolchain is needed.
 
 ### Optional: Enable Video Preview with FFmpeg
 
-FFmpeg adds the video formats and the audio ones Windows does not decode — the `[ffmpeg]` list, and the `[audio]` names Windows' own decoders do not reach. It also plays any `[video]` name the media engine turns down, or every video there is, where **Engine → Select Engine → Video** names FFmpeg. `ffplay` and `ffprobe` need to be in your `PATH`.
+FFmpeg adds the video formats and the audio ones Windows does not decode — the `[ffmpeg]` list, and the `[audio]` names Windows' own decoders do not reach. It also plays any `[video]` name the media engine turns down, or every video there is, where **Engine → Video Engine** names FFmpeg. `ffplay` and `ffprobe` need to be in your `PATH`.
 
 **Option A: winget**
 
@@ -223,7 +223,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - Its edges resize it; what that does depends on what is inside.
       - A picture, video, or rendered page keeps its own shape.
       - A document or listing is laid out to whatever box it is given.
-      - A sound's card keeps the size **Audio Scaling** names, and a video `ffplay` has is not resized at all.
+      - A sound's card keeps the size **Audio** names, and a video `ffplay` has is not resized at all.
     - A picture's caption and bar are drawn over the media rather than in bands around it, and fade in as the pointer arrives; only the strip under the pointer is shown.
     - A pinned video carries a transport bar of its own: play/pause, a draggable seek bar, and the two clocks.
       - Where FFmpeg's player is the one playing it, a read-out bar appears instead, since that player can be told nothing.
@@ -239,30 +239,30 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - The pin key itself only ever puts a pin up and brings back a bubble; it never hides one.
     - The key is named in the item and can be changed in `config.ini` (`pin_key`).
   - **Update Preview** — Whether a pin that is up is shown the file you pick next.
-    - **Enabled** — On by default.
+    - **Follow Selection** — On by default.
       - A file you click, or one the keyboard selects, is shown where the window already stands, rather than as a second preview beside it.
       - A file named this way that cannot be shown leaves the window on the file it already had.
       - Stepping over a file that will not open belongs to the caption's own **Previous** and **Next**, which you pressed.
-      - A sound's card is drawn at the size its **Audio Scaling** setting names, in the middle of that box; it follows the **Theme** setting, and no longer **Font Size**.
+      - A sound's card is drawn at the size its **Audio** setting names, in the middle of that box; it follows the **Theme** setting, and no longer **Font Size**.
       - The keyboard half follows Explorer, so it pauses while a pinned window holds the keyboard; click back into the listing and it carries on.
     - **On Hover** — Off by default.
       - On, the pointer's own hover is one of the ways a pin is told about a file, the way a Quick Look window follows a listing.
-      - Greyed while **Enabled** is off.
-  - **Pause Preview** — What a window collapsed into its bubble does with what it was playing.
+      - Greyed while **Follow Selection** is off.
+  - **Pause in Bubble** — What a window collapsed into its bubble does with what it was playing.
     - Both on by default: the media engine is paused where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
     - **Audio**
     - **Video**
-  - **Nav File Types** — What **Previous** and **Next** on the caption step through.
+  - **Navigation Files** — What **Previous** and **Next** on the caption step through.
     - Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them.
     - The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front.
     - `Space` in a pinned sound pauses and resumes it, on the same terms.
     - `Escape` in a pinned window closes it.
-    - **All** (`default`) — Every file this build can preview, in the folder the pin was taken up in and not any subfolder of it, in the order the Explorer listing is showing them. A video sits beside a sound.
-    - **Category** — Only the files of the pinned file's own kind of thing: pictures, video, audio, documents, archives, text, fonts, or design.
+    - **All Files** (`default`) — Every file this build can preview, in the folder the pin was taken up in and not any subfolder of it, in the order the Explorer listing is showing them. A video sits beside a sound.
+    - **Same Category** — Only the files of the pinned file's own kind of thing: pictures, video, audio, documents, archives, text, fonts, or design.
       - A camera raw is a picture and a book is a document, because that is what you call them.
       - A kind switched off under **Preview Types**, or one with no engine installed on the machine, is not a step either way.
       - A file this build *could* preview but that will not open is a step the window steps over rather than one it stops on.
-- **Preview Types** — Choose which file kinds can preview: Images, Videos, Audio, Text, Ebook, Archives, Document, Vector, Fonts, Design.
+- **Preview Types** — Choose which file kinds can preview: Image, Video, Audio, Text, Ebook, Archive, Document, Vector, Font, Design.
   - A switch is a switch over behaviour, not over files: the lists deciding which files are previewed are untouched, so switching a kind off and back on restores what was configured.
   - One switch covers both the original file and the engine-drawn preview.
     - Camera raw uses **Images**.
@@ -292,43 +292,43 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - On, holding it brings the pin down along with the previews it stops.
       - It speaks for **Hold to Disable Preview**.
     - **Hold to Disable Preview** / **Hold to Enable Preview** — What holding the key does.
-  - **Delay** — How long the pointer rests before a preview opens: `0 ms` at the top down to `1000 ms` at the bottom. Default `0 ms`.
+  - **Hover Delay** — How long the pointer rests before a preview opens: `0 ms` at the top down to `1000 ms` at the bottom. Default `0 ms`.
   - **Rehover Delay** — Wait before the same file can preview again. Default `200 ms`.
   - **Settling Delay** — How still the pointer must be before previewing what it is on.
     - Default `0 ms` means a new file can preview while the hand is still moving.
     - Keyboard previews ignore this.
 - **Placement**
   - **Position** — Follow Cursor or Best Position. Default **Best Position**.
-  - **Avoid** — Avoid Nothing, Avoid Filename (`default`), Avoid Filename Column, or Avoid Details.
+  - **Avoid** — Nothing, Filename (`default`), Filename Column, or Details.
     - Keeps a preview off the item it is about.
-    - Keyboard previews have no cursor, so **Avoid Nothing** acts like **Avoid Filename**.
+    - Keyboard previews have no cursor, so **Nothing** acts like **Filename**.
 - **Scaling**
-  - **Image Scaling** — Fit to Screen or `25%`–`400%` of the image's own size.
-  - **Video Scaling** — Same shares for a video. Default `100%`.
-  - **Audio Scaling** — `25%`, `20%`, `15%`, `10%` (`default`), or `5%` of the display, for a sound's card — the whole card scales with the share: font, height and width, the way Windows scaling sizes a window.
+  - **Image** — Fit to Screen or `25%`–`400%` of the image's own size.
+  - **Video** — Same shares for a video. Default `100%`.
+  - **Animated Image** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery.
+    - A still GIF or PNG uses **Image**.
+    - Default `100%`.
+  - **Audio** — `25%`, `20%`, `15%`, `10%` (`default`), `7%`, or `5%` of the display, for a sound's card — the whole card scales with the share: font, height and width, the way Windows scaling sizes a window.
     - The card at any share is the `10%` card uniformly smaller or larger (~188×50 at `5%` to ~936×250 at `25%` on a 3440×1440 display), its seek bar stretching with the width, its height what its content measures at the share's font.
     - Built at the share's own font (the default text size, `125%`, at the `10%` anchor), so **Font Size** does not resize it; a pinned sound's card is the same size as the hover's.
-  - **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery.
-    - A still GIF or PNG uses **Image Scaling**.
-    - Default `100%`.
-  - **Vector Scaling** — Fit to Screen (`default`), or `75%`, `50%`, `25%`, `10%` of the display.
-  - **Text Scaling** — Same display shares for a text preview — a plain text file, code, or Markdown.
+  - **Vector** — Fit to Screen (`default`), or `75%`, `50%`, `25%`, `10%` of the display.
+  - **Text** — Same display shares for a text preview — a plain text file, code, or Markdown.
     - It caps how much of the screen the preview box may take when it opens; a short file still gets the small box its own text needs.
     - Default **Fit to Screen**.
-  - **Ebook Scaling** — Fit to Screen (`default`), or the same display shares for a PDF page, a comic's first page, and a Calibre-converted book.
-  - **Document Scaling** — Same display shares for a document drawn as a page, whether by its own Office app or by LibreOffice.
+  - **Ebook** — Fit to Screen (`default`), or the same display shares for a PDF page, a comic's first page, and a Calibre-converted book.
+  - **Document** — Same display shares for a document drawn as a page, whether by its own Office app or by LibreOffice.
     - A workbook's fallback bitmap is never enlarged.
-  - **Font Scaling** — Same shares for a font specimen. Default `50%`.
-  - **Design Scaling** — Same display shares for design documents: Photoshop, Illustrator, Krita, OpenRaster, Procreate. Default **Fit to Screen**.
+  - **Font** — Same shares for a font specimen. Default `50%`.
+  - **Design** — Same display shares for design documents: Photoshop, Illustrator, Krita, OpenRaster, Procreate. Default **Fit to Screen**.
 - **Background**
-  - **Image Background** — Transparent, Black, White, or Checkerboard. Default **Checkerboard**.
-  - **Vector Background** — Same backdrops for an SVG document or metafile. Default **Checkerboard**.
-  - **HTML Background** — White, Black, or Checkerboard for a page of HTML. Default **White**.
+  - **Image** — Transparent, Black, White, or Checkerboard. Default **Checkerboard**.
+  - **Vector** — Same backdrops for an SVG document or metafile. Default **Checkerboard**.
+  - **HTML** — White, Black, or Checkerboard for a page of HTML. Default **White**.
     - The see-through backdrop is not offered: a page is drawn on a page, whether it runs or not, and the backdrop is behind the page rather than behind what it paints.
-  - **Font Background** — Same backdrops for a font specimen. Default **White**.
-  - **DDS Background** — Black or White for `.dds` textures. Default **White**.
+  - **Font** — Same backdrops for a font specimen. Default **White**.
+  - **DDS** — Black or White for `.dds` textures. Default **White**.
     - The two see-through backdrops are not offered.
-  - **Design Background** — Same as picture backdrops for a design document. Default **Checkerboard**.
+  - **Design** — Same as picture backdrops for a design document. Default **Checkerboard**.
 - **Volume** — **Video** and **Audio**, each offering `100%`, `80%`, `65%`, `50%`, `35%`, `20%`, `10%`, `5%`, `1%`, and `0%`, loudest first.
   - A video's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for — and a sound file at `10%`.
   - A video is looked at and a song is listened to, so the two are settings of their own.
@@ -339,7 +339,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - On by default for **Audio** and off for **Video**, whose soundtrack is heard beside a picture that was asked for and whose measurement is a decode of the film.
     - Both are greyed out unless FFmpeg is installed — FFmpeg is what measures the loudness and what applies the gain.
     - The loudness is measured once per file and kept, so only a file's first hover waits for it.
-  - **Remember** — The row under **Normalize**, above the levels.
+  - **Remember Level** — The row under **Normalize**, above the levels.
     - Whether a level moved with a pinned window's own volume knob is the level the next preview is played at.
     - Off by default for both halves, so a knob belongs to the window it was turned on and the level in the list above it is what every preview starts from.
     - With it on, letting go of the knob writes the level to `config.ini` and the next hover — or the next film — is played at it; nothing is rebuilt on screen and a preview already playing is left where it is.
@@ -359,43 +359,45 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
     - **`General (Disk)`** = the subtitle tracks a film's embedded ones are copied into, kept as temp files; `0` draws a film without its subtitles.
   - **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
-  - **Tick** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`.
+  - **Explorer Poll** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`.
     - Lower answers a move sooner; higher is lighter on CPU and Explorer.
-  - **Hardware Acceleration** — **Video** (checked by default): a video FFmpeg's player has is decoded on the graphics card rather than on a core.
+  - **Hardware Acceleration (Video)** — checked by default: a video FFmpeg's player has is decoded on the graphics card rather than on a core.
     - It is a setting about this build's FFmpeg rather than about a kind of file — a file the media engine plays is decoded by Windows either way.
     - A machine with no device FFmpeg can decode on is the one the setting is for, where FFmpeg falls back by itself.
 - **Engine**
-  - **AFK Timer** — How long Explorer may be unreachable before a non-**Persistent** engine is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`.
+  - **Away Timer** — How long Explorer may be unreachable before a non-**Persistent** engine is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`.
     - Counts time when no Explorer window is reachable on any monitor.
     - A second Explorer window keeps engines warm.
     - Each **`… TTL`** submenu has a **Persistent** toggle at the top.
-  - **Select Engine → Office** — Which engine draws Office documents.
-    - **Microsoft Office** (`default`) — Uses the format's own app and falls back to LibreOffice.
-    - **LibreOffice** — Draws every Office document.
-    - LibreOffice is greyed out if not installed.
-  - **Select Engine → Video** — Which engine plays a video.
+  - **Video Engine** — Which engine plays a video.
     - **Best** (`default`) — The machine's own answer: the media engine for a film at or under 3.2 megapixels, FFmpeg's player for a larger one or one it could not measure.
     - **Native** — The media engine alone.
     - **FFmpeg** — `ffplay` alone.
     - **Native (FFmpeg above 3.2MP)** — That size rule stated plainly.
     - A **Fallback** switch at the top (`default` on) lets a chosen engine that cannot play a given file fall through to the other; off, the engine you chose stands alone.
     - **FFmpeg** and **Native (FFmpeg above 3.2MP)** are greyed out where `ffplay` is not installed.
+  - **Office Engine** — Which engine draws Office documents.
+    - **Microsoft Office** (`default`) — Uses the format's own app and falls back to LibreOffice.
+    - **LibreOffice** — Draws every Office document.
+    - LibreOffice is greyed out if not installed.
   - **Microsoft Office TTL** — With **Persistent** on: how long a family's Office app stays warm: Indefinitely, `1 hour`, `30 minutes`, `10 minutes` (`default`), `5 minutes`, `1 minute`, `0 seconds`.
-    - Off: kept while Explorer is reachable, then let go by **AFK Timer**.
+    - Off: kept while Explorer is reachable, then let go by **Away Timer**.
   - **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats.
     - A kept engine converts the next document faster: `1.2 s` cold vs `0.2 s`, but uses a few hundred MB.
     - `0 seconds` means one engine per document.
-    - Both TTLs apply to **Persistent** engines; non-persistent ones use **AFK Timer**.
+    - Both TTLs apply to **Persistent** engines; non-persistent ones use **Away Timer**.
     - Greyed out if LibreOffice is not installed.
   - **WebView2 TTL** — With **Persistent** on: how long the SVG browser stays warm.
-    - Off: let go by **AFK Timer**.
+    - Off: let go by **Away Timer**.
     - Greyed out if WebView2 is missing.
   - No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
 - **Codecs** — What this machine has: Videos, Audio, Images, Engines.
   - A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
-- **Run at Startup** — Add or remove the Windows startup entry.
-  - On every start, an entry that names another copy of the app — a portable copy, an older version, a path that has moved — is pointed back at the one you are running.
-- **Config.ini** — Open the configuration file; named for the running version.
+- **System**
+  - **Check for Updates** — Ask for a check now, past the once-an-hour one an opening of the menu makes. Where one is found, the **Update Available** row appears above this submenu on the menu's next opening; where none is, a dialog says so.
+  - **Run at Startup** — Add or remove the Windows startup entry.
+    - On every start, an entry that names another copy of the app — a portable copy, an older version, a path that has moved — is pointed back at the one you are running.
+  - **Config.ini** — Open the configuration file; named for the running version.
 - **Exit** — Close the app.
 
 ## Configuration

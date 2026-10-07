@@ -270,7 +270,7 @@ pub(in super::super) fn set_office_engine_idle(index: u16) {
     }
 }
 
-/// Which engine Office documents are asked of, from `Engine → Select Engine → Office`.
+/// Which engine Office documents are asked of, from `Engine → Office Engine`.
 ///
 /// Nothing is rebuilt here, and nothing has to be: the choice is read live by the side that
 /// asks an engine for a page and by the side that draws one (see `office_formats::page_engine`),
@@ -293,7 +293,7 @@ pub(in super::super) fn set_office_engine(engine: OfficeEngine) {
     }
 }
 
-/// Which engine plays a video, from `Engine -> Select Engine -> Video`.
+/// Which engine plays a video, from `Engine → Video Engine`.
 ///
 /// The choice is read live by the router on the next hover, so nothing on screen is rebuilt: a
 /// preview that is already up belongs to the engine playing it and is replaced the next time it
@@ -747,7 +747,7 @@ pub(in super::super) fn set_text_scale(index: u16) {
     }
 }
 
-/// The share of its own size an item of the `Image Scaling` or `Video Scaling` submenu
+/// The share of its own size an item of the `Image` or `Video` submenu
 /// stands for, by the position it was listed at. An id past the last choice the menu
 /// offered is one that is not there.
 pub(in super::super) fn bitmap_scale_at(index: u16) -> Option<PreviewScale> {

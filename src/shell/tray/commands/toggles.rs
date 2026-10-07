@@ -225,7 +225,7 @@ pub(in super::super) fn toggle_video_hw_accel() {
 }
 
 /// Whether an explicitly chosen video engine falls through to the others when it cannot play a
-/// file, from the `Fallback` row at the top of `Engine -> Select Engine -> Video`.
+/// file, from the `Fallback` row at the top of `Engine → Video Engine`.
 ///
 /// Nothing on screen changes: the switch is read by the router on the next hover, and what the
 /// geometry probe holds is given up for the reason the choice moving gives it up — the answer

@@ -34,13 +34,13 @@ pub(super) const ID_TRAY_PIN: u16 = 1004; // Whether a preview can be pinned wit
 /// it, and the two questions belong together under the one row they hang from.
 pub(super) const ID_TRAY_PIN_UPDATE: u16 = 1016;
 pub(super) const ID_TRAY_PIN_UPDATE_HOVER: u16 = 1017;
-/// And the two rows of the `Pin Mode → Pause Preview` submenu: whether a pin collapsed into its
+/// And the two rows of the `Pin Mode → Pause in Bubble` submenu: whether a pin collapsed into its
 /// bubble holds the sound it is playing where it is, and whether it holds a video. They sit in
 /// the slack the same block left beside the update pair, for the same reason — both are the
 /// pin's own business and neither is a click on the row beside it.
 pub(super) const ID_TRAY_PIN_PAUSE_AUDIO: u16 = 1018;
 pub(super) const ID_TRAY_PIN_PAUSE_VIDEO: u16 = 1019;
-/// The two rows of the `Pin Mode → Nav File Types` submenu: whether a pin's own previous/next
+/// The two rows of the `Pin Mode → Navigation Files` submenu: whether a pin's own previous/next
 /// buttons walk every file this build can preview or only those of the pinned file's own kind
 /// of thing (see `PinNavFileTypes`).
 ///
@@ -55,13 +55,13 @@ pub(super) const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key
 /// The trigger key's second switch: whether a held key reaches a pinned preview. It sits in the
 /// one id left between the `Audio` gate at 1098 and the `theme` folder's items at 1100.
 pub(super) const ID_TRAY_TRIGGER_AFFECT_PIN: u16 = 1099;
-/// The `Engine → Select Engine → Office` pair: which engine an Office document's page is
+/// The `Engine → Office Engine` pair: which engine an Office document's page is
 /// asked of — the application that owns the format, or the render engine beside it. Two ids
 /// rather than a range, the way the trigger key's mode has two, and they sit in the gap the
 /// update row at 1007 leaves before the page's backdrop range that begins at 1010.
 pub(super) const ID_TRAY_ENGINE_OFFICE_MS: u16 = 1008;
 pub(super) const ID_TRAY_ENGINE_OFFICE_LIBRE: u16 = 1009;
-/// The `Engine -> Select Engine -> Video` submenu: the `Fallback` toggle at the top, and one
+/// The `Engine → Video Engine` submenu: the `Fallback` toggle at the top, and one
 /// row per engine below it. The toggle is a switch and the engines are a radio group, so the
 /// toggle has an id of its own and the engines are a base plus the position each was listed at
 /// (see `VIDEO_ENGINE_CHOICES`). They sit in the slack the LibreOffice idle range leaves before
@@ -123,7 +123,7 @@ pub(super) const BACKGROUND_CHOICES: [TransparentBackground; 4] = [
     TransparentBackground::White,
     TransparentBackground::Checkerboard,
 ];
-/// The backdrops the `HTML Background` half offers, which are three of the four rather than
+/// The backdrops the `HTML` half offers, which are three of the four rather than
 /// all of them: a page is drawn over a page rather than over what stands behind one, so
 /// transparency is the one backdrop left off, and the white page the setting starts at is
 /// listed first, as every other half lists its own. A file that names transparency anyway,
@@ -135,7 +135,7 @@ pub(super) const HTML_BACKGROUND_CHOICES: [TransparentBackground; 3] = [
     TransparentBackground::Black,
     TransparentBackground::Checkerboard,
 ];
-/// The backdrops the `DDS Background` half offers, which are two of the four rather than all
+/// The backdrops the `DDS` half offers, which are two of the four rather than all
 /// of them: a texture's alpha channel is as often a mask, a height or a roughness as it is
 /// transparency (see `dds_image`), so what is drawn behind one is a page to read the channels
 /// against rather than a hole to look through — and the two backdrops that show what stands
@@ -163,7 +163,7 @@ pub(super) const ID_TRAY_AUDIO_VOLUME_BASE: u16 = 1370;
 /// because the two questions belong together — a sound is heard at a level and from a place,
 /// and both are answered the moment a hover starts its player rather than while one is playing.
 ///
-/// Its range sits in the slack the `Decode Budget` ceilings leave before the `Vector Scaling`
+/// Its range sits in the slack the `Decode Budget` ceilings leave before the `Vector`
 /// half begins, and it is four wide because there are four ways a sound can be started. That it
 /// is past the volume halves on the number line rather than beside them is the whole of what
 /// keeps a level of either half from being read as a way of starting a sound — see
@@ -236,7 +236,7 @@ pub(super) const ID_TRAY_PRIORITIZE_KEYBOARD: u16 = 1515;
 pub(super) const TIMING_DELAY_CHOICES_MS: [u64; 15] = [
     0, 25, 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000,
 ];
-/// The `Performance → Tick` submenu: one command per rate the loop may run at, in the
+/// The `Performance → Explorer Poll` submenu: one command per rate the loop may run at, in the
 /// order it lists them. It is the app's own rate rather than a delay a hover waits out,
 /// and its range sits past every other range the app hands out so that a tick is never
 /// read as a delay, a size or a share.
@@ -259,6 +259,14 @@ pub(super) const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 /// neither can be read as a click on one of those.
 pub(super) const ID_TRAY_RESET_SETTINGS: u16 = 1520;
 pub(super) const ID_TRAY_RESET_LISTS: u16 = 1521;
+/// The `System → Check for Updates` row: a check asked for now, past the
+/// once-an-hour one an opening of the menu makes, with what the check found
+/// said in a dialog of its own where there is nothing to put on.
+///
+/// It is a switch of a question rather than a level of a list, so it takes an
+/// id of its own — the one the reset rows beside it leave free, where a row of
+/// the same submenu belongs and no range the app hands out reaches.
+pub(super) const ID_TRAY_CHECK_UPDATES: u16 = 1522;
 /// The rows of the `Codecs` submenu, numbered as one list across its three groups: only the
 /// rows this machine is missing and has a page for are given an id at all, and this is where
 /// those ids begin. The range is wider than the list is long, so that a row added to any of
@@ -269,44 +277,44 @@ pub(super) const CODEC_COMMANDS: u16 = 64;
 /// waiting: it puts the installer `updates` fetched on, and the app ends itself as the
 /// installer takes over rather than being the copy that has to be terminated.
 pub(super) const ID_TRAY_UPDATE: u16 = 1007;
-/// The `Scaling → Image Scaling` submenu: one command per share of its own size a
-/// picture is drawn at, in the order it lists them — the first of the two bitmap
+/// The `Scaling → Image` submenu: one command per share of its own size a
+/// picture is drawn at, in the order it lists them — the first of the three bitmap
 /// submenus, each with a range of its own so a click on one is never read as a click
 /// on the other.
 pub(super) const ID_TRAY_SCALE_BASE: u16 = 1041;
-/// `Vector Scaling`, the second of them, in the range the `Scaling` submenus share: a
+/// `Vector`, the second of them, in the range the `Scaling` submenus share: a
 /// drawing is asked for a share of the display rather than for a share of a size the file
 /// asks for, and both halves of the kind — a document the browser draws and a metafile the
 /// drawing layer replays — are asked with this one setting.
 pub(super) const ID_TRAY_VECTOR_SCALE_BASE: u16 = 1400;
-/// The `Ebook Scaling` and `Document Scaling` submenus, each listing the same shares:
+/// The `Ebook` and `Document` submenus, each listing the same shares:
 /// they sit in the slack the `Avoid` items leave, so a share of the display is never
 /// read as a way of avoiding the item a preview is about.
 pub(super) const ID_TRAY_EBOOK_SCALE_BASE: u16 = 1405;
 pub(super) const ID_TRAY_DOCUMENT_SCALE_BASE: u16 = 1415;
-/// `Font Scaling`, in the range after the Document one: a specimen is drawn at a share of
+/// `Font`, in the range after the Document one: a specimen is drawn at a share of
 /// the display the same way a document is.
 pub(super) const ID_TRAY_FONT_SCALE_BASE: u16 = 1420;
-/// `Video Scaling`, the `Image Scaling` submenu's twin below it, in the range directly
+/// `Video`, the `Image` submenu's twin below it, in the range directly
 /// after the font one: it lists the same shares, so the two share a table and a builder,
 /// and it is a range of its own because a click on a video's scale is never a click on a
 /// picture's.
 pub(super) const ID_TRAY_VIDEO_SCALE_BASE: u16 = 1425;
-/// `Animated Scaling`, the third of them, in the range after the video one: an animated
+/// `Animated Image`, the third of them, in the range after the video one: an animated
 /// picture is a bitmap like the two above it, so it lists the same shares through the
 /// same builder, and the range is its own because what moves has a size apart from what
 /// does not.
 pub(super) const ID_TRAY_ANIMATED_SCALE_BASE: u16 = 1435;
-/// `Design Scaling`, in the range after the animated one: a design document is previewed
+/// `Design`, in the range after the animated one: a design document is previewed
 /// from a picture the file keeps of the whole of itself, so it is asked for a share of the
 /// display the way a page is rather than for a share of its own size.
 pub(super) const ID_TRAY_DESIGN_SCALE_BASE: u16 = 1445;
-/// `Text Scaling`, in the range after the design one: a text page is measured against a
+/// `Text`, in the range after the design one: a text page is measured against a
 /// share of the display rather than drawn at a share of a size of its own, so it is asked the
 /// same question a page is — and the share is its own because what a page of text is given
 /// and what a drawing is given are not the same answer.
 pub(super) const ID_TRAY_TEXT_SCALE_BASE: u16 = 1450;
-/// The shares of the display every `… Scaling` submenu offers, in the order it lists
+/// The shares of the display every display-share submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
 /// `50`, half the display, for a font specimen, and `Fit to Screen` for a drawing, a page
@@ -318,7 +326,7 @@ pub(super) const DOCUMENT_SCALE_CHOICES: [PreviewScale; 5] = [
     PreviewScale::Percent(25),
     PreviewScale::Percent(10),
 ];
-/// The shares the `Image Scaling` and `Video Scaling` submenus offer, in the order they
+/// The shares the `Image` and `Video` submenus offer, in the order they
 /// list them: a bitmap is drawn at a share of its own size rather than of the display, so
 /// the percentages are the ones that mean something for one. Nothing is marked as the
 /// default here — the default is passed to the labels rather than written into the table,
@@ -333,17 +341,18 @@ pub(super) const BITMAP_SCALE_CHOICES: [PreviewScale; 8] = [
     PreviewScale::Percent(50),
     PreviewScale::Percent(25),
 ];
-/// The shares the `Audio Scaling` submenu offers, in the order it lists
+/// The shares the `Audio` submenu offers, in the order it lists
 /// them: a sound's card is laid out over a share of the display rather than
 /// drawn at a share of a size of its own, so the percentages are the ones
 /// that mean something for one. Nothing is marked as the default here — the
 /// default is passed to the labels rather than written into the table,
 /// because which share a setting starts at is the setting's own business.
-pub(super) const AUDIO_SCALE_CHOICES: [PreviewScale; 5] = [
+pub(super) const AUDIO_SCALE_CHOICES: [PreviewScale; 6] = [
     PreviewScale::Percent(25),
     PreviewScale::Percent(20),
     PreviewScale::Percent(15),
     PreviewScale::Percent(10),
+    PreviewScale::Percent(7),
     PreviewScale::Percent(5),
 ];
 pub(super) const ID_TRAY_THEME_LIGHT: u16 = 1050; // Atom One Light
@@ -474,10 +483,10 @@ pub(super) const ENGINE_IDLE_CHOICES: [EngineIdle; 7] = [
     EngineIdle::Seconds(60),
     EngineIdle::Seconds(0),
 ];
-/// The `Engine → AFK Timer` submenu: one command per away time it offers, in the order it
+/// The `Engine → Away Timer` submenu: one command per away time it offers, in the order it
 /// lists them. Both it and the `Persistent` range below sit past every other range the app
-/// hands out — the `Tick` range is the last of those and ends at 1504 — so a time is never
-/// read as a tick and a toggle is never read as either.
+/// hands out — the `Explorer Poll` range is the last of those and ends at 1504 — so a time is
+/// never read as a poll and a toggle is never read as either.
 pub(super) const ID_TRAY_AFK_TIMER_BASE: u16 = 1505;
 /// The `Persistent` toggle at the top of each `… TTL` submenu, one command apiece, in the
 /// order those submenus are listed: `Microsoft Office TTL`, then `LibreOffice TTL`, then
@@ -487,14 +496,14 @@ pub(super) const ID_TRAY_ENGINE_PERSISTENT_BASE: u16 = 1512;
 /// the graphics card. It sits in the slack past the three `Persistent` toggles, which end at
 /// 1515, so a click on it is never read as a toggle belonging to an engine's TTL submenu.
 pub(super) const ID_TRAY_VIDEO_HW_ACCEL: u16 = 1516;
-/// The `Audio Scaling` submenu: one command per share of the display a
+/// The `Audio` submenu under `Scaling`: one command per share of the display a
 /// sound's card is laid out over, in the order it lists them. It sits in
 /// the stretch between the volume toggles, which end at 1528, and the
-/// `Codecs` commands, which begin at 1600 — the first run in it five ids
+/// `Codecs` commands, which begin at 1600 — the first run in it six ids
 /// wide, the reset rows and the toggles owning the ids below it — so a
 /// click on a share is never read as a row of another submenu's.
 pub(super) const ID_TRAY_AUDIO_SCALE_BASE: u16 = 1529;
-/// The away times the `AFK Timer` submenu offers, in the order it lists them: an hour at the
+/// The away times the `Away Timer` submenu offers, in the order it lists them: an hour at the
 /// top and a quarter of a minute at the bottom, with the one that bounds an engine by
 /// default in the middle. There is no `Indefinitely` here — a time that never comes round is
 /// what the `Persistent` toggle beside it is for — and a value a hand-edited `config.ini`

@@ -36,7 +36,8 @@ use super::ids::{
     DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB, DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES,
     HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_ANIMATED_SCALE_BASE,
     ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_VOLUME_BASE,
-    ID_TRAY_AVOID_BASE, ID_TRAY_CODEC_BASE, ID_TRAY_DDS_BACKGROUND_BASE,
+    ID_TRAY_AVOID_BASE, ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE,
+    ID_TRAY_DDS_BACKGROUND_BASE,
     ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
     ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
     ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
@@ -170,6 +171,14 @@ unsafe extern "system" fn tray_window_proc(
                             updates::Answer::Cancel => {}
                         }
                     }
+                    // The `System → Check for Updates` row: a check asked
+                    // for now, past the once-an-hour one an opening of the
+                    // menu makes. What it finds is offered on the row above
+                    // this menu's `System` submenu, and said in a dialog of
+                    // its own where there is nothing to put on.
+                    ID_TRAY_CHECK_UPDATES => {
+                        updates::force_check(TRAY_HWND);
+                    }
                     ID_TRAY_ENABLE => {
                         toggle_preview_enabled();
                     }
@@ -199,7 +208,7 @@ unsafe extern "system" fn tray_window_proc(
                     ID_TRAY_ENGINE_OFFICE_LIBRE => set_office_engine(OfficeEngine::LibreOffice),
                     ID_TRAY_VIDEO_ENGINE_FALLBACK => toggle_video_engine_fallback(),
                     // Which engine plays a video, by the position it was listed at: the
-                    // `Video` submenu is the same base-plus-position arrangement every value
+                    // `Video Engine` submenu is the same base-plus-position arrangement every value
                     // menu here is.
                     cmd if (ID_TRAY_VIDEO_ENGINE_BASE
                         ..ID_TRAY_VIDEO_ENGINE_BASE + VIDEO_ENGINE_CHOICES.len() as u16)
@@ -382,7 +391,7 @@ unsafe extern "system" fn tray_window_proc(
                     {
                         set_libreoffice_idle(cmd - ID_TRAY_LIBREOFFICE_IDLE_BASE)
                     }
-                    // An away time for the `AFK Timer`, by the position it was listed at.
+                    // An away time for the `Away Timer`, by the position it was listed at.
                     cmd if (ID_TRAY_AFK_TIMER_BASE
                         ..ID_TRAY_AFK_TIMER_BASE + AFK_TIMER_CHOICES_SECS.len() as u16)
                         .contains(&cmd) =>
@@ -396,8 +405,9 @@ unsafe extern "system" fn tray_window_proc(
                     {
                         toggle_engine_persistent(cmd - ID_TRAY_ENGINE_PERSISTENT_BASE)
                     }
-                    // Whether a video is decoded on the graphics card, which is the one row of
-                    // the `Hardware Acceleration` submenu and so has an id of its own rather than
+                    // Whether a video is decoded on the graphics card, which is the
+                    // `Hardware Acceleration (Video)` row of the `Performance`
+                    // submenu and so has an id of its own rather than
                     // a range.
                     ID_TRAY_VIDEO_HW_ACCEL => toggle_video_hw_accel(),
                     // A cache size, by the position it was listed at. Each cache is bounded by the

@@ -24,10 +24,10 @@ use super::ids::{
 
 use crate::app::dialogs;
 use crate::config::config::{
-    AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PreviewScale, TransparentBackground,
-    VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
-    DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE,
-    DEFAULT_VIDEO_ENGINE_FALLBACK,
+    AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinNavFileTypes, PreviewScale,
+    TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
+    DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_TICK_MS,
+    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
@@ -168,15 +168,51 @@ pub(super) fn append_avoid_menu(parent: HMENU, label: PCWSTR, base: u16, avoid_m
 
 /// What a way of keeping a preview off an item is called in the menu: the words the
 /// tray lists it under, with the way this setting starts at marked as the default.
+/// The submenu is the `Avoid` one, so each way is named for itself rather than
+/// prefixed with the question it answers.
 pub(super) fn avoid_label(mode: AvoidMode) -> String {
     let label = match mode {
-        AvoidMode::Off => "Avoid Nothing",
-        AvoidMode::Filename => "Avoid Filename",
-        AvoidMode::FilenameColumn => "Avoid Filename Column",
-        AvoidMode::Details => "Avoid Details",
+        AvoidMode::Off => "Nothing",
+        AvoidMode::Filename => "Filename",
+        AvoidMode::FilenameColumn => "Filename Column",
+        AvoidMode::Details => "Details",
     };
 
     default_label(label, mode == DEFAULT_AVOID_MODE)
+}
+
+/// The `Update Preview` submenu's own row: whether a pin that is up is shown
+/// the file the user picks next — the one the pointer clicks, or the one the
+/// keyboard selects — named for what it follows rather than for that it is on.
+/// The row is built in `menus`, where the pin's own submenus are, and the
+/// words are kept here with every other label so that what a row is called is
+/// asserted in one place (see `tests`).
+pub(super) fn pin_update_label() -> &'static str {
+    "Follow Selection"
+}
+
+/// What the two walks a pin's own **Previous** and **Next** take are called:
+/// every file this build can preview, or only the files of the kind of the
+/// pinned one.
+pub(super) fn pin_nav_label(types: PinNavFileTypes) -> &'static str {
+    match types {
+        PinNavFileTypes::All => "All Files",
+        PinNavFileTypes::Category => "Same Category",
+    }
+}
+
+/// The row under each half of the `Volume` submenu's `Normalize`: whether a
+/// level turned on a pinned window's own knob is the level the next preview is
+/// played at — named for the level it keeps rather than for that it is
+/// remembered.
+pub(super) fn remember_volume_label() -> &'static str {
+    "Remember Level"
+}
+
+/// The row that offers the update a check found, which is the version it is of
+/// and nothing else: the whole of what it says is what it offers.
+pub(super) fn update_available_label(version: &str) -> String {
+    format!("Update Available (v{version})")
 }
 
 /// The `Volume → Audio Seek` submenu: where in a file a sound starts playing, with the way the
@@ -257,8 +293,9 @@ pub(super) fn audio_seek_label(seek: AudioSeek) -> String {
     default_label(label, seek == DEFAULT_AUDIO_SEEK)
 }
 
-/// The `Tick` submenu: how often the app looks at the pointer's world while Explorer
-/// has focus, with the tick it is at marked.
+/// The `Explorer Poll` submenu — the loop's own tick: how often the
+/// app looks at the pointer's world while Explorer has focus, with the
+/// tick it is at marked.
 pub(super) fn append_tick_menu(parent: HMENU, label: PCWSTR, base: u16, tick_ms: u64) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
 
@@ -394,11 +431,17 @@ pub(super) fn html_background_at(index: u16) -> Option<TransparentBackground> {
     HTML_BACKGROUND_CHOICES.get(index as usize).copied()
 }
 
-/// One `… Scaling` submenu: the shares of the display a document is drawn at, with the
-/// one the setting is on marked, and nothing marked for a share the menu does not
-/// offer — which is what a hand-edited `config.ini` can ask for. `default` says which
-/// of the shares this setting starts at, so the one it names is the one the label
-/// marks.
+/// One of the display-share submenus — `Vector`, `Text`, `Ebook`,
+/// `Document`, `Font` and `Design`: the shares of the display a
+/// document is drawn at, with the one the setting is on marked, and
+/// nothing marked for a share the menu does not offer — which is what
+/// a hand-edited `config.ini` can ask for. `default` says which of the
+/// shares this setting starts at, so the one it names is the one the
+/// label marks.
+///
+/// Each opens with the `By Screen` row and a separator under it,
+/// because the first thing a reader of the submenu is told is what the
+/// shares below are of.
 pub(super) fn append_document_scale_menu(
     parent: HMENU,
     label: PCWSTR,
@@ -407,6 +450,8 @@ pub(super) fn append_document_scale_menu(
     default: PreviewScale,
 ) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    append_by_screen_info_row(menu);
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
@@ -441,13 +486,27 @@ pub(super) fn append_document_scale_menu(
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
 }
 
-/// The `Image Scaling` and `Video Scaling` submenus: the shares of its own size a bitmap
-/// — a picture, or a video's first frame and the player window over it — is drawn at, with
-/// the one the setting is on marked and nothing marked for a share the menu does not
-/// offer, which is what a hand-edited `config.ini` can ask for. One builder serves both
-/// because the two are the same question asked of two kinds of file: the shares are one
-/// list, the labels are one function, and what differs is only which setting the submenu
-/// writes and the id its items carry.
+/// The `By Screen` row a display-share submenu opens with, and the separator
+/// under it: what the shares below are of, rather than a share itself. A row
+/// that names a group carries no command — picking one would be a click that
+/// does nothing — so it is given no id at all, which is how the `Codecs`
+/// submenu's present rows are made inert too: a Windows item cannot be both
+/// normal-looking and unpickable, and this row is normal-looking on purpose
+/// (see `append_codecs_menu`).
+fn append_by_screen_info_row(menu: HMENU) {
+    append_labeled_item(menu, MF_STRING, 0, "By Screen");
+
+    let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
+}
+
+/// The `Image`, `Video` and `Animated Image` submenus: the shares of its own size
+/// a bitmap — a picture, a video's first frame and the player window over it, or
+/// a frame that moves — is drawn at, with the one the setting is on marked and
+/// nothing marked for a share the menu does not offer, which is what a
+/// hand-edited `config.ini` can ask for. One builder serves all three because the
+/// three are the same question asked of three kinds of file: the shares are one
+/// list, the labels are one function, and what differs is only which setting the
+/// submenu writes and the id its items carry.
 pub(super) fn append_bitmap_scale_menu(
     parent: HMENU,
     label: PCWSTR,
@@ -490,13 +549,14 @@ pub(super) fn append_bitmap_scale_menu(
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
 }
 
-/// The `Audio Scaling` submenu: the shares of the display a sound's card is
+/// The `Audio` submenu under `Scaling`: the shares of the display a sound's card is
 /// laid out over, with the one the setting is on marked, and nothing marked
 /// for a share the menu does not offer — which is what a hand-edited
 /// `config.ini` can ask for. The shares are of the display rather than of a
 /// size of the file's own, because a card holds nothing of the sound to take
 /// a share of — what it holds is laid out over the room it is given — so the
-/// labels are the document scale's, which name the same question.
+/// labels are the document scale's, which name the same question, and the
+/// submenu opens with the `By Screen` row like those do.
 pub(super) fn append_audio_scale_menu(
     parent: HMENU,
     label: PCWSTR,
@@ -505,6 +565,8 @@ pub(super) fn append_audio_scale_menu(
     default: PreviewScale,
 ) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    append_by_screen_info_row(menu);
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
@@ -570,7 +632,7 @@ pub(super) fn document_scale_at(index: u16) -> Option<PreviewScale> {
     DOCUMENT_SCALE_CHOICES.get(index as usize).copied()
 }
 
-/// The share of the display an item of the `Audio Scaling` submenu stands
+/// The share of the display an item of the `Audio` submenu stands
 /// for, by the position it was listed at — the share a sound's card is laid
 /// out over. An id past the last choice the menu offered is one that is not
 /// there.
@@ -578,10 +640,11 @@ pub(super) fn audio_scale_at(index: u16) -> Option<PreviewScale> {
     AUDIO_SCALE_CHOICES.get(index as usize).copied()
 }
 
-/// The `Engine -> Select Engine -> Video` submenu: the `Fallback` switch at the top, then the
-/// engines it decides between. An engine this machine does not have is greyed, since there is
-/// nothing there to choose; `Best` is the default and carries the mark.
-fn append_video_engine_menu(parent: HMENU) {
+/// The `Engine → Video Engine` submenu: the `Fallback` switch at the
+/// top, then the engines it decides between. An engine this machine
+/// does not have is greyed, since there is nothing there to choose;
+/// `Best` is the default and carries the mark.
+pub(super) fn append_video_engine_menu(parent: HMENU) {
     let (selected, fallback) = CONFIG
         .lock()
         .map(|config| (config.video_engine, config.video_engine_fallback))
@@ -622,7 +685,7 @@ fn append_video_engine_menu(parent: HMENU) {
         };
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Video")) };
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Video Engine")) };
 }
 
 /// What an engine row is called: the engine's name, with the one the app starts at marked.
@@ -636,24 +699,22 @@ pub(super) fn video_engine_label(engine: VideoEngine) -> String {
     default_label(label, engine == DEFAULT_VIDEO_ENGINE)
 }
 
-/// The `Engine → Select Engine → Office` submenu: which engine an Office document's page
-/// is asked of, with the setting's own choice marked.
+/// The `Engine → Office Engine` submenu: which engine an Office document's
+/// page is asked of, with the setting's own choice marked.
 ///
-/// There are two engines to ask and both are listed. The row for one this machine has not got
-/// is greyed out rather than left out: what it names cannot be started, so the app would fall
-/// back to the other engine for as long as that is so — but the choice is the user's, it is
-/// remembered where it is made, and the day the engine is installed it is the one that draws
+/// There are two engines to ask and both are listed. The row for one this machine
+/// has not got is greyed out rather than left out: what it names cannot be
+/// started, so the app would fall back to the other engine for as long as that
+/// is so — but the choice is the user's, it is remembered where it is made,
+/// and the day the engine is installed it is the one that draws
 /// (see `office_formats::page_engine`).
-pub(super) fn append_select_engine_menu(parent: HMENU) {
+pub(super) fn append_office_engine_menu(parent: HMENU) {
     let selected = CONFIG
         .lock()
         .map(|config| config.office_engine)
         .unwrap_or(DEFAULT_OFFICE_ENGINE);
 
-    let select_engine_menu = unsafe { CreatePopupMenu().unwrap() };
     let office_menu = unsafe { CreatePopupMenu().unwrap() };
-
-    append_video_engine_menu(select_engine_menu);
 
     let microsoft_office = default_label(
         "Microsoft Office",
@@ -697,24 +758,17 @@ pub(super) fn append_select_engine_menu(parent: HMENU) {
 
     let _ = unsafe {
         AppendMenuW(
-            select_engine_menu,
-            MF_STRING | MF_POPUP,
-            office_menu.0 as usize,
-            w!("Office"),
-        )
-    };
-    let _ = unsafe {
-        AppendMenuW(
             parent,
             MF_STRING | MF_POPUP,
-            select_engine_menu.0 as usize,
-            w!("Select Engine"),
+            office_menu.0 as usize,
+            w!("Office Engine"),
         )
     };
 }
 
-/// The `AFK Timer` submenu: how long Explorer may be out of reach before an engine that is
-/// not marked `Persistent` is let go.
+/// The `Away Timer` submenu: how long Explorer may be out of reach before an
+/// engine that is not marked `Persistent` is let go. The setting it asks
+/// about is `afk_timer_seconds`, which keeps its name.
 ///
 /// It is one setting for every engine this app keeps, because the question it answers is
 /// about the user rather than about an engine: nothing this app holds is being looked at
@@ -775,7 +829,7 @@ pub(super) fn append_afk_timer_menu(parent: HMENU) {
             parent,
             MF_STRING | MF_POPUP,
             menu.0 as usize,
-            w!("AFK Timer"),
+            w!("Away Timer"),
         )
     };
 }
@@ -786,7 +840,8 @@ pub(super) fn append_afk_timer_menu(parent: HMENU) {
 /// ask for.
 ///
 /// The toggle is what decides what the times mean. On, they are the whole of how long the
-/// engine is kept, whatever the user is doing; off, `Engine → AFK Timer` is what bounds it
+/// engine is kept, whatever the user is doing; off, `Engine → Away Timer` is what
+/// bounds it
 /// and the times are not consulted at all, so an engine is kept while Explorer is in front
 /// of the user and let go once it has not been for that long. The toggle is at the top and
 /// the times below a separator because it is a different kind of answer — a checkmark rather
@@ -1035,7 +1090,8 @@ pub(super) fn engine_idle_at(index: u16) -> Option<EngineIdle> {
     ENGINE_IDLE_CHOICES.get(index as usize).copied()
 }
 
-/// What an away time is called in the `AFK Timer` submenu: the time, with the one an engine
+/// What an away time is called in the `Away Timer` submenu: the time, with
+/// the one an engine
 /// that is not `Persistent` is bounded by marked as the default.
 ///
 /// Three of the seven are not a whole number of minutes, and each says itself which one it
@@ -1052,7 +1108,8 @@ fn afk_timer_label(seconds: u64) -> String {
     default_label(&label, seconds == DEFAULT_AFK_TIMER_SECS)
 }
 
-/// The away time an item of the `AFK Timer` submenu stands for, by the position it was
+/// The away time an item of the `Away Timer` submenu stands for, by the
+/// position it was
 /// listed at. An id past the last time the menu offered is one that is not there.
 pub(super) fn afk_timer_secs_at(index: u16) -> Option<u64> {
     AFK_TIMER_CHOICES_SECS.get(index as usize).copied()

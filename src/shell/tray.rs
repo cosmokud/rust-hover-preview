@@ -52,7 +52,8 @@ use ids::{
     DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES, FONT_SIZE_CHOICES,
     HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_ANIMATED_SCALE_BASE,
     ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_VOLUME_BASE,
-    ID_TRAY_AVOID_BASE, ID_TRAY_CODEC_BASE, ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DELAY_BASE,
+    ID_TRAY_AVOID_BASE, ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE,
+    ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DELAY_BASE,
     ID_TRAY_DESIGN_BACKGROUND_BASE, ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE,
     ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE,
     ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS,
@@ -80,8 +81,9 @@ use ids::{
 #[cfg(test)]
 use submenus::{
     audio_scale_at, audio_seek_label, avoid_label, background_at, background_label,
-    bitmap_scale_label, dds_background_at, document_scale_at, document_scale_label, engine_idle_at,
-    engine_idle_label, html_background_at, video_engine_label,
+    bitmap_scale_label, dds_background_at, document_scale_at, document_scale_label,
+    engine_idle_at, engine_idle_label, html_background_at, pin_nav_label, pin_update_label,
+    remember_volume_label, update_available_label, video_engine_label,
 };
 
 #[cfg(test)]

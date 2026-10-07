@@ -4,6 +4,8 @@
 
 ### Added
 
+- **`System → Check for Updates`** — Forces a check for a newer release past the once-an-hour one an opening of the menu makes: where none is found (or GitHub is unreachable), a "You're up to date." dialog owned by the tray's window says so; where one is, the `Update Available (vX.Y.Z)` row appears above the `System` submenu on the menu's next opening. The passive check every menu opening makes is unchanged, and a check asked for by hand counts as one made — the next passive one waits the hour out from it.
+- **`Scaling → Audio` `7%`** — the sound's-card scale offers `7%` between `10%` and `5%`; the default stays `10%`.
 - **`Pin Mode → Enable (Space)`** — Press `Space` while a preview is up to turn it into a captioned, movable, always-on-top window that stays when the pointer leaves; key set by `pin_key` (`space` default), feature toggled by `pin_enabled`.
 - **Pinned caption controls** — Minimize collapses to a draggable round bubble (click to restore, right-click to close), Maximize fits the media to the screen centered while keeping its shape, and Close ends the pin.
 - **Move by picture** — A pinned window can be dragged by the picture as well as the caption, except over a text preview's own text/scrollbar and a video's FFmpeg player.
@@ -40,6 +42,7 @@
 
 ### Changed
 
+- **Tray menu regrouped and reworded** — `Pin Mode → Update Preview → Follow Selection` (was `Enabled`), `Pause in Bubble` (was `Pause Preview`), `Navigation Files → All Files` / `Same Category` (was `Nav File Types → All` / `Category`), singular `Preview Types` names in three separated groups (what is looked at and heard, what is read, what is drawn), `Hover Delay` (was `Delay`), `Avoid → Nothing` / `Filename` / `Filename Column` / `Details` (the `Avoid` prefixes dropped), `Scaling` and `Background` submenu names drop their `Scaling`/`Background` suffixes with `Animated Image` listed above `Audio` and the seven display-share submenus opening with a `By Screen` row, `Volume → Remember Level` (was `Remember`), `Performance → Explorer Poll` (was `Tick`) with a flattened `Hardware Acceleration (Video)` row (was a submenu holding one `Video` row), `Engine → Away Timer` (was `AFK Timer`) with `Video Engine` and `Office Engine` in place of `Select Engine → Video` / `Select Engine → Office`, and `Update Available (vX.Y.Z)` (was `Update is available! (vX.Y.Z)`) above a new `System` submenu holding `Check for Updates`, `Run at Startup`, `Config.ini (vX.Y.Z)` and the two resets (was `Config.ini (vX.Y.Z)` with the resets inside it and `Run at Startup` at the top level). Labels only — every command id and every `config.ini` key is unchanged.
 - **Pinned sound has no title bar** — The window is only the card: name at top, controls on its own row, no caption band or gap; Space, arrows and Escape still work from the pin's own window.
 - **Maximized pin no longer maximizes text, archive listing or page** — These are already measured against display room, so maximize leaves them laid out as they are, deliberately unlike shaped files.
 - **HTML page can be pointed at and typed into** — The page rectangle holds the hand, drags starting there survive leaving it, clicking gives the page keyboard, and pictures/videos still dismiss on hover; page still cannot have sound, side files, fullscreen, right-click menu, tools or find bar.
