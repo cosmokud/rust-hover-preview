@@ -813,6 +813,197 @@ fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
     );
 }
 
+/// The `Audio Scaling` range sits in the stretch between the volume
+/// toggles and the `Codecs` commands, and every id of it answers as a
+/// share of the display and nothing else: the range overlaps no other
+/// id the app hands out — not another scale's range, not the avoid
+/// ways, the reset rows, the volume switches, the engine-idle times,
+/// the cache sizes, the font sizes, the theme folder's own ids, the
+/// codec rows, the delays and the tick, the away timer, the persistent
+/// toggles, the hardware-acceleration row, nor any single row of the
+/// menu — and no two of those overlap each other either. Holding the
+/// range against the scale ranges alone is how a range landing on the
+/// reset rows went unnoticed, so every id the app hands out is held
+/// against it here.
+#[test]
+fn the_audio_scaling_range_sits_apart_from_every_other_id() {
+    let audio_scales = (
+        ID_TRAY_AUDIO_SCALE_BASE,
+        ID_TRAY_AUDIO_SCALE_BASE + AUDIO_SCALE_CHOICES.len() as u16,
+    );
+
+    // Every other id the app hands out, as the half-open range the
+    // window proc reads it as: a submenu's range is its base plus the
+    // choices it is as wide as, and a row of its own is one id wide.
+    let mut others: Vec<(u16, u16)> = vec![
+        // The scale ranges, each as wide as the shares its submenu lists.
+        (ID_TRAY_SCALE_BASE, ID_TRAY_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16),
+        (
+            ID_TRAY_VIDEO_SCALE_BASE,
+            ID_TRAY_VIDEO_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_ANIMATED_SCALE_BASE,
+            ID_TRAY_ANIMATED_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_VECTOR_SCALE_BASE,
+            ID_TRAY_VECTOR_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_EBOOK_SCALE_BASE,
+            ID_TRAY_EBOOK_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_DOCUMENT_SCALE_BASE,
+            ID_TRAY_DOCUMENT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_FONT_SCALE_BASE,
+            ID_TRAY_FONT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_DESIGN_SCALE_BASE,
+            ID_TRAY_DESIGN_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_TEXT_SCALE_BASE,
+            ID_TRAY_TEXT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        ),
+        // The ways of keeping a preview off the item it is about.
+        (ID_TRAY_AVOID_BASE, ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16),
+        // The engine-idle times, one range apiece.
+        (
+            ID_TRAY_ENGINE_IDLE_BASE,
+            ID_TRAY_ENGINE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_WEBVIEW_IDLE_BASE,
+            ID_TRAY_WEBVIEW_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_LIBREOFFICE_IDLE_BASE,
+            ID_TRAY_LIBREOFFICE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16,
+        ),
+        // The cache sizes, one range per cache.
+        (
+            ID_TRAY_IMAGE_CACHE_BASE,
+            ID_TRAY_IMAGE_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+        ),
+        (
+            ID_TRAY_DOCUMENT_CACHE_BASE,
+            ID_TRAY_DOCUMENT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+        ),
+        (
+            ID_TRAY_IMAGE_DISK_CACHE_BASE,
+            ID_TRAY_IMAGE_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+        ),
+        (
+            ID_TRAY_GENERAL_DISK_CACHE_BASE,
+            ID_TRAY_GENERAL_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+        ),
+        // The delays the timing submenus offer, and the loop's own tick.
+        (
+            ID_TRAY_DELAY_BASE,
+            ID_TRAY_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16,
+        ),
+        (
+            ID_TRAY_REHOVER_DELAY_BASE,
+            ID_TRAY_REHOVER_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16,
+        ),
+        (
+            ID_TRAY_SETTLING_DELAY_BASE,
+            ID_TRAY_SETTLING_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16,
+        ),
+        (ID_TRAY_TICK_BASE, ID_TRAY_TICK_BASE + TICK_CHOICES_MS.len() as u16),
+        // The away times, the persistent toggles above them, and the
+        // theme folder's own items up to where the cache sizes begin.
+        (
+            ID_TRAY_AFK_TIMER_BASE,
+            ID_TRAY_AFK_TIMER_BASE + AFK_TIMER_CHOICES_SECS.len() as u16,
+        ),
+        (ID_TRAY_ENGINE_PERSISTENT_BASE, ID_TRAY_ENGINE_PERSISTENT_BASE + 3),
+        (ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_IMAGE_CACHE_BASE),
+        // The codec rows, wider than the list is long.
+        (ID_TRAY_CODEC_BASE, ID_TRAY_CODEC_BASE + CODEC_COMMANDS),
+    ];
+    // The font sizes, each the one id its size carries.
+    others.extend(FONT_SIZE_CHOICES.map(|(_, id)| (id, id + 1)));
+    // And the single rows: the reset pair, the volume switches, the
+    // hardware-acceleration row, and every other lone row the menu holds.
+    others.extend(
+        [
+            ID_TRAY_RESET_SETTINGS,
+            ID_TRAY_RESET_LISTS,
+            ID_TRAY_NORMALIZE_VOLUME,
+            ID_TRAY_NORMALIZE_VIDEO_VOLUME,
+            ID_TRAY_REMEMBER_VOLUME,
+            ID_TRAY_REMEMBER_VIDEO_VOLUME,
+            ID_TRAY_VIDEO_HW_ACCEL,
+            ID_TRAY_PRIORITIZE_KEYBOARD,
+            ID_TRAY_EXIT,
+            ID_TRAY_STARTUP,
+            ID_TRAY_UPDATE,
+            ID_TRAY_ENABLE,
+            ID_TRAY_PIN,
+            ID_TRAY_PIN_UPDATE,
+            ID_TRAY_PIN_UPDATE_HOVER,
+            ID_TRAY_PIN_PAUSE_AUDIO,
+            ID_TRAY_PIN_PAUSE_VIDEO,
+            ID_TRAY_PIN_NAV_ALL,
+            ID_TRAY_PIN_NAV_CATEGORY,
+            ID_TRAY_TRIGGER_DISABLE,
+            ID_TRAY_TRIGGER_ENABLE,
+            ID_TRAY_TRIGGER_ENABLED,
+            ID_TRAY_TRIGGER_AFFECT_PIN,
+            ID_TRAY_ENGINE_OFFICE_MS,
+            ID_TRAY_ENGINE_OFFICE_LIBRE,
+            ID_TRAY_VIDEO_ENGINE_FALLBACK,
+            ID_TRAY_POSITION_FOLLOW,
+            ID_TRAY_POSITION_BEST,
+            ID_TRAY_OPEN_CONFIG,
+            ID_TRAY_THEME_LIGHT,
+            ID_TRAY_THEME_DARK,
+            ID_TRAY_MARKDOWN_RENDERED,
+            ID_TRAY_MARKDOWN_SOURCE,
+            ID_TRAY_RENDER_HTML,
+            ID_TRAY_TYPE_IMAGES,
+            ID_TRAY_TYPE_VIDEOS,
+            ID_TRAY_TYPE_AUDIO,
+            ID_TRAY_TYPE_TEXT,
+            ID_TRAY_TYPE_EBOOK,
+            ID_TRAY_TYPE_ARCHIVES,
+            ID_TRAY_TYPE_DOCUMENT,
+            ID_TRAY_TYPE_FONTS,
+            ID_TRAY_TYPE_DESIGN,
+            ID_TRAY_TYPE_VECTOR,
+        ]
+        .map(|id| (id, id + 1)),
+    );
+
+    let overlaps = |ours: (u16, u16), theirs: (u16, u16)| {
+        (ours.0 < theirs.1 && theirs.0 < ours.1).then_some((ours, theirs))
+    };
+
+    for other in &others {
+        assert_eq!(
+            overlaps(audio_scales, *other),
+            None,
+            "the audio range {audio_scales:?} and the id {other:?} overlap"
+        );
+    }
+
+    for (index, range) in others.iter().enumerate() {
+        for other in others.iter().skip(index + 1) {
+            assert_eq!(
+                overlaps(*range, *other),
+                None,
+                "the ranges {range:?} and {other:?} overlap"
+            );
+        }
+    }
+}
+
 /// The `Image Scaling` and `Video Scaling` submenus offer the shares a bitmap can be
 /// drawn at — the share of its own size, rather than the share of the display the
 /// document scales beside them are — in one order and with one set of labels: what a

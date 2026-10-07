@@ -71,18 +71,7 @@ impl PreviewScale {
     /// The scale a `config.ini` value names, or `None` for one that is neither a
     /// percentage nor a word for the fit.
     pub(crate) fn from_str(value: &str) -> Option<Self> {
-        let normalized = value.trim().to_ascii_lowercase();
-        let normalized = normalized.trim_end_matches('%').trim();
-
-        match normalized {
-            "fit" | "fit to screen" | "fit-to-screen" | "fit_to_screen" | "fittoscreen" => {
-                Some(Self::FitToScreen)
-            }
-            _ => normalized
-                .parse::<u32>()
-                .ok()
-                .map(|percent| Self::Percent(sanitize_preview_scale_percent(percent))),
-        }
+        Self::from_str_with(value, sanitize_preview_scale_percent)
     }
 
     /// The scale a sound's `config.ini` value names, or `None` for one that is
@@ -96,6 +85,15 @@ impl PreviewScale {
     /// `None`, which leaves the setting where the configuration already holds
     /// it rather than guessing.
     pub(crate) fn from_audio_str(value: &str) -> Option<Self> {
+        Self::from_str_with(value, sanitize_audio_scale_percent)
+    }
+
+    /// The words and the number every scale reads a `config.ini` value as:
+    /// the fit words name the whole room, and a percentage is read through
+    /// the bounds the caller's own setting holds, which is the one difference
+    /// between a picture's scale and a sound's — the cascade that turns a
+    /// written value into one of them is the same either way.
+    fn from_str_with(value: &str, sanitize: fn(u32) -> u32) -> Option<Self> {
         let normalized = value.trim().to_ascii_lowercase();
         let normalized = normalized.trim_end_matches('%').trim();
 
@@ -106,7 +104,7 @@ impl PreviewScale {
             _ => normalized
                 .parse::<u32>()
                 .ok()
-                .map(|percent| Self::Percent(sanitize_audio_scale_percent(percent))),
+                .map(|percent| Self::Percent(sanitize(percent))),
         }
     }
 }
