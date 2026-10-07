@@ -438,6 +438,9 @@ pub(super) struct PinnedPreview {
     /// themselves, asked on every move and every tick (see `pinned_mouse_move`
     /// and `pin_audio_hover_refresh`).
     pub(super) audio_window_buttons: bool,
+    /// The card's own menu: whether its panel is up, and which of its two
+    /// pages it is showing (see `PinMenu`).
+    pub(super) menu: PinMenu,
 }
 
 #[cfg(test)]
@@ -474,6 +477,7 @@ impl PinnedPreview {
             audio_hovered: None,
             audio_pressed: None,
             audio_window_buttons: false,
+            menu: PinMenu::default(),
         }
     }
 }

@@ -77,6 +77,7 @@ mod pin_geometry;
 mod pin_input;
 mod pin_install;
 mod pin_lifecycle;
+mod pin_menu;
 mod pin_model;
 mod pin_playback;
 mod pin_swap;
@@ -108,7 +109,7 @@ use crate::config::config::{
     DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_MODE_AUDIO_LOOP,
-    DEFAULT_PIN_MODE_AUDIO_SEEK,
+    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
     DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
@@ -307,6 +308,7 @@ use pin_geometry::*;
 use pin_input::*;
 use pin_install::*;
 use pin_lifecycle::*;
+use pin_menu::*;
 use pin_model::*;
 use pin_playback::*;
 use pin_swap::*;

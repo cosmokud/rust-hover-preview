@@ -61,6 +61,7 @@ fn wide_banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
         audio_hovered: None,
         audio_pressed: None,
         audio_window_buttons: false,
+        menu: PinMenu::default(),
     }
 }
 

@@ -179,6 +179,13 @@ pub(crate) enum CardControl {
     /// The window button that ends the pin, the player and the window together, which is the
     /// pin's own close command asked for (see `pinned_audio_control_release`).
     Close,
+    /// The menu the card's mark opens, in the cell the mark is drawn in: the
+    /// shuffle, loop and seek switches of a pinned sound. The cell is a
+    /// control only while the window buttons are up, because the stripes the
+    /// cell becomes while they are are what that band is for (see `paint`),
+    /// and it is hit-tested before the window buttons so that the cell wins
+    /// in its own box (see `control_at`).
+    Menu,
 }
 
 /// What a card's own controls are saying, and what a pointer is doing on them: whether a player
@@ -450,6 +457,7 @@ pub(crate) fn control_at(
     dpi: u32,
     options: AudioPreviewOptions,
     controls: bool,
+    window_buttons: bool,
 ) -> Option<CardControl> {
     let dc = unsafe { CreateCompatibleDC(None) };
     if dc.0.is_null() {
@@ -460,10 +468,24 @@ pub(crate) fn control_at(
         let boxes = control_boxes(&metrics, width, controls)?;
         let row = bar_row(&metrics);
 
+        // The menu the cell the card's mark is drawn in opens, asked of
+        // before anything else the card carries: the cell is its own box,
+        // and a hand in it is a hand on the menu. It is a control only
+        // while the window buttons are up, because the stripes the cell
+        // becomes while they are are what that band is for (see `paint`),
+        // and it stands first in the chain so that the cell wins in its
+        // own box (see the order above).
+        let menu = window_buttons.then(|| {
+            boxes
+                .rect(CardControl::Menu)
+                .filter(|rect| holds(*rect, x, y))
+                .map(|_| CardControl::Menu)
+        });
+
         // The two window buttons, which a hand on the top margin is on before
         // it is on anything the card carries lower down (see the order above).
-        boxes
-            .window_button_at(x, y)
+        menu.flatten()
+            .or_else(|| boxes.window_button_at(x, y))
             .or_else(|| {
                 boxes
                     .rect(CardControl::Volume)

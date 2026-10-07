@@ -69,6 +69,12 @@ thread_local! {
     /// nothing, and a name from the last frame left opaque on this one would be a second name
     /// drawn over the first.
     pub(super) static TOOLTIP_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+    /// The membrane a card's menu is written on, for the reason the tooltip's is: the
+    /// rows' labels are measured and drawn through GDI, which needs a device context of
+    /// its own, and it is the size of the whole window for that reason rather than of a
+    /// strip. It is kept between paints for the reason the surfaces above are, and
+    /// cleared before each use for the reason the tooltip's is.
+    pub(super) static MENU_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
 }
 
 /// The last frame a pinned film's player had on screen, held as a frame of its own rather than

@@ -137,6 +137,10 @@ pub(super) struct CardBoxes {
     pub(super) next: RECT,
     pub(super) volume: RECT,
     pub(super) bar: RECT,
+    /// The cell the card's mark is drawn in, which the menu the
+    /// mark opens is answered against while the window buttons are
+    /// up (see `control_at` and `paint`).
+    pub(super) menu: RECT,
     /// The minimize that shrinks the pin into its bubble, and the close that ends it.
     pub(super) minimize: WindowButtonBox,
     pub(super) close: WindowButtonBox,
@@ -171,6 +175,7 @@ impl CardBoxes {
             CardControl::Next => self.next,
             CardControl::Seek => self.bar,
             CardControl::Volume => self.volume,
+            CardControl::Menu => self.menu,
             CardControl::Minimize => self.minimize.hit,
             CardControl::Close => self.close.hit,
         })
@@ -229,6 +234,7 @@ pub(super) fn control_boxes(
     let next = button(play.right + gap);
     let volume = button(right - side);
     let bar_left = next.right + gap;
+    let menu = bullet_cell_box(metrics);
     let (minimize, close) = window_button_boxes(metrics, width as i32);
 
     Some(CardBoxes {
@@ -247,9 +253,43 @@ pub(super) fn control_boxes(
             right: (volume.left - gap).max(bar_left),
             bottom: row.top + row.height,
         },
+        menu,
         minimize,
         close,
     })
+}
+
+/// The box the card's mark is drawn in: the cell the name line
+/// gives it, at the left of the card, as wide as the mark and the
+/// room after it (see `BULLET_CELL_ADVANCES`) and as tall as the
+/// name line's own box. The menu the mark opens while the window
+/// buttons are up is answered against this box (see `control_at`),
+/// and the stripes that replace the mark are drawn over it (see
+/// `paint`) — so it is the cell `build_page` draws the mark's run
+/// in, worked out here for the one caller that has none of that in
+/// hand: the hit test, which is asked of the card's own layout
+/// rather than of a page that was built.
+pub(super) fn bullet_cell_box(metrics: &TextMetrics) -> RECT {
+    let advance = metrics.advance[HEADER_LEVEL as usize].max(1);
+    let header_height = metrics.line_height[HEADER_LEVEL as usize];
+    let rule_gap = scaled(RULE_GAP_PIXELS, metrics.scale);
+
+    // The name line is centred between the window's own top border
+    // and the rule under it (see `build_page`), which is where the
+    // cell's own top is.
+    let rule_top = metrics.padding + header_height + rule_gap;
+    let header_top = (rule_top
+        - metrics.ink_top[HEADER_LEVEL as usize]
+        - metrics.ink_bottom[HEADER_LEVEL as usize]
+        - 1)
+        / 2;
+
+    RECT {
+        left: metrics.padding,
+        top: header_top,
+        right: metrics.padding + advance * BULLET_CELL_ADVANCES,
+        bottom: header_top + header_height,
+    }
 }
 
 /// The side one of the two window buttons is drawn at: twice what the card's own top
@@ -759,6 +799,16 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         }
     }
 
+    // The cell the mark is drawn in becomes the hamburger the card's menu
+    // opens from while the window buttons are up: the mark steps aside for
+    // three stripes, in the room the mark already had, so the card is the
+    // height it has always been (see `CardControl::Menu`).
+    if let (Some(boxes), Some(chrome)) = (page.boxes.as_ref(), page.chrome.as_ref()) {
+        if chrome.window_buttons {
+            paint_menu_stripes(surface, boxes.menu, page_color, accent, scale);
+        }
+    }
+
     if page.rule_height > 0 {
         fill_rect(
             surface,
@@ -887,6 +937,68 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
                 );
             }
         }
+    }
+}
+
+/// Three stripes in the cell the card's mark is drawn in, in place
+/// of the mark: the hamburger the card's menu opens from.
+///
+/// The stripes are drawn by hand, like the window buttons' marks
+/// are (see `paint_window_button`), because the mark they replace
+/// is a glyph of the page's own font and a hamburger of three
+/// strokes is not one. Each stroke is a line one logical pixel
+/// thick, held in from the cell's edges and spaced down the
+/// middle of the cell, and the cell is the page's own colour
+/// first, so the mark it held is gone rather than under the
+/// stripes.
+fn paint_menu_stripes(
+    surface: &DibSurface,
+    cell: RECT,
+    page_color: [u8; 3],
+    ink: [u8; 3],
+    scale: f32,
+) {
+    fill_rect(surface, cell, page_color);
+
+    let buffer = unsafe {
+        std::slice::from_raw_parts_mut(
+            surface_pixels(surface),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    };
+    let width = surface.width as i32;
+
+    // The centre of the box, on the middle of a pixel rather than on the edge of one,
+    // which is where a one-pixel stroke is a whole pixel rather than a half of two.
+    let stroke = scaled(1, scale) as f32;
+
+    // The stripes span the middle of the cell and are held in from its edges, the
+    // way the window buttons' marks are held in from theirs: a sixth of the cell's
+    // own width from each end.
+    let side = (cell.right - cell.left) as f32;
+    let inset = side / 6.0;
+    let left = cell.left as f32 + inset;
+    let right = cell.right as f32 - inset;
+
+    // Three strokes, a stripe's own height apart, the first and the last a
+    // stripe's own height in from the cell's ends. Each stripe's row is
+    // rounded onto a whole pixel, and its stroke centred on that pixel's
+    // middle, the way the window buttons' marks are: a one-pixel stroke
+    // there is a whole pixel rather than a half of two, so the stripe is
+    // the ink it is meant to be and not a smear over two rows.
+    let height = (cell.bottom - cell.top) as f32;
+    for stripe in 0..3 {
+        let row = cell.top + (height * (stripe as f32 + 1.0) / 4.0).round() as i32;
+        let centre = row as f32 + 0.5;
+        stroke_segment(
+            buffer,
+            width,
+            (left, centre),
+            (right, centre),
+            stroke,
+            ink,
+            1.0,
+        );
     }
 }
 

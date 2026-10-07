@@ -339,6 +339,56 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         }
     }
 
+    // The card's menu, over the media below the cell it came out of:
+    // drawn after everything but the caption's own name, because it is
+    // over everything but that (see `pinned_menu_geometry`).
+    if let Some(menu) = paint.menu.as_ref() {
+        if let Some(palette) = pin_chrome::ChromePalette::current() {
+            // A surface of the window's own size, because the rows'
+            // labels are measured and drawn through GDI and GDI needs a
+            // device context of its own — the same surface the caption's
+            // tooltip is written on, kept between paints for the same
+            // reason and blanked before each use for the same one (see
+            // `TOOLTIP_SURFACE`).
+            let wanted = (width.max(1) as u32, height.max(1) as u32);
+            MENU_SURFACE.with(|cell| {
+                let mut surface = cell.borrow_mut();
+                if surface
+                    .as_ref()
+                    .map(|surface| (surface.width, surface.height))
+                    != Some(wanted)
+                {
+                    *surface = DibSurface::create(wanted.0, wanted.1);
+                }
+                let Some(surface) = surface.as_ref() else {
+                    return;
+                };
+
+                // The surface is blanked before it is used rather than
+                // left as the last menu left it, for the reason the
+                // tooltip's is: what is carried off it afterwards is
+                // decided by the alpha byte GDI leaves behind.
+                let blanked = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        surface.bits(),
+                        surface.width as usize * surface.height as usize * 4,
+                    )
+                };
+                blanked.fill(0);
+
+                pin_chrome::paint_menu_popup(
+                    out,
+                    width,
+                    &palette,
+                    &menu.popup,
+                    &menu.rows,
+                    surface,
+                    paint.dpi as f32 / 96.0,
+                );
+            });
+        }
+    }
+
     // The caption's tooltip, floated over the media below the strip — which is where it is
     // because a name like "Open With Adobe Photoshop" is wider than the buttons it describes,
     // and a tooltip drawn inside the strip would cover them for as long as it was up (see
@@ -416,6 +466,11 @@ pub(super) struct PinnedPaint {
     /// than recomputed at the paint, so that the panel drawn is the panel a press is answered
     /// against (see `pinned_volume_geometry`).
     pub(super) volume_popup: Option<pin_chrome::VolumePopup>,
+    /// The card's own menu, or nothing while its panel is closed: the panel
+    /// hung from the cell the mark is drawn in and the rows it holds, asked
+    /// of the pin for the reason the volume popup's panel is (see
+    /// `pinned_menu_geometry`).
+    pub(super) menu: Option<PinMenuPaint>,
     /// Whether the bar's controls do anything for the engine playing this file (see
     /// `PinnedPreview::transport_live`).
     pub(super) transport_live: bool,
@@ -484,6 +539,7 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             transport: pin.transport,
             volume: pin.volume,
             volume_popup: None,
+            menu: None,
             transport_live: pin.transport_live,
             parked: pin.parked,
         }
@@ -494,6 +550,13 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
     // while it is up — and because a panel placed from the pin's own numbers is the same panel
     // every press and every drag is answered against (see `pinned_volume_geometry`).
     paint.volume_popup = pinned_volume_geometry();
+
+    // The card's menu, asked for after the pin's lock is let go of for
+    // the reason the volume popup's panel is: where it goes is a
+    // question about the geometry of a window this one only holds a
+    // lock for while it is up, and the panel drawn is the panel a press
+    // is answered against (see `pinned_menu_geometry`).
+    paint.menu = pinned_menu_geometry();
 
     // Where the bar is drawn: where the pointer has dragged it while a drag is going, and
     // where the file really is otherwise (see `PinTransport`).

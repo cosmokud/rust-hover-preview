@@ -220,8 +220,10 @@ pub(crate) fn paint_tooltip(
 ///
 /// A pixel the run did not reach is left exactly as it was, which is what makes this the name
 /// rather than a rectangle of text-coloured panel: the run's background is written over the
-/// whole of its box, and its coverage is what separates the letters from the box around them.
-fn composite_text_into(surface: &DibSurface, out: &mut [u8], width: i32, panel: RECT) {
+/// whole of its box, and its coverage is what separates the letters from the box
+/// around them. The menu's labels are carried across by the same road
+/// (`pin_chrome::menu`).
+pub(super) fn composite_text_into(surface: &DibSurface, out: &mut [u8], width: i32, panel: RECT) {
     let source = unsafe {
         std::slice::from_raw_parts(
             surface.bits(),

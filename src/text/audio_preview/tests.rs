@@ -645,7 +645,7 @@ fn a_pinned_card_carries_its_four_controls_where_they_are_drawn() {
         let rect = control_box(control, width, 96, options(), true).expect("a box to press");
         let centre = ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
         assert_eq!(
-            control_at(centre.0, centre.1, width, 96, options(), true),
+            control_at(centre.0, centre.1, width, 96, options(), true, true),
             Some(control),
             "the middle of {control:?} is {control:?}"
         );
@@ -684,6 +684,137 @@ fn a_pinned_card_carries_its_four_controls_where_they_are_drawn() {
     // And the row is laid out left to right: the walk at the left, the bar in the middle, the
     // level at the right — which is the order a hand reads them in.
     let _ = boxes;
+}
+
+/// The box the card's menu is answered against is the cell the card's
+/// mark is drawn in — the same box the name line gives the mark, its
+/// first run — and the cell is a control only while the window buttons
+/// are up, because the stripes the cell becomes are what that band is
+/// for. The two window buttons keep their own boxes, which the cell's
+/// box does not reach: the cell stands at the left of the name line and
+/// they at its right.
+#[test]
+fn the_bullet_cell_is_the_box_the_menus_answered_in() {
+    let (width, _) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+    let page = scrolled(&pinned(), width, 0);
+
+    // The cell the mark is drawn in, read of the name line's own first
+    // run: the mark and the room after it (see `BULLET_CELL_ADVANCES`).
+    let mark = &page.header[0];
+    let cell = control_box(CardControl::Menu, width, 96, options(), true)
+        .expect("a box for the menu the cell opens");
+    assert_eq!(cell.left, mark.x);
+    assert_eq!(cell.right, mark.x + mark.width);
+    assert_eq!(cell.top, page.header_top);
+    assert_eq!(cell.bottom, page.header_top + page.header_height);
+
+    // The cell answers for the menu while the window buttons are up, and
+    // for nothing at all while they are down: the stripes are what the
+    // cell becomes in that band, and a band that has gone is a cell that
+    // is the mark's own again (see `paint`).
+    let centre = ((cell.left + cell.right) / 2, (cell.top + cell.bottom) / 2);
+    assert_eq!(
+        control_at(centre.0, centre.1, width, 96, options(), true, true),
+        Some(CardControl::Menu),
+        "the cell is the menu's while the window buttons are up"
+    );
+    assert_eq!(
+        control_at(centre.0, centre.1, width, 96, options(), true, false),
+        None,
+        "and the cell answers for nothing while they are down"
+    );
+
+    // The window buttons keep their own boxes, which the cell does not
+    // reach: each is answered in its own box either way.
+    let boxes = page.boxes.as_ref().expect("a card that carries controls");
+    for (control, button) in [
+        (CardControl::Minimize, boxes.minimize.hit),
+        (CardControl::Close, boxes.close.hit),
+    ] {
+        let centre = ((button.left + button.right) / 2, (button.top + button.bottom) / 2);
+        assert_eq!(
+            control_at(centre.0, centre.1, width, 96, options(), true, true),
+            Some(control),
+            "{control:?} keeps its own box"
+        );
+    }
+}
+
+/// The mark steps aside for three stripes while the window buttons are
+/// up: the cell is the page's own colour with three strokes of the
+/// accent in it, which is less ink than the mark's own disc — and the
+/// card is no taller for the swap, because the stripes are drawn in
+/// the room the mark already had.
+#[test]
+fn the_mark_steps_aside_for_stripes_while_the_window_buttons_are_up() {
+    let (width, height) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+    let cell = control_box(CardControl::Menu, width, 96, options(), true)
+        .expect("the cell the stripes are drawn in");
+
+    let theme = text_theme::loaded(options().theme).expect("the bundled theme");
+    let page_color = rgb(theme.background());
+    let accent = readable(
+        rgb(theme.style_for_scopes(&["support.function"]).foreground),
+        page_color,
+    );
+
+    // The ink of a pixel is its color read backwards: the buffer is
+    // blue, green, red, alpha, and a color is red, green, blue (see
+    // `the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else`).
+    let accent_ink = [accent[2], accent[1], accent[0]];
+    let page_ink = [page_color[2], page_color[1], page_color[0]];
+
+    // The cell's own accounting: the pixels that are the accent
+    // itself, and the pixels that are any ink at all. A glyph's
+    // anti-aliased edge is ink that is no pixel of the accent, and
+    // the mark's disc is mostly edge at this size, so what the
+    // stripes are less than is the ink the disc holds, not the
+    // accent alone.
+    let in_cell = |card: &Card| -> (usize, usize) {
+        let (pixels, painted_width, _) =
+            render(card, width, height, 96, options()).expect("a painted card");
+        let (left, top) = (cell.left as usize, cell.top as usize);
+        let (wide, tall) = (
+            (cell.right - cell.left) as usize,
+            (cell.bottom - cell.top) as usize,
+        );
+
+        let mut accent = 0;
+        let mut ink = 0;
+        for y in top..top + tall {
+            for x in left..left + wide {
+                let at = (y * painted_width as usize + x) * 4;
+                if pixels[at..at + 3] == accent_ink {
+                    accent += 1;
+                }
+                if pixels[at..at + 3] != page_ink {
+                    ink += 1;
+                }
+            }
+        }
+        (accent, ink)
+    };
+
+    let (striped_accent, striped_ink) = in_cell(&pinned());
+    let (_, marked_ink) = in_cell(&card());
+
+    assert!(
+        striped_accent > 0,
+        "three stripes of the accent are drawn in the cell while the window buttons are up"
+    );
+    assert!(
+        striped_ink < marked_ink,
+        "the stripes are less ink than the mark's disc, which is \
+         what replacing it means: {striped_ink} against {marked_ink}"
+    );
+
+    // The card is the height it has always been: the stripes are drawn
+    // in the room the mark already had, not in room the card grew by.
+    let (_, hover_height) = measure(&card(), 4096, 2160, 96, options()).expect("a measured card");
+    assert_eq!(
+        height, hover_height,
+        "a card carrying stripes is the card carrying the mark"
+    );
 }
 
 /// A pinned card is the size the card a hover shows is: its controls stand in the bar's own
@@ -793,7 +924,7 @@ fn the_hover_card_is_the_card_it_has_always_been() {
     for y in (0..page.height as i32).step_by(3) {
         for x in (0..plain as i32).step_by(7) {
             assert_eq!(
-                control_at(x, y, plain, 96, options(), false),
+                control_at(x, y, plain, 96, options(), false, true),
                 None,
                 "a point on a hover's card is on no control: ({x}, {y})"
             );
@@ -861,6 +992,7 @@ fn a_seek_is_measured_across_the_bar_and_not_across_the_buttons() {
             width,
             96,
             options(),
+            true,
             true
         ),
         Some(CardControl::Volume),
@@ -1201,7 +1333,7 @@ fn a_window_button_is_answered_where_its_glyph_is_and_a_little_beyond_it() {
         let drawn = button.drawn;
         let hit = boxes.rect(control).expect("a box to press");
         let middle = (drawn.left + drawn.right) / 2;
-        let at = |x: i32, y: i32| control_at(x, y, width, 96, options(), true);
+        let at = |x: i32, y: i32| control_at(x, y, width, 96, options(), true, true);
 
         // The middle of the drawn box, and the window's own top row above it:
         // the cushion the hit box reaches to is part of the button, which is

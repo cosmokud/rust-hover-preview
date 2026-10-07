@@ -39,4 +39,5 @@ fn blit_cell(out: &mut [u8], width: u32, height: u32, source: &[u8], source_widt
 }
 
 mod caption;
+mod menu;
 mod transport;
