@@ -13,28 +13,30 @@
 
 use super::commands::{
     open_config_file, reset_lists_from_tray, reset_settings_from_tray, set_afk_timer,
-    set_animated_scale, set_audio_seek, set_audio_volume, set_avoid_mode, set_dds_background,
-    set_decode_budget_gb, set_design_background, set_design_scale, set_document_cache_mb,
-    set_document_scale, set_ebook_scale, set_follow_cursor, set_font_background, set_font_scale,
-    set_general_disk_cache_mb, set_hover_delay, set_html_background, set_image_background,
-    set_image_cache_mb, set_image_disk_cache_mb, set_libreoffice_idle, set_markdown_mode,
-    set_office_engine, set_office_engine_idle, set_pin_nav_file_types, set_preview_scale,
-    set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
-    set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
-    set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
-    toggle_engine_persistent, toggle_normalize_video_volume, toggle_normalize_volume,
-    toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
+    set_animated_scale, set_audio_scale, set_audio_seek, set_audio_volume, set_avoid_mode,
+    set_dds_background, set_decode_budget_gb, set_design_background, set_design_scale,
+    set_document_cache_mb, set_document_scale, set_ebook_scale, set_follow_cursor,
+    set_font_background, set_font_scale, set_general_disk_cache_mb, set_hover_delay,
+    set_html_background, set_image_background, set_image_cache_mb, set_image_disk_cache_mb,
+    set_libreoffice_idle, set_markdown_mode, set_office_engine, set_office_engine_idle,
+    set_pin_nav_file_types, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
+    set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
+    set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
+    set_video_scale, set_video_volume, set_webview_idle, toggle_engine_persistent,
+    toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_enabled,
+    toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
     toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
     toggle_render_html, toggle_startup, toggle_trigger_key_affect_pin_mode,
     toggle_trigger_key_enabled, toggle_video_engine_fallback, toggle_video_hw_accel,
 };
 use super::ids::{
-    AFK_TIMER_CHOICES_SECS, AUDIO_SEEK_CHOICES, AVOID_CHOICES, BACKGROUND_CHOICES,
-    BITMAP_SCALE_CHOICES, CACHE_SIZE_CHOICES_MB, CODEC_COMMANDS, DDS_BACKGROUND_CHOICES,
-    DECODE_BUDGET_CHOICES_GB, DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES,
-    ID_TRAY_AFK_TIMER_BASE, ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE,
-    ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE, ID_TRAY_CODEC_BASE, ID_TRAY_DDS_BACKGROUND_BASE,
+    AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
+    BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, CACHE_SIZE_CHOICES_MB, CODEC_COMMANDS,
+    DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB, DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES,
+    HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_ANIMATED_SCALE_BASE,
+    ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_VOLUME_BASE,
+    ID_TRAY_AVOID_BASE, ID_TRAY_CODEC_BASE, ID_TRAY_DDS_BACKGROUND_BASE,
     ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
     ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
     ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
@@ -492,6 +494,17 @@ unsafe extern "system" fn tray_window_proc(
                         .contains(&cmd) =>
                     {
                         set_animated_scale(cmd - ID_TRAY_ANIMATED_SCALE_BASE)
+                    }
+                    // And how much of the display a sound's card is laid out over,
+                    // the same question the document scales beside it answer — a card
+                    // holds no bitmap of the file to take a share of, so the share is
+                    // of the room the display has, and the setting written is the
+                    // sound's own.
+                    cmd if (ID_TRAY_AUDIO_SCALE_BASE
+                        ..ID_TRAY_AUDIO_SCALE_BASE + AUDIO_SCALE_CHOICES.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_audio_scale(cmd - ID_TRAY_AUDIO_SCALE_BASE)
                     }
                     ID_TRAY_FONT_400 => set_text_font_scale(400),
                     ID_TRAY_FONT_300 => set_text_font_scale(300),

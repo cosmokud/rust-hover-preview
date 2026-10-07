@@ -14,11 +14,12 @@
 
 use super::commands::open_link;
 use super::ids::{
-    EngineIdleIds, AFK_TIMER_CHOICES_SECS, AUDIO_SEEK_CHOICES, AVOID_CHOICES, BACKGROUND_CHOICES,
-    BITMAP_SCALE_CHOICES, DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES,
-    HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_CODEC_BASE,
-    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_VIDEO_ENGINE_BASE,
-    ID_TRAY_VIDEO_ENGINE_FALLBACK, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
+    EngineIdleIds, AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
+    BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES,
+    ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE,
+    ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS,
+    ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, TICK_CHOICES_MS,
+    TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
 };
 
 use crate::app::dialogs;
@@ -489,6 +490,55 @@ pub(super) fn append_bitmap_scale_menu(
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
 }
 
+/// The `Audio Scaling` submenu: the shares of the display a sound's card is
+/// laid out over, with the one the setting is on marked, and nothing marked
+/// for a share the menu does not offer — which is what a hand-edited
+/// `config.ini` can ask for. The shares are of the display rather than of a
+/// size of the file's own, because a card holds nothing of the sound to take
+/// a share of — what it holds is laid out over the room it is given — so the
+/// labels are the document scale's, which name the same question.
+pub(super) fn append_audio_scale_menu(
+    parent: HMENU,
+    label: PCWSTR,
+    base: u16,
+    scale: PreviewScale,
+    default: PreviewScale,
+) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    // The labels are kept for as long as the menu is being filled out, for the same
+    // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
+    // strings have to outlive the call that lists them.
+    let labels: Vec<Vec<u16>> = AUDIO_SCALE_CHOICES
+        .iter()
+        .map(|choice| {
+            document_scale_label(*choice, default)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, choice) in AUDIO_SCALE_CHOICES.iter().enumerate() {
+        let flags = MF_STRING
+            | if *choice == scale {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                flags,
+                (base + index as u16) as usize,
+                PCWSTR(labels[index].as_ptr()),
+            )
+        };
+    }
+
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+}
+
 /// What a share of a bitmap's own size is called in the menu: the percentage itself, with
 /// the one the setting starts at marked as the default. Taking the whole of it is not a
 /// percentage, so it is named for what it does.
@@ -518,6 +568,14 @@ pub(super) fn document_scale_label(scale: PreviewScale, default: PreviewScale) -
 /// is not there.
 pub(super) fn document_scale_at(index: u16) -> Option<PreviewScale> {
     DOCUMENT_SCALE_CHOICES.get(index as usize).copied()
+}
+
+/// The share of the display an item of the `Audio Scaling` submenu stands
+/// for, by the position it was listed at — the share a sound's card is laid
+/// out over. An id past the last choice the menu offered is one that is not
+/// there.
+pub(super) fn audio_scale_at(index: u16) -> Option<PreviewScale> {
+    AUDIO_SCALE_CHOICES.get(index as usize).copied()
 }
 
 /// The `Engine -> Select Engine -> Video` submenu: the `Fallback` switch at the top, then the

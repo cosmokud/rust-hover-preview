@@ -333,6 +333,19 @@ pub(super) const BITMAP_SCALE_CHOICES: [PreviewScale; 8] = [
     PreviewScale::Percent(50),
     PreviewScale::Percent(25),
 ];
+/// The shares the `Audio Scaling` submenu offers, in the order it lists
+/// them: a sound's card is laid out over a share of the display rather than
+/// drawn at a share of a size of its own, so the percentages are the ones
+/// that mean something for one. Nothing is marked as the default here — the
+/// default is passed to the labels rather than written into the table,
+/// because which share a setting starts at is the setting's own business.
+pub(super) const AUDIO_SCALE_CHOICES: [PreviewScale; 5] = [
+    PreviewScale::Percent(25),
+    PreviewScale::Percent(20),
+    PreviewScale::Percent(15),
+    PreviewScale::Percent(10),
+    PreviewScale::Percent(5),
+];
 pub(super) const ID_TRAY_THEME_LIGHT: u16 = 1050; // Atom One Light
 pub(super) const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
 pub(super) const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
@@ -474,6 +487,15 @@ pub(super) const ID_TRAY_ENGINE_PERSISTENT_BASE: u16 = 1512;
 /// the graphics card. It sits in the slack past the three `Persistent` toggles, which end at
 /// 1515, so a click on it is never read as a toggle belonging to an engine's TTL submenu.
 pub(super) const ID_TRAY_VIDEO_HW_ACCEL: u16 = 1516;
+/// The `Audio Scaling` submenu: one command per share of the display a
+/// sound's card is laid out over, in the order it lists them. It sits past
+/// every other range the app hands out, the way the `AFK Timer` and
+/// `Persistent` ranges do — the hardware acceleration row above is the last
+/// of those and ends at 1516 — because the slack beside the Ebook and
+/// Document scales is the `Avoid` submenu's, and the gaps beside the video
+/// and animated ranges are two ids wide, so a range of five cannot fit
+/// between them without renumbering.
+pub(super) const ID_TRAY_AUDIO_SCALE_BASE: u16 = 1517;
 /// The away times the `AFK Timer` submenu offers, in the order it lists them: an hour at the
 /// top and a quarter of a minute at the bottom, with the one that bounds an engine by
 /// default in the middle. There is no `Indefinitely` here — a time that never comes round is
