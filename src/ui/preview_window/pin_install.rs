@@ -1025,6 +1025,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         audio_hovered: None,
         audio_pressed: None,
         audio_window_buttons: false,
+        menu: PinMenu::default(),
     }
 }
 

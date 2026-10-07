@@ -799,6 +799,15 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
+    // The card's menu, while its panel is up: a panel over the
+    // card is over the card's own controls too, so a press on a
+    // row is the menu's before it is the card's, and a press
+    // anywhere else is a press that has left the menu, which
+    // puts the panel away (see `pinned_menu_press`).
+    if pinned_menu_press(hwnd, x, y) {
+        return true;
+    }
+
     // And then the four controls a sound's card carries, which are drawn on the card rather than in
     // a strip of their own, and so are asked of before the media becomes a handle for moving the
     // window: a button is a button, and a hand on the rest of the card is still a hand carrying the
@@ -838,12 +847,16 @@ pub(super) unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> b
     // `pin_shows_an_audio_card`). The pin's remembered options are taken in the same look,
     // because they are the options the card is drawn at — the press is answered against the
     // layout the card is drawn in, not the configuration's (see `pinned_audio_options`).
-    let (shows, options) = pin_state()
+    let (shows, options, window_buttons) = pin_state()
         .and_then(|pinned| {
             let pin = pinned.pin()?;
-            Some((pin_shows_an_audio_card(pin), pinned_audio_options(pin)))
+            Some((
+                pin_shows_an_audio_card(pin),
+                pinned_audio_options(pin),
+                pin.audio_window_buttons,
+            ))
         })
-        .unwrap_or((false, current_audio_options()));
+        .unwrap_or((false, current_audio_options(), false));
     if !shows {
         return false;
     }
@@ -869,7 +882,7 @@ pub(super) unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> b
 
     let (media_x, media_y) = media_point(x, y);
     let Some(control) =
-        audio_preview::control_at(media_x, media_y, width, dpi, options, true)
+        audio_preview::control_at(media_x, media_y, width, dpi, options, true, window_buttons)
     else {
         return false;
     };
@@ -947,6 +960,13 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
             // answers the way it answers a caption button (see `pin_command_request`).
             CardControl::Minimize => ask_pin(PinCommand::Minimize),
             CardControl::Close => ask_pin(PinCommand::Close),
+            // The menu the cell the card's mark is drawn in opens: the
+            // press that armed this release is the hamburger's own, and
+            // the release is what puts the panel up or away — the same
+            // press-and-release a caption button follows, because the
+            // cell is a control of the card's like any other (see
+            // `toggle_pin_menu`).
+            CardControl::Menu => toggle_pin_menu(hwnd),
             CardControl::Seek => {}
         }
     }
