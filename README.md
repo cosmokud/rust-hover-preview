@@ -14,7 +14,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 - Press a key and a preview becomes a window of its own — captioned, movable, resizable, always on top, where it stays until you close it.
 - Supports images, design documents, camera raw, vector drawings, fonts, videos, PDFs, ebooks, comics, text/code, archives, Office documents, and more.
 - A file's preview depends on what's really inside it, not its name — so renamed files still show correctly, unreadable content gets no preview, and ambiguous types are resolved by extension or content.
-- Scaling from 25% to 400%, or fit-to-screen, with separate scaling for images and videos and for vector drawings, PDFs, documents, fonts, and design documents.
+- Scaling from 25% to 400%, or fit-to-screen, with separate scaling for images and videos and for vector drawings, PDFs, documents, fonts, design documents, and sounds.
 - Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
 
 ## Supported Formats
@@ -223,7 +223,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - Its edges resize it; what that does depends on what is inside.
       - A picture, video, or rendered page keeps its own shape.
       - A document or listing is laid out to whatever box it is given.
-      - A sound's card, or a video `ffplay` has, is not resized at all.
+      - A sound's card keeps the size **Audio Scaling** names, and a video `ffplay` has is not resized at all.
     - A picture's caption and bar are drawn over the media rather than in bands around it, and fade in as the pointer arrives; only the strip under the pointer is shown.
     - A pinned video carries a transport bar of its own: play/pause, a draggable seek bar, and the two clocks.
       - Where FFmpeg's player is the one playing it, a read-out bar appears instead, since that player can be told nothing.
@@ -243,7 +243,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - A file you click, or one the keyboard selects, is shown where the window already stands, rather than as a second preview beside it.
       - A file named this way that cannot be shown leaves the window on the file it already had.
       - Stepping over a file that will not open belongs to the caption's own **Previous** and **Next**, which you pressed.
-      - A sound's card is drawn at its own size, in the middle of that box.
+      - A sound's card is drawn at the size its **Audio Scaling** setting names, in the middle of that box; it follows the **Theme** setting, and no longer **Font Size**.
       - The keyboard half follows Explorer, so it pauses while a pinned window holds the keyboard; click back into the listing and it carries on.
     - **On Hover** — Off by default.
       - On, the pointer's own hover is one of the ways a pin is told about a file, the way a Quick Look window follows a listing.
@@ -305,6 +305,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 - **Scaling**
   - **Image Scaling** — Fit to Screen or `25%`–`400%` of the image's own size.
   - **Video Scaling** — Same shares for a video. Default `100%`.
+  - **Audio Scaling** — `25%`, `20%`, `15%`, `10%` (`default`), or `5%` of the display, for a sound's card.
+    - The card fills the share its setting names — its seek bar stretches with it — while its height stays the card's own.
+    - The card is drawn at the default text size (`125%`) on every machine, so **Font Size** does not resize it; a pinned sound's card is the same size as the hover's.
   - **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery.
     - A still GIF or PNG uses **Image Scaling**.
     - Default `100%`.
@@ -454,6 +457,7 @@ follow_cursor=false
 
 ; Scaling
 animated_scale=100
+audio_scale=10
 design_scale=fit
 document_scale=fit
 ebook_scale=fit
@@ -587,6 +591,7 @@ spinner_delay_ms=250
 
 - `preview_scale`: percentage or `fit`, based on the picture's own size.
 - `video_scale`: same for video. Default `100`.
+- `audio_scale`: the share of the display a sound's card is laid out over — `25`, `20`, `15`, `10` or `5`. Default `10`; the card fills the share (its seek bar stretches with it), its height stays the card's own, and it is drawn at the default text size, so `Text Size` no longer resizes it. A hand-edited value is sanitized rather than fatal: `100` or more reads as `100`, `0` reads as `10`, and an unrecognized value is ignored.
 - `animated_scale`: same for animated GIF, WebP, or PNG — and for an animated JPEG XL, which is played as a picture rather than as a video. Default `100`. Still GIF/PNG follow `preview_scale`.
 - `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
 - `text_scale`: how much of the screen a text preview box may take when it opens, for plain text, code, and Markdown. Default `fit`; `100` or more reads as `fit`. `Text Size` still scales the text inside that box.
