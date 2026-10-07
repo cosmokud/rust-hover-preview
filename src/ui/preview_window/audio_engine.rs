@@ -2,6 +2,7 @@
 //! normalised to, the player it is given, and the clock it is asked against.
 
 use super::*;
+use super::dimensions::audio_font_scale_percent;
 
 /// How loud a video is played, which is read when one is started rather than when the
 /// setting changes: a preview is a few seconds long, and the next one is played at
@@ -28,21 +29,23 @@ pub(super) fn current_audio_seek() -> AudioSeek {
 }
 
 /// What a sound's card is built with: the theme, which is the one setting a painted
-/// preview answers to, and the default text size, which is the size the card is
-/// always drawn at. The Audio Scaling setting decides the room the card is laid out
-/// over (see `audio_box_room`), and the text font size no longer moves the card at
-/// all — the card is the same size at every text size, so that what a text preview
-/// does when that setting changes is something a sound's card never does.
+/// preview answers to, and the font size the Audio Scaling share names — the default
+/// text size at the 10% anchor, scaled by the share's fraction of it (see
+/// `audio_font_scale_percent`). The Audio Scaling setting decides the room the card
+/// is laid out over and the size the card is drawn at together (see `audio_box_room`),
+/// so the text font size no longer moves the card at all: the card's font is the
+/// share's own, and what a change to Text Preview → Font Size does to a text preview
+/// is something a sound's card never does.
 pub(super) fn current_audio_options() -> AudioPreviewOptions {
     CONFIG
         .lock()
         .map(|cfg| AudioPreviewOptions {
             theme: cfg.theme,
-            font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
+            font_scale_percent: audio_font_scale_percent(cfg.audio_scale),
         })
         .unwrap_or(AudioPreviewOptions {
             theme: TextTheme::Light,
-            font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
+            font_scale_percent: audio_font_scale_percent(DEFAULT_AUDIO_SCALE),
         })
 }
 

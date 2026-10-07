@@ -936,8 +936,8 @@ fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
         let options = current_audio_options();
         let room = audio_box_room(bounds, current_audio_scale(), 96);
         MeasureScope::Room {
-            cap_width: room.0,
-            cap_height: room.1,
+            cap_width: room.width,
+            cap_height: room.height,
             dpi: 96,
             theme: options.theme,
             font_scale_percent: options.font_scale_percent,

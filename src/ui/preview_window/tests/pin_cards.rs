@@ -336,7 +336,7 @@ fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
     // `audio_box`), and a pin is given the very box its hover was given.
     let room = audio_box_room(work_area_at(100, 100), current_audio_scale(), 96);
     let (room_width, room_height) =
-        audio_preview::measure(&hover, room.0, room.1, 96, options).expect("a measured card");
+        audio_preview::measure(&hover, room.width, room.height, 96, options).expect("a measured card");
     let hover_box = (100, 100, 100 + room_width as i32, 100 + room_height as i32);
     let pin_box = pinned_audio_card_box(hover_box, &path, 96);
     assert_eq!(
@@ -345,6 +345,43 @@ fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
     );
 
     let _ = std::fs::remove_file(&path);
+}
+
+/// The card's font is the share's own — the default text size at the
+/// 10% anchor, scaled by the share's fraction of it — and not the text
+/// font size, which sizes every other painted preview: a change to
+/// Text Preview → Font Size leaves a sound's card where it is at every
+/// share.
+#[test]
+fn a_card_is_built_at_the_share_s_font_not_the_text_s() {
+    let saved = {
+        let config = crate::CONFIG.lock().expect("the configuration");
+        (config.audio_scale, config.text_font_scale_percent)
+    };
+
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.audio_scale = PreviewScale::Percent(5);
+        config.text_font_scale_percent = 200;
+    }
+    assert_eq!(
+        current_audio_options().font_scale_percent,
+        63,
+        "a 5% card is built at 63%, whatever the text font size is"
+    );
+
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.audio_scale = PreviewScale::Percent(25);
+    }
+    assert_eq!(
+        current_audio_options().font_scale_percent,
+        313,
+        "a 25% card is built at 313%"
+    );
+
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.audio_scale = saved.0;
+        config.text_font_scale_percent = saved.1;
+    }
 }
 
 /// The card a take-up is measured for is drawn again at the box the measurement came to: a pin is
@@ -454,6 +491,19 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
 /// sound nobody can move through.
 #[test]
 fn a_pinned_sounds_bar_is_answered_from_the_card_and_not_from_below_it() {
+    // The window is a fixed box, and the box a 400-by-200 window holds is the
+    // card at the anchor's font — the 10% share's own — so the share is stood
+    // at the anchor for the test and put back afterwards: what the test is
+    // about is where the card's controls sit inside the window they are drawn
+    // in, which is the anchor's answer whatever share the machine is set to.
+    let saved = {
+        let config = crate::CONFIG.lock().expect("the configuration");
+        config.audio_scale
+    };
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.audio_scale = DEFAULT_AUDIO_SCALE;
+    }
+
     let pin = sound_pin();
 
     // The window is the card's box: no caption above it, no transport strip below it.
@@ -522,6 +572,10 @@ fn a_pinned_sounds_bar_is_answered_from_the_card_and_not_from_below_it() {
         (0.0..=1.0).contains(&share),
         "the middle of the bar is the middle of the file, and not {share}"
     );
+
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.audio_scale = saved;
+    }
 }
 
 /// The card's own paint is what shows the wash under a pointer, and the hover path is where
