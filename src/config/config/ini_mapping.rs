@@ -215,6 +215,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "audio_scale",
+            Some(self.audio_scale.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "animated_scale",
             Some(self.animated_scale.as_str()),
         );
@@ -659,6 +664,16 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "video_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.video_scale = scale;
+            }
+        }
+        // A sound's card is sized by its own share of the room the display has,
+        // read through the sound's own bounds rather than the picture's: what the
+        // number is a percentage of is the display rather than a size the file
+        // asks for, a hand-edited percentage past the whole display is the whole
+        // display, and a `0` is the tenth the setting starts at.
+        if let Some(value) = ini.get(CONFIG_SECTION, "audio_scale") {
+            if let Some(scale) = PreviewScale::from_audio_str(&value) {
+                self.audio_scale = scale;
             }
         }
         // And an animation's, the same way again.

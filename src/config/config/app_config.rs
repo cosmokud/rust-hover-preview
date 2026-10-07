@@ -20,10 +20,10 @@ use super::defaults::{
 };
 use super::setting_types::{
     AudioSeek, AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinNavFileTypes, PreviewScale,
-    TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine, DEFAULT_AUDIO_SEEK,
-    DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
-    DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
-    DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
+    TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine, DEFAULT_AUDIO_SCALE,
+    DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND,
+    DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
+    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
     DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO, DEFAULT_PIN_PAUSE_VIDEO,
     DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_TEXT_SCALE,
     DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
@@ -257,6 +257,16 @@ pub struct AppConfig {
     /// large enough to read a frame is a window over the file rather than a photograph on
     /// a desk.
     pub video_scale: PreviewScale,
+    /// How large a sound's card is drawn, as a share of the room the display
+    /// has for it: the same question, and the same answers, as the document
+    /// scales, because a card holds no bitmap of the file's own to take a
+    /// share of — what it holds is the sound, a name, a seek bar and the facts
+    /// about the file, laid out over the room the setting names, its height
+    /// kept by the font it is set in. It is a setting of its own rather than
+    /// the picture and video scales above it, which are shares of a size a file
+    /// asks for and a sound asks for none, and it is the one scale a sound's
+    /// card answers to.
+    pub audio_scale: PreviewScale,
     /// How large an animated picture — a GIF, an animated WebP or an APNG — is drawn, as a
     /// share of its own size: the same question, and the same answers, as the picture scale
     /// above it.
@@ -613,6 +623,7 @@ impl Default for AppConfig {
             remember_video_volume: DEFAULT_REMEMBER_VIDEO_VOLUME,
             preview_scale: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
             video_scale: PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT),
+            audio_scale: DEFAULT_AUDIO_SCALE,
             animated_scale: PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT),
             ebook_scale: DEFAULT_EBOOK_SCALE,
             document_scale: DEFAULT_DOCUMENT_SCALE,
