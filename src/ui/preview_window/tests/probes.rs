@@ -567,11 +567,13 @@ fn keys_a_probed_geometry_by_the_files_version() {
 
 /// The report an `ffprobe` pass writes is read for the sound in it and nothing of the
 /// picture before it: a film with a soundtrack is not a sound, and the fields a card is
-/// drawn with are the ones that follow the sound's own stream.
+/// drawn with are the ones the sound's own stream carries. A stream's codec name is
+/// written ahead of the `codec_type` line that says what the stream is, which is the
+/// order an `ffprobe` pass writes its fields in.
 #[test]
 fn reads_a_sound_out_of_an_ffprobe_report() {
-    let report = "codec_type=video\ncodec_name=h264\nwidth=1920\n\
-                      codec_type=audio\ncodec_name=flac\nsample_rate=44100\nchannels=2\n\
+    let report = "codec_name=h264\ncodec_type=video\nwidth=1920\n\
+                      codec_name=flac\ncodec_type=audio\nsample_rate=44100\nchannels=2\n\
                       bit_rate=1006000\nduration=562.31\n";
 
     let track = audio_track_from_report(report).expect("a sound in the report");
@@ -583,7 +585,7 @@ fn reads_a_sound_out_of_an_ffprobe_report() {
     assert_eq!(track.duration, Some(562.31));
 
     assert_eq!(
-        audio_track_from_report("codec_type=video\ncodec_name=h264\nduration=10.0\n"),
+        audio_track_from_report("codec_name=h264\ncodec_type=video\nduration=10.0\n"),
         None,
         "a file with no sound stream in it is not a sound, however it is named"
     );

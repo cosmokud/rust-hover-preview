@@ -274,13 +274,19 @@ pub(super) fn ffprobe_audio_track(path: &Path) -> Option<audio_track::Track> {
 
 /// The track an `ffprobe` report describes, or nothing where the file holds no sound.
 ///
-/// The entries arrive one stream at a time, so what follows a `codec_type=audio` line is that
-/// stream's own fields and nothing of the streams before it — which is what makes a film with a
-/// soundtrack distinguishable from a song.
+/// The entries arrive one stream at a time, and a stream's own codec name arrives
+/// ahead of the `codec_type` line that says what the stream is — so the name is
+/// held until that line names its stream, and a stream that turns out to be a
+/// picture (the cover art a file with its art inside itself carries, named as a
+/// video stream beside the sound) leaves the sound's own name where it was
+/// rather than taking it. What follows a `codec_type=audio` line is that
+/// stream's own fields and nothing of the streams before it — which is what
+/// makes a film with a soundtrack distinguishable from a song.
 pub(super) fn audio_track_from_report(report: &str) -> Option<audio_track::Track> {
     let mut in_audio = false;
     let mut heard_audio = false;
     let mut codec: Option<String> = None;
+    let mut held_codec: Option<String> = None;
     let mut rate: Option<u32> = None;
     let mut channels: Option<u16> = None;
     let mut bitrate: Option<u32> = None;
@@ -296,8 +302,16 @@ pub(super) fn audio_track_from_report(report: &str) -> Option<audio_track::Track
             "codec_type" => {
                 in_audio = value == "audio";
                 heard_audio |= in_audio;
+                // The name held is the stream this line names, arrived ahead of
+                // the line that says so: the sound's own where the stream is a
+                // sound, and one to forget where it is a picture.
+                if in_audio {
+                    codec = held_codec.take();
+                } else {
+                    held_codec = None;
+                }
             }
-            "codec_name" if in_audio => codec = Some(codec_label(value)),
+            "codec_name" => held_codec = Some(codec_label(value)),
             "sample_rate" if in_audio => rate = value.parse().ok(),
             "channels" if in_audio => channels = value.parse().ok(),
             "bit_rate" if in_audio => bitrate = value.parse().ok(),
