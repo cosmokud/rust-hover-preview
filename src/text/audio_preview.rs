@@ -57,14 +57,14 @@ use crate::config::config::TextTheme;
 #[cfg(test)]
 use crate::readers::audio_track::Track;
 #[cfg(test)]
-use crate::text::text_paint::{readable, rgb, scaled, TextMetrics};
+use crate::text::text_paint::{readable, rgb, scaled, TextMetrics, BODY_LEVEL};
 #[cfg(test)]
 use crate::text::text_theme;
 #[cfg(test)]
 use card::{
     bitrate_label, channel_label, clock, rate_label, Fact, FactKind, BAR_GAP_PIXELS, BAR_PIXELS,
-    BAR_REACH_PIXELS, CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, NAME_HOLD,
-    WINDOW_BUTTON_GAP_PIXELS,
+    BAR_REACH_PIXELS, CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, MIN_CONTENT_ADVANCES,
+    NAME_HOLD, WINDOW_BUTTON_GAP_PIXELS,
 };
 #[cfg(test)]
 use page::{bar_band, bar_row, build_page, clock_runs, fill_span, CardBoxes, Page};

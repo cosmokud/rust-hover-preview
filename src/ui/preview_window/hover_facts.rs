@@ -205,12 +205,15 @@ pub(super) fn notify_measured(path: &Path, size: Option<(u32, u32)>) {
 ///
 /// `measure` is the reader's own measure — the same call this side would otherwise make on its
 /// own thread — and it runs on a thread of this function's own making, once per file version
-/// and scope. What comes back to the hovering call meanwhile is the spinner's own box, which
+/// and scope. What comes back to the hovering call meanwhile is `waiting`, which
 /// is what the layout places a hover at until the answer lands (see `measure_waiting` and
-/// `MeasureProbed`).
+/// `MeasureProbed`): the spinner's own box for a read that is about the file, and the room
+/// a card will take for one that is about the box it is laid out in, so that the wait is
+/// never laid out at a size the answer will not stand at.
 pub(super) fn measured_off_the_tick(
     path: &Path,
     scope: MeasureScope,
+    waiting: (u32, u32),
     measure: impl FnOnce() -> Option<(u32, u32)> + Send + 'static,
 ) -> Option<(u32, u32)> {
     let version = file_version(path);
@@ -223,7 +226,7 @@ pub(super) fn measured_off_the_tick(
         spawn_measure_probe(path.to_path_buf(), version, scope, measure);
     }
 
-    Some((office_preview::WAITING_BOX, office_preview::WAITING_BOX))
+    Some(waiting)
 }
 
 /// Which preview surface the pointer is currently on.

@@ -33,12 +33,15 @@ fn a_sound_picked_into_a_pin_is_the_wait_for_its_probe_until_that_has_answered()
     };
 
     // What the measure a card is asked for is keyed by, so that an answer can be held for a
-    // file the way the measure thread would have held it.
+    // file the way the measure thread would have held it: the room the Audio
+    // Scaling setting gives the display, which is the room the card is laid
+    // out over (see `audio_box_room`).
     let scope = {
         let options = current_audio_options();
+        let room = audio_box_room(bounds, current_audio_scale(), 96);
         MeasureScope::Room {
-            cap_width: (bounds.right - bounds.left).max(1) as u32,
-            cap_height: bounds.height().max(1) as u32,
+            cap_width: room.0,
+            cap_height: room.1,
             dpi: 96,
             theme: options.theme,
             font_scale_percent: options.font_scale_percent,

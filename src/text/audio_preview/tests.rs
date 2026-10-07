@@ -72,6 +72,30 @@ fn options() -> AudioPreviewOptions {
     }
 }
 
+/// The narrowest card worth drawing at the options the tests build: the
+/// width floor the card is laid out at, counted the way `build_page`
+/// counts it — the bar's own advances, plus the margin the card stands
+/// inside on both sides.
+fn narrowest_card() -> u32 {
+    let dc = unsafe { CreateCompatibleDC(None) };
+    let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+    let narrowest =
+        (metrics.advance[BODY_LEVEL as usize] * MIN_CONTENT_ADVANCES + metrics.padding * 2) as u32;
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+    narrowest
+}
+
+/// The card measured at the room the default share of a 3440x1440 display
+/// gives it at 96 DPI — the room a name-scroll test needs, because the name
+/// the tests below draw is one this room has no room for: the name is the
+/// thing that gives way, not the room that grows to fit it (see
+/// `audio_box_room`).
+fn measured_at_the_default_share(card: &Card) -> (u32, u32) {
+    measure(card, 374, 144, 96, options()).expect("a measured card")
+}
+
 /// The card is a page like any other painted preview's: measured before the window is
 /// placed, drawn into the box the layout settled on, and opaque everywhere.
 #[test]
@@ -106,8 +130,73 @@ fn draws_a_sound_whose_length_is_not_known() {
     let painted = render(&unknown, width, height, 96, options()).expect("a painted card");
     assert_eq!(painted.0.len(), (painted.1 * painted.2 * 4) as usize);
 
-    let (_, cramped) = measure(&card(), 8, 8, 96, options()).expect("a measured card");
-    assert_eq!(cramped, 1, "a card with no room is one pixel and no page");
+    // A room of a few pixels is not a room with nothing in it: the card's
+    // width is floored at the narrowest card worth drawing, so the answer
+    // is that card's width with the one-pixel height a room too short to
+    // draw a name in answers with.
+    let (cramped_width, cramped) = measure(&card(), 8, 8, 96, options()).expect("a measured card");
+    assert_eq!(
+        cramped_width,
+        narrowest_card(),
+        "a card with no room is the narrowest card"
+    );
+    assert_eq!(cramped, 1, "and no page taller than one pixel");
+}
+
+/// A card fills the room it is measured at: the width is the room
+/// itself, floored at the narrowest card worth drawing — which the
+/// room the default share names clears and the room the narrowest
+/// share names does not — and the height is the card's own, the same
+/// one-line strip at every share, because the share decides the room
+/// and not the card.
+#[test]
+fn a_card_fills_the_room_its_share_gives_it() {
+    // The 10% room of a 3440x1440 work area, the default share, and
+    // the 5% room beside it, which is narrower than the narrowest card
+    // worth drawing.
+    let (wide, height) = measure(&card(), 374, 144, 96, options()).expect("a measured card");
+    let (narrow, floor_height) = measure(&card(), 202, 72, 96, options()).expect("a measured card");
+
+    assert_eq!(wide, 374, "the card fills the room it is measured at");
+    assert_eq!(
+        narrow,
+        narrowest_card(),
+        "a room narrower than the narrowest card is the narrowest card"
+    );
+
+    // The height is the card's own at both rooms, and the same as the
+    // height a room ten times the size answers with: the card is a
+    // one-line strip at every share.
+    let (_, roomy) = measure(&card(), 4096, 2160, 96, options()).expect("a measured card");
+    assert_eq!(
+        height, floor_height,
+        "the narrowest share does not squash the card"
+    );
+    assert_eq!(
+        height, roomy,
+        "and the widest room does not stretch it either"
+    );
+    assert!(
+        height > 32,
+        "a card is a page with a name and a bar in it: {height}"
+    );
+}
+
+/// A room too short for a name and a line under it answers with
+/// nothing: the one-pixel page, at the width the room gives — the
+/// width floor is what keeps the width at or above the narrowest
+/// card, and a room this wide clears it.
+#[test]
+fn a_room_too_short_for_a_name_answers_with_nothing() {
+    let (width, height) = measure(&card(), 374, 10, 96, options()).expect("a measured card");
+    assert_eq!(
+        width, 374,
+        "the width is the room's own, floored at the narrowest card"
+    );
+    assert_eq!(
+        height, 1,
+        "a room with no room for a name is one pixel and no page"
+    );
 }
 
 /// The facts of a track are the ones it holds: what a file does not say is left out rather
@@ -220,8 +309,9 @@ fn writes_the_clock_the_card_is_drawn_with() {
     );
 }
 
-/// A name the card has no room for is not a reason to draw a wider card: the width comes
-/// from the facts line and the bar under it, and the name is the thing that gives way.
+/// A name the card has no room for is not a reason to draw a wider card: the width
+/// comes from the room the card is measured at, and the name is the thing that
+/// gives way.
 #[test]
 fn a_name_that_does_not_fit_does_not_widen_the_card() {
     let mut long = card();
@@ -229,8 +319,8 @@ fn a_name_that_does_not_fit_does_not_widen_the_card() {
     let mut short = card();
     short.name = "2.flac".to_string();
 
-    let long_box = measure(&long, 4096, 2160, 96, options()).expect("a measured card");
-    let short_box = measure(&short, 4096, 2160, 96, options()).expect("a measured card");
+    let long_box = measured_at_the_default_share(&long);
+    let short_box = measured_at_the_default_share(&short);
     assert_eq!(
         long_box, short_box,
         "the card is the size its facts ask for whatever its name is"
@@ -296,7 +386,7 @@ fn draws_the_whole_name_where_the_offset_puts_it() {
 fn scrolls_the_name_from_one_end_of_itself_to_the_other_and_back() {
     let mut long = card();
     long.name = "18 - The Longest Track Name On This Album (Remastered, 2026).flac".to_string();
-    let (width, _) = measure(&long, 4096, 2160, 96, options()).expect("a measured card");
+    let (width, _) = measured_at_the_default_share(&long);
     let step = Duration::from_millis(33);
 
     let mut scroll = NameScroll::of(&long.name, width, 96, options());
@@ -828,7 +918,7 @@ fn lit(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
 /// `the_name_runs_underneath_the_window_buttons_while_they_are_up`).
 #[test]
 fn the_window_buttons_stand_in_the_top_corner_over_the_name_line() {
-    let (width, _) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+    let (width, _) = measured_at_the_default_share(&pinned());
     let page = scrolled(&pinned(), width, 0);
     let boxes = page.boxes.as_ref().expect("a card that carries controls");
 
@@ -933,7 +1023,7 @@ fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
         window_buttons: true,
     });
 
-    let (width, height) = measure(&named, 4096, 2160, 96, options()).expect("a measured card");
+    let (width, height) = measured_at_the_default_share(&named);
     let page = scrolled(&named, width, 0);
     let boxes = page.boxes.as_ref().expect("a card that carries controls");
     let name_run = page.header.last().expect("the run the name is drawn in");

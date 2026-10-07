@@ -269,8 +269,12 @@ fn pin_update_content_measured(
             // Nothing here plays the file, so there is no card to swap in: the pin keeps what it
             // is showing. The verdict is remembered, so this is not a wait that comes back.
             None => None,
-            // The probe is in flight, which is the wait `pin_swap_awaits` names.
-            Some(shape) if pin_swap_awaits(path, shape) => Some(PinBox::Waiting),
+            // The probe is in flight, which is the wait `pin_swap_awaits` names — but
+            // asked here as the read running behind the box rather than as the box
+            // itself: a sound's card waits in the room the card will take (see
+            // `audio_box`), and the card that answers is drawn at that same room, so
+            // the box alone cannot tell the wait from the answer.
+            Some(_) if measure_waiting(path) => Some(PinBox::Waiting),
             // The card is there to be laid out, and a card is its own size: the box it is given
             // is the one its own measure came out at, in the middle of the box the pin has now —
             // never the box another file left, which no card is drawn to or fitted into.

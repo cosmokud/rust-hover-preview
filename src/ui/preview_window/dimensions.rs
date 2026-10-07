@@ -2,6 +2,7 @@
 //! fit into, and the size a renderer is asked for at the scale of the display.
 
 use super::*;
+use crate::text::text_paint::TextMetrics;
 
 /// The size of the picture a design document is previewed from: the page an installed
 /// render engine drew for it, the document's own size for a Photoshop file, and the size of
@@ -47,9 +48,12 @@ pub(super) fn design_dimensions(path: &Path) -> Option<(u32, u32)> {
 pub(super) fn comic_box(path: &Path) -> Option<(u32, u32)> {
     let source = path.to_path_buf();
 
-    measured_off_the_tick(path, MeasureScope::File, move || {
-        comic_preview::dimensions(&source)
-    })
+    measured_off_the_tick(
+        path,
+        MeasureScope::File,
+        (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
+        move || comic_preview::dimensions(&source),
+    )
 }
 
 /// The size a drawing asks to be shown at: what the preview inside an `.eps` is of, or what
@@ -218,9 +222,12 @@ pub(super) fn video_probe_due(hover: &HoverFacts) -> bool {
 pub(super) fn pdf_page_box(path: &Path) -> Option<(u32, u32)> {
     let source = path.to_path_buf();
 
-    measured_off_the_tick(path, MeasureScope::File, move || {
-        pdf_preview::page_dimensions(&source)
-    })
+    measured_off_the_tick(
+        path,
+        MeasureScope::File,
+        (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
+        move || pdf_preview::page_dimensions(&source),
+    )
 }
 
 /// The box a document the engine draws asks for: the size its own markup declares, read the
@@ -228,9 +235,12 @@ pub(super) fn pdf_page_box(path: &Path) -> Option<(u32, u32)> {
 pub(super) fn svg_box(path: &Path) -> Option<(u32, u32)> {
     let source = path.to_path_buf();
 
-    measured_off_the_tick(path, MeasureScope::File, move || {
-        svg_preview::measure(&source)
-    })
+    measured_off_the_tick(
+        path,
+        MeasureScope::File,
+        (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
+        move || svg_preview::measure(&source),
+    )
 }
 
 /// The box a specimen is drawn in, held for a file that parses as a font.
@@ -241,10 +251,15 @@ pub(super) fn svg_box(path: &Path) -> Option<(u32, u32)> {
 pub(super) fn font_box(path: &Path) -> Option<(u32, u32)> {
     let source = path.to_path_buf();
 
-    measured_off_the_tick(path, MeasureScope::File, move || {
-        font_preview::probe(&source)
-            .map(|_| (font_preview::SPECIMEN_WIDTH, font_preview::SPECIMEN_HEIGHT))
-    })
+    measured_off_the_tick(
+        path,
+        MeasureScope::File,
+        (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
+        move || {
+            font_preview::probe(&source)
+                .map(|_| (font_preview::SPECIMEN_WIDTH, font_preview::SPECIMEN_HEIGHT))
+        },
+    )
 }
 
 /// The box a vector drawing asks for, measured the same way: what a metafile declares is read
@@ -253,7 +268,12 @@ pub(super) fn font_box(path: &Path) -> Option<(u32, u32)> {
 pub(super) fn vector_box(path: &Path) -> Option<(u32, u32)> {
     let source = path.to_path_buf();
 
-    measured_off_the_tick(path, MeasureScope::File, move || vector_dimensions(&source))
+    measured_off_the_tick(
+        path,
+        MeasureScope::File,
+        (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
+        move || vector_dimensions(&source),
+    )
 }
 
 /// The box a listing asks for, measured off the preview thread: an archive's table of contents
@@ -283,6 +303,7 @@ pub(super) fn archive_box_off_the_tick(
             theme: options.theme,
             font_scale_percent: options.font_scale_percent,
         },
+        (office_preview::WAITING_BOX, office_preview::WAITING_BOX),
         move || archive_preview::measure(&source, cap_width, cap_height, dpi, options),
     )
 }
@@ -294,15 +315,17 @@ pub(super) fn archive_box_off_the_tick(
 /// itself — a source reader for the engine's own decoders, an `ffprobe` pass for FFmpeg's —
 /// and a file neither of them can play is a hover answered with nothing rather than with a card
 /// of facts nothing will ever play. The second is the card's own layout, which is a page of
-/// text wrapped to the room the display has.
+/// text wrapped to the room the Audio Scaling setting gives it (see `audio_box_room`).
 ///
 /// Both are off the preview thread, and what the hover waits in meanwhile is the spinner: a
 /// probe is a process, and the box it answers with is what the replayed hover is laid out at
-/// (see `measured_off_the_tick`).
+/// (see `measured_off_the_tick`). The wait is laid out at the room itself, so that the
+/// spinner stands at the box the card will take and does not jump size when the answer
+/// lands.
 pub(super) fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(u32, u32)> {
     let source = path.to_path_buf();
-    let cap_width = (bounds.right - bounds.left).max(1) as u32;
-    let cap_height = bounds.height().max(1) as u32;
+    let room = audio_box_room(bounds, current_audio_scale(), dpi);
+    let (cap_width, cap_height) = room;
     let options = current_audio_options();
 
     measured_off_the_tick(
@@ -314,6 +337,7 @@ pub(super) fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(
             theme: options.theme,
             font_scale_percent: options.font_scale_percent,
         },
+        room,
         move || {
             // What the machine has for the file, asked once per file and version and held for
             // the hovers that follow — a file the engine will not play costs one probe rather
@@ -758,6 +782,42 @@ pub(super) fn text_box_room(bounds: ScreenBounds) -> (u32, u32) {
     // nearest one rather than cut: the share is a room to measure in, and a room a pixel
     // narrower than it asks for is a page with a column missing from it.
     let width = ((bounds.right - bounds.left).max(1) as f32 * share).round();
+    let height = (bounds.height().max(1) as f32 * share).round();
+
+    (width.max(1.0) as u32, height.max(1.0) as u32)
+}
+
+/// The room a sound's card is laid out over: the work area of the display the
+/// pointer is on times the share the Audio Scaling setting names (see
+/// `audio_box`).
+///
+/// A share past the whole display is the whole display, so a hand-edited value
+/// above `100%` cannot put a card wider than the screen. The width room is that
+/// share of the width plus twice the card's own margin — the margin being the
+/// padding the card is drawn inside, because the room is the room the card's
+/// *content* spans and the card stands in the margin around it — and the margin
+/// is taken at the default text size, which is the size the card is always drawn
+/// at, so the room does not move when the text font size does. The height room is
+/// the plain share of the height: the card's height is its own, content-driven,
+/// and the share of the height is only the guard that answers a room too short
+/// to draw a card in with nothing.
+pub(super) fn audio_box_room(bounds: ScreenBounds, scale: PreviewScale, dpi: u32) -> (u32, u32) {
+    let share = scale.target_scale().unwrap_or(1.0).min(1.0);
+
+    // The card's own margin, at the default text size the card is always drawn
+    // at: a compatible DC to measure with, created and dropped here, the way
+    // `window_button_band` takes one.
+    let dc = unsafe { CreateCompatibleDC(None) };
+    let padding = TextMetrics::new(dc, dpi, DEFAULT_TEXT_FONT_SCALE_PERCENT)
+        .map(|metrics| metrics.padding)
+        .unwrap_or(0);
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    // A column is a whole character and a row a whole line, so each side is
+    // rounded to the nearest one rather than cut (see `text_box_room`).
+    let width = ((bounds.right - bounds.left).max(1) as f32 * share).round() + (padding * 2) as f32;
     let height = (bounds.height().max(1) as f32 * share).round();
 
     (width.max(1.0) as u32, height.max(1.0) as u32)

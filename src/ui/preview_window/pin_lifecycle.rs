@@ -851,7 +851,8 @@ pub(super) fn pin_shows_an_audio_card(pin: &PinnedPreview) -> bool {
 ///
 /// A pin's card carries its controls where a hover's does not, but it is not a different card:
 /// the buttons stand in the bar's own row and are carved out of the bar's width, so the card a pin
-/// measures is the card a hover measured and the window is the one the hover put up (see
+/// measures is the card a hover measured — at the audio room, the same room the hover's own
+/// card is measured at (see `audio_box_room`) — and the window is the one the hover put up (see
 /// `audio_preview::bar_row`). The card is measured again all the same, with the controls it is
 /// going to carry on it and a clock at nothing — which button is lit is not part of the layout —
 /// and the hover's own top left corner is kept: where a window is put is the hover's place, and
@@ -869,7 +870,7 @@ pub(super) fn pinned_audio_card_box(rect: ScreenRegion, path: &Path, dpi: u32) -
         return rect;
     };
 
-    let room = work_area_at(rect.0, rect.1).room();
+    let room = audio_box_room(work_area_at(rect.0, rect.1), current_audio_scale(), dpi);
     let Some((width, height)) = audio_preview::measure(
         &card,
         room.0.max(1),
