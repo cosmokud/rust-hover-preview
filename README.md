@@ -305,9 +305,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 - **Scaling**
   - **Image Scaling** — Fit to Screen or `25%`–`400%` of the image's own size.
   - **Video Scaling** — Same shares for a video. Default `100%`.
-  - **Audio Scaling** — `25%`, `20%`, `15%`, `10%` (`default`), or `5%` of the display, for a sound's card.
-    - The card fills the share its setting names — its seek bar stretches with it — while its height stays the card's own.
-    - The card is drawn at the default text size (`125%`) on every machine, so **Font Size** does not resize it; a pinned sound's card is the same size as the hover's.
+  - **Audio Scaling** — `25%`, `20%`, `15%`, `10%` (`default`), or `5%` of the display, for a sound's card — the whole card scales with the share: the font it is set in, its height, and its width together, the way Windows scaling sizes a window.
+    - The card at any share is the `10%` card scaled by the share's fraction of `10%` — ~188×50 at `5%` to ~936×250 at `25%` on a 3440×1440 display — its seek bar stretching with the width and its height what its content measures at the share's font.
+    - The card is built at the share's own font (the default text size, `125%`, at the `10%` anchor), so **Font Size** does not resize it; a pinned sound's card is the same size as the hover's.
   - **Animated Scaling** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery.
     - A still GIF or PNG uses **Image Scaling**.
     - Default `100%`.
@@ -591,7 +591,7 @@ spinner_delay_ms=250
 
 - `preview_scale`: percentage or `fit`, based on the picture's own size.
 - `video_scale`: same for video. Default `100`.
-- `audio_scale`: the share of the display a sound's card is laid out over — `25`, `20`, `15`, `10` or `5`. Default `10`; the card fills the share (its seek bar stretches with it), its height stays the card's own, and it is drawn at the default text size, so `Text Size` no longer resizes it. A hand-edited value is sanitized rather than fatal: `100` or more reads as `100`, `0` reads as `10`, and an unrecognized value is ignored.
+- `audio_scale`: the share of the display a sound's card is laid out over — `25`, `20`, `15`, `10` or `5`. Default `10`; the whole card scales with the share — the font it is set in (the default text size at the `10%` anchor, scaled by the share's fraction of it), its height at that font, and its width, which fills the share — so the card at any share is the `10%` card uniformly smaller or larger, and `Text Size` no longer resizes it. A hand-edited value is sanitized rather than fatal: `100` or more reads as `100`, `0` reads as `10`, and an unrecognized value is ignored.
 - `animated_scale`: same for animated GIF, WebP, or PNG — and for an animated JPEG XL, which is played as a picture rather than as a video. Default `100`. Still GIF/PNG follow `preview_scale`.
 - `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
 - `text_scale`: how much of the screen a text preview box may take when it opens, for plain text, code, and Markdown. Default `fit`; `100` or more reads as `fit`. `Text Size` still scales the text inside that box.
