@@ -445,8 +445,8 @@ pub(super) fn html_background_at(index: u16) -> Option<TransparentBackground> {
 /// shares this setting starts at, so the one it names is the one the
 /// label marks.
 ///
-/// Each opens with the `By Screen` row and a separator under it,
-/// because the first thing a reader of the submenu is told is what the
+/// Each opens with the `By Screen` row between separators, because
+/// the first thing a reader of the submenu is told is what the
 /// shares below are of.
 pub(super) fn append_document_scale_menu(
     parent: HMENU,
@@ -492,13 +492,15 @@ pub(super) fn append_document_scale_menu(
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
 }
 
-/// The `By Screen` row a display-share submenu opens with, and the separator
-/// under it: what the shares below are of, rather than a share itself. The row
-/// names a group rather than offering anything, so it is greyed and given no
-/// id at all — a click on it lands on command 0, which the window proc ignores
-/// (see `append_codecs_menu` for the same id-less treatment the other way
-/// round, where an inert row is left normal-looking).
+/// The `By Screen` row a display-share submenu opens with, with a separator
+/// above it and another under it: what the shares below are of, rather than a
+/// share itself. The row names a group rather than offering anything, so it is
+/// greyed and given no id at all — a click on it lands on command 0, which the
+/// window proc ignores (see `append_codecs_menu` for the same id-less treatment
+/// the other way round, where an inert row is left normal-looking).
 fn append_by_screen_info_row(menu: HMENU) {
+    let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
+
     append_labeled_item(menu, MF_STRING | MF_GRAYED, 0, "By Screen");
 
     let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
@@ -531,8 +533,8 @@ fn append_by_own_size_info_row(menu: HMENU) {
 /// The shares are of two bases, and the submenu says which is which
 /// around the items themselves: the shares of the display's fitted
 /// size open it, under a `By Screen` row, and the shares of a
-/// bitmap's own size close it, under a `By Own Size` row, with a
-/// separator on either side of that row.
+/// bitmap's own size close it, under a `By Own Size` row, each row
+/// bracketed by separators.
 pub(super) fn append_bitmap_scale_menu(
     parent: HMENU,
     label: PCWSTR,
@@ -606,7 +608,7 @@ pub(super) fn append_bitmap_scale_menu(
 /// size of the file's own, because a card holds nothing of the sound to take
 /// a share of — what it holds is laid out over the room it is given — so the
 /// labels are the document scale's, which name the same question, and the
-/// submenu opens with the `By Screen` row like those do.
+/// submenu opens with the `By Screen` row, between separators, like those do.
 pub(super) fn append_audio_scale_menu(
     parent: HMENU,
     label: PCWSTR,
