@@ -83,7 +83,7 @@ use submenus::{
     audio_scale_at, audio_seek_label, avoid_label, background_at, background_label,
     bitmap_scale_label, dds_background_at, document_scale_at, document_scale_label,
     engine_idle_at, engine_idle_label, html_background_at, pin_nav_label, pin_update_label,
-    remember_volume_label, update_available_label, video_engine_label,
+    remember_volume_label, system_menu_label, update_available_label, video_engine_label,
 };
 
 #[cfg(test)]

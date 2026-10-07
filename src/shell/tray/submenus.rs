@@ -215,6 +215,12 @@ pub(super) fn update_available_label(version: &str) -> String {
     format!("Update Available (v{version})")
 }
 
+/// The `System` submenu's own label: the version the build is of, which is
+/// where a user looks to see which one is running.
+pub(super) fn system_menu_label(version: &str) -> String {
+    format!("System (v{version})")
+}
+
 /// The `Volume → Audio Seek` submenu: where in a file a sound starts playing, with the way the
 /// setting is on marked.
 ///
@@ -487,14 +493,13 @@ pub(super) fn append_document_scale_menu(
 }
 
 /// The `By Screen` row a display-share submenu opens with, and the separator
-/// under it: what the shares below are of, rather than a share itself. A row
-/// that names a group carries no command — picking one would be a click that
-/// does nothing — so it is given no id at all, which is how the `Codecs`
-/// submenu's present rows are made inert too: a Windows item cannot be both
-/// normal-looking and unpickable, and this row is normal-looking on purpose
-/// (see `append_codecs_menu`).
+/// under it: what the shares below are of, rather than a share itself. The row
+/// names a group rather than offering anything, so it is greyed and given no
+/// id at all — a click on it lands on command 0, which the window proc ignores
+/// (see `append_codecs_menu` for the same id-less treatment the other way
+/// round, where an inert row is left normal-looking).
 fn append_by_screen_info_row(menu: HMENU) {
-    append_labeled_item(menu, MF_STRING, 0, "By Screen");
+    append_labeled_item(menu, MF_STRING | MF_GRAYED, 0, "By Screen");
 
     let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
 }
@@ -502,12 +507,13 @@ fn append_by_screen_info_row(menu: HMENU) {
 /// The `By Own Size` row a bitmap's submenu puts its own-size shares
 /// under, and the separator above it: the shares that follow are of a
 /// bitmap's own size rather than of the display, and the row names the
-/// basis the same way `By Screen` names the one above. It carries no
-/// command either, for the same reason (see `append_by_screen_info_row`).
+/// basis the same way `By Screen` names the one above. It is greyed and
+/// carries no command either, for the same reason (see
+/// `append_by_screen_info_row`).
 fn append_by_own_size_info_row(menu: HMENU) {
     let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
 
-    append_labeled_item(menu, MF_STRING, 0, "By Own Size");
+    append_labeled_item(menu, MF_STRING | MF_GRAYED, 0, "By Own Size");
 }
 
 /// The `Image`, `Video` and `Animated Image` submenus: the shares a
@@ -557,7 +563,7 @@ pub(super) fn append_bitmap_scale_menu(
         })
         .collect();
 
-    for (index, choice) in BITMAP_SCALE_CHOICES.iter().enumerate() {
+    for (index, label) in labels.iter().enumerate() {
         if index == own_size_begin {
             append_by_own_size_info_row(menu);
         }
@@ -567,7 +573,7 @@ pub(super) fn append_bitmap_scale_menu(
                 menu,
                 MF_STRING,
                 (base + index as u16) as usize,
-                PCWSTR(labels[index].as_ptr()),
+                PCWSTR(label.as_ptr()),
             )
         };
     }

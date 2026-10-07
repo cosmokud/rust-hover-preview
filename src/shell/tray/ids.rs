@@ -254,8 +254,8 @@ pub(super) const ID_TRAY_TICK_BASE: u16 = 1500;
 /// shown with nothing checked rather than rounded to the nearest.
 pub(super) const TICK_CHOICES_MS: [u64; 5] = [15, 31, 47, 63, 78];
 pub(super) const ID_TRAY_OPEN_CONFIG: u16 = 1040;
-/// The two rows inside the `Config.ini` submenu, beside the one that opens the file: the
-/// first puts every setting back at what this build recommends and leaves the extension
+/// The two rows inside the `System` submenu, beside the one that opens the config file:
+/// the first puts every setting back at what this build recommends and leaves the extension
 /// lists alone, the second puts the lists back and leaves every other setting alone.
 ///
 /// They sit between every range the submenus share and the `Codecs` commands above them, so

@@ -839,6 +839,7 @@ fn the_renamed_rows_say_what_they_do() {
     );
     assert_eq!(remember_volume_label(), "Remember Level");
     assert_eq!(update_available_label("0.3.4"), "Update Available (v0.3.4)");
+    assert_eq!(system_menu_label("0.4.0"), "System (v0.4.0)");
 }
 
 /// The `Audio` range sits in the stretch between the volume
