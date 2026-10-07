@@ -704,7 +704,7 @@ fn the_document_scale_ranges_are_not_another_submenus_range() {
     }
 }
 
-/// The `Image`, `Video` and `Animated Image` submenus are one
+/// The `Image`, `Video` and `Animated` submenus are one
 /// range each, and none of them reaches into another or into the display shares the
 /// document scales beside them hand out: a click on a share of a bitmap is never read
 /// as a click on another setting's share. The `Audio` submenu beside
@@ -1035,7 +1035,7 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
     }
 }
 
-/// The `Image`, `Video` and `Animated Image` submenus offer the shares a
+/// The `Image`, `Video` and `Animated` submenus offer the shares a
 /// bitmap is drawn at — the shares of the display's fitted size and of a
 /// bitmap's own size, rather than the share of the display the document
 /// scales beside them are — in one order and with one set of labels: what a
@@ -1066,7 +1066,7 @@ fn every_offered_bitmap_scale_is_one_the_setting_keeps() {
     // The two groups the `By Screen` and `By Own Size` rows stand
     // between: every share of the display's fitted size first, then
     // every share of a bitmap's own size — the boundary the
-    // submenu's separator and its two rows are placed at (see
+    // submenu's separators and its two rows are placed at (see
     // `append_bitmap_scale_menu`).
     let own_size_begin = BITMAP_SCALE_CHOICES
         .iter()

@@ -309,7 +309,7 @@ pub(super) const ID_TRAY_FONT_SCALE_BASE: u16 = 1420;
 /// picture's. It sits in the stretch past the image's own range, the
 /// second run of twelve the `Audio` scale's end at 1534 leaves.
 pub(super) const ID_TRAY_VIDEO_SCALE_BASE: u16 = 1550;
-/// `Animated Image`, the third of them, in the range after the video
+/// `Animated`, the third of them, in the range after the video
 /// one: an animated picture is a bitmap like the two above it, so it
 /// lists the same shares through the same builder, and the range is its
 /// own because what moves has a size apart from what does not.
@@ -335,7 +335,7 @@ pub(super) const DOCUMENT_SCALE_CHOICES: [PreviewScale; 5] = [
     PreviewScale::Percent(25),
     PreviewScale::Percent(10),
 ];
-/// The shares the `Image`, `Video` and `Animated Image` submenus offer, in
+/// The shares the `Image`, `Video` and `Animated` submenus offer, in
 /// the order they list them: the shares of the display's fitted size at the
 /// top — the whole room a fit takes, then the room reduced to a share of
 /// it — and the shares of a bitmap's own size below, which are the ones
