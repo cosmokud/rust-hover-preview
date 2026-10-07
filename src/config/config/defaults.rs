@@ -103,6 +103,18 @@ pub const DEFAULT_VIDEO_SCALE_PERCENT: u32 = 100;
 /// so the share means the same thing here as it does for one — a percentage of the size
 /// the file asks for — and the setting starts at the same place the picture's does.
 pub const DEFAULT_ANIMATED_SCALE_PERCENT: u32 = 100;
+/// The share of the display a sound's card is drawn at unless the
+/// configuration says otherwise.
+///
+/// A sound's card holds no bitmap the file asks to be drawn at a size — what it
+/// holds is the sound, a name, a seek bar and the facts about the file, laid
+/// out over whatever room it is given — so the share is of the display rather
+/// than of the file, as it is for the drawings and documents. It starts at a
+/// tenth of the display: the size the card was measured at across the files it
+/// was tried on, which is the size a sound's card wants to be.
+pub const DEFAULT_AUDIO_SCALE_PERCENT: u32 = 10;
+pub const MIN_AUDIO_SCALE_PERCENT: u32 = 1;
+pub const MAX_AUDIO_SCALE_PERCENT: u32 = 100;
 /// The share of the display a font specimen is drawn at unless asked otherwise.
 ///
 /// A font has no size it asks to be drawn at — a file holds outlines, and the text they are
@@ -534,5 +546,19 @@ pub(super) fn sanitize_preview_scale_percent(value: u32) -> u32 {
         DEFAULT_PREVIEW_SCALE_PERCENT
     } else {
         value.clamp(MIN_PREVIEW_SCALE_PERCENT, MAX_PREVIEW_SCALE_PERCENT)
+    }
+}
+
+/// The share of the display a sound's card is laid out over, which a
+/// hand-edited `config.ini` is read through: a share of nothing names no share
+/// at all, so it is the tenth the setting starts at, and a share past the whole
+/// display is the whole display — a card cannot be given more room than there
+/// is. Anything between is honored as written, the same way a delay the menu
+/// does not offer is.
+pub(super) fn sanitize_audio_scale_percent(value: u32) -> u32 {
+    if value == 0 {
+        DEFAULT_AUDIO_SCALE_PERCENT
+    } else {
+        value.clamp(MIN_AUDIO_SCALE_PERCENT, MAX_AUDIO_SCALE_PERCENT)
     }
 }
