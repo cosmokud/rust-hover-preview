@@ -223,6 +223,132 @@ fn an_animations_scale_is_read_from_its_own_key() {
     assert_eq!(config.animated_scale, DEFAULT_ANIMATED_SCALE);
 }
 
+/// A sound's card is a tenth of the display unless the file says otherwise:
+/// the size the card was measured at across the files it was tried on, which
+/// is what a fresh install writes and what the menu marks as the default.
+#[test]
+fn a_sounds_card_starts_at_a_tenth_of_the_display() {
+    let config = AppConfig::default();
+
+    assert_eq!(config.audio_scale, PreviewScale::Percent(10));
+    assert_eq!(config.audio_scale, DEFAULT_AUDIO_SCALE);
+    assert_eq!(config.audio_scale.as_str(), "10");
+}
+
+/// The card's scale is written the way a document scale is, so the words a
+/// person would write by hand are the words it reads — and every share a card
+/// can be given is one the setting keeps, so a choice made in the menu is
+/// still the choice after a restart.
+#[test]
+fn a_sounds_scale_reads_back_what_it_writes() {
+    for percent in [5, 10, 15, 20, 25, 100] {
+        assert_eq!(
+            PreviewScale::from_audio_str(&PreviewScale::Percent(percent).as_str()),
+            Some(PreviewScale::Percent(percent)),
+            "`{percent}%` read back"
+        );
+    }
+}
+
+/// A hand-edited `config.ini` is read through the sound's own bounds: the
+/// setting is a share of the display, so a `0` — a share of nothing — is the
+/// share a fresh installation starts at, a percentage past the whole display is
+/// the whole display rather than a card wider than one, and a value that names
+/// no share at all is `None`, which leaves the setting where it is.
+#[test]
+fn a_hand_edited_sounds_scale_is_brought_back_to_the_display() {
+    assert_eq!(
+        PreviewScale::from_audio_str("150"),
+        Some(PreviewScale::Percent(100)),
+        "a share past the whole display is the whole display"
+    );
+    assert_eq!(
+        PreviewScale::from_audio_str("0"),
+        Some(PreviewScale::Percent(10)),
+        "a share of nothing is the share a fresh installation starts at"
+    );
+    assert_eq!(
+        PreviewScale::from_audio_str("banana"),
+        None,
+        "a value that names no share is not one"
+    );
+    assert_eq!(
+        PreviewScale::from_audio_str(" 25% "),
+        Some(PreviewScale::Percent(25)),
+        "the words a person would write are read for them"
+    );
+}
+
+/// A sound's scale is a setting of its own, like the picture and video scales
+/// beside it: one key changing leaves the others where they were, and a file
+/// that has no key for it — one written before the kind had a scale of its
+/// own — leaves it where a fresh installation starts.
+#[test]
+fn a_sounds_scale_is_read_from_its_own_key() {
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "preview_scale", Some("400".to_string()));
+    ini.set(CONFIG_SECTION, "video_scale", Some("75".to_string()));
+    ini.set(CONFIG_SECTION, "animated_scale", Some("50".to_string()));
+    ini.set(CONFIG_SECTION, "audio_scale", Some("20".to_string()));
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(config.audio_scale, PreviewScale::Percent(20));
+    assert_eq!(config.video_scale, PreviewScale::Percent(75));
+    assert_eq!(config.animated_scale, PreviewScale::Percent(50));
+    assert_eq!(config.preview_scale, PreviewScale::Percent(400));
+
+    // The words a person would write are read for a sound's key the same way
+    // they are for a document's, since it is the same value read against the
+    // same whole.
+    let mut ini = Ini::new();
+    ini.set(
+        CONFIG_SECTION,
+        "audio_scale",
+        Some(" Fit to Screen ".to_string()),
+    );
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(config.audio_scale, PreviewScale::FitToScreen);
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "audio_scale", Some("150".to_string()));
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.audio_scale,
+        PreviewScale::Percent(100),
+        "a hand-edited share past the whole display is the whole display"
+    );
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "audio_scale", Some("0".to_string()));
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.audio_scale,
+        PreviewScale::Percent(10),
+        "a hand-edited share of nothing is the share a fresh installation starts at"
+    );
+
+    // A file with no key for it leaves the setting where a fresh installation
+    // starts, whatever share the file draws its pictures at.
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "preview_scale", Some("25".to_string()));
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(config.preview_scale, PreviewScale::Percent(25));
+    assert_eq!(config.audio_scale, DEFAULT_AUDIO_SCALE);
+
+    let config = AppConfig::default();
+
+    assert_eq!(config.audio_scale, DEFAULT_AUDIO_SCALE);
+}
+
 /// A page is drawn at the whole room the display has unless the file says
 /// otherwise — which is what the two page scales start at, and what a fresh
 /// install writes.

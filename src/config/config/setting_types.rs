@@ -13,9 +13,9 @@ use crate::formats::codecs;
 
 use super::app_config::AppConfig;
 use super::defaults::{
-    sanitize_preview_scale_percent, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_FONT_SCALE_PERCENT,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_VIDEO_SCALE_PERCENT, MAX_AFK_TIMER_SECS,
-    MAX_OFFICE_ENGINE_IDLE_SECS,
+    sanitize_audio_scale_percent, sanitize_preview_scale_percent, DEFAULT_ANIMATED_SCALE_PERCENT,
+    DEFAULT_AUDIO_SCALE_PERCENT, DEFAULT_FONT_SCALE_PERCENT, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_VIDEO_SCALE_PERCENT, MAX_AFK_TIMER_SECS, MAX_OFFICE_ENGINE_IDLE_SECS,
 };
 
 /// How the preview is sized relative to the media's native pixel dimensions.
@@ -84,6 +84,31 @@ impl PreviewScale {
                 .map(|percent| Self::Percent(sanitize_preview_scale_percent(percent))),
         }
     }
+
+    /// The scale a sound's `config.ini` value names, or `None` for one that is
+    /// neither a percentage nor a word for the fit.
+    ///
+    /// The same words as a picture's scale are read, through the sound's own
+    /// bounds rather than the picture's: the setting is a share of the display
+    /// rather than of the file, so a hand-edited percentage past the whole
+    /// display is the whole display, and a `0` — a share of nothing — is the
+    /// share a fresh installation starts at. A value that names nothing is
+    /// `None`, which leaves the setting where the configuration already holds
+    /// it rather than guessing.
+    pub(crate) fn from_audio_str(value: &str) -> Option<Self> {
+        let normalized = value.trim().to_ascii_lowercase();
+        let normalized = normalized.trim_end_matches('%').trim();
+
+        match normalized {
+            "fit" | "fit to screen" | "fit-to-screen" | "fit_to_screen" | "fittoscreen" => {
+                Some(Self::FitToScreen)
+            }
+            _ => normalized
+                .parse::<u32>()
+                .ok()
+                .map(|percent| Self::Percent(sanitize_audio_scale_percent(percent))),
+        }
+    }
 }
 
 /// What a PDF page — the `Ebook` kind — is drawn at unless the configuration says
@@ -101,6 +126,13 @@ pub const DEFAULT_PREVIEW_SCALE: PreviewScale =
 pub const DEFAULT_VIDEO_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_VIDEO_SCALE_PERCENT);
 pub const DEFAULT_ANIMATED_SCALE: PreviewScale =
     PreviewScale::Percent(DEFAULT_ANIMATED_SCALE_PERCENT);
+/// What a sound's card is drawn at unless the configuration says otherwise: a
+/// share of the room the display has for it, at the tenth the card was measured
+/// at across the files it was tried on. A card holds no bitmap of the file's own
+/// to take a share of — what it holds is laid out over the room the setting
+/// names, its height kept by the font it is set in — so the room is the whole
+/// question, as it is for the drawings and documents beside it.
+pub const DEFAULT_AUDIO_SCALE: PreviewScale = PreviewScale::Percent(DEFAULT_AUDIO_SCALE_PERCENT);
 /// The same for a vector drawing, at the whole of the room: a drawing is drawn at whatever
 /// size it is asked for — an SVG document by the browser that rasterizes nothing until it
 /// is told the size, a metafile by the drawing layer playing its records again — so the
