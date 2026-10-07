@@ -488,14 +488,12 @@ pub(super) const ID_TRAY_ENGINE_PERSISTENT_BASE: u16 = 1512;
 /// 1515, so a click on it is never read as a toggle belonging to an engine's TTL submenu.
 pub(super) const ID_TRAY_VIDEO_HW_ACCEL: u16 = 1516;
 /// The `Audio Scaling` submenu: one command per share of the display a
-/// sound's card is laid out over, in the order it lists them. It sits past
-/// every other range the app hands out, the way the `AFK Timer` and
-/// `Persistent` ranges do — the hardware acceleration row above is the last
-/// of those and ends at 1516 — because the slack beside the Ebook and
-/// Document scales is the `Avoid` submenu's, and the gaps beside the video
-/// and animated ranges are two ids wide, so a range of five cannot fit
-/// between them without renumbering.
-pub(super) const ID_TRAY_AUDIO_SCALE_BASE: u16 = 1517;
+/// sound's card is laid out over, in the order it lists them. It sits in
+/// the stretch between the volume toggles, which end at 1528, and the
+/// `Codecs` commands, which begin at 1600 — the first run in it five ids
+/// wide, the reset rows and the toggles owning the ids below it — so a
+/// click on a share is never read as a row of another submenu's.
+pub(super) const ID_TRAY_AUDIO_SCALE_BASE: u16 = 1529;
 /// The away times the `AFK Timer` submenu offers, in the order it lists them: an hour at the
 /// top and a quarter of a minute at the bottom, with the one that bounds an engine by
 /// default in the middle. There is no `Indefinitely` here — a time that never comes round is
