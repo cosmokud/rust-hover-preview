@@ -3,6 +3,11 @@
 
 use super::*;
 
+use crate::formats::lists;
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 /// Every file of a list but the one the pin is showing, which is how many files a walk of that
 /// list may be asked for.
 ///
@@ -12,6 +17,56 @@ use super::*;
 /// app can read is a walk that ends rather than one that goes for ever (see `PinStep`).
 pub(super) fn walk_budget(list: &[PathBuf]) -> usize {
     list.len().saturating_sub(1)
+}
+
+/// The file a shuffled step of a walk lands on, from a roll that
+/// names it.
+///
+/// A shuffle is a walk through the folder's sounds in an order of
+/// their own choosing: the pool is the sounds of the walk's list
+/// other than the file it is standing on — the file on screen is not
+/// a file a step is for, which is the whole of what `walk_budget`
+/// says for an ordinary step — and a roll names one of the pool. A
+/// pool with nothing in it is a walk with nowhere to go, which ends
+/// it rather than stepping onto a file that is not a sound: the
+/// sounds are the `[audio]` category of the folder, so a shuffle
+/// never lands on a file of another kind.
+pub(super) fn shuffle_step(at: &Path, sounds: &[PathBuf], roll: usize) -> Option<PathBuf> {
+    let pool: Vec<&PathBuf> = sounds
+        .iter()
+        .filter(|sound| !pin_navigation::same_file(sound, at))
+        .collect();
+
+    if pool.is_empty() {
+        return None;
+    }
+
+    Some(pool[roll % pool.len()].clone())
+}
+
+/// A roll of the folder's sounds: a number drawn from the clock mixed
+/// with a count of how many have been drawn in this run, so that two
+/// steps a moment apart do not land on the same file the way two
+/// reads of a clock that barely moves would. Nothing here needs a
+/// generator anyone could reproduce, and nothing is seeded from the
+/// file (see `audio_seek::anywhere`, which draws its rolls the same
+/// way).
+fn roll() -> usize {
+    static DRAWN: AtomicU64 = AtomicU64::new(0);
+
+    let clock = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_nanos() as u64)
+        .unwrap_or(0);
+    let throw = clock
+        ^ DRAWN
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    throw.hash(&mut hasher);
+
+    hasher.finish() as usize
 }
 
 /// A step the pin's own walk has taken, and what is left of the walk to ask for.
@@ -46,6 +101,20 @@ pub(crate) struct PinStep {
     /// the first is a walk through what is already in hand rather than a second read of
     /// the folder (see `PinPlanner`).
     pub(super) list: Vec<PathBuf>,
+    /// Whether a step *forward* of this walk is a random one of the
+    /// folder's sounds rather than the one beside it, which is what the
+    /// pin's own shuffle switch says a step is (see `shuffle_step`).
+    ///
+    /// A step back is the file before it either way: a shuffle is an
+    /// order the *next* file is picked in, and there is no order a
+    /// previous is picked back through.
+    pub(super) shuffle: bool,
+    /// The sounds of the list — the files whose extension is in the
+    /// `[audio]` list of `config.ini` — which is what a shuffled step
+    /// picks from. Empty where the walk does not shuffle, and the whole
+    /// of what a shuffle is limited to: no file of another kind is one
+    /// a shuffled step ever lands on.
+    pub(super) sounds: Vec<PathBuf>,
 }
 
 impl PinStep {
@@ -64,7 +133,11 @@ impl PinStep {
 
         // The list is already in hand — the planner read it off the preview thread — so a
         // step costs a position in a vector rather than a walk of the folder behind it.
-        let path = pin_navigation::step_to(&self.at, &self.list, self.step)?;
+        let path = if self.shuffle && self.step > 0 {
+            shuffle_step(&self.at, &self.sounds, roll())
+        } else {
+            pin_navigation::step_to(&self.at, &self.list, self.step)
+        }?;
 
         self.at = path.clone();
 
@@ -267,6 +340,23 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             let empty = Vec::new();
             let list = pin_navigation::list_for(at, config).unwrap_or_else(|| empty.clone());
 
+            // The sounds of the list, read where the list is: a walk that
+            // shuffles steps to a random one of the folder's sounds, and
+            // which files those are is a question of the `[audio]` list of
+            // the file the walk was asked with, so it is answered here once
+            // rather than on every step (see `PinStep::step`).
+            let (shuffle, sounds) = if config.pin_mode_audio_shuffle {
+                (
+                    true,
+                    list.iter()
+                        .filter(|path| lists::AUDIO.claims(path, config))
+                        .cloned()
+                        .collect(),
+                )
+            } else {
+                (false, Vec::new())
+            };
+
             // The walk is the list asked one file at a time, so it is bounded by the list:
             // every file of it but the one the pin is showing is one the walk may still be
             // offered, and this step is the first of them.
@@ -279,6 +369,8 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
                 step: *step,
                 left,
                 list,
+                shuffle,
+                sounds,
             };
 
             // A step that lands is the walk; one that does not leaves it with nothing left

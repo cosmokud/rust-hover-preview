@@ -744,6 +744,93 @@ fn reads_where_a_pinned_sound_starts_from_its_own_key() {
     assert_eq!(config.pin_mode_audio_seek, AudioSeek::Middle);
 }
 
+/// Whether a pinned sound's next file is a random one of the folder's sounds,
+/// and whether a pinned sound goes round at the end of its file, are two of the
+/// pin's own keys, read the way every yes-or-no setting is. Both are answers a
+/// fresh configuration already gives — a shuffle that is off and a loop that is
+/// on, which is what a pinned sound did before there was a setting — so a file
+/// that names neither is a file a fresh one answers, and a value either key
+/// names that is not a yes or a no is left where it was rather than guessed at.
+#[test]
+fn reads_how_a_pinned_sound_steps_and_ends_from_their_own_keys() {
+    assert_eq!(
+        AppConfig::default().pin_mode_audio_shuffle,
+        DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+        "a pinned sound steps to the file beside it unless the file says otherwise"
+    );
+    assert!(!DEFAULT_PIN_MODE_AUDIO_SHUFFLE, "which is a shuffle off");
+    assert_eq!(
+        AppConfig::default().pin_mode_audio_loop,
+        DEFAULT_PIN_MODE_AUDIO_LOOP,
+        "a pinned sound goes round at the end of its file unless the file says otherwise"
+    );
+    assert!(DEFAULT_PIN_MODE_AUDIO_LOOP, "which is a loop on");
+
+    // What the menu writes is what the file reads back: both keys are yes-or-no
+    // ones, so a choice made here is still the choice after a restart.
+    let mut changed = Ini::new();
+    changed.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_shuffle",
+        Some("true".to_string()),
+    );
+    changed.set(CONFIG_SECTION, "pin_mode_audio_loop", Some("false".to_string()));
+
+    let mut written = Ini::new();
+    written
+        .read(ordered_text(&read_file(&mut changed).to_ini()))
+        .expect("a file this app wrote is one it can read");
+    let config = read_file(&mut written);
+    assert!(
+        config.pin_mode_audio_shuffle,
+        "a shuffle on is a shuffle on after a restart"
+    );
+    assert!(
+        !config.pin_mode_audio_loop,
+        "and a loop off is a loop off after one"
+    );
+
+    let mut older = Ini::new();
+    older.set(CONFIG_SECTION, "audio_seek", Some("random".to_string()));
+    let config = read_file(&mut older);
+    assert_eq!(
+        config.pin_mode_audio_shuffle, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+        "a file written before the shuffle existed steps a pinned sound the way a \
+         fresh one does, whatever the hover's own setting is"
+    );
+    assert_eq!(
+        config.pin_mode_audio_loop, DEFAULT_PIN_MODE_AUDIO_LOOP,
+        "and the loop the same way"
+    );
+
+    let mut unknown = Ini::new();
+    unknown.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_shuffle",
+        Some("sideways".to_string()),
+    );
+    unknown.set(CONFIG_SECTION, "pin_mode_audio_loop", Some("roundabout".to_string()));
+    let config = read_file(&mut unknown);
+    assert_eq!(
+        config.pin_mode_audio_shuffle, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+        "a value that is not a yes or a no is answered with the way a fresh \
+         configuration steps rather than guessed at"
+    );
+    assert_eq!(
+        config.pin_mode_audio_loop, DEFAULT_PIN_MODE_AUDIO_LOOP,
+        "and the loop the same way"
+    );
+
+    // The two are two switches, so a file that names one names it alone: the
+    // shuffle is left where the file put it, and the loop where the file put that.
+    let mut both = Ini::new();
+    both.set(CONFIG_SECTION, "pin_mode_audio_shuffle", Some("true".to_string()));
+    both.set(CONFIG_SECTION, "pin_mode_audio_loop", Some("false".to_string()));
+    let config = read_file(&mut both);
+    assert!(config.pin_mode_audio_shuffle);
+    assert!(!config.pin_mode_audio_loop);
+}
+
 /// Which files a pin's own previous/next buttons step through is one of its own keys, and
 /// it is written under the name the tray's `Nav File Types` submenu shows: `category` is
 /// the folder narrowed to the pinned file's own kind of thing, and every file this build

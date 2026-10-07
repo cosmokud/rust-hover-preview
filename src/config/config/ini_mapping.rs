@@ -190,6 +190,16 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "pin_mode_audio_shuffle",
+            Some(self.pin_mode_audio_shuffle.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_mode_audio_loop",
+            Some(self.pin_mode_audio_loop.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "normalize_volume",
             Some(self.normalize_volume.to_string()),
         );
@@ -645,6 +655,18 @@ impl AppConfig {
             if let Some(seek) = AudioSeek::from_str(&value) {
                 self.pin_mode_audio_seek = seek;
             }
+        }
+        // Whether a pinned sound's next file is a random one of the
+        // folder's sounds, and whether it goes round at the end of its
+        // file, read the way every yes-or-no setting is: a file written
+        // before either setting existed has no key for it and leaves the
+        // setting where this build starts, and a value that is not a yes
+        // or a no is left there too.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_shuffle") {
+            self.pin_mode_audio_shuffle = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_loop") {
+            self.pin_mode_audio_loop = value;
         }
         // Whether a sound's loudness is measured and brought to one level, which a file
         // written before the setting existed has no key for: a fresh installation normalizes, and a

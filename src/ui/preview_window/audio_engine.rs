@@ -39,6 +39,22 @@ pub(super) fn current_pin_mode_audio_seek() -> AudioSeek {
         .unwrap_or(DEFAULT_PIN_MODE_AUDIO_SEEK)
 }
 
+/// Whether a pinned sound's file is gone round for as long as it is
+/// shown, read the way the pin's seek is and at the same moment: from
+/// the pin's own setting as a player is started, so a change in the
+/// tray reaches the next pin — and a sound already playing is left
+/// where it is.
+///
+/// A sound that is *not* to be looped is a sound the engine plays
+/// once, and the end of it is what moves the pin on to the next file
+/// of the folder (see `pin_mode_audio_loop_off_for`).
+pub(super) fn current_pin_mode_audio_loop() -> bool {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.pin_mode_audio_loop)
+        .unwrap_or(DEFAULT_PIN_MODE_AUDIO_LOOP)
+}
+
 /// What a sound's card is built with: the theme, which is the one setting a painted
 /// preview answers to, and the font size the Audio Scaling share names — the default
 /// text size at the 10% anchor, scaled by the share's fraction of it (see
@@ -705,7 +721,11 @@ pub(super) fn start_audio_playback_at(
                 return true;
             }
 
-            video_player::play_audio(path, volume, start);
+            // A pinned sound whose loop switch is off is a sound the engine
+            // plays once, and the end of it is what moves the pin on (see
+            // `pin_mode_audio_loop_off_for`); every other sound is one the
+            // engine goes round for as long as it is on screen.
+            video_player::play_audio(path, volume, start, !pin_mode_audio_loop_off_for(path));
             video_player::is_playing()
         }
         Player::Ffmpeg => {
@@ -826,6 +846,31 @@ pub(super) fn reached_the_end(played: Duration, length: Option<f64>, offset: f64
     played.as_secs_f64() >= pass.min(AUDIO_WRAP_MINIMUM)
 }
 
+/// Whether the pin's own loop switch is off for the sound `path` is showing.
+///
+/// The setting is the pin's own, so a hover preview — a sound the pointer is
+/// on rather than one a pin was asked to keep — is always looped, whatever the
+/// setting says, and the question is only ever asked of the file a pin is
+/// showing.
+pub(super) fn pin_mode_audio_loop_off_for(path: &Path) -> bool {
+    pinned() && pinned_path().as_deref() == Some(path) && !current_pin_mode_audio_loop()
+}
+
+/// Whether the sound the native engine is playing for the pin has ended, which
+/// is the one thing a pinned sound whose loop switch is off is advanced by.
+///
+/// The engine was asked not to loop when the player was started (see
+/// `start_audio_playback_at`), so its end is its own to report: the engine's
+/// word for it, or its clock at the length of the file, is the end of the
+/// sound. A path is part of the question because the engine holds one sound at
+/// a time — a file the engine is not playing has not ended, whatever the clock
+/// of the file on screen says (see `video_player::audio_ended`).
+pub(super) fn pinned_native_audio_ended(path: &Path) -> bool {
+    pin_mode_audio_loop_off_for(path)
+        && video_player::playing_path().as_deref() == Some(path)
+        && video_player::audio_ended()
+}
+
 /// Put a sound FFmpeg plays round to the beginning of its file where the player it was given has
 /// reached the end of it.
 ///
@@ -845,11 +890,19 @@ pub(super) fn reached_the_end(played: Duration, length: Option<f64>, offset: f64
 /// A player whose stop is not read as the end of its file by `reached_the_end` — one that never
 /// played anything — is not started again: the card is left with no clock rather than with
 /// another player, which is the answer a file this machine will not play gets.
+///
+/// A pinned sound whose loop switch is off is not wrapped at all: the end of its
+/// file is the end of the sound, and what is asked for in the player's place is
+/// the next file of the folder, the same ask the caption's own **Next** button
+/// makes (see `ask_pin_walk`). The walk is the planner's work, so the wait for
+/// its answer is the pin's own — the same arc a **Next** press turns (see
+/// `PinWait`).
 pub(super) fn wrap_audio_player(
     media: &mut MediaData,
     path: &Path,
     started: &mut Option<Instant>,
     offset: &mut f64,
+    wait: &mut Option<PinWait>,
 ) {
     let Some(process) = media.video_process.as_mut() else {
         return;
@@ -876,6 +929,20 @@ pub(super) fn wrap_audio_player(
     if !reached_the_end(played, length, *offset) {
         *started = None;
         AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+        return;
+    }
+
+    // A pinned sound whose loop switch is off has played its file through: the
+    // pass is not gone round, and the next file of the folder is asked for
+    // instead — the same ask the caption's own **Next** button makes, with the
+    // same wait for its answer. The card is left with no clock and no player,
+    // which is what a sound that has ended is, until the walk lands.
+    if pin_mode_audio_loop_off_for(path) {
+        *started = None;
+        AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+
+        ask_pin_walk(path.to_path_buf(), 1);
+        *wait = Some(PinWait::new());
         return;
     }
 

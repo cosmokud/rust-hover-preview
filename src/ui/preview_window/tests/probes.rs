@@ -690,7 +690,7 @@ fn audio_probe() {
             let start = audio_seek::start_position(&path, seek, track.duration);
             println!("starting at {start:.3}s, by `Volume → Audio Seek`");
 
-            video_player::play_audio(&path, volume, start);
+            video_player::play_audio(&path, volume, start, true);
             std::thread::sleep(Duration::from_millis(500));
 
             println!(
