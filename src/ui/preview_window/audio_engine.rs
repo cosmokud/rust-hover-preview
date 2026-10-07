@@ -1,8 +1,8 @@
 //! A sound: the track read out of the file, the loudness measured off it, the gain it is
 //! normalised to, the player it is given, and the clock it is asked against.
 
-use super::*;
 use super::dimensions::audio_font_scale_percent;
+use super::*;
 
 /// How loud a video is played, which is read when one is started rather than when the
 /// setting changes: a preview is a few seconds long, and the next one is played at

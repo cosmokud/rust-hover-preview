@@ -72,6 +72,17 @@ fn options() -> AudioPreviewOptions {
     }
 }
 
+/// The same options at another font size, which is what a card is
+/// built with at a share other than the 10% anchor: the font the
+/// share names (see `audio_font_scale_percent` in the preview window's
+/// dimensions).
+fn options_at(font_scale_percent: u32) -> AudioPreviewOptions {
+    AudioPreviewOptions {
+        theme: TextTheme::Dark,
+        font_scale_percent,
+    }
+}
+
 /// The narrowest card worth drawing at the options the tests build: the
 /// width floor the card is laid out at, counted the way `build_page`
 /// counts it — the bar's own advances, plus the margin the card stands
@@ -144,42 +155,85 @@ fn draws_a_sound_whose_length_is_not_known() {
 }
 
 /// A card fills the room it is measured at: the width is the room
-/// itself, floored at the narrowest card worth drawing — which the
-/// room the default share names clears and the room the narrowest
-/// share names does not — and the height is the card's own, the same
-/// one-line strip at every share, because the share decides the room
-/// and not the card.
+/// itself, floored at the narrowest card worth drawing at the font
+/// the room's share builds its card at — which every room the menu
+/// offers clears, the 5% room included, measured at the 5% font —
+/// and the height is the card's own, the same one-line strip at
+/// every share, because the share decides the room and not the card.
 #[test]
 fn a_card_fills_the_room_its_share_gives_it() {
-    // The 10% room of a 3440x1440 work area, the default share, and
-    // the 5% room beside it, which is narrower than the narrowest card
-    // worth drawing.
+    // The 10% room of a 3440x1440 work area at the default share, and
+    // the 5% room beside it — each measured at the font its share
+    // builds its card at, which is what makes the 5% room the wider of
+    // the room and the narrowest card worth drawing at that font.
     let (wide, height) = measure(&card(), 374, 144, 96, options()).expect("a measured card");
-    let (narrow, floor_height) = measure(&card(), 188, 72, 96, options()).expect("a measured card");
+    let (narrow, short_height) =
+        measure(&card(), 188, 72, 96, options_at(63)).expect("a measured card");
 
     assert_eq!(wide, 374, "the card fills the room it is measured at");
     assert_eq!(
-        narrow,
-        narrowest_card(),
-        "a room narrower than the narrowest card is the narrowest card"
+        narrow, 188,
+        "the 5% room is the wider of the room and the narrowest card at the 5% font"
     );
 
-    // The height is the card's own at both rooms, and the same as the
-    // height a room ten times the size answers with: the card is a
-    // one-line strip at every share.
+    // The height is the card's own at both rooms — a one-line strip at
+    // every share: the room's height does not squash it, and a room ten
+    // times the size does not stretch it either.
     let (_, roomy) = measure(&card(), 4096, 2160, 96, options()).expect("a measured card");
+    let (_, short_roomy) =
+        measure(&card(), 4096, 2160, 96, options_at(63)).expect("a measured card");
+    assert_eq!(height, roomy, "the widest room does not stretch the card");
     assert_eq!(
-        height, floor_height,
-        "the narrowest share does not squash the card"
+        short_height, short_roomy,
+        "and the 5% share is a one-line strip at its own font too"
     );
-    assert_eq!(
-        height, roomy,
-        "and the widest room does not stretch it either"
+    assert!(
+        height > short_height,
+        "the card's height follows its font: the 10% card is the taller one"
     );
     assert!(
         height > 32,
         "a card is a page with a name and a bar in it: {height}"
     );
+}
+
+/// The ladder the five shares answer with: a card measured at each
+/// share's room, at the font that share builds its card at, is the
+/// room wide — at every share the room is the wider of the room and
+/// the narrowest card worth drawing at the share's own font, so the
+/// width floor never engages at a share the menu offers — and the
+/// height is what the card's content measures at that font, which is
+/// the anchor's height scaled by the share's fraction of the anchor.
+#[test]
+fn every_share_answers_the_anchor_s_card_scaled() {
+    let (_, anchor_height) = measure(&card(), 374, 144, 96, options()).expect("the anchor's card");
+
+    for (room, font) in [
+        ((188u32, 72u32), 63u32),
+        ((374, 144), 125),
+        ((562, 216), 188),
+        ((748, 288), 250),
+        ((936, 360), 313),
+    ] {
+        let (width, height) =
+            measure(&card(), room.0, room.1, 96, options_at(font)).expect("a measured card");
+        assert_eq!(
+            width, room.0,
+            "the {font}% card fills the {font}% room: the floor never engages at a share the menu offers"
+        );
+
+        // The height follows the font, not the room: the anchor's
+        // height scaled by the share's fraction of the anchor. The
+        // band is wide because the font's own metrics round each line
+        // and margin to a whole pixel, and a card is several of them
+        // stacked — but a card whose height ignored its font would be
+        // off by the share's whole fraction, far outside it.
+        let expected = anchor_height as f32 * font as f32 / 125.0;
+        assert!(
+            (height as f32 - expected).abs() / expected < 0.10,
+            "the {font}% card's height is the anchor's scaled by its font: {height} against {expected}"
+        );
+    }
 }
 
 /// A room too short for a name and a line under it answers with
