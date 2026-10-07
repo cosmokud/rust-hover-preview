@@ -27,19 +27,34 @@ pub(super) fn current_audio_seek() -> AudioSeek {
         .unwrap_or(DEFAULT_AUDIO_SEEK)
 }
 
-/// What a sound's card is built with: the theme and the text size, which are the two settings
-/// a painted preview answers to.
+/// What a sound's card is built with: the theme, which is the one setting a painted
+/// preview answers to, and the default text size, which is the size the card is
+/// always drawn at. The Audio Scaling setting decides the room the card is laid out
+/// over (see `audio_box_room`), and the text font size no longer moves the card at
+/// all — the card is the same size at every text size, so that what a text preview
+/// does when that setting changes is something a sound's card never does.
 pub(super) fn current_audio_options() -> AudioPreviewOptions {
     CONFIG
         .lock()
         .map(|cfg| AudioPreviewOptions {
             theme: cfg.theme,
-            font_scale_percent: cfg.text_font_scale_percent,
+            font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
         })
         .unwrap_or(AudioPreviewOptions {
             theme: TextTheme::Light,
             font_scale_percent: DEFAULT_TEXT_FONT_SCALE_PERCENT,
         })
+}
+
+/// The share of the display a sound's card is laid out over, read the way the
+/// options are: from the configuration at the moment a box is measured, so a
+/// change in the tray reaches the next hover rather than a card already on
+/// screen (see `audio_box_room`).
+pub(super) fn current_audio_scale() -> PreviewScale {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.audio_scale)
+        .unwrap_or(DEFAULT_AUDIO_SCALE)
 }
 
 /// How long a sound's probe is given — the source reader's own read of a file, or FFmpeg's

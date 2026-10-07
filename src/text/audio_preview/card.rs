@@ -35,8 +35,13 @@ pub(super) const TIME_GAP_ADVANCES: i32 = 3;
 /// laid out against a fixed edge and the two do not move as the seconds do.
 pub(super) const CLOCK_ADVANCES: i32 = 17;
 
-/// The narrowest a card is worth drawing, in body advances: the bar is what asks for it, so a
-/// file with a short name still gets a card that looks like one.
+/// The narrowest a card is worth drawing, in body advances — the width floor the
+/// card is laid out at, so a room of a few pixels answers with a card that looks
+/// like one rather than a sliver. The floor is the smallest card that still holds
+/// a pin's controls, and it holds more than those controls need: the four buttons
+/// are carved out of the bar's own row, standing in the gap the track gives up, so
+/// what the floor is really holding is the bar — a bar a handful of pixels long is
+/// not the control that takes a sound to a second of it (see `control_boxes`).
 pub(super) const MIN_CONTENT_ADVANCES: i32 = 34;
 
 /// The size level the name is set in, which is the level an archive's header is set in. The

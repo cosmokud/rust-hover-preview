@@ -282,6 +282,38 @@ fn a_document_is_drawn_at_its_share_of_the_room() {
     }
 }
 
+/// A sound is laid out over a share of the display, the share the Audio
+/// Scaling setting names: the room its card is measured at is the work
+/// area of the display the pointer is on times that share, at the
+/// display's own DPI. The width room is the share of the width plus
+/// twice the card's own margin — the padding the card is drawn inside,
+/// at the default text size, which is the size the card is always drawn
+/// at — and the height room is the plain share of the height, which is
+/// only the guard that answers a too-short room with nothing.
+#[test]
+fn a_sound_is_laid_out_over_its_share_of_the_display() {
+    let display = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 3440,
+        bottom: 1440,
+    };
+
+    for (percent, room) in [
+        (5, (202, 72)),
+        (10, (374, 144)),
+        (15, (546, 216)),
+        (20, (718, 288)),
+        (25, (890, 360)),
+    ] {
+        assert_eq!(
+            dimensions::audio_box_room(display, PreviewScale::Percent(percent), TEST_DPI),
+            room,
+            "{percent}% of a 3440x1440 work area"
+        );
+    }
+}
+
 /// A font is drawn at a share of the room the way a document is, and it is the fourth
 /// setting of its own: the specimen is a page of this app's making, so the share decides
 /// how large the type is drawn — and what a PDF, a document and a page are configured at

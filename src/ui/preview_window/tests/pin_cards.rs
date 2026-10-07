@@ -329,14 +329,15 @@ fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
              {hover_width}x{hover_height}"
     );
 
-    // Which is the whole of what the take-up re-measures for: the box a pin is given holds
-    // every control its card carries.
-    let hover_box = (
-        100,
-        100,
-        100 + hover_width as i32,
-        100 + hover_height as i32,
-    );
+    // Which is the whole of what the take-up re-measures for: the box a pin is
+    // given holds every control its card carries. The box is the audio room —
+    // the room the Audio Scaling setting gives the display the hover stands
+    // on — because that is the room the hover's own card is measured at (see
+    // `audio_box`), and a pin is given the very box its hover was given.
+    let room = audio_box_room(work_area_at(100, 100), current_audio_scale(), 96);
+    let (room_width, room_height) =
+        audio_preview::measure(&hover, room.0, room.1, 96, options).expect("a measured card");
+    let hover_box = (100, 100, 100 + room_width as i32, 100 + room_height as i32);
     let pin_box = pinned_audio_card_box(hover_box, &path, 96);
     assert_eq!(
         pin_box, hover_box,

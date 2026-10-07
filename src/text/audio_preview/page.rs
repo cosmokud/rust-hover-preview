@@ -420,30 +420,26 @@ pub(super) fn build_page(
         page_color,
     );
 
-    // The width the card would like: the facts line with the clock beside it, or the narrowest
-    // bar there is, whichever asks for more — clamped to the box the way every preview's size
-    // is. The name is not in that count, and that is the one rule this line is: a name too long
-    // for the card is not a reason to ask the display for a card a hundred advances wide, so
-    // what gives way is the name, which is drawn whole and scrolled across the card (see
-    // `Card::name_offset`). A name the card *does* have room for is inside these two anyway,
-    // since the width is the line beneath it.
+    // The width the card takes: the room it is given, floored at the narrowest
+    // card worth drawing — the card fills the room and its seek bar stretches with
+    // it, so every share of the display is visibly a different size and every
+    // file's card is the same width at a given share. The facts line is no longer
+    // in that count: the room decides how many facts fit, the last giving way
+    // first (see `fact_runs`). The name is not in the count either, and that is
+    // the one rule this line is: a name too long for the card is not a reason to
+    // ask the display for a card a hundred advances wide, so what gives way is the
+    // name, which is drawn whole and scrolled across the card (see
+    // `Card::name_offset`).
     let bullet_cell = header_advance * BULLET_CELL_ADVANCES;
-    let facts_line = facts_width(&card.facts, body_advance)
-        + body_advance * TIME_GAP_ADVANCES
-        + body_advance * CLOCK_ADVANCES;
-    // A card whose facts are narrow still needs room for the four buttons the bar is carved out
-    // beside: the bar is what takes a sound to a second of it, and a bar a hundred pixels long is
-    // not the same control as one that fills the card. The bar gives way for them rather than the
-    // card giving way — a pin's card is the width a hover's is, and what the buttons cost is the
-    // track's width (see `control_boxes`).
-    let content = facts_line.max(body_advance * MIN_CONTENT_ADVANCES);
-    let width = (content + padding * 2).clamp(1, box_width.max(1) as i32) as u32;
+    let content = ((box_width as i32) - padding * 2).max(body_advance * MIN_CONTENT_ADVANCES);
+    let width = (content + padding * 2).max(1) as u32;
 
-    // A card with no room for a name and a line under it is a card that cannot be drawn, which
-    // is the answer an archive page gives in the same place.
-    if (width as i32) < padding * 2 + body_advance
-        || (box_height as i32) < padding * 2 + header_height
-    {
+    // A room with no room for a name and a line under it is a room that cannot be
+    // drawn in, which is the answer an archive page gives in the same place. The
+    // width is never the reason: the floor above keeps the card at the narrowest
+    // card worth drawing, so a room of a few pixels answers with that card's width
+    // and a one-pixel height rather than with nothing at all.
+    if (box_height as i32) < padding * 2 + header_height {
         return empty_page(width, padding);
     }
 
@@ -534,9 +530,12 @@ pub(super) fn build_page(
         boxes,
         chrome: card.controls,
         width,
-        height: box_height
-            .min((bar_row.top + bar_row.height + padding) as u32)
-            .max(1),
+        // The height is the card's own: the name line, the rule, the facts line
+        // and the bar, with the card's own margin under it — content-driven at
+        // every share, so the card stays a one-line strip whatever room it is
+        // given (the room's own height is only the guard above, see
+        // `audio_box_room`).
+        height: ((bar_row.top + bar_row.height + padding) as u32).max(1),
         padding,
     }
 }
@@ -962,17 +961,6 @@ fn paint_window_button(
 /// pitch, so a count of characters is the whole measurement.
 pub(super) fn text_width(text: &str, advance: i32) -> i32 {
     text.chars().count() as i32 * advance.max(1)
-}
-
-/// How wide the facts are with the separators between them.
-fn facts_width(facts: &[Fact], advance: i32) -> i32 {
-    let separator = text_width(" · ", advance);
-    let parts: i32 = facts
-        .iter()
-        .map(|fact| text_width(&fact.text, advance))
-        .sum();
-
-    parts + separator * facts.len().saturating_sub(1) as i32
 }
 
 /// A name cut to the room it has, with an ellipsis where it was cut. A name that does not fit
