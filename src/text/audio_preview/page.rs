@@ -259,6 +259,31 @@ pub(super) fn control_boxes(
     })
 }
 
+/// Where the name line's own box and the rule under it stand: the line is
+/// centred between the window's own top border and the rule, so the ink of
+/// its glyphs — the neon circle and the name — is as far from the one as
+/// from the other. The rule keeps the place it has always had: the line's
+/// own box moves within the room above it, and the card keeps the height it
+/// has always had.
+///
+/// Worked out here for the caller that has no page in hand — the hit test,
+/// which is asked of the card's own layout rather than of a page that was
+/// built (see `bullet_cell_box`) — as well as for `build_page`, which lays
+/// the page out around the same two lines.
+fn header_line(metrics: &TextMetrics) -> (i32, i32) {
+    let header_height = metrics.line_height[HEADER_LEVEL as usize];
+    let rule_gap = scaled(RULE_GAP_PIXELS, metrics.scale);
+
+    let rule_top = metrics.padding + header_height + rule_gap;
+    let header_top = (rule_top
+        - metrics.ink_top[HEADER_LEVEL as usize]
+        - metrics.ink_bottom[HEADER_LEVEL as usize]
+        - 1)
+        / 2;
+
+    (header_top, rule_top)
+}
+
 /// The box the card's mark is drawn in: the cell the name line
 /// gives it, at the left of the card, as wide as the mark and the
 /// room after it (see `BULLET_CELL_ADVANCES`) and as tall as the
@@ -272,17 +297,7 @@ pub(super) fn control_boxes(
 pub(super) fn bullet_cell_box(metrics: &TextMetrics) -> RECT {
     let advance = metrics.advance[HEADER_LEVEL as usize].max(1);
     let header_height = metrics.line_height[HEADER_LEVEL as usize];
-    let rule_gap = scaled(RULE_GAP_PIXELS, metrics.scale);
-
-    // The name line is centred between the window's own top border
-    // and the rule under it (see `build_page`), which is where the
-    // cell's own top is.
-    let rule_top = metrics.padding + header_height + rule_gap;
-    let header_top = (rule_top
-        - metrics.ink_top[HEADER_LEVEL as usize]
-        - metrics.ink_bottom[HEADER_LEVEL as usize]
-        - 1)
-        / 2;
+    let (header_top, _) = header_line(metrics);
 
     RECT {
         left: metrics.padding,
@@ -518,18 +533,7 @@ pub(super) fn build_page(
         },
     ];
 
-    // The name line is centred between the window's own top border
-    // and the rule under it, so the ink of its glyphs — the neon
-    // circle and the name — is as far from the one as from the
-    // other. The rule keeps the place it has always had: the
-    // line's own box moves within the room above it, and the card
-    // keeps the height it has always had.
-    let rule_top = padding + header_height + rule_gap;
-    let header_top = (rule_top
-        - metrics.ink_top[HEADER_LEVEL as usize]
-        - metrics.ink_bottom[HEADER_LEVEL as usize]
-        - 1)
-        / 2;
+    let (header_top, rule_top) = header_line(metrics);
     let facts_top = rule_top + rule_height + rule_gap;
 
     let bar_width = content_right - content_left;
