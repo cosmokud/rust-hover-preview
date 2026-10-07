@@ -39,6 +39,22 @@ pub(super) fn current_pin_mode_audio_seek() -> AudioSeek {
         .unwrap_or(DEFAULT_PIN_MODE_AUDIO_SEEK)
 }
 
+/// Whether the play position of the sound on screen is written down as its
+/// card is repainted — the one moment anything knows it (see the tick's
+/// clock-and-bar repaint). Which setting answers is the sound's own: a
+/// pinned file's is the pin's `Pin Mode Audio Seek`, a hovered file's the
+/// tray's `Audio Seek`, the same two answers the start positions are read
+/// from (see `current_pin_mode_audio_seek` and `current_audio_seek`).
+pub(super) fn position_is_remembered(pinned: bool) -> bool {
+    let seek = if pinned {
+        current_pin_mode_audio_seek()
+    } else {
+        current_audio_seek()
+    };
+
+    seek == AudioSeek::Remember
+}
+
 /// Whether a pinned sound's file is gone round for as long as it is
 /// shown, read the way the pin's seek is and at the same moment: from
 /// the pin's own setting as a player is started, so a change in the

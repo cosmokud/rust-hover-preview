@@ -87,3 +87,42 @@ fn the_two_settings_start_at_their_own_answers() {
         "a hovered sound starts where it was left unless the file says otherwise"
     );
 }
+
+/// Whether the position of the sound on screen is written down
+/// as its card is repainted is the answer of the setting that
+/// governs that sound: the pin's own setting for a pinned file,
+/// the hover's for a hovered one. The two are two answers to one
+/// question, so a configuration that names them differently is
+/// answered differently by the two — a pin whose own setting is
+/// `Remember` keeps its position even where the hover's is not,
+/// and a hover keeps its even where the pin's is not.
+#[test]
+fn the_position_written_down_is_what_the_sound_s_own_setting_says() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // The pin's setting is the one that resumes a pinned sound
+    // and the hover's the one that resumes a hovered one, so each
+    // keeps its position under its own setting and neither under
+    // the other's.
+    let _settings = SeekSettings::put(AudioSeek::Start, AudioSeek::Remember);
+    assert!(
+        position_is_remembered(true),
+        "a pinned file's position is written down where the pin's own setting says so, even where the hover's says otherwise"
+    );
+    assert!(
+        !position_is_remembered(false),
+        "a hovered file's position is not written down where the hover's setting says otherwise"
+    );
+
+    let _settings = SeekSettings::put(AudioSeek::Remember, AudioSeek::Start);
+    assert!(
+        position_is_remembered(false),
+        "a hovered file's position is written down where the hover's own setting says so, even where the pin's says otherwise"
+    );
+    assert!(
+        !position_is_remembered(true),
+        "a pinned file's position is not written down where the pin's own setting says otherwise"
+    );
+}

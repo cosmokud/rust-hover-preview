@@ -1064,8 +1064,11 @@ pub fn run_preview_window() {
                                 // the only moment anything here knows it. The other three ways
                                 // of starting a sound are rules rather than memories and are
                                 // not written down at all: a run that is on one of them keeps
-                                // nothing, which is what makes the memory the setting's own.
-                                if current_audio_seek() == AudioSeek::Remember {
+                                // nothing, which is what makes the memory the setting's own —
+                                // and the setting is the one the sound on screen plays under:
+                                // the pin's for a pinned file, the hover's for a hovered one
+                                // (see `position_is_remembered`).
+                                if position_is_remembered(pinned()) {
                                     if let Some(elapsed) = elapsed {
                                         audio_seek::remember(path, elapsed);
                                     }
