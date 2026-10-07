@@ -230,54 +230,13 @@ pub(super) fn system_menu_label(version: &str) -> String {
 /// own inside that one because a sound's volume is not a video's and neither is a video's start
 /// position: a video is looked at from its beginning and nothing else is offered for one.
 pub(super) fn append_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
-
-    // The labels are kept for as long as the menu is being filled out, for the same reason the
-    // `Avoid` labels are: `AppendMenuW` is handed a pointer, so the wide strings have to outlive
-    // the call that lists them.
-    let labels: Vec<Vec<u16>> = AUDIO_SEEK_CHOICES
-        .iter()
-        .map(|seek| {
-            audio_seek_label(*seek)
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect()
-        })
-        .collect();
-
-    for (index, label) in labels.iter().enumerate() {
-        let _ = unsafe {
-            AppendMenuW(
-                menu,
-                MF_STRING,
-                (ID_TRAY_AUDIO_SEEK_BASE + index as u16) as usize,
-                PCWSTR(label.as_ptr()),
-            )
-        };
-    }
-
-    // One of the ways is the setting, so one of them carries the radio mark; a way the menu does
-    // not list is marked by nothing rather than by the wrong one.
-    if let Some(index) = AUDIO_SEEK_CHOICES.iter().position(|way| *way == seek) {
-        let _ = unsafe {
-            CheckMenuRadioItem(
-                menu,
-                ID_TRAY_AUDIO_SEEK_BASE as u32,
-                (ID_TRAY_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16 - 1) as u32,
-                (ID_TRAY_AUDIO_SEEK_BASE + index as u16) as u32,
-                MF_BYCOMMAND.0,
-            )
-        };
-    }
-
-    let _ = unsafe {
-        AppendMenuW(
-            parent,
-            MF_STRING | MF_POPUP,
-            menu.0 as usize,
-            w!("Audio Seek"),
-        )
-    };
+    append_seek_menu(
+        parent,
+        w!("Audio Seek"),
+        ID_TRAY_AUDIO_SEEK_BASE,
+        audio_seek_label,
+        seek,
+    );
 }
 
 /// The `Volume → Pin Mode Audio Seek` submenu: where in a file a
@@ -290,6 +249,29 @@ pub(super) fn append_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
 /// already playing where a hover left it is not moved by a change
 /// to either.
 pub(super) fn append_pin_mode_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
+    append_seek_menu(
+        parent,
+        w!("Pin Mode Audio Seek"),
+        ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
+        pin_mode_audio_seek_label,
+        seek,
+    );
+}
+
+/// One of the tray's two seek submenus: the four ways of starting a sound,
+/// each listed under `title` as `label` words it and carrying the id `base`
+/// hands out, the one `seek` names marked, and the submenu hung from
+/// `parent`. The two submenus are the one question asked twice — once of the
+/// hover's setting and once of the pin's — so they differ in nothing but
+/// those three answers (see `append_audio_seek_menu` and
+/// `append_pin_mode_audio_seek_menu` for what each is).
+fn append_seek_menu(
+    parent: HMENU,
+    title: PCWSTR,
+    base: u16,
+    label: fn(AudioSeek) -> String,
+    seek: AudioSeek,
+) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
 
     // The labels are kept for as long as the menu is being filled out, for the same reason the
@@ -298,7 +280,7 @@ pub(super) fn append_pin_mode_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
     let labels: Vec<Vec<u16>> = AUDIO_SEEK_CHOICES
         .iter()
         .map(|seek| {
-            pin_mode_audio_seek_label(*seek)
+            label(*seek)
                 .encode_utf16()
                 .chain(std::iter::once(0))
                 .collect()
@@ -310,7 +292,7 @@ pub(super) fn append_pin_mode_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
             AppendMenuW(
                 menu,
                 MF_STRING,
-                (ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE + index as u16) as usize,
+                (base + index as u16) as usize,
                 PCWSTR(label.as_ptr()),
             )
         };
@@ -322,9 +304,9 @@ pub(super) fn append_pin_mode_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
         let _ = unsafe {
             CheckMenuRadioItem(
                 menu,
-                ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE as u32,
-                (ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16 - 1) as u32,
-                (ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE + index as u16) as u32,
+                base as u32,
+                (base + AUDIO_SEEK_CHOICES.len() as u16 - 1) as u32,
+                (base + index as u16) as u32,
                 MF_BYCOMMAND.0,
             )
         };
@@ -335,20 +317,21 @@ pub(super) fn append_pin_mode_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
             parent,
             MF_STRING | MF_POPUP,
             menu.0 as usize,
-            w!("Pin Mode Audio Seek"),
+            title,
         )
     };
 }
 
-/// What a way of starting a sound is called in the menu: the words the tray lists it under, with
-/// the way this setting starts at marked as the default.
+/// What a way of starting a sound is called in a menu: the words the tray
+/// lists it under, with the way the setting that starts at `default` marked
+/// as the default.
 ///
 /// The three that are not a memory are worded as where the sound comes *from* rather than as
 /// where it is — `From the Start` rather than `At Start` — because each one answers the question
 /// the submenu's own name asks, which is where a hover drops the needle; `Remember` answers it
 /// the fourth way, and is left as the one word a user already knows from every player they have
 /// used.
-pub(super) fn audio_seek_label(seek: AudioSeek) -> String {
+fn seek_label(seek: AudioSeek, default: AudioSeek) -> String {
     let label = match seek {
         AudioSeek::Remember => "Remember",
         AudioSeek::Start => "From the Start",
@@ -356,7 +339,13 @@ pub(super) fn audio_seek_label(seek: AudioSeek) -> String {
         AudioSeek::Random => "Random",
     };
 
-    default_label(label, seek == DEFAULT_AUDIO_SEEK)
+    default_label(label, seek == default)
+}
+
+/// What a way of starting a sound is called in the menu: the words the tray lists it under, with
+/// the way this setting starts at marked as the default.
+pub(super) fn audio_seek_label(seek: AudioSeek) -> String {
+    seek_label(seek, DEFAULT_AUDIO_SEEK)
 }
 
 /// What a way of starting a *pinned* sound is called in the menu:
@@ -365,14 +354,7 @@ pub(super) fn audio_seek_label(seek: AudioSeek) -> String {
 /// hover's setting starts, so the mark is the pin's own and not
 /// the one `audio_seek_label` puts on the same words.
 pub(super) fn pin_mode_audio_seek_label(seek: AudioSeek) -> String {
-    let label = match seek {
-        AudioSeek::Remember => "Remember",
-        AudioSeek::Start => "From the Start",
-        AudioSeek::Middle => "From the Middle",
-        AudioSeek::Random => "Random",
-    };
-
-    default_label(label, seek == DEFAULT_PIN_MODE_AUDIO_SEEK)
+    seek_label(seek, DEFAULT_PIN_MODE_AUDIO_SEEK)
 }
 
 /// The `Explorer Poll` submenu — the loop's own tick: how often the
