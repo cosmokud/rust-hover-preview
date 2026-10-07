@@ -332,25 +332,26 @@ pub(super) struct PinnedPreview {
     /// The scale of the display the pin was put up on: what the caption's measurements are
     /// multiplied by, and what the media is laid out at again when the box changes.
     pub(super) dpi: u32,
-    /// The options the sound's card this pin shows was taken up with, when
-    /// the pin is showing a sound: the theme and the font size the card's
-    /// frame was painted with at the take-up, kept beside the dpi and the
-    /// box the card was taken up at.
+    /// The share the sound's card this pin shows was taken up at, when
+    /// the pin is showing a sound: the size the card's frame was
+    /// painted at at the take-up, kept beside the dpi and the box the
+    /// card was taken up at.
     ///
-    /// The take-up and the frame's first painting capture the options at
+    /// The take-up and the frame's first painting capture the share at
     /// the same moment, so this and the frame's own remembered copy
-    /// (`MediaData::audio_options`, which the take-up reads) are one value,
-    /// which is why a hover that becomes a pin keeps the hover's size, and
-    /// a walk to the next sound — whose media was freshly loaded — takes up
-    /// the new share.
+    /// (`MediaData::audio_scale`, which the take-up reads) are one
+    /// value, which is why a hover that becomes a pin keeps the
+    /// hover's size, and a walk to the next sound — whose media was
+    /// freshly loaded — takes up the new share.
     ///
-    /// The card's own arithmetic — the press, the seek, the volume popup's
-    /// geometry, the window buttons' band — is answered from these rather
-    /// than from the configuration, so a press is answered against the
-    /// layout the card is drawn in, and a change to Audio Scaling reaches
-    /// the next take-up only (see `pinned_audio_options`). Nothing at all
+    /// The card's own arithmetic — the press, the seek, the volume
+    /// popup's geometry, the window buttons' band — is answered from
+    /// the options this share names rather than from the
+    /// configuration, so a press is answered against the layout the
+    /// card is drawn in, and a change to Audio Scaling reaches the
+    /// next take-up only (see `pinned_audio_options`). Nothing at all
     /// for a pin that shows no sound's card.
-    pub(super) audio_options: Option<AudioPreviewOptions>,
+    pub(super) audio_scale: Option<PreviewScale>,
     /// Whether this kind carries a transport bar, decided when the pin was taken up: it is the
     /// same answer for as long as the pin lasts, and the window's own height is measured from it.
     pub(super) transport_bar: bool,
@@ -453,7 +454,7 @@ impl PinnedPreview {
             content: (0, 0, 100, 100),
             restore: None,
             dpi: 96,
-            audio_options: None,
+            audio_scale: None,
             transport_bar: false,
             transport_live: false,
             frame: PinFrame::Shaped,
