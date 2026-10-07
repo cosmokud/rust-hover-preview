@@ -587,7 +587,7 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         content: (100, 100, 700, 500),
         restore: None,
         dpi: 96,
-        audio_options: None,
+        audio_scale: None,
         transport_bar: false,
         transport_live: false,
         frame: PinFrame::Shaped,

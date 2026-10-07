@@ -506,7 +506,7 @@ fn every_animated_kind_drains_its_queue() {
             video_process: None,
             loading_start: None,
             text_state: None,
-            audio_options: None,
+            audio_scale: None,
         };
 
         assert!(

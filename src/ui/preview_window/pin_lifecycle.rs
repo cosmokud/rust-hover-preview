@@ -847,7 +847,10 @@ pub(super) fn pin_shows_an_audio_card(pin: &PinnedPreview) -> bool {
     !pin.collapsed && !pin.transport_bar && !pin.overlay && pin.frame == PinFrame::None
 }
 
-/// The box a pin of a sound is given, which is the box its hover was.
+/// The box a pin of a sound is given, which is the box its hover was:
+/// the box of the card as it is drawn, at the share its frame was
+/// painted at, so a change to Audio Scaling that arrived while the
+/// hover was up does not resize the window pinning it.
 ///
 /// A pin's card carries its controls where a hover's does not, but it is not a different card:
 /// the buttons stand in the bar's own row and are carved out of the bar's width, so the card a pin
@@ -858,7 +861,12 @@ pub(super) fn pin_shows_an_audio_card(pin: &PinnedPreview) -> bool {
 /// and the hover's own top left corner is kept: where a window is put is the hover's place, and
 /// the clamp the take-up runs afterwards pulls a box the card would not fit back onto the display
 /// (see `pinned_caption_height` for the kind that has no caption above this one at all).
-pub(super) fn pinned_audio_card_box(rect: ScreenRegion, path: &Path, dpi: u32) -> ScreenRegion {
+pub(super) fn pinned_audio_card_box(
+    rect: ScreenRegion,
+    path: &Path,
+    dpi: u32,
+    scale: PreviewScale,
+) -> ScreenRegion {
     let chrome = Some(CardChrome {
         playing: false,
         volume: current_audio_volume(),
@@ -870,13 +878,13 @@ pub(super) fn pinned_audio_card_box(rect: ScreenRegion, path: &Path, dpi: u32) -
         return rect;
     };
 
-    let room = audio_box_room(work_area_at(rect.0, rect.1), current_audio_scale(), dpi);
+    let room = audio_box_room(work_area_at(rect.0, rect.1), scale, dpi);
     let Some((width, height)) = audio_preview::measure(
         &card,
         room.width.max(1),
         room.height.max(1),
         dpi,
-        current_audio_options(),
+        audio_options_of(scale),
     ) else {
         return rect;
     };
@@ -889,16 +897,19 @@ pub(super) fn pinned_audio_card_box(rect: ScreenRegion, path: &Path, dpi: u32) -
     )
 }
 
-/// The options a pinned sound's card is drawn with: the ones its card was
-/// taken up with, kept beside the dpi and the box it was taken up at (see
-/// `PinnedPreview::audio_options`), so the card's own arithmetic — the press,
+/// The options a pinned sound's card is drawn with: the ones its card
+/// was taken up with — the options the share it remembers names — kept
+/// beside the dpi and the box it was taken up at (see
+/// `PinnedPreview::audio_scale`), so the card's own arithmetic — the press,
 /// the seek, the volume popup's geometry, the window buttons' band — is
 /// answered against the layout the card is drawn in rather than the
 /// configuration's, and a change to Audio Scaling reaches the next take-up.
 /// A pin that remembers none — one that shows no sound's card — is answered
 /// with the configuration's.
 pub(super) fn pinned_audio_options(pin: &PinnedPreview) -> AudioPreviewOptions {
-    pin.audio_options.unwrap_or_else(current_audio_options)
+    pin.audio_scale
+        .map(audio_options_of)
+        .unwrap_or_else(current_audio_options)
 }
 
 /// The card's own control the pointer is over, asked of the card's own layout and answered in the

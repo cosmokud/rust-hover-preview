@@ -100,7 +100,7 @@ pub(super) fn load_animated_gif(
             video_process: None,
             loading_start: None,
             text_state: None,
-            audio_options: None,
+            audio_scale: None,
         });
     }
 
@@ -205,7 +205,7 @@ pub(super) fn load_animated_gif(
         video_process: None,
         loading_start: Some(Instant::now()),
         text_state: None,
-        audio_options: None,
+        audio_scale: None,
     })
 }
 
@@ -327,7 +327,7 @@ pub(super) fn load_animated_apng(
             video_process: None,
             loading_start: None,
             text_state: None,
-            audio_options: None,
+            audio_scale: None,
         });
     }
 
@@ -419,7 +419,7 @@ pub(super) fn load_animated_apng(
         video_process: None,
         loading_start: Some(Instant::now()),
         text_state: None,
-        audio_options: None,
+        audio_scale: None,
     })
 }
 
@@ -559,7 +559,7 @@ pub(super) fn load_animated_webp(
             video_process: None,
             loading_start: None,
             text_state: None,
-            audio_options: None,
+            audio_scale: None,
         });
     }
 
@@ -662,7 +662,7 @@ pub(super) fn load_animated_webp(
         video_process: None,
         loading_start: Some(Instant::now()),
         text_state: None,
-        audio_options: None,
+        audio_scale: None,
     })
 }
 
@@ -720,7 +720,7 @@ pub(super) fn load_animated_heif(
         video_process: None,
         loading_start: None,
         text_state: None,
-        audio_options: None,
+        audio_scale: None,
     })
 }
 
@@ -816,6 +816,6 @@ pub(super) fn load_animated_jxl(
         video_process: None,
         loading_start: None,
         text_state: None,
-        audio_options: None,
+        audio_scale: None,
     })
 }

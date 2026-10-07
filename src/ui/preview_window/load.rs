@@ -525,7 +525,7 @@ pub(super) fn load_pdf_first_page(
         video_process: None,
         loading_start: None,
         text_state: None,
-        audio_options: None,
+        audio_scale: None,
     })
 }
 
@@ -572,7 +572,7 @@ pub(super) fn load_office_preview(
         video_process: None,
         loading_start: None,
         text_state: None,
-        audio_options: None,
+        audio_scale: None,
     })
 }
 
@@ -624,7 +624,7 @@ pub(super) fn load_text_preview(
         video_process: None,
         loading_start: None,
         text_state: state,
-        audio_options: None,
+        audio_scale: None,
     })
 }
 
@@ -660,7 +660,7 @@ pub(super) fn load_archive_preview(
         video_process: None,
         loading_start: None,
         text_state: None,
-        audio_options: None,
+        audio_scale: None,
     })
 }
 
@@ -751,6 +751,6 @@ pub(super) fn load_video_thumbnail(
         video_process: None,
         loading_start: None,
         text_state: None,
-        audio_options: None,
+        audio_scale: None,
     })
 }
