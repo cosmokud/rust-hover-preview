@@ -43,7 +43,7 @@ use super::submenus::{
     append_document_scale_menu, append_engine_idle_menu, append_labeled_item,
     append_office_engine_menu, append_tick_menu, append_video_engine_menu, cache_size_label,
     decode_budget_label, default_label, pin_nav_label, pin_update_label, remember_volume_label,
-    timing_delay_menu, update_available_label,
+    system_menu_label, timing_delay_menu, update_available_label,
 };
 
 use crate::app::updates;
@@ -1522,8 +1522,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // a check found (the row above asks for one, the first row here asks for
     // one now), whether this app starts with the session (the registry's
     // answer rather than the configuration's), and the configuration's own
-    // file and resets. The version the build is of is the file's label,
-    // which is what a user looks for to open `config.ini` by hand.
+    // file and resets. The version the build is of is the submenu's own
+    // label, which is where a user looks to see which build is running.
     let system_menu = CreatePopupMenu().unwrap();
 
     // Ask for a check now, past the once-an-hour one an opening of the menu
@@ -1556,18 +1556,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
 
     let _ = AppendMenuW(system_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
-    // The configuration's own file, labelled with the version that is running:
-    // it opens with the default app for it, and no one is asked first.
-    let config_label = format!("Config.ini (v{})", env!("CARGO_PKG_VERSION"));
-    let config_label_wide: Vec<u16> = config_label
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    // The configuration's own file: it opens with the default app for it,
+    // and no one is asked first.
     let _ = AppendMenuW(
         system_menu,
         MF_STRING,
         ID_TRAY_OPEN_CONFIG as usize,
-        PCWSTR(config_label_wide.as_ptr()),
+        w!("Edit Config.ini"),
     );
 
     // What each of the two would change, which is also the answer to whether it is offered:
@@ -1607,11 +1602,16 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Reset Extension Lists..."),
     );
 
+    let system_label = system_menu_label(env!("CARGO_PKG_VERSION"));
+    let system_label_wide: Vec<u16> = system_label
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let _ = AppendMenuW(
         menu,
         MF_STRING | MF_POPUP,
         system_menu.0 as usize,
-        w!("System"),
+        PCWSTR(system_label_wide.as_ptr()),
     );
 
     // Add Exit

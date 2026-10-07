@@ -393,11 +393,11 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
 - **Codecs** — What this machine has: Videos, Audio, Images, Engines.
   - A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
-- **System**
+- **System (vX.Y.Z)**
   - **Check for Updates** — Ask for a check now, past the once-an-hour one an opening of the menu makes. Where one is found, the **Update Available** row appears above this submenu on the menu's next opening; where none is, a dialog says so.
   - **Run at Startup** — Add or remove the Windows startup entry.
     - On every start, an entry that names another copy of the app — a portable copy, an older version, a path that has moved — is pointed back at the one you are running.
-  - **Config.ini** — Open the configuration file; named for the running version.
+  - **Edit Config.ini** — Open the configuration file in its default editor.
 - **Exit** — Close the app.
 
 ## Configuration
