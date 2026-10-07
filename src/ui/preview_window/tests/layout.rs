@@ -309,7 +309,8 @@ fn a_sound_is_laid_out_over_its_share_of_the_display() {
         (20, (748, 288), 250),
         (25, (936, 360), 313),
     ] {
-        let answered = dimensions::audio_box_room(display, PreviewScale::Percent(percent), TEST_DPI);
+        let answered =
+            dimensions::audio_box_room(display, PreviewScale::Percent(percent), TEST_DPI);
         assert_eq!(
             (answered.width, answered.height),
             room,

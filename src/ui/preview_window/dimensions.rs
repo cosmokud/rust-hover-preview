@@ -790,8 +790,9 @@ pub(super) fn text_box_room(bounds: ScreenBounds) -> (u32, u32) {
 /// text size at the 10% anchor, scaled by the share's fraction of the
 /// anchor and rounded to the nearest whole percent — 63%, 125%, 188%,
 /// 250% and 313% for the five shares the menu offers. A share a hand
-/// edits past the menu's top end is past the menu but not past the
-/// metrics, which honor 1% to 1000% (see `TextMetrics::new`).
+/// edits past the menu's top end derives a font past the 1000% the
+/// metrics honor, which is clamped to it (see `TextMetrics::new`) —
+/// the same clamping every other font size answer is put through.
 pub(super) fn audio_font_scale_percent(scale: PreviewScale) -> u32 {
     let share = scale.target_scale().unwrap_or(1.0).min(1.0);
     let anchor = DEFAULT_AUDIO_SCALE_PERCENT as f32 / 100.0;
