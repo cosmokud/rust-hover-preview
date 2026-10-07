@@ -184,7 +184,7 @@ pub(crate) struct VolumePopup {
 }
 
 /// The popup a volume button opens, as it is placed against the strip the button sits in: a panel
-/// floating over the media above the bar, hung from the button's own right edge and kept inside
+/// floating over the media above the bar, centered on the button and kept inside
 /// the window it belongs to — a popup drawn off the side of the window is a level that cannot be
 /// dragged to.
 ///
@@ -225,8 +225,13 @@ pub(crate) fn volume_popup_from_button(button: RECT, width: i32, dpi: u32) -> Vo
     let panel_height = text_paint::scaled(VOLUME_PANEL_HEIGHT, scale).max(8);
     let gap = text_paint::scaled(VOLUME_PANEL_GAP, scale).max(1);
 
-    let right = button.right.clamp(0, width.max(0));
-    let left = (right - panel_width).max(0);
+    // The panel sits centered on the button's own middle — a hand aims at the
+    // button, and the level answers from the middle of it — rather than hung off
+    // the button's right edge, and kept inside the window: a window too narrow to
+    // hold the panel centered is a panel held at the window's own edge instead,
+    // where the hand that opened it can still reach it.
+    let center = (button.left + button.right) / 2;
+    let left = (center - panel_width / 2).clamp(0, width.saturating_sub(panel_width).max(0));
     let right = left + panel_width;
     // The panel floats above the button rather than over it: a level is aimed at from the side
     // it is heard on, and a panel covering the button that opened it is a panel the hand has to

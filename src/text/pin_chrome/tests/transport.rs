@@ -47,8 +47,8 @@ fn the_popup_hung_from_a_button_is_the_one_the_transport_bar_opens() {
             };
             assert_eq!(groove, hung, "{width}x{height} at dpi {dpi}");
 
-            // And the panel is still where it belongs: hung from the button's own right edge,
-            // above it, and inside the window it belongs to.
+            // And the panel is still where it belongs: centered on the button it
+            // belongs to, above it, and inside the window it belongs to.
             assert!(panel.panel.right <= width && panel.panel.left >= 0);
             // And it floats above the button rather than over it — unless the window is too
             // short for that, which is what the panel's own floor is for: a level that cannot
@@ -226,8 +226,12 @@ fn a_volume_popup_is_placed_over_its_button_and_read_bottom_up() {
     let popup = volume_popup_layout(width, strip_top, strip_height, 96);
     let button = transport_layout(width, strip_height, 96, true).volume;
 
-    // Above the bar, hung from the button's own right edge, and clear of the button itself.
-    assert_eq!(popup.panel.right, button.right);
+    // Above the bar, centered on the button that opened it, and clear of the button itself.
+    assert_eq!(
+        (popup.panel.left + popup.panel.right) / 2,
+        (button.left + button.right) / 2,
+        "the panel is centered on the button it was opened from"
+    );
     assert_eq!(
         popup.panel.bottom,
         strip_top + button.top - VOLUME_PANEL_GAP
@@ -280,13 +284,84 @@ fn a_volume_popup_is_placed_over_its_button_and_read_bottom_up() {
     assert!(volume_thumb_row(popup.track, 50) < volume_thumb_row(popup.track, 25));
 }
 
-/// A window too narrow for the panel is not a popup drawn off the side of it: it is a panel
-/// that starts at the window's own edge, where the hand that opened it can still reach it.
+/// The panel a volume button opens is centered on that button's own middle, at every scale
+/// the display runs at and every width the window is given: a hand aims at the button, and
+/// the level answers from the middle of it rather than off one edge of it.
+#[test]
+fn a_volume_popup_is_centered_on_its_button() {
+    for (width, height, strip_top, dpi) in [
+        (800, 30, 400, 96),
+        (600, 40, 200, 144),
+        (320, 30, 55, 96),
+        (1920, 40, 100, 144),
+    ] {
+        let strip = transport_layout(width, height, dpi, true).volume;
+        let button = RECT {
+            top: strip.top + strip_top,
+            bottom: strip.bottom + strip_top,
+            ..strip
+        };
+
+        let popup = volume_popup_layout(width, strip_top, height, dpi);
+
+        // The panel's middle is the button's middle, and the whole of the panel is
+        // inside the window it belongs to.
+        assert_eq!(
+            (popup.panel.left + popup.panel.right) / 2,
+            (button.left + button.right) / 2,
+            "{width}x{height} at dpi {dpi}"
+        );
+        assert!(
+            popup.panel.left >= 0 && popup.panel.right <= width,
+            "the panel is inside the window at {width}x{height} dpi {dpi}"
+        );
+    }
+
+    // And the same centering for a button drawn somewhere else — a sound's card is
+    // one such place — not only the transport bar's.
+    for (button, width, dpi) in [
+        (
+            RECT {
+                left: 100,
+                top: 300,
+                right: 130,
+                bottom: 330,
+            },
+            800,
+            96,
+        ),
+        (
+            RECT {
+                left: 40,
+                top: 10,
+                right: 88,
+                bottom: 58,
+            },
+            200,
+            144,
+        ),
+    ] {
+        let popup = volume_popup_from_button(button, width, dpi);
+
+        assert_eq!(
+            (popup.panel.left + popup.panel.right) / 2,
+            (button.left + button.right) / 2,
+            "{width} wide at dpi {dpi}"
+        );
+        assert!(popup.panel.left >= 0 && popup.panel.right <= width);
+    }
+}
+
+/// A window narrow beside the panel is not a popup drawn off the side of it: the panel is
+/// kept inside the window it belongs to, centered on the button when the window is wide
+/// enough and held at its edge when it is not, where the hand that opened it can still
+/// reach it.
 #[test]
 fn a_volume_popup_is_kept_inside_a_narrow_window() {
-    let popup = volume_popup_layout(30, 100, 30, 96);
+    let width = 30;
+    let popup = volume_popup_layout(width, 100, 30, 96);
 
-    assert!(popup.panel.left >= 0);
+    assert!(popup.panel.left >= 0 && popup.panel.right <= width);
     assert!(popup.panel.right > popup.panel.left);
     assert!(popup.track.left >= popup.panel.left);
     assert!(popup.track.bottom > popup.track.top);
