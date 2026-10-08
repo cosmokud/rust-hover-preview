@@ -147,6 +147,310 @@ fn a_menu_that_would_run_off_the_window_stays_inside_it() {
     );
 }
 
+/// The rows the seek flyout holds: the four seek
+/// choices, in the order the menu lists them in, with
+/// the one in force carrying its disc.
+fn four_choices() -> Vec<MenuRow> {
+    vec![
+        MenuRow {
+            label: "Remember".to_string(),
+            mark: MenuMark::None,
+        },
+        MenuRow {
+            label: "From the Start".to_string(),
+            mark: MenuMark::None,
+        },
+        MenuRow {
+            label: "From the Middle".to_string(),
+            mark: MenuMark::None,
+        },
+        MenuRow {
+            label: "Random".to_string(),
+            mark: MenuMark::Bullet,
+        },
+    ]
+}
+
+/// The seek flyout hangs right of the main menu's own
+/// right edge, top-aligned with the Seek row — the main
+/// menu's third row — so the menu the flyout came from
+/// stays wholly visible beside it. The window is one the
+/// flyout fits in beside the menu at the gear's side,
+/// which is asked of more than one width and one display's
+/// own scale, because the scale is what sizes the two
+/// panels.
+#[test]
+fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
+    let menu_rows = three_rows();
+    let flyout_rows = four_choices();
+
+    // A window the flyout fits in beside the menu at the
+    // gear's side, at the scale of a 96-DPI display and at
+    // a second width, where the gap the flyout is held off
+    // the menu by is the same four logical pixels the menu
+    // is held off the gear by.
+    for width in [520i32, 600i32] {
+        let placed =
+            menu_flyout_from_menu(
+                &menu_popup_from_button(the_gear(), width, 300, 96, &menu_rows),
+                width,
+                300,
+                96,
+                &flyout_rows,
+            );
+
+        // The flyout's left edge is a small gap right of the
+        // main menu's own right edge, and its top is the Seek
+        // row's own top — the row the flyout is hung from.
+        assert_eq!(
+            placed.popup.panel.left,
+            placed.menu.panel.right + 4,
+            "the flyout sits right of the menu's own right edge"
+        );
+        assert_eq!(
+            placed.popup.panel.top,
+            placed.menu.rows_top + 2 * placed.menu.row_height,
+            "the flyout is top-aligned with the Seek row"
+        );
+
+        // Both panels are inside the window they belong to.
+        for panel in [placed.menu.panel, placed.popup.panel] {
+            assert!(panel.left >= 0, "the panel is not off the window's left");
+            assert!(panel.right <= width, "nor off its right");
+            assert!(panel.top >= 0, "nor off its top");
+            assert!(panel.bottom <= 300, "nor off its bottom");
+        }
+    }
+
+    // The same placement at a display's own larger scale,
+    // where both panels are bigger than they are at 96 DPI
+    // and the gap is the six logical pixels that is.
+    let placed = menu_flyout_from_menu(
+        &menu_popup_from_button(the_gear(), 700, 300, 144, &menu_rows),
+        700,
+        300,
+        144,
+        &flyout_rows,
+    );
+    assert_eq!(placed.popup.panel.left, placed.menu.panel.right + 6);
+    assert_eq!(
+        placed.popup.panel.top,
+        placed.menu.rows_top + 2 * placed.menu.row_height
+    );
+    for panel in [placed.menu.panel, placed.popup.panel] {
+        assert!(panel.left >= 0);
+        assert!(panel.right <= 700);
+        assert!(panel.top >= 0);
+        assert!(panel.bottom <= 300);
+    }
+}
+
+/// Both panels stay inside the window at every width: the
+/// button the menu hangs from stands in the window's top
+/// corner, where a menu tucked to it leaves a flyout no
+/// room but the corner's own — so a window too narrow for
+/// the flyout beside the menu there is a menu pulled left,
+/// off the button, until the flyout fits beside it at the
+/// window's own right edge, and a window too narrow for
+/// the two panels at their own width is the two of them
+/// narrowed to half the room the window leaves between its
+/// own edges. A window too short to hold the flyout below
+/// the Seek row is a flyout held at the window's own
+/// bottom, the same holding the menu's own panel has. Each
+/// holding is asked of more than one display's own scale.
+#[test]
+fn both_panels_stay_inside_the_window_at_every_width() {
+    let menu_rows = three_rows();
+    let flyout_rows = four_choices();
+
+    // A window the flyout runs off the right edge of at the
+    // menu's tucked place, but one two panels fit in side by
+    // side: the menu is pulled left until the flyout fits
+    // beside it at the window's right edge, and the menu
+    // stays inside the window and uncovered.
+    let pulled = menu_flyout_from_menu(
+        &menu_popup_from_button(the_gear(), 400, 300, 96, &menu_rows),
+        400,
+        300,
+        96,
+        &flyout_rows,
+    );
+    assert_eq!(
+        pulled.popup.panel.right,
+        400,
+        "the flyout is held at the window's right edge"
+    );
+    assert_eq!(
+        pulled.popup.panel.left,
+        pulled.menu.panel.right + 4,
+        "and it is still right of the menu"
+    );
+    assert!(
+        pulled.menu.panel.left >= 0,
+        "the menu pulled left is still inside the window"
+    );
+    assert!(
+        pulled.menu.panel.right < pulled.popup.panel.left,
+        "and the pulled menu is not covered by the flyout"
+    );
+
+    // The same holding at a display's own larger scale, where
+    // the panels are bigger than the window can hold side by
+    // side at the button's side.
+    let pulled = menu_flyout_from_menu(
+        &menu_popup_from_button(the_gear(), 500, 300, 144, &menu_rows),
+        500,
+        300,
+        144,
+        &flyout_rows,
+    );
+    assert_eq!(pulled.popup.panel.right, 500);
+    assert_eq!(pulled.popup.panel.left, pulled.menu.panel.right + 6);
+    assert!(pulled.menu.panel.left >= 0);
+    assert!(pulled.menu.panel.right < pulled.popup.panel.left);
+
+    // A window too narrow for the two panels at their own
+    // width: the two are narrowed to half the room the
+    // window leaves between its own edges, the menu at the
+    // window's left edge and the flyout right of it.
+    let split = menu_flyout_from_menu(
+        &menu_popup_from_button(the_gear(), 250, 300, 96, &menu_rows),
+        250,
+        300,
+        96,
+        &flyout_rows,
+    );
+    assert_eq!(
+        split.menu.panel.left,
+        0,
+        "a window too narrow for the two holds the menu at its left"
+    );
+    assert_eq!(
+        split.popup.panel.right,
+        250,
+        "and the flyout at its right"
+    );
+    assert_eq!(
+        split.popup.panel.left,
+        split.menu.panel.right + 4,
+        "the narrowed flyout is still right of the narrowed menu"
+    );
+    assert!(split.menu.panel.right < split.popup.panel.left);
+
+    // And the same narrowing at a display's own larger scale.
+    let split = menu_flyout_from_menu(
+        &menu_popup_from_button(the_gear(), 250, 300, 144, &menu_rows),
+        250,
+        300,
+        144,
+        &flyout_rows,
+    );
+    assert_eq!(split.menu.panel.left, 0);
+    assert_eq!(split.popup.panel.right, 250);
+    assert_eq!(split.popup.panel.left, split.menu.panel.right + 6);
+    assert!(split.menu.panel.right < split.popup.panel.left);
+
+    // A window too short to hold the flyout below the Seek
+    // row: the flyout is held at the window's own bottom,
+    // moved up from the row it is aligned with, and the menu
+    // is still inside the window.
+    let short = menu_flyout_from_menu(
+        &menu_popup_from_button(the_gear(), 600, 120, 96, &menu_rows),
+        600,
+        120,
+        96,
+        &flyout_rows,
+    );
+    assert_eq!(
+        short.popup.panel.bottom,
+        120,
+        "a short window holds the flyout at its bottom"
+    );
+    assert!(
+        short.popup.panel.top < short.menu.rows_top + 2 * short.menu.row_height,
+        "the flyout is moved up from the Seek row to stay inside"
+    );
+    assert!(short.popup.panel.top >= 0);
+    assert!(
+        short.menu.panel.bottom <= 120,
+        "and the menu is still inside the short window"
+    );
+}
+
+/// While the flyout is up, the menu it came from stays
+/// wholly visible and uncovered: every row of the menu is
+/// inside the window, and the flyout's panel does not reach
+/// into the menu's own — the flyout is beside the menu, not
+/// over it. Asked of the placements a window gives the pair:
+/// the flyout at the menu's side, the menu pulled left to
+/// make the flyout room, and the two narrowed to fit a
+/// window too small for them at their own width.
+#[test]
+fn every_menu_row_stays_visible_and_uncovered_while_the_flyout_is_up() {
+    let menu_rows = three_rows();
+    let flyout_rows = four_choices();
+
+    let placements = [
+        (600i32, 300i32, 96u32), // the flyout at the menu's side
+        (400, 300, 96),          // the menu pulled left
+        (250, 300, 96),          // the two narrowed
+        (500, 300, 144),         // pulled left at a larger scale
+        (250, 300, 144),         // narrowed at a larger scale
+    ];
+
+    for (width, height, dpi) in placements {
+        let placed = menu_flyout_from_menu(
+            &menu_popup_from_button(the_gear(), width, height, dpi, &menu_rows),
+            width,
+            height,
+            dpi,
+            &flyout_rows,
+        );
+        let menu = placed.menu;
+        let flyout = placed.popup;
+
+        // The flyout is beside the menu, not over it: its panel
+        // starts at or after the menu's own right edge, so no
+        // row of the menu is covered.
+        assert!(
+            flyout.panel.left >= menu.panel.right,
+            "the flyout does not cover the menu ({}x{} at {} DPI)",
+            width,
+            height,
+            dpi
+        );
+
+        // Every row of the menu is inside the window: the
+        // rows' own band, from the first row's top to the last
+        // row's bottom, held between the window's own edges
+        // with the panel it is drawn in.
+        let rows_bottom = menu.rows_top + menu.rows * menu.row_height;
+        assert!(
+            menu.rows_top >= 0 && rows_bottom <= height,
+            "the menu's rows are inside the window ({}x{} at {} DPI)",
+            width,
+            height,
+            dpi
+        );
+        assert!(menu.panel.left >= 0 && menu.panel.right <= width);
+        for index in 0..menu.rows {
+            let row_top = menu.rows_top + index * menu.row_height;
+            assert!(
+                row_top >= 0 && row_top + menu.row_height <= height,
+                "menu row {index} is inside the window ({}x{} at {} DPI)",
+                width,
+                height,
+                dpi
+            );
+        }
+
+        // And the flyout is inside the window too, which is
+        // what keeps it reachable.
+        assert!(flyout.panel.left >= 0 && flyout.panel.right <= width);
+        assert!(flyout.panel.top >= 0 && flyout.panel.bottom <= height);
+    }
+}
+
 /// A point answers a row only inside the rows: the pad the panel is
 /// drawn with above and below them is no row at all, and neither is
 /// anywhere outside the panel, above it or below it — a press there is
