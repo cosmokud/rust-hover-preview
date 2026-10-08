@@ -129,7 +129,7 @@ pub(super) fn menu_rows() -> Vec<pin_chrome::MenuRow> {
     let (shuffle, loop_) = pin_mode_audio_toggles();
     vec![
         pin_chrome::MenuRow {
-            label: "Shuffle Mode".to_string(),
+            label: "Shuffle".to_string(),
             mark: pin_chrome::MenuMark::Check(shuffle),
         },
         pin_chrome::MenuRow {

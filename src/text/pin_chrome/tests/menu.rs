@@ -1,6 +1,7 @@
 use super::*;
 use super::super::menu::{
-    MENU_MARKER_ROOM_PIXELS, MENU_PAD_PIXELS, MENU_PANEL_MIN_PIXELS, MENU_PANEL_WIDTH_PIXELS,
+    MENU_MARKER_ROOM_PIXELS, MENU_PAD_PIXELS, MENU_PANEL_MIN_PIXELS,
+    MENU_PANEL_RIGHT_ROOM_PIXELS, MENU_PANEL_WIDTH_PIXELS,
 };
 
 /// The rows the card's menu carries: the two that turn a mode
@@ -9,7 +10,7 @@ use super::super::menu::{
 fn three_rows() -> Vec<MenuRow> {
     vec![
         MenuRow {
-            label: "Shuffle Mode".to_string(),
+            label: "Shuffle".to_string(),
             mark: MenuMark::Check(true),
         },
         MenuRow {
@@ -97,13 +98,13 @@ fn a_menu_that_would_run_off_the_window_stays_inside_it() {
 
     // And the same two holdings at a display's own larger scale, where
     // the panel is bigger than it is at 96 DPI.
-    let scaled = menu_popup_from_point((90, 200), 100, 120, 144, &rows);
+    let scaled = menu_popup_from_point((90, 200), 80, 120, 144, &rows);
     assert_eq!(
         scaled.panel.left,
         0,
         "a narrow window holds the panel at its left at 144 DPI"
     );
-    assert!(scaled.panel.right <= 100);
+    assert!(scaled.panel.right <= 80);
     assert!(
         scaled.panel.bottom <= 120,
         "and a short window holds the panel at its bottom"
@@ -112,7 +113,7 @@ fn a_menu_that_would_run_off_the_window_stays_inside_it() {
 
 /// The main menu's own panel is only as wide as its longest
 /// row: a menu whose longest row is longer than the card's
-/// own ("Shuffle Mode") is a wider panel at the same
+/// own ("Shuffle") is a wider panel at the same
 /// display's own scale, and the room the longest row's label
 /// asks for moves with the display's own scale the way the
 /// labels' does — double the scale, and the text room is
@@ -151,12 +152,13 @@ fn the_main_menu_is_only_as_wide_as_its_longest_row() {
     );
 
     // Double the display's own scale: the room the longest
-    // row's label asks for — the panel less the marks' room
-    // and the pads — is roughly doubled.
+    // row's label asks for — the panel less the marks' room,
+    // the pad and the right room — is roughly doubled.
     let text_room = |rows: &[MenuRow], dpi: u32| {
         let scale = dpi as f32 / 96.0;
         let held = text_paint::scaled(MENU_MARKER_ROOM_PIXELS as i32, scale)
-            + 2 * text_paint::scaled(MENU_PAD_PIXELS as i32, scale);
+            + text_paint::scaled(MENU_PAD_PIXELS as i32, scale)
+            + text_paint::scaled(MENU_PANEL_RIGHT_ROOM_PIXELS as i32, scale);
         panel_width(rows, dpi) - held
     };
     let room_at_100 = text_room(&three_rows(), 96);
@@ -171,11 +173,12 @@ fn the_main_menu_is_only_as_wide_as_its_longest_row() {
 
 /// The main menu's panel is exactly its longest row's
 /// measurement, at the display's own scale and in the theme's
-/// own face, plus the room the marks stand in and the pad the
-/// panel holds its rows in on either side of it — the
-/// arithmetic of the width, not a size of its own.
+/// own face, plus the room the marks stand in, the pad the
+/// panel holds its rows in on its left, and the room it holds
+/// to the right of its longest row — the arithmetic of the
+/// width, not a size of its own.
 #[test]
-fn the_main_menu_panel_is_the_longest_row_plus_the_marks_and_the_pads() {
+fn the_main_menu_panel_is_the_longest_row_plus_the_marks_and_the_rooms() {
     let rows = three_rows();
     let popup = menu_popup_from_point(a_point(), 620, 300, 96, &rows);
 
@@ -191,12 +194,13 @@ fn the_main_menu_panel_is_the_longest_row_plus_the_marks_and_the_pads() {
         .max()
         .expect("the menu holds rows");
     let marker_room = text_paint::scaled(MENU_MARKER_ROOM_PIXELS as i32, scale);
-    let pads = 2 * text_paint::scaled(MENU_PAD_PIXELS as i32, scale);
+    let pad = text_paint::scaled(MENU_PAD_PIXELS as i32, scale);
+    let right_room = text_paint::scaled(MENU_PANEL_RIGHT_ROOM_PIXELS as i32, scale);
 
     assert_eq!(
         popup.panel.right - popup.panel.left,
-        longest + marker_room + pads,
-        "the panel is the longest row plus the marks' room and the pads"
+        longest + marker_room + pad + right_room,
+        "the panel is the longest row plus the marks' room, the pad and the right room"
     );
 }
 
@@ -226,7 +230,8 @@ fn a_menu_of_one_character_rows_does_not_collapse_below_the_floor() {
     let scale = 96f32 / 96.0;
     let floor = text_paint::scaled(MENU_PANEL_MIN_PIXELS as i32, scale);
     let marker_room = text_paint::scaled(MENU_MARKER_ROOM_PIXELS as i32, scale);
-    let pads = 2 * text_paint::scaled(MENU_PAD_PIXELS as i32, scale);
+    let pad = text_paint::scaled(MENU_PAD_PIXELS as i32, scale);
+    let right_room = text_paint::scaled(MENU_PANEL_RIGHT_ROOM_PIXELS as i32, scale);
 
     assert!(
         popup.panel.right - popup.panel.left >= floor,
@@ -244,7 +249,7 @@ fn a_menu_of_one_character_rows_does_not_collapse_below_the_floor() {
         .max()
         .expect("the menu holds rows");
     assert!(
-        popup.panel.right - popup.panel.left > longest + marker_room + pads,
+        popup.panel.right - popup.panel.left > longest + marker_room + pad + right_room,
         "the floor held the panel open past what the rows ask for"
     );
 }
@@ -570,7 +575,7 @@ fn the_seek_row_carries_its_arrow_while_the_flyout_is_down() {
     let placements = [
         (620i32, 300i32, 96u32, MenuArrow::Right), // the flyout fits right
         (400, 300, 96, MenuArrow::Left), // the flyout flips left
-        (250, 300, 96, MenuArrow::Right), // the two are narrowed
+        (180, 300, 96, MenuArrow::Right), // the two are narrowed
         (760, 300, 144, MenuArrow::Right), // fits right, larger scale
         (500, 300, 144, MenuArrow::Left), // flips left, larger scale
         (250, 300, 144, MenuArrow::Right), // narrowed, larger scale
@@ -674,8 +679,8 @@ fn both_panels_stay_inside_the_window_at_every_width() {
     // the window leaves between its own edges, the menu at the
     // window's left edge and the flyout right of it.
     let split = menu_flyout_from_menu(
-        &menu_popup_from_point(a_point(), 250, 300, 96, &menu_rows),
-        250,
+        &menu_popup_from_point(a_point(), 200, 300, 96, &menu_rows),
+        200,
         300,
         96,
         &flyout_rows,
@@ -685,7 +690,7 @@ fn both_panels_stay_inside_the_window_at_every_width() {
         0,
         "a window too narrow for the two holds the menu at its left"
     );
-    assert_eq!(split.popup.panel.right, 250, "and the flyout at its right");
+    assert_eq!(split.popup.panel.right, 200, "and the flyout at its right");
     assert_eq!(
         split.popup.panel.left,
         split.menu.panel.right + 4,
@@ -878,7 +883,7 @@ fn a_check_row_carries_a_check_alone_and_a_choice_its_disc() {
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
     let rows = vec![
         MenuRow {
-            label: "Shuffle Mode".to_string(),
+            label: "Shuffle".to_string(),
             mark: MenuMark::Check(true),
         },
         MenuRow {
@@ -899,8 +904,7 @@ fn a_check_row_carries_a_check_alone_and_a_choice_its_disc() {
 
     // The room the marks stand in: the pad the panel holds its
     // rows in and the column the marks are centred in, inside
-    // the hairline that keeps the panel off what is behind it
-    // and short of the labels it holds.
+    // the panel's own edge and short of the labels it holds.
     let marks = popup.panel.left + 1..popup.panel.left + 22;
 
     /// The pixels of a band of the buffer that are neither the
