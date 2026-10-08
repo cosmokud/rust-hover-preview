@@ -37,24 +37,21 @@ pub const DEFAULT_NORMALIZE_VOLUME: bool = true;
 /// Whether a video's soundtrack is brought to the same level before it is played, on the same
 /// terms and by the same measurement as a sound file's own (see above).
 ///
-/// It is off where the app starts, and for the reason the video's own level starts at silence: a
-/// video is looked at, and its soundtrack is as likely to be a distraction as anything — where a
-/// sound file *is* the sound. What it costs is the reason it is worth the switch rather than a
-/// default too: a film's audio is a decode of the film, and a hover pays for one.
-pub const DEFAULT_NORMALIZE_VIDEO_VOLUME: bool = false;
+/// It is on where the app starts, on the same terms as the sound's own: a folder of films is
+/// heard at one level rather than at each film's own, and the cost of the measurement — a
+/// decode of the film — is the same one the sound's already pays (see above).
+pub const DEFAULT_NORMALIZE_VIDEO_VOLUME: bool = true;
 /// Whether a sound's previewed level is kept between hovers, or whether the level the setting
 /// names is the level every sound is previewed at.
 ///
-/// It is off where the app starts, and the two readings are both defensible: a level that is kept
-/// is what a person who turned it up once meant for the rest of the folder, and a level that is not
-/// is a quiet app that plays every file the same way until it is asked otherwise (see
-/// `remember_audio_volume`).
-pub const DEFAULT_REMEMBER_AUDIO_VOLUME: bool = false;
-/// And the video's own, which is the same question asked about a soundtrack and is off for the same
-/// reason the video's level starts at silence: a film is looked at rather than listened to, so a
-/// soundtrack that remembers the last preview is as unwelcome as one that plays itself (see
-/// `remember_video_volume`).
-pub const DEFAULT_REMEMBER_VIDEO_VOLUME: bool = false;
+/// It is on where the app starts: a level that is kept is what a person who turned it up once
+/// meant for the rest of the folder, and a level that is not is a quiet app that plays every
+/// file the same way until it is asked otherwise (see `remember_audio_volume`).
+pub const DEFAULT_REMEMBER_AUDIO_VOLUME: bool = true;
+/// And the video's own, which is the same question asked about a soundtrack and is on for the
+/// same reason the sound's own is: a level that is kept is what a person who turned it up once
+/// meant for the rest of the folder (see `remember_video_volume`).
+pub const DEFAULT_REMEMBER_VIDEO_VOLUME: bool = true;
 /// Whether a video is decoded on the graphics card, which is the `Video` toggle under
 /// `Performance → Hardware Acceleration` in the tray.
 ///

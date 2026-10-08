@@ -191,9 +191,9 @@ pub(super) const ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE: u16 = 1394;
 /// stretch the levels are read from.
 pub(super) const ID_TRAY_NORMALIZE_VOLUME: u16 = 1525;
 /// The video half's own row of the same name, which is the same switch asked about a film's
-/// soundtrack: a setting of its own, and one that starts switched off (see
-/// `normalize_video_volume`). It carries the id beside its sound half's, so neither row is ever
-/// read as a level of a list under it.
+/// soundtrack: a setting of its own, and one that starts switched on along with its sound half
+/// (see `normalize_video_volume`). It carries the id beside its sound half's, so neither row is
+/// ever read as a level of a list under it.
 pub(super) const ID_TRAY_NORMALIZE_VIDEO_VOLUME: u16 = 1526;
 /// The row under a sound's `Normalize`: whether a level turned on a pinned window's own knob is the
 /// level the next sound is previewed at, rather than the level the list above it names.
@@ -203,7 +203,7 @@ pub(super) const ID_TRAY_NORMALIZE_VIDEO_VOLUME: u16 = 1526;
 /// `remember_audio_volume`).
 pub(super) const ID_TRAY_REMEMBER_VOLUME: u16 = 1527;
 /// And the video's own row of the same name, which is the same switch asked about a soundtrack and
-/// starts switched off along with it (see `remember_video_volume`).
+/// starts switched on along with it (see `remember_video_volume`).
 pub(super) const ID_TRAY_REMEMBER_VIDEO_VOLUME: u16 = 1528;
 /// The ways a sound can be started, in the order the submenu lists them: where it was left the
 /// last time it was hovered, which is where the setting starts, then its beginning, its middle,
