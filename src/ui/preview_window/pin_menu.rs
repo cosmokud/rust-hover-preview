@@ -82,15 +82,15 @@ pub(super) fn menu_rows(seek_page: bool) -> Vec<pin_chrome::MenuRow> {
         return vec![
             pin_chrome::MenuRow {
                 label: "Shuffle Mode".to_string(),
-                marked: shuffle,
+                mark: pin_chrome::MenuMark::Check(shuffle),
             },
             pin_chrome::MenuRow {
                 label: "Loop".to_string(),
-                marked: loop_,
+                mark: pin_chrome::MenuMark::Check(loop_),
             },
             pin_chrome::MenuRow {
                 label: "Seek".to_string(),
-                marked: false,
+                mark: pin_chrome::MenuMark::None,
             },
         ];
     }
@@ -101,7 +101,11 @@ pub(super) fn menu_rows(seek_page: bool) -> Vec<pin_chrome::MenuRow> {
         .zip(SEEK_LABELS)
         .map(|(choice, label)| pin_chrome::MenuRow {
             label: label.to_string(),
-            marked: *choice == current,
+            mark: if *choice == current {
+                pin_chrome::MenuMark::Bullet
+            } else {
+                pin_chrome::MenuMark::None
+            },
         })
         .collect()
 }
@@ -200,7 +204,7 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     )?;
 
     Some(PinMenuPaint {
-        popup: pin_chrome::menu_popup_from_bullet(
+        popup: pin_chrome::menu_popup_from_button(
             RECT {
                 top: gear.top + top,
                 ..gear
