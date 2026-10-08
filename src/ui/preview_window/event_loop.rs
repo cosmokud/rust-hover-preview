@@ -358,6 +358,12 @@ pub fn run_preview_window() {
             if PIN_END_REQUESTED.swap(false, Ordering::AcqRel) {
                 pin_request = Some(end_pin_state(Reason::Asked));
             }
+            // A press the pin's own window never saw — on another app's window, the tray, or
+            // the pin's own bubble — is the hook's ask to put the card's menu away: only the
+            // menu goes, and the pin itself stands (see `take_pin_menu_dismiss`).
+            if take_pin_menu_dismiss() {
+                render_layered_preview(hwnd);
+            }
 
             // Which windows a standing pin takes the keyboard keys for, told to the hook once a
             // tick: a `WH_KEYBOARD_LL` callback may not walk the desktop to find them, so this is

@@ -154,6 +154,28 @@ fn a_press_through_a_dismissed_popup_is_not_a_pick() {
     );
 }
 
+/// A press that lands anywhere but the pin's own window is a press the pin window never
+/// sees: it is `WS_EX_NOACTIVATE` and holds no capture, so nothing its procedure is sent can
+/// answer for a hand on another app's window, the tray, or the pin's own bubble. The Explorer
+/// hook polls every press and is the only side that can, so it publishes these — and only
+/// these — to close the card's menu where one is up. A press on the pin's own window is that
+/// window's own to answer (see `pinned_menu_press`), and is not published.
+#[test]
+fn a_press_on_another_window_is_published_but_one_on_the_pin_is_not() {
+    assert!(
+        press_is_outside_the_pin_window(true, false),
+        "a press whose window is not the pin window is published"
+    );
+    assert!(
+        !press_is_outside_the_pin_window(true, true),
+        "a press on the pin window is not"
+    );
+    assert!(
+        !press_is_outside_the_pin_window(false, false),
+        "and a tick with no press publishes nothing"
+    );
+}
+
 /// A pointer that has left the item the preview on screen is about has moved,
 /// whether or not it went far enough to clear the threshold: the threshold is a
 /// hand's own jitter, and a row of the list crossed under it would otherwise
