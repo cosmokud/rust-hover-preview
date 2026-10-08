@@ -487,9 +487,9 @@ pub(super) struct PinnedPaint {
     /// against (see `pinned_volume_geometry`).
     pub(super) volume_popup: Option<pin_chrome::VolumePopup>,
     /// The card's own menu, or nothing while its panel is closed: the
-    /// panel hung from the gear the card's menu opens from, the rows it
-    /// holds, and the Seek row's flyout beside it, asked of the pin for
-    /// the reason the volume popup's panel is (see
+    /// panel anchored at the point the right-click that opened it landed,
+    /// the rows it holds, and the Seek row's flyout beside it, asked of the
+    /// pin for the reason the volume popup's panel is (see
     /// `pinned_menu_geometry`).
     pub(super) menu: Option<PinMenuPaint>,
     /// Whether the bar's controls do anything for the engine playing this file (see

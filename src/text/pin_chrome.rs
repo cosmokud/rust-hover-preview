@@ -18,7 +18,7 @@
 //!
 //! The chrome lives in five files below: `transport` for the bar a playing file is driven and
 //! drawn from, `caption` for the strip above it, `bubble` for the two panels that float over
-//! the media rather than standing in it, `menu` for the panel a card's gear opens, and
+//! the media rather than standing in it, `menu` for the panel a card's right-click opens, and
 //! `primitives` for the palette and the shapes, marks and text runs the other four are drawn
 //! from. What is left in this file is the way in: every
 //! name the rest of the tree reaches as `pin_chrome::`, and the imports the tests beside it read
@@ -37,7 +37,7 @@ pub(crate) use caption::{
     button_at, button_boxes, measure_caption_text, paint_caption, Caption, CaptionButton,
 };
 pub(crate) use menu::{
-    menu_flyout_from_menu, menu_popup_from_button, menu_row_at, paint_menu_popup, MenuFlyout,
+    menu_flyout_from_menu, menu_popup_from_point, menu_row_at, paint_menu_popup, MenuFlyout,
     MenuPopup, MenuMark, MenuRow,
 };
 pub(crate) use primitives::{stroke_segment, surface_pixels, ChromePalette};

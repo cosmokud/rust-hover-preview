@@ -20,42 +20,31 @@ fn three_rows() -> Vec<MenuRow> {
     ]
 }
 
-/// The box the card's own arithmetic answers for the gear, in
-/// the window's own coordinates: the box a press is answered
-/// against, which reaches the window's own top edge above the
-/// drawn glyph and down to the bottom of the band the window
-/// buttons stand in.
-fn the_gear() -> RECT {
-    RECT {
-        left: 346,
-        top: 0,
-        right: 362,
-        bottom: 21,
-    }
+/// The point a menu is opened at in these tests, in the window's own
+/// coordinates: somewhere that leaves room for a flyout to its right at
+/// the widths the flyout cases are asked of.
+fn a_point() -> (i32, i32) {
+    (300, 40)
 }
 
-/// The menu opens downward from the gear's own button, with
-/// its right edge tucked to the gear's own left edge a small
-/// gap off it — the placement that leaves a flyout room to
-/// the menu's right — and the panel hangs below the band the
-/// gear stands in rather than over it.
+/// The menu opens with its top-left at the point the right-click landed,
+/// and its rows are held in from its own ends by the pad the panel is
+/// drawn with, so a row is never the panel's edge.
 #[test]
-fn the_menu_opens_down_from_the_button_with_its_right_edge_tucked_to_its_left() {
-    let gear = the_gear();
+fn the_menu_opens_at_the_point_the_click_landed() {
     let rows = three_rows();
-    let popup = menu_popup_from_button(gear, 400, 300, 96, &rows);
+    let popup = menu_popup_from_point((120, 40), 400, 300, 96, &rows);
 
-    // One small gap off the gear's own left edge, at the
-    // scale of a 96-DPI display, so the panel's right edge
-    // is tucked to the gear rather than hung off its right.
-    assert_eq!(popup.panel.right, gear.left - 4);
-    assert!(
-        popup.panel.top >= gear.bottom,
-        "the panel hangs below the band the gear stands in, not over it"
+    // The panel's own top-left corner is the point itself, where the
+    // window leaves it room.
+    assert_eq!(
+        (popup.panel.left, popup.panel.top),
+        (120, 40),
+        "the panel's top-left is the point the click landed"
     );
 
     // The rows are held in from the panel's own ends by the pad the
-    // panel is drawn with, so a row is never the panel's edge.
+    // panel is drawn with.
     assert!(popup.rows_top > popup.panel.top);
     let rows_bottom = popup.rows_top + rows.len() as i32 * popup.row_height;
     assert!(rows_bottom < popup.panel.bottom);
@@ -65,31 +54,18 @@ fn the_menu_opens_down_from_the_button_with_its_right_edge_tucked_to_its_left() 
     assert!(popup.panel.bottom <= 300);
 }
 
-/// A menu that would run off the window is held inside it: a
-/// panel off the side of a window is a row a hand cannot
-/// reach, and one off the bottom is rows that cannot be read
-/// at all. The window's own scale changes the panel's size,
-/// so the holding is asked of more than one.
+/// A menu asked for near an edge is held inside the window: a panel off
+/// the side of a window is a row a hand cannot reach, and one off the
+/// bottom is rows that cannot be read at all. The window's own scale
+/// changes the panel's size, so the holding is asked of more than one.
 #[test]
 fn a_menu_that_would_run_off_the_window_stays_inside_it() {
     let rows = three_rows();
 
-    // A narrow window: the panel is wider than the room the
-    // gear's own left edge leaves to the left, so the panel
-    // is narrowed to the window and held at its left edge
-    // rather than running off it.
-    let narrow = menu_popup_from_button(
-        RECT {
-            left: 46,
-            top: 0,
-            right: 62,
-            bottom: 21,
-        },
-        100,
-        300,
-        96,
-        &rows,
-    );
+    // A window too narrow to hold the panel with its left at the point:
+    // the panel is held at the window's own left rather than running off
+    // it.
+    let narrow = menu_popup_from_point((90, 0), 100, 300, 96, &rows);
     assert_eq!(
         narrow.panel.left,
         0,
@@ -97,44 +73,27 @@ fn a_menu_that_would_run_off_the_window_stays_inside_it() {
     );
     assert!(narrow.panel.right <= 100);
 
-    // A short window: the gear sits near the bottom and the
-    // panel cannot hang below it inside the window, so the
-    // panel is held at the window's own bottom instead.
-    let short = menu_popup_from_button(
-        RECT {
-            left: 346,
-            top: 0,
-            right: 362,
-            bottom: 113,
-        },
+    // A point near the window's own right edge: the panel is moved back
+    // until its own right edge is the window's.
+    let right = menu_popup_from_point((380, 0), 400, 300, 96, &rows);
+    assert_eq!(
+        right.panel.right,
         400,
-        120,
-        96,
-        &rows,
+        "a panel that would run off the right is moved back to the edge"
     );
+
+    // A short window: a point near the bottom puts the panel off it, so
+    // the panel is moved up until its own bottom edge is the window's.
+    let short = menu_popup_from_point((10, 200), 400, 120, 96, &rows);
     assert!(
         short.panel.bottom <= 120,
         "the panel does not run off the bottom"
     );
     assert!(short.panel.top >= 0, "and it is still a panel of the window");
 
-    // And the same two holdings at a display's own larger
-    // scale, where the panel is bigger than it is at 96 DPI:
-    // the room the gear's left edge leaves is smaller than
-    // the panel, and the window is shorter than the panel
-    // below it.
-    let scaled = menu_popup_from_button(
-        RECT {
-            left: 46,
-            top: 0,
-            right: 62,
-            bottom: 21,
-        },
-        100,
-        120,
-        144,
-        &rows,
-    );
+    // And the same two holdings at a display's own larger scale, where
+    // the panel is bigger than it is at 96 DPI.
+    let scaled = menu_popup_from_point((90, 200), 100, 120, 144, &rows);
     assert_eq!(
         scaled.panel.left,
         0,
@@ -175,24 +134,23 @@ fn four_choices() -> Vec<MenuRow> {
 /// right edge, top-aligned with the Seek row — the main
 /// menu's third row — so the menu the flyout came from
 /// stays wholly visible beside it. The window is one the
-/// flyout fits in beside the menu at the gear's side,
-/// which is asked of more than one width and one display's
-/// own scale, because the scale is what sizes the two
-/// panels.
+/// flyout fits in beside the menu at the point, which is
+/// asked of more than one width and one display's own
+/// scale, because the scale is what sizes the two panels.
 #[test]
 fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
     let menu_rows = three_rows();
     let flyout_rows = four_choices();
 
     // A window the flyout fits in beside the menu at the
-    // gear's side, at the scale of a 96-DPI display and at
+    // point, at the scale of a 96-DPI display and at
     // a second width, where the gap the flyout is held off
     // the menu by is the same four logical pixels the menu
-    // is held off the gear by.
+    // is held off the point by.
     for width in [520i32, 600i32] {
         let placed =
             menu_flyout_from_menu(
-                &menu_popup_from_button(the_gear(), width, 300, 96, &menu_rows),
+                &menu_popup_from_point(a_point(), width, 300, 96, &menu_rows),
                 width,
                 300,
                 96,
@@ -226,7 +184,7 @@ fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
     // where both panels are bigger than they are at 96 DPI
     // and the gap is the six logical pixels that is.
     let placed = menu_flyout_from_menu(
-        &menu_popup_from_button(the_gear(), 700, 300, 144, &menu_rows),
+        &menu_popup_from_point(a_point(), 700, 300, 144, &menu_rows),
         700,
         300,
         144,
@@ -269,7 +227,7 @@ fn both_panels_stay_inside_the_window_at_every_width() {
     // beside it at the window's right edge, and the menu
     // stays inside the window and uncovered.
     let pulled = menu_flyout_from_menu(
-        &menu_popup_from_button(the_gear(), 400, 300, 96, &menu_rows),
+        &menu_popup_from_point(a_point(), 400, 300, 96, &menu_rows),
         400,
         300,
         96,
@@ -298,7 +256,7 @@ fn both_panels_stay_inside_the_window_at_every_width() {
     // the panels are bigger than the window can hold side by
     // side at the button's side.
     let pulled = menu_flyout_from_menu(
-        &menu_popup_from_button(the_gear(), 500, 300, 144, &menu_rows),
+        &menu_popup_from_point(a_point(), 500, 300, 144, &menu_rows),
         500,
         300,
         144,
@@ -314,7 +272,7 @@ fn both_panels_stay_inside_the_window_at_every_width() {
     // window leaves between its own edges, the menu at the
     // window's left edge and the flyout right of it.
     let split = menu_flyout_from_menu(
-        &menu_popup_from_button(the_gear(), 250, 300, 96, &menu_rows),
+        &menu_popup_from_point(a_point(), 250, 300, 96, &menu_rows),
         250,
         300,
         96,
@@ -339,7 +297,7 @@ fn both_panels_stay_inside_the_window_at_every_width() {
 
     // And the same narrowing at a display's own larger scale.
     let split = menu_flyout_from_menu(
-        &menu_popup_from_button(the_gear(), 250, 300, 144, &menu_rows),
+        &menu_popup_from_point(a_point(), 250, 300, 144, &menu_rows),
         250,
         300,
         144,
@@ -355,7 +313,7 @@ fn both_panels_stay_inside_the_window_at_every_width() {
     // moved up from the row it is aligned with, and the menu
     // is still inside the window.
     let short = menu_flyout_from_menu(
-        &menu_popup_from_button(the_gear(), 600, 120, 96, &menu_rows),
+        &menu_popup_from_point(a_point(), 600, 120, 96, &menu_rows),
         600,
         120,
         96,
@@ -400,7 +358,7 @@ fn every_menu_row_stays_visible_and_uncovered_while_the_flyout_is_up() {
 
     for (width, height, dpi) in placements {
         let placed = menu_flyout_from_menu(
-            &menu_popup_from_button(the_gear(), width, height, dpi, &menu_rows),
+            &menu_popup_from_point(a_point(), width, height, dpi, &menu_rows),
             width,
             height,
             dpi,
@@ -457,7 +415,7 @@ fn every_menu_row_stays_visible_and_uncovered_while_the_flyout_is_up() {
 /// a press outside the menu, which is what closes it.
 #[test]
 fn a_point_is_a_row_only_inside_the_rows() {
-    let popup = menu_popup_from_button(the_gear(), 400, 300, 96, &three_rows());
+    let popup = menu_popup_from_point(a_point(), 400, 300, 96, &three_rows());
 
     let middle_x = (popup.panel.left + popup.panel.right) / 2;
     let row_middle = |index: i32| {
@@ -535,7 +493,7 @@ fn each_kind_of_mark_is_its_own_art_in_the_room_before_the_labels() {
             mark: MenuMark::Bullet,
         },
     ];
-    let popup = menu_popup_from_button(the_gear(), width, height, 96, &rows);
+    let popup = menu_popup_from_point(a_point(), width, height, 96, &rows);
     paint_menu_popup(&mut buffer, width, &palette, &popup, &rows, &surface, 1.0);
 
     // The room the marks stand in: the pad the panel holds its
@@ -668,7 +626,7 @@ fn a_menu_is_painted_as_a_panel_of_the_theme_over_what_is_behind_it() {
     };
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
     let rows = three_rows();
-    let popup = menu_popup_from_button(the_gear(), width, height, 96, &rows);
+    let popup = menu_popup_from_point(a_point(), width, height, 96, &rows);
     paint_menu_popup(&mut buffer, width, &palette, &popup, &rows, &surface, 1.0);
 
     // The panel is the theme's own page colour, drawn over what is

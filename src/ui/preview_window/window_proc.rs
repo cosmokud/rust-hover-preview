@@ -344,6 +344,22 @@ pub(super) unsafe extern "system" fn window_proc(
             pin_capture_lost(&Win32PinWindow);
             LRESULT(0)
         }
+        WM_RBUTTONDOWN => {
+            // A right-click on a pinned sound's card asks for the card's own
+            // menu, at the point it was asked for: only a sound carries one,
+            // and `open_pin_menu` answers nothing for any other kind (see
+            // `pin_shows_an_audio_card`). The menu is the preview's own, so
+            // the press does not dismiss the preview; a right-click on
+            // anything else is left to the default procedure — a hover's
+            // window has no menu, and the text preview's own opens on the
+            // release below.
+            if pinned() {
+                let (x, y) = message_point(lparam);
+                open_pin_menu(hwnd, x, y);
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_RBUTTONUP => {
             // The menu is the preview's own, so it opens where it was asked for,
             // and the press that asks for it does not dismiss the preview.

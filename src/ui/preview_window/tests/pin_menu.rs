@@ -180,16 +180,13 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
     );
 }
 
-/// The panel a menu opens hangs from the gear the card's
-/// menu opens from: it opens downward from the band the gear
-/// stands in, with its right edge tucked to the gear's own
-/// left edge a small gap off it — the placement that leaves a
-/// flyout room to the menu's right — and inside the window
-/// the pin stands in — and a menu that is not up is nothing
-/// at all, which is what a paint with no panel to draw is
-/// answered with.
+/// A right-click on an audio pin opens the card's menu at the point it
+/// landed — with no panel before the press and the panel there the moment
+/// it has landed, which is no animation — and a second right-click while
+/// the panel is up moves it to the new point rather than putting it away.
+/// A point near the window's own corner is held inside the window.
 #[test]
-fn the_menu_hangs_from_the_gear_the_card_s_menu_opens_from() {
+fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -200,70 +197,29 @@ fn the_menu_hangs_from_the_gear_the_card_s_menu_opens_from() {
 
     assert!(
         pinned_menu_geometry().is_none(),
-        "a menu that is not up is not painted"
+        "a menu that has not been asked for is not painted"
     );
 
-    with_pin(|pin| pin.menu.open = true);
+    let (width, height) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+        .expect("the pin that was installed");
+    let hwnd = HWND(0x1000 as *mut _);
 
+    // A point that leaves the panel room: the panel's own top-left is the
+    // point itself, the moment the press has landed.
+    let (x, y) = (20, 20);
+    unsafe { open_pin_menu(hwnd, x, y) };
     let Some(paint) = pinned_menu_geometry() else {
         panic!("a menu that is up is painted");
     };
-
-    // The gear the menu hangs from, in the window's own
-    // coordinates: the card's own box for it, moved down
-    // by the band the card is drawn in (see
-    // `pinned_audio_volume_popup`).
-    let (width, height, gear) = pin_state()
-        .and_then(|pinned| {
-            let pin = pinned.pin()?;
-            let (width, height) = pin.window_size();
-            let (top, _) = pinned_band_rows(
-                height,
-                pin.caption,
-                pinned_transport_height(pin.dpi, pin.transport_bar),
-                pin.overlay,
-            );
-            let gear = audio_preview::control_box(
-                CardControl::Menu,
-                (pin.content.2 - pin.content.0).max(1) as u32,
-                pin.dpi,
-                pinned_audio_options(pin),
-                true,
-            )?;
-            Some((
-                width,
-                height,
-                RECT {
-                    top: gear.top + top,
-                    ..gear
-                },
-            ))
-        })
-        .expect("the pin that was installed");
-
-    // The panel's right edge is tucked to the gear's own
-    // left edge, one small gap off it (see
-    // `pin_chrome::menu_popup_from_button`). At the pin's
-    // own 96-DPI scale the gap is the four logical pixels
-    // the panel is held off the button it came from.
     assert_eq!(
-        paint.popup.panel.right,
-        gear.left - 4,
-        "the panel's right edge is one gap left of the gear's own left edge"
-    );
-    assert!(
-        paint.popup.panel.top >= gear.bottom,
-        "the panel hangs below the band the gear stands in, not over it"
-    );
-    assert!(paint.popup.panel.right <= width, "the panel is inside the window");
-    assert!(
-        paint.popup.panel.bottom <= height,
-        "and so is its bottom edge"
+        (paint.popup.panel.left, paint.popup.panel.top),
+        (x, y),
+        "the panel's top-left is the point the right-click landed"
     );
 
-    // The rows are the first page's, because the menu was put up
-    // on it, and each carries the mark of the setting it stands
-    // for.
+    // It opens on its main page: the two toggles and the Seek row, each
+    // carrying the mark of the setting it stands for.
     let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, ["Shuffle Mode", "Loop", "Seek"]);
     assert!(
@@ -275,16 +231,56 @@ fn the_menu_hangs_from_the_gear_the_card_s_menu_opens_from() {
         "loop is on, so its row is checked"
     );
     assert!(
-        matches!(paint.rows[2].mark, pin_chrome::MenuMark::None),
-        "the seek row is not a choice"
-    );
-
-    // A menu put up on its main page holds no flyout:
-    // the Seek row is the door the flyout comes
-    // through, not the flyout itself.
-    assert!(
         paint.flyout.is_none(),
         "the main page is the menu's three rows"
+    );
+
+    // A second right-click moves the panel to the new point, and the menu
+    // stays up.
+    let (x, y) = (30, 40);
+    unsafe { open_pin_menu(hwnd, x, y) };
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("the menu is still up");
+    };
+    assert_eq!(
+        (paint.popup.panel.left, paint.popup.panel.top),
+        (x, y),
+        "a second right-click moves the panel to the new point"
+    );
+
+    // A right-click near the far corner would put the panel off the
+    // window, so the placement holds it inside.
+    unsafe { open_pin_menu(hwnd, width - 2, height - 2) };
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("the menu is still up");
+    };
+    assert!(
+        paint.popup.panel.right <= width && paint.popup.panel.bottom <= height,
+        "a panel asked for near the corner is held inside the window"
+    );
+    assert!(paint.popup.panel.left >= 0 && paint.popup.panel.top >= 0);
+}
+
+/// A right-click on a pin that is not showing a sound's card opens
+/// nothing at all: the menu is the card's own, and only a sound's card
+/// carries one (see `pin_shows_an_audio_card`).
+#[test]
+fn a_right_click_on_a_pin_that_is_not_a_sound_opens_nothing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _put_back = PutBack(take_pin_for_a_test());
+    // A framed card is not a sound's own card: the three facts the menu
+    // is gated on are settled against the kind.
+    let mut pin = sound_pin();
+    pin.frame = PinFrame::Shaped;
+    stand_pin(Some(pin));
+
+    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 20, 20) };
+    assert!(
+        pinned_menu_geometry().is_none(),
+        "a pin that is not a sound opens no menu"
     );
 }
 
@@ -413,9 +409,7 @@ fn a_press_on_the_loop_row_turns_the_loop_setting_over() {
 /// A press anywhere outside the panel puts it away: the panel
 /// is over the card, and a hand that has come for what is
 /// under it is a hand that has left the menu. The point is
-/// one the panel does not hold and not the gear the menu
-/// came from, whose own press is the press that opens and
-/// closes it.
+/// one the panel does not hold.
 #[test]
 fn a_press_outside_the_panel_puts_it_away() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -431,9 +425,8 @@ fn a_press_outside_the_panel_puts_it_away() {
         panic!("a menu that is up is painted");
     };
 
-    // A point left of the panel, in the row of its first
-    // row: not the panel, and not the gear the menu came
-    // out of, which stands to the panel's right.
+    // A point left of the panel, in the row of its first row: not the
+    // panel, and not a row of any of the menu's.
     let x = paint.popup.panel.left - 10;
     let y = paint.popup.rows_top + paint.popup.row_height / 2;
     assert!(
@@ -478,8 +471,8 @@ fn the_seek_row_opens_its_flyout_beside_the_menu() {
 
     // The flyout is beside the main menu, not over it:
     // its panel starts a small gap right of the main
-    // menu's own right edge — the same gap the menu is
-    // held off the gear it came from — and its top is
+    // menu's own right edge — the gap a panel is held
+    // off the panel beside it — and its top is
     // the Seek row's own top, the row the flyout is
     // hung from.
     assert_eq!(
@@ -727,9 +720,9 @@ fn a_press_outside_both_panels_puts_the_whole_menu_away() {
     };
 
     // Three points neither panel holds, in the row of
-    // the menu's first row or below the flyout: not the
-    // panels, and not the gear the menu came out of,
-    // which stands in the band above them.
+    // the menu's first row, in the gap between the two
+    // panels, or below the flyout: a hand off both
+    // panels has left the menu.
     let first_row = paint.popup.rows_top + paint.popup.row_height / 2;
     let presses = [
         (paint.popup.panel.left - 10, first_row),
