@@ -36,11 +36,83 @@ impl Drop for MenuSettings {
     }
 }
 
+/// What the configuration file was when a test began: the bytes
+/// it held, no file at all, or a file there that cannot be read —
+/// which is a file a test cannot write back either, so it is left
+/// exactly where it is.
+enum ConfigFileWas {
+    Bytes(Vec<u8>),
+    NoFile,
+    Unreadable,
+}
+
+/// The configuration file as a test found it, put back when the
+/// guard is dropped. A press on a menu's check row writes the
+/// configuration the way every setting this app's own menus write
+/// is, so a test that presses one leaves the file the press wrote
+/// unless it is put back.
+struct ConfigFilePutBack {
+    path: Option<std::path::PathBuf>,
+    was: ConfigFileWas,
+}
+
+impl ConfigFilePutBack {
+    fn take() -> Self {
+        let path = crate::config::config::AppConfig::config_path();
+        let was = match path.as_ref() {
+            Some(path) if path.exists() => match std::fs::read(path) {
+                Ok(bytes) => ConfigFileWas::Bytes(bytes),
+                Err(_) => ConfigFileWas::Unreadable,
+            },
+            _ => ConfigFileWas::NoFile,
+        };
+        Self { path, was }
+    }
+}
+
+impl Drop for ConfigFilePutBack {
+    fn drop(&mut self) {
+        let Some(path) = self.path.as_ref() else {
+            return;
+        };
+
+        match &self.was {
+            ConfigFileWas::Bytes(bytes) => {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(path, bytes);
+            }
+            // There was no file before the test, so the file the
+            // test's own press wrote is taken away again.
+            ConfigFileWas::NoFile => {
+                let _ = std::fs::remove_file(path);
+            }
+            // A file that cannot be read is one that cannot be
+            // written back, so it is left where it is.
+            ConfigFileWas::Unreadable => {}
+        }
+    }
+}
+
+/// A pin stood up for a test and whatever was there before it put
+/// back when the test is done — even when it is done by panicking —
+/// because a test that leaves a pin up is a test every test after it
+/// is standing inside (see `stand_pin`).
+struct PutBack(Option<PinnedPreview>);
+impl Drop for PutBack {
+    fn drop(&mut self) {
+        stand_pin(self.0.take());
+    }
+}
+
 /// The rows the menu holds are the settings it is the face of:
-/// the first page is the two mode toggles — each marked as the
-/// setting it stands for is — and the row that opens the seek
-/// choices, and the seek page is the four choices, in the order
-/// the tray lists them in, with the one the pin plays by marked.
+/// the first page is the two mode toggles — each carrying the
+/// checkbox of the setting it stands for, checked where the
+/// setting is on and empty where it is off — and the row that
+/// opens the seek choices, and the seek page is the four
+/// choices, in the order the tray lists them in, with the one
+/// the pin plays by carrying its disc.
 #[test]
 fn the_menu_holds_the_settings_it_is_the_face_of() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -52,11 +124,17 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
     let top = menu_rows(false);
     let labels: Vec<&str> = top.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, ["Shuffle Mode", "Loop", "Seek"]);
-    assert!(top[0].marked, "shuffle is on, so its row is marked");
-    assert!(!top[1].marked, "loop is off, so its row is not");
     assert!(
-        !top[2].marked,
-        "the seek row opens the choices, so it is not one of them"
+        matches!(top[0].mark, pin_chrome::MenuMark::Check(true)),
+        "shuffle is on, so its row is checked"
+    );
+    assert!(
+        matches!(top[1].mark, pin_chrome::MenuMark::Check(false)),
+        "loop is off, so its row is an empty box"
+    );
+    assert!(
+        matches!(top[2].mark, pin_chrome::MenuMark::None),
+        "the seek row opens the choices, so it carries no mark"
     );
 
     let choices = menu_rows(true);
@@ -65,7 +143,9 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         labels,
         ["Remember", "From the Start", "From the Middle", "Random"]
     );
-    let marked = choices.iter().position(|row| row.marked);
+    let marked = choices
+        .iter()
+        .position(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet));
     assert_eq!(
         marked,
         Some(2),
@@ -81,10 +161,18 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         DEFAULT_PIN_MODE_AUDIO_LOOP,
     );
     let top = menu_rows(false);
-    assert!(!top[0].marked, "shuffle starts off, so its row is not marked");
-    assert!(top[1].marked, "loop starts on, so its row is");
+    assert!(
+        matches!(top[0].mark, pin_chrome::MenuMark::Check(false)),
+        "shuffle starts off, so its row is an empty box"
+    );
+    assert!(
+        matches!(top[1].mark, pin_chrome::MenuMark::Check(true)),
+        "loop starts on, so its row is checked"
+    );
     let choices = menu_rows(true);
-    let marked = choices.iter().position(|row| row.marked);
+    let marked = choices
+        .iter()
+        .position(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet));
     assert_eq!(
         marked,
         Some(1),
@@ -93,12 +181,13 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
 }
 
 /// The panel a menu opens hangs from the gear the card's
-/// menu opens from: its left edge on the gear's own left
-/// edge, moved left only as far as the window's own edge
-/// makes it, below the gear's own row rather than over it,
-/// and inside the window the pin stands in — and a menu
-/// that is not up is nothing at all, which is what a paint
-/// with no panel to draw is answered with.
+/// menu opens from: it opens downward from the band the gear
+/// stands in, with its right edge tucked to the gear's own
+/// left edge a small gap off it — the placement that leaves a
+/// flyout room to the menu's right — and inside the window
+/// the pin stands in — and a menu that is not up is nothing
+/// at all, which is what a paint with no panel to draw is
+/// answered with.
 #[test]
 fn the_menu_hangs_from_the_gear_the_card_s_menu_opens_from() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -106,18 +195,6 @@ fn the_menu_hangs_from_the_gear_the_card_s_menu_opens_from() {
         .unwrap_or_else(|e| e.into_inner());
 
     let _settings = MenuSettings::put(AudioSeek::Start, false, true);
-
-    // A pin stood up for this test and whatever was there
-    // before it put back when the test is done — even when it
-    // is done by panicking — because a test that leaves a pin
-    // up is a test every test after it is standing inside (see
-    // `stand_pin`).
-    struct PutBack(Option<PinnedPreview>);
-    impl Drop for PutBack {
-        fn drop(&mut self) {
-            stand_pin(self.0.take());
-        }
-    }
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -164,23 +241,19 @@ fn the_menu_hangs_from_the_gear_the_card_s_menu_opens_from() {
         })
         .expect("the pin that was installed");
 
-    // The panel's left edge is the gear's own, moved left
-    // only as far as the window's own edge makes it: the
-    // gear stands in the top corner, and a panel the window
-    // has no room for beside it is a panel the edge moved
-    // (see `pin_chrome::menu_popup_from_bullet`).
-    let panel_width = paint.popup.panel.right - paint.popup.panel.left;
+    // The panel's right edge is tucked to the gear's own
+    // left edge, one small gap off it (see
+    // `pin_chrome::menu_popup_from_button`). At the pin's
+    // own 96-DPI scale the gap is the four logical pixels
+    // the panel is held off the button it came from.
     assert_eq!(
-        paint.popup.panel.left,
-        gear
-            .left
-            .min(width.saturating_sub(panel_width).max(0))
-            .max(0),
-        "the panel's left edge is the gear's own, moved left only as far as the window's own edge makes it"
+        paint.popup.panel.right,
+        gear.left - 4,
+        "the panel's right edge is one gap left of the gear's own left edge"
     );
     assert!(
         paint.popup.panel.top >= gear.bottom,
-        "the panel hangs below the gear's row, not over it"
+        "the panel hangs below the band the gear stands in, not over it"
     );
     assert!(paint.popup.panel.right <= width, "the panel is inside the window");
     assert!(
@@ -189,10 +262,178 @@ fn the_menu_hangs_from_the_gear_the_card_s_menu_opens_from() {
     );
 
     // The rows are the first page's, because the menu was put up
-    // on it, and each says what the setting it stands for says.
+    // on it, and each carries the mark of the setting it stands
+    // for.
     let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, ["Shuffle Mode", "Loop", "Seek"]);
-    assert!(!paint.rows[0].marked, "shuffle is off");
-    assert!(paint.rows[1].marked, "loop is on");
-    assert!(!paint.rows[2].marked, "the seek row is not a choice");
+    assert!(
+        matches!(paint.rows[0].mark, pin_chrome::MenuMark::Check(false)),
+        "shuffle is off, so its row is an empty box"
+    );
+    assert!(
+        matches!(paint.rows[1].mark, pin_chrome::MenuMark::Check(true)),
+        "loop is on, so its row is checked"
+    );
+    assert!(
+        matches!(paint.rows[2].mark, pin_chrome::MenuMark::None),
+        "the seek row is not a choice"
+    );
+}
+
+/// A press on one of the two mode rows turns the setting it
+/// stands for over, writes it down, and puts the panel away:
+/// the row is a check toggle, so a press on it is an answer
+/// rather than a door. The setting is written to `config.ini`
+/// the way every setting this app's own menus write is, which
+/// is why the file the press writes is put back what it was
+/// when the test is done.
+#[test]
+fn a_press_on_a_mode_row_turns_its_setting_over_and_writes_it_down() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _file = ConfigFilePutBack::take();
+    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    with_pin(|pin| pin.menu.open = true);
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("a menu that is up is painted");
+    };
+
+    // The middle of the first row, which is the row the
+    // Shuffle Mode setting is the face of.
+    let x = (paint.popup.panel.left + paint.popup.panel.right) / 2;
+    let y = paint.popup.rows_top + paint.popup.row_height / 2;
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on a row of the menu is the menu's own"
+    );
+
+    // The setting is the opposite of what it was, in the
+    // configuration the press holds...
+    assert!(
+        CONFIG
+            .lock()
+            .expect("the configuration")
+            .pin_mode_audio_shuffle,
+        "shuffle was off, so the press turned it on"
+    );
+    // ... and in the file the press wrote it down to, which
+    // is what a read of the configuration from where it
+    // lives answers, where there is a file to write to at
+    // all.
+    if crate::config::config::AppConfig::config_path().is_some() {
+        assert!(
+            crate::config::config::AppConfig::load().pin_mode_audio_shuffle,
+            "the file the press wrote holds the setting turned over"
+        );
+    }
+
+    // The rows show the setting as it now is: the box the
+    // first row carries is checked.
+    let rows = menu_rows(false);
+    assert!(
+        matches!(rows[0].mark, pin_chrome::MenuMark::Check(true)),
+        "the Shuffle Mode row is checked now"
+    );
+
+    // And the panel is away, because a toggle is an answer
+    // rather than a door.
+    assert!(
+        pinned_menu_geometry().is_none(),
+        "the panel is put away by the press that answered it"
+    );
+}
+
+/// The second mode row turns its own setting over the same
+/// way: the Loop row is the checkbox of the loop setting,
+/// and a press on it is the press on the Shuffle Mode row's
+/// own, asked of the other row.
+#[test]
+fn a_press_on_the_loop_row_turns_the_loop_setting_over() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _file = ConfigFilePutBack::take();
+    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    with_pin(|pin| pin.menu.open = true);
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("a menu that is up is painted");
+    };
+
+    // The middle of the second row, which is the row the
+    // Loop setting is the face of.
+    let x = (paint.popup.panel.left + paint.popup.panel.right) / 2;
+    let y = paint.popup.rows_top + paint.popup.row_height + paint.popup.row_height / 2;
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on a row of the menu is the menu's own"
+    );
+
+    assert!(
+        !CONFIG
+            .lock()
+            .expect("the configuration")
+            .pin_mode_audio_loop,
+        "loop was on, so the press turned it off"
+    );
+    if crate::config::config::AppConfig::config_path().is_some() {
+        assert!(
+            !crate::config::config::AppConfig::load().pin_mode_audio_loop,
+            "the file the press wrote holds the setting turned over"
+        );
+    }
+
+    let rows = menu_rows(false);
+    assert!(
+        matches!(rows[1].mark, pin_chrome::MenuMark::Check(false)),
+        "the Loop row is an empty box now"
+    );
+    assert!(
+        pinned_menu_geometry().is_none(),
+        "and the panel is put away"
+    );
+}
+
+/// A press anywhere outside the panel puts it away: the panel
+/// is over the card, and a hand that has come for what is
+/// under it is a hand that has left the menu. The point is
+/// one the panel does not hold and not the gear the menu
+/// came from, whose own press is the press that opens and
+/// closes it.
+#[test]
+fn a_press_outside_the_panel_puts_it_away() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    with_pin(|pin| pin.menu.open = true);
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("a menu that is up is painted");
+    };
+
+    // A point left of the panel, in the row of its first
+    // row: not the panel, and not the gear the menu came
+    // out of, which stands to the panel's right.
+    let x = paint.popup.panel.left - 10;
+    let y = paint.popup.rows_top + paint.popup.row_height / 2;
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand off the panel is still the menu's to answer"
+    );
+    assert!(
+        pinned_menu_geometry().is_none(),
+        "so the panel is put away"
+    );
 }

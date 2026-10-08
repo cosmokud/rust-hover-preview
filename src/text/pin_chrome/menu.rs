@@ -1,7 +1,7 @@
-//! The menu a pinned sound's card opens from its bullet: the panel that
+//! The menu a pinned sound's card opens from its gear: the panel that
 //! floats over the media below the card, and the rows in it.
 //!
-//! The panel is placed by the cell the press came from and drawn the way a
+//! The panel is placed by the button the press came from and drawn the way a
 //! tool tip is drawn — the theme's own page colour, a hairline around it, a
 //! shadow under it, and labels written through GDI onto a surface of the
 //! window's own size and carried across (`paint_menu_popup`) — because a menu
@@ -16,8 +16,8 @@
 
 use super::bubble::composite_text_into;
 use super::primitives::{
-    caption_style, fill_disc, fill_round_rect, measure_text, stroke_round_rect, surface_pixels,
-    ChromePalette,
+    caption_style, fill_disc, fill_round_rect, measure_text, stroke_box, stroke_round_rect,
+    stroke_segment, surface_pixels, ChromePalette,
 };
 use crate::text::text_paint::{self, DibSurface};
 use windows::Win32::Foundation::RECT;
@@ -32,17 +32,23 @@ const MENU_PANEL_WIDTH_PIXELS: f32 = 150.0;
 const MENU_ROW_HEIGHT_PIXELS: f32 = 22.0;
 const MENU_PAD_PIXELS: f32 = 6.0;
 
-/// How far the panel hangs below the bullet's own row, and how round its
-/// corners are: the tooltip's own radius, because the two panels are the two
-/// of the same kind.
+/// How far the panel hangs below the band the button stands
+/// in, and how round its corners are: the tooltip's own
+/// radius, because the two panels are the two of the same
+/// kind.
 const MENU_PANEL_GAP_PIXELS: f32 = 4.0;
 const MENU_RADIUS: f32 = 4.0;
 
-/// The column the mark of the row in force stands in, before the labels, and
-/// the size of the mark itself: a disc of the ink, small enough to sit inside
-/// a row without being the row.
+/// The column the mark of a row stands in, before the labels, and
+/// the size of the mark itself: a checkbox a mode is turned over
+/// with, or a disc the size of a point of ink, both small enough to
+/// sit inside a row without being the row.
 const MENU_MARKER_ROOM_PIXELS: f32 = 16.0;
 const MENU_MARKER_RADIUS_PIXELS: f32 = 2.5;
+/// The side of the checkbox a check row is marked with: a square
+/// big enough for the check drawn in it to be read, and small
+/// enough to sit in the room the marks stand in.
+const MENU_CHECKBOX_PIXELS: f32 = 9.0;
 
 /// Where a card's menu is, in the window's own coordinates: the panel it
 /// floats in, and the rows inside it.
@@ -59,30 +65,52 @@ pub(crate) struct MenuPopup {
     pub(crate) rows: i32,
 }
 
-/// One row of a card's menu: the label it is written with, and whether it is
-/// the row in force — which is what the mark before the label says, for a mode
-/// that is on and for the seek that is the one the pin plays by.
-pub(crate) struct MenuRow {
-    pub(crate) label: String,
-    pub(crate) marked: bool,
+/// The mark a row of a card's menu carries, which is what says
+/// what the row is: a check for a setting that is on or off, a
+/// disc for the one choice of several that is in force, and
+/// nothing at all for a row that is a door to somewhere rather
+/// than an answer.
+pub(crate) enum MenuMark {
+    /// Nothing: the row carries no mark at all.
+    None,
+    /// A checkbox, checked where the setting the row stands
+    /// for is on, and empty where it is off.
+    Check(bool),
+    /// The disc of the choice in force.
+    Bullet,
 }
 
-/// The menu a card's bullet opens, hung from that bullet's own box in the
-/// window's own coordinates: a panel below the bullet's row, with its left
-/// edge on the bullet's own left edge and its rows held in from its ends.
+/// One row of a card's menu: the label it is written with, and
+/// the mark it carries, which is what says what the row is — a
+/// check for a mode that is on or off, a disc for the seek
+/// that is the one the pin plays by, and nothing at all for a
+/// row that opens something rather than answers.
+pub(crate) struct MenuRow {
+    pub(crate) label: String,
+    pub(crate) mark: MenuMark,
+}
+
+/// The menu a card's gear opens, hung from that button's own
+/// box in the window's own coordinates — the box the card's
+/// own arithmetic answers for the gear, which reaches the
+/// window's own top edge above the drawn glyph and down to
+/// the bottom of the band the window buttons stand in. The
+/// panel hangs below that band rather than over it, with its
+/// right edge tucked to the button's own left edge a small
+/// gap off it — the placement that leaves a flyout room to
+/// the panel's right — and its rows held in from its ends.
 ///
 /// `rows` is what the panel is sized to hold, so the panel and the rows the
 /// window puts in it cannot disagree about how tall the panel is. The panel
 /// is kept inside the window it belongs to — a panel off the side of a window
 /// is a row a hand cannot reach, and one off the bottom is rows that cannot be
-/// read at all — so a window too narrow to hold the panel from the bullet's
-/// edge is a panel held at the window's own left (and a window narrower than
-/// the panel itself is a panel narrowed to it, because a panel running off the
-/// side of a window is rows no hand can read), and one too short to hold
-/// the panel below the bullet is a panel held at the window's own bottom,
-/// where the hand that opened it can still reach it.
-pub(crate) fn menu_popup_from_bullet(
-    bullet: RECT,
+/// read at all — so a window too narrow to hold the panel beside the button is
+/// a panel narrowed to the window and held at its own left (because a panel
+/// running off the side of a window is rows no hand can read), and one too
+/// short to hold the panel below the button is a panel held at the window's
+/// own bottom, where the hand that opened it can still reach it.
+pub(crate) fn menu_popup_from_button(
+    button: RECT,
     width: i32,
     height: i32,
     dpi: u32,
@@ -98,16 +126,22 @@ pub(crate) fn menu_popup_from_bullet(
 
     let panel_height = (pad * 2 + rows.len() as i32 * row_height).max(1);
 
-    // The left edge is the bullet's own, moved left only as far as the
-    // window's own edge makes it, and never past it.
-    let left = bullet
+    // The right edge is tucked to the button's own left edge, a
+    // small gap off it, so a flyout has room to the panel's
+    // right. It is moved right only as far as the window's own
+    // left edge makes it — a window too narrow to hold the panel
+    // beside the button is a panel held at the window's own
+    // left edge — and never past the window's own right.
+    let right = button
         .left
-        .min(width.saturating_sub(panel_width).max(0))
-        .max(0);
-    // The panel hangs below the bullet's row rather than over it — the way the
-    // volume popup floats clear of the button that opened it — moved up only
-    // as far as the window's own bottom makes it, and never past the top.
-    let top = (bullet.bottom + gap)
+        .saturating_sub(gap)
+        .clamp(panel_width, width.max(panel_width));
+    let left = right - panel_width;
+    // The panel hangs below the band the button stands in rather
+    // than over it — the way the volume popup floats clear of the
+    // button that opened it — moved up only as far as the
+    // window's own bottom makes it, and never past the top.
+    let top = (button.bottom + gap)
         .min(height.saturating_sub(panel_height).max(0))
         .max(0);
 
@@ -115,7 +149,7 @@ pub(crate) fn menu_popup_from_bullet(
         panel: RECT {
             left,
             top,
-            right: left + panel_width,
+            right,
             bottom: top + panel_height,
         },
         rows_top: top + pad,
@@ -250,22 +284,34 @@ pub(crate) fn paint_menu_popup(
             palette.hover(0.0),
         );
 
-        // The mark of the row that is in force: a disc of the ink in the room
-        // the labels are held away from, which is the room a menu keeps for
-        // the answer to "which one is this?". It is drawn straight into the
-        // panel rather than through GDI, because it is a shape and not a
+        // The mark of the row, in the room the labels
+        // are held away from, which is the room a menu
+        // keeps for the answer to "what is this row?".
+        // It is drawn straight into the panel rather than
+        // through GDI, because it is a shape and not a
         // letter, and the panel is already drawn under it.
-        if row.marked {
-            let row_top = popup.rows_top + index as i32 * popup.row_height;
-            fill_disc(
+        let row_top = popup.rows_top + index as i32 * popup.row_height;
+        let row_middle = row_top as f32 + (popup.row_height / 2) as f32 + 0.5;
+        match row.mark {
+            MenuMark::None => {}
+            MenuMark::Check(on) => paint_menu_check(
                 buffer,
                 width,
                 marker,
-                row_top as f32 + (popup.row_height / 2) as f32 + 0.5,
+                row_middle,
+                on,
+                scale,
+                palette.foreground,
+            ),
+            MenuMark::Bullet => fill_disc(
+                buffer,
+                width,
+                marker,
+                row_middle,
                 marker_radius,
                 palette.foreground,
                 1.0,
-            );
+            ),
         }
     }
 
@@ -295,4 +341,67 @@ pub(crate) fn paint_menu_popup(
     // size of the whole window and the rest of it is blank memory, which over
     // the media would be a sheet of nothing.
     composite_text_into(surface, buffer, width, panel);
+}
+
+/// The checkbox a check row is marked with: a square at the
+/// row's own middle, in the room the labels are held away
+/// from, its outline a stroke one logical pixel thick like
+/// the window buttons' own marks, with the check drawn in
+/// when the setting the row stands for is on and the square
+/// left empty when it is off — the empty square says as much
+/// as the checked one, which is what a check a hand can read
+/// is.
+fn paint_menu_check(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: f32,
+    center_y: f32,
+    on: bool,
+    scale: f32,
+    ink: [u8; 3],
+) {
+    let side = (MENU_CHECKBOX_PIXELS * scale).round().max(5.0);
+    let half = side / 2.0;
+    let square_left = (center_x - half).round() as i32;
+    let square_top = (center_y - half).round() as i32;
+    let square = RECT {
+        left: square_left,
+        top: square_top,
+        right: square_left + side as i32,
+        bottom: square_top + side as i32,
+    };
+
+    // The square's outline, drawn inside its own edges so
+    // that the box is the size it was asked for rather than
+    // a stroke wider on each side.
+    let stroke = text_paint::scaled(1, scale) as f32;
+    stroke_box(buffer, width, square, stroke, ink, 1.0);
+
+    if !on {
+        return;
+    }
+
+    // The check: two strokes from the box's own left shoulder
+    // down to its middle and up to its right shoulder, each
+    // the same one logical pixel the box around them is drawn
+    // with.
+    let third = side / 3.0;
+    stroke_segment(
+        buffer,
+        width,
+        (center_x - third, center_y),
+        (center_x, center_y + third),
+        stroke,
+        ink,
+        1.0,
+    );
+    stroke_segment(
+        buffer,
+        width,
+        (center_x, center_y + third),
+        (center_x + third, center_y - third),
+        stroke,
+        ink,
+        1.0,
+    );
 }
