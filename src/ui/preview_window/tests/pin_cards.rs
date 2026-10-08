@@ -1627,7 +1627,7 @@ fn a_sound_window_button_point(pin: &PinnedPreview, control: CardControl) -> (i3
     ((box_.left + box_.right) / 2, (box_.top + box_.bottom) / 2)
 }
 
-/// The two window buttons a pinned sound's card carries in its top
+/// The three window buttons a pinned sound's card carries in its top
 /// margin, and the cushion each is answered against: the box reaches
 /// the window's own top edge above the drawn button and a little below
 /// it, which is what makes a mark this small a thing a hand can hit.
@@ -1637,10 +1637,15 @@ fn a_sounds_window_buttons_are_answered_over_the_margin_they_stand_in() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let pin = sound_pin();
+    // The window buttons are controls only while they are
+    // showing, which is the state a hand near the window's
+    // top border — the hand that is about to ask about one —
+    // leaves the pin in (see `pin_audio_window_buttons`).
+    let mut pin = sound_pin();
+    pin.audio_window_buttons = true;
     let (width, _) = pin.window_size();
 
-    for control in [CardControl::Minimize, CardControl::Close] {
+    for control in [CardControl::Menu, CardControl::Minimize, CardControl::Close] {
         let box_ = audio_preview::control_box(
             control,
             width as u32,
@@ -1705,7 +1710,13 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
         (CardControl::Minimize, PinCommand::Minimize),
         (CardControl::Close, PinCommand::Close),
     ] {
-        stand_pin(Some(sound_pin()));
+        // The window buttons are controls only while they are
+        // showing, which is the state a hand near the window's
+        // top border — the hand that is about to press one —
+        // leaves the pin in (see `pin_audio_window_buttons`).
+        let mut shown = sound_pin();
+        shown.audio_window_buttons = true;
+        stand_pin(Some(shown));
         take_pin_command();
 
         let (x, y) = a_sound_window_button_point(&sound_pin(), control);
@@ -1898,7 +1909,13 @@ fn a_press_that_slides_off_a_sounds_window_button_asks_for_nothing() {
     forget_video_frame();
     take_gesture_snapshot();
 
-    stand_pin(Some(sound_pin()));
+    // The window buttons are controls only while they are
+    // showing, which is the state a hand near the window's
+    // top border — the hand that is about to press one —
+    // leaves the pin in (see `pin_audio_window_buttons`).
+    let mut shown = sound_pin();
+    shown.audio_window_buttons = true;
+    stand_pin(Some(shown));
     let (x, y) = a_sound_window_button_point(&sound_pin(), CardControl::Minimize);
     assert!(
         unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },

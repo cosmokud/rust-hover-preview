@@ -19,6 +19,7 @@ use crate::text::text_paint::{
     TextStyle, BODY_LEVEL,
 };
 use crate::text::text_theme::LoadedTheme;
+use std::f32::consts::TAU;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC};
 
@@ -124,7 +125,7 @@ pub(super) fn bar_band(row: BarRow, left: i32, right: i32, metrics: &TextMetrics
 
 /// The boxes of the controls a pinned card carries, laid out across the card's own content box:
 /// the three buttons at its left, the bar filling what is left of the row, the volume button
-/// against its right edge, and the two window buttons standing in the top corner.
+/// against its right edge, and the three window buttons standing in the top corner.
 ///
 /// They are one walk rather than five numbers each because the card is drawn from these boxes and
 /// pressed against them: a button laid out here and hit-tested elsewhere answers a press in the
@@ -137,16 +138,16 @@ pub(super) struct CardBoxes {
     pub(super) next: RECT,
     pub(super) volume: RECT,
     pub(super) bar: RECT,
-    /// The cell the card's mark is drawn in, which the menu the
-    /// mark opens is answered against while the window buttons are
-    /// up (see `control_at` and `paint`).
-    pub(super) menu: RECT,
+    /// The gear that opens the card's menu, which is a control
+    /// only while the window buttons are up (see `control_at`
+    /// and `paint`).
+    pub(super) gear: WindowButtonBox,
     /// The minimize that shrinks the pin into its bubble, and the close that ends it.
     pub(super) minimize: WindowButtonBox,
     pub(super) close: WindowButtonBox,
 }
 
-/// One of the two window buttons a pinned card carries in its top corner, with the
+/// One of the three window buttons a pinned card carries in its top corner, with the
 /// two boxes it has: the one its glyph is drawn in, and the one a press on it is
 /// answered against.
 ///
@@ -166,7 +167,7 @@ pub(super) struct WindowButtonBox {
 impl CardBoxes {
     /// The box one of the row's controls is drawn in, which is the box a press on it is answered
     /// against — except the bar's, whose is its own box inside the row and whose band is wider,
-    /// and the two window buttons', whose is the box their glyphs are drawn in plus the cushion
+    /// and the three window buttons', whose is the box their glyphs are drawn in plus the cushion
     /// above them (see [`WindowButtonBox`]).
     pub(super) fn rect(&self, control: CardControl) -> Option<RECT> {
         Some(match control {
@@ -175,18 +176,23 @@ impl CardBoxes {
             CardControl::Next => self.next,
             CardControl::Seek => self.bar,
             CardControl::Volume => self.volume,
-            CardControl::Menu => self.menu,
+            CardControl::Menu => self.gear.hit,
             CardControl::Minimize => self.minimize.hit,
             CardControl::Close => self.close.hit,
         })
     }
 
-    /// Which of the two window buttons in the top margin a point is on, if either.
+    /// Which of the three window buttons in the top margin a point is on, if either.
     ///
     /// Asked of the cushion each is answered against rather than of the drawn boxes,
     /// because a hand aiming at a button this small is given the room above it
-    /// (see [`window_button_boxes`]).
+    /// (see [`window_button_boxes`]). The gear is asked about ahead of the minimize,
+    /// so that a hand on it is a hand on the menu it opens rather than on the
+    /// minimize beside it (see `control_at`).
     pub(super) fn window_button_at(&self, x: i32, y: i32) -> Option<CardControl> {
+        if holds(self.gear.hit, x, y) {
+            return Some(CardControl::Menu);
+        }
         if holds(self.minimize.hit, x, y) {
             return Some(CardControl::Minimize);
         }
@@ -234,8 +240,7 @@ pub(super) fn control_boxes(
     let next = button(play.right + gap);
     let volume = button(right - side);
     let bar_left = next.right + gap;
-    let menu = bullet_cell_box(metrics);
-    let (minimize, close) = window_button_boxes(metrics, width as i32);
+    let (gear, minimize, close) = window_button_boxes(metrics, width as i32);
 
     Some(CardBoxes {
         previous,
@@ -253,7 +258,7 @@ pub(super) fn control_boxes(
             right: (volume.left - gap).max(bar_left),
             bottom: row.top + row.height,
         },
-        menu,
+        gear,
         minimize,
         close,
     })
@@ -268,7 +273,7 @@ pub(super) fn control_boxes(
 ///
 /// Worked out here for the caller that has no page in hand — the hit test,
 /// which is asked of the card's own layout rather than of a page that was
-/// built (see `bullet_cell_box`) — as well as for `build_page`, which lays
+/// built — as well as for `build_page`, which lays
 /// the page out around the same two lines.
 fn header_line(metrics: &TextMetrics) -> (i32, i32) {
     let header_height = metrics.line_height[HEADER_LEVEL as usize];
@@ -284,30 +289,7 @@ fn header_line(metrics: &TextMetrics) -> (i32, i32) {
     (header_top, rule_top)
 }
 
-/// The box the card's mark is drawn in: the cell the name line
-/// gives it, at the left of the card, as wide as the mark and the
-/// room after it (see `BULLET_CELL_ADVANCES`) and as tall as the
-/// name line's own box. The menu the mark opens while the window
-/// buttons are up is answered against this box (see `control_at`),
-/// and the stripes that replace the mark are drawn over it (see
-/// `paint`) — so it is the cell `build_page` draws the mark's run
-/// in, worked out here for the one caller that has none of that in
-/// hand: the hit test, which is asked of the card's own layout
-/// rather than of a page that was built.
-pub(super) fn bullet_cell_box(metrics: &TextMetrics) -> RECT {
-    let advance = metrics.advance[HEADER_LEVEL as usize].max(1);
-    let header_height = metrics.line_height[HEADER_LEVEL as usize];
-    let (header_top, _) = header_line(metrics);
-
-    RECT {
-        left: metrics.padding,
-        top: header_top,
-        right: metrics.padding + advance * BULLET_CELL_ADVANCES,
-        bottom: header_top + header_height,
-    }
-}
-
-/// The side one of the two window buttons is drawn at: twice what the card's own top
+/// The side one of the three window buttons is drawn at: twice what the card's own top
 /// margin would hold on its own — the margin's height less the gap above the button
 /// and the gap below it — which is room the margin does not have, so a button stands
 /// in the name line's own rows as well (see [`window_button_boxes`]).
@@ -318,16 +300,16 @@ fn window_button_side(metrics: &TextMetrics) -> i32 {
 
 /// The bottom of the box a press on a window button is answered against: the drawn
 /// box's own bottom plus the cushion below it, which is the bottom of the band the
-/// two buttons stand in (see [`window_button_boxes`]).
+/// three buttons stand in (see [`window_button_boxes`]).
 fn window_button_reach(metrics: &TextMetrics) -> i32 {
     let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
     window_button_side(metrics) + gap + scaled(WINDOW_BUTTON_CUSHION_PIXELS, metrics.scale)
 }
 
 /// The band a pointer is near the window's own top border in, at the display's scale
-/// and font size: the bottom of the box a press on either window button is answered
+/// and font size: the bottom of the box a press on any window button is answered
 /// against. A hand anywhere in it is a hand near the top border or near the buttons
-/// themselves, which is the one thing that asks for the two window buttons — the one
+/// themselves, which is the one thing that asks for the three window buttons — the one
 /// thing on a sound's card that comes and goes, because a button twice the margin's
 /// own side stands in the name's own rows (see [`window_button_reach`]).
 pub(crate) fn window_button_band(dpi: u32, options: AudioPreviewOptions) -> i32 {
@@ -347,18 +329,19 @@ pub(crate) fn window_button_band(dpi: u32, options: AudioPreviewOptions) -> i32 
     band
 }
 
-/// The two window buttons a pinned card carries in its top corner: the minimize that shrinks the
-/// pin into the bubble it leaves, and the close that ends the pin, the player and the window
+/// The three window buttons a pinned card carries in its top corner: the gear that
+/// opens the card's menu, the minimize that shrinks the pin into the bubble it
+/// leaves, and the close that ends the pin, the player and the window
 /// together.
 ///
 /// Each button is a square stood against the card's right border with the same gap on every
-/// side that has room — above it to the window's own top edge, between the two of them, and
-/// to the border — and a side twice what the margin alone would hold, which is room the
+/// side that has room — above it to the window's own top edge, between each pair of
+/// them, and to the border — and a side twice what the margin alone would hold, which is room the
 /// margin does not have: the buttons stand in the name line's own rows, and the name runs
 /// underneath them while they are up, its box and its scroll unchanged (see `paint`).
 ///
 /// A button's *hit* box is its drawn box widened upward to the window's own top edge and by the
-/// cushion below it: the two buttons are small, so a hand is given the room above them and
+/// cushion below it: the three buttons are small, so a hand is given the room above them and
 /// a pixel of the name line's invisible leading, and the name's own rows below that as well —
 /// the room the buttons stand in, which a hit box that stopped at the name line's top would
 /// cut off, leaving a box smaller than the button it answers for. The cushion is a logical
@@ -367,12 +350,13 @@ pub(crate) fn window_button_band(dpi: u32, options: AudioPreviewOptions) -> i32 
 pub(super) fn window_button_boxes(
     metrics: &TextMetrics,
     width: i32,
-) -> (WindowButtonBox, WindowButtonBox) {
+) -> (WindowButtonBox, WindowButtonBox, WindowButtonBox) {
     let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
     let side = window_button_side(metrics);
 
-    // The close against the right border, and the minimize beside it with the same
-    // gap between them as each has to the border.
+    // The close against the right border, the minimize beside it and the
+    // gear beside that, each with the same gap between them as each has to
+    // the border.
     let close = RECT {
         left: (width - gap - side).max(0),
         top: gap,
@@ -383,6 +367,12 @@ pub(super) fn window_button_boxes(
         left: (close.left - gap - side).max(0),
         top: gap,
         right: (close.left - gap).max(0),
+        bottom: gap + side,
+    };
+    let gear = RECT {
+        left: (minimize.left - gap - side).max(0),
+        top: gap,
+        right: (minimize.left - gap).max(0),
         bottom: gap + side,
     };
 
@@ -396,6 +386,15 @@ pub(super) fn window_button_boxes(
     let bottom = window_button_reach(metrics);
 
     (
+        WindowButtonBox {
+            drawn: gear,
+            hit: RECT {
+                left: gear.left,
+                top: 0,
+                right: gear.right,
+                bottom,
+            },
+        },
         WindowButtonBox {
             drawn: minimize,
             hit: RECT {
@@ -803,16 +802,6 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         }
     }
 
-    // The cell the mark is drawn in becomes the hamburger the card's menu
-    // opens from while the window buttons are up: the mark steps aside for
-    // three stripes, in the room the mark already had, so the card is the
-    // height it has always been (see `CardControl::Menu`).
-    if let (Some(boxes), Some(chrome)) = (page.boxes.as_ref(), page.chrome.as_ref()) {
-        if chrome.window_buttons {
-            paint_menu_stripes(surface, boxes.menu, page_color, accent, scale);
-        }
-    }
-
     if page.rule_height > 0 {
         fill_rect(
             surface,
@@ -911,7 +900,7 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
             }
         }
 
-        // The two window buttons in the top corner, painted last of all and painted as
+        // The three window buttons in the top corner, painted last of all and painted as
         // nothing but their marks: no wash under them and no box around them in any
         // state, the ink being the only thing that changes. At rest it is the card's
         // own foreground, which is the ink the row's glyphs are painted in, and while
@@ -926,6 +915,7 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         // scrolling under one from running under its mark.
         if chrome.window_buttons {
             for (control, button) in [
+                (CardControl::Menu, &boxes.gear),
                 (CardControl::Minimize, &boxes.minimize),
                 (CardControl::Close, &boxes.close),
             ] {
@@ -944,70 +934,9 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
     }
 }
 
-/// Three stripes in the cell the card's mark is drawn in, in place
-/// of the mark: the hamburger the card's menu opens from.
-///
-/// The stripes are drawn by hand, like the window buttons' marks
-/// are (see `paint_window_button`), because the mark they replace
-/// is a glyph of the page's own font and a hamburger of three
-/// strokes is not one. Each stroke is a line one logical pixel
-/// thick, held in from the cell's edges and spaced down the
-/// middle of the cell, and the cell is the page's own colour
-/// first, so the mark it held is gone rather than under the
-/// stripes.
-fn paint_menu_stripes(
-    surface: &DibSurface,
-    cell: RECT,
-    page_color: [u8; 3],
-    ink: [u8; 3],
-    scale: f32,
-) {
-    fill_rect(surface, cell, page_color);
-
-    let buffer = unsafe {
-        std::slice::from_raw_parts_mut(
-            surface_pixels(surface),
-            surface.width as usize * surface.height as usize * 4,
-        )
-    };
-    let width = surface.width as i32;
-
-    // The centre of the box, on the middle of a pixel rather than on the edge of one,
-    // which is where a one-pixel stroke is a whole pixel rather than a half of two.
-    let stroke = scaled(1, scale) as f32;
-
-    // The stripes span the middle of the cell and are held in from its edges, the
-    // way the window buttons' marks are held in from theirs: a sixth of the cell's
-    // own width from each end.
-    let side = (cell.right - cell.left) as f32;
-    let inset = side / 6.0;
-    let left = cell.left as f32 + inset;
-    let right = cell.right as f32 - inset;
-
-    // Three strokes, a stripe's own height apart, the first and the last a
-    // stripe's own height in from the cell's ends. Each stripe's row is
-    // rounded onto a whole pixel, and its stroke centred on that pixel's
-    // middle, the way the window buttons' marks are: a one-pixel stroke
-    // there is a whole pixel rather than a half of two, so the stripe is
-    // the ink it is meant to be and not a smear over two rows.
-    let height = (cell.bottom - cell.top) as f32;
-    for stripe in 0..3 {
-        let row = cell.top + (height * (stripe as f32 + 1.0) / 4.0).round() as i32;
-        let centre = row as f32 + 0.5;
-        stroke_segment(
-            buffer,
-            width,
-            (left, centre),
-            (right, centre),
-            stroke,
-            ink,
-            1.0,
-        );
-    }
-}
-
-/// One of the two window buttons, drawn as the one mark that says what it is: a dash for the
-/// minimize, two crossing strokes for the close.
+/// One of the three window buttons, drawn as the one mark that says what it
+/// is: a dash for the minimize, two crossing strokes for the close, and a
+/// gear for the menu the card opens.
 ///
 /// The marks are drawn by hand rather than with the caption's glyph machinery, because that
 /// machinery's smallest mark has a floor of six pixels and a button this small is barely
@@ -1064,6 +993,50 @@ fn paint_window_button(
             let to_y = rect.bottom as f32 - inset - 1.0 + 0.5;
             stroke_segment(buffer, width, (from_x, from_y), (to_x, to_y), stroke, ink, 1.0);
             stroke_segment(buffer, width, (from_x, to_y), (to_x, from_y), stroke, ink, 1.0);
+        }
+        CardControl::Menu => {
+            // A gear: a ring with a hub and the spokes between
+            // them, each a stroke one logical pixel thick like
+            // the dash and the cross, and held to the same span
+            // they are — the ring reaches the inset the cross's
+            // own corners do, and the spokes run from the hub to
+            // it.
+            let ring = inset;
+            let hub = inset * 0.45;
+
+            // The ring and the hub, walked a segment at a time:
+            // a circle is a polygon of enough sides that no side
+            // is a straight line at this size, which is what a
+            // stroke walked around it is.
+            const SIDES: i32 = 24;
+            for circle in [ring, hub] {
+                let point_on = |angle: f32| {
+                    (center_x + circle * angle.cos(), center_y + circle * angle.sin())
+                };
+                let mut from = point_on(0.0);
+                for side in 1..=SIDES {
+                    let angle = TAU * side as f32 / SIDES as f32;
+                    let to = point_on(angle);
+                    stroke_segment(buffer, width, from, to, stroke, ink, 1.0);
+                    from = to;
+                }
+            }
+
+            // The spokes: one for each tooth the gear carries,
+            // from the hub to the ring.
+            const SPOKES: i32 = 8;
+            for spoke in 0..SPOKES {
+                let angle = TAU * spoke as f32 / SPOKES as f32;
+                stroke_segment(
+                    buffer,
+                    width,
+                    (center_x + hub * angle.cos(), center_y + hub * angle.sin()),
+                    (center_x + ring * angle.cos(), center_y + ring * angle.sin()),
+                    stroke,
+                    ink,
+                    1.0,
+                );
+            }
         }
         // The row's controls are drawn by the caption's own glyph machinery, at a
         // size a button this small cannot hold (see `paint_card_control`).

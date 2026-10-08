@@ -1,5 +1,5 @@
-//! The menu a pinned sound's card opens from the cell its mark is
-//! drawn in: the state of it, the rows it holds, and what a press
+//! The menu a pinned sound's card opens from the gear in its
+//! top corner: the state of it, the rows it holds, and what a press
 //! on one of them does.
 //!
 //! The menu is the card's own rather than the tray's, so its rows are
@@ -155,7 +155,7 @@ fn set_pin_mode_audio_seek(seek: AudioSeek) {
 }
 
 /// Where the card's menu floats, or nothing while it is closed: the
-/// panel hung from the cell the card's mark is drawn in, holding the
+/// panel hung from the gear the card's menu opens from, holding the
 /// rows of the page it is showing.
 ///
 /// It is asked of the pin rather than recomputed at the paint, so that
@@ -169,12 +169,12 @@ pub(super) fn pinned_menu_geometry() -> Option<PinMenuPaint> {
 }
 
 /// The menu as it is painted: the rows the page it is showing holds,
-/// and the panel hung from the bullet's own cell for those rows to be
+/// and the panel hung from the gear's own box for those rows to be
 /// drawn in.
 ///
-/// The panel is hung from the cell's own box, from the card's own
+/// The panel is hung from the gear's own box, from the card's own
 /// arithmetic rather than from anything kept beside it, so a panel
-/// opened after a change to Audio Scaling hangs off the cell as the
+/// opened after a change to Audio Scaling hangs off the gear as the
 /// card drew it (see `pinned_audio_volume_popup`, which is the same
 /// road the volume button's panel takes).
 fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
@@ -191,7 +191,7 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
         pin.overlay,
     );
 
-    let bullet = audio_preview::control_box(
+    let gear = audio_preview::control_box(
         CardControl::Menu,
         (pin.content.2 - pin.content.0).max(1) as u32,
         pin.dpi,
@@ -202,8 +202,8 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     Some(PinMenuPaint {
         popup: pin_chrome::menu_popup_from_bullet(
             RECT {
-                top: bullet.top + top,
-                ..bullet
+                top: gear.top + top,
+                ..gear
             },
             width,
             height,
@@ -223,12 +223,13 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
 /// anywhere else is a press that has left the menu, which puts the panel
 /// away.
 ///
-/// The cell that opens the menu is left out on purpose: a press on it is
-/// the press every card control follows, held and acted on at the
-/// release, and the release is what toggles the panel (see
-/// `pinned_audio_control_release`) — putting the panel away here would
-/// have the release open it straight back up, which is the same bargain
-/// the volume button's press makes (see the top of `pinned_press`).
+/// The gear that opens the menu is left out on purpose: a
+/// press on it is the press every card control follows, held
+/// and acted on at the release, and the release is what
+/// toggles the panel (see `pinned_audio_control_release`) —
+/// putting the panel away here would have the release open it
+/// straight back up, which is the same bargain the volume
+/// button's press makes (see the top of `pinned_press`).
 ///
 /// Nothing is captured and nothing is held, because a menu is a thing a
 /// hand reads rather than a thing it carries: the press is answered
@@ -239,10 +240,10 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return false;
     };
 
-    // A press on the cell the menu came out of is the press that opens
+    // A press on the gear the menu came out of is the press that opens
     // and closes it, left to the road every card control follows (see
     // `pinned_audio_control_press`).
-    if pressed_on_the_bullet(x, y) {
+    if pressed_on_the_gear(x, y) {
         return false;
     }
 
@@ -294,11 +295,11 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     true
 }
 
-/// Whether a press is on the cell the card's mark is drawn in, which is
-/// the cell the menu opens from: asked of the card's own layout rather
-/// than of the panel, because the cell is a fact of the card whether
-/// the menu is up or not (see `pin_audio_control_at`).
-fn pressed_on_the_bullet(x: i32, y: i32) -> bool {
+/// Whether a press is on the gear the card's menu opens from: asked
+/// of the card's own layout rather than of the panel, because the
+/// gear is a fact of the card whether the menu is up or not (see
+/// `pin_audio_control_at`).
+fn pressed_on_the_gear(x: i32, y: i32) -> bool {
     pin_state()
         .and_then(|pinned| {
             let pin = pinned.pin()?;
@@ -307,8 +308,8 @@ fn pressed_on_the_bullet(x: i32, y: i32) -> bool {
         .unwrap_or(false)
 }
 
-/// The card's menu put up or put away by the press on the cell that
-/// opens it: the cell's press and release, which is the road every card
+/// The card's menu put up or put away by the press on the gear that
+/// opens it: the gear's press and release, which is the road every card
 /// control follows (see `pinned_audio_control_release`).
 ///
 /// A menu put up is put up as the page it opens on, whatever page it
