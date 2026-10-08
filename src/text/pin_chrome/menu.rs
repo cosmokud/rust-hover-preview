@@ -17,8 +17,8 @@
 
 use super::bubble::composite_text_into;
 use super::primitives::{
-    caption_style, fill_disc, fill_round_rect, measure_text, stroke_box, stroke_round_rect,
-    stroke_segment, surface_pixels, ChromePalette,
+    caption_style, fill_box, fill_disc, fill_polygon, fill_round_rect, measure_text,
+    stroke_round_rect, stroke_segment, surface_pixels, ChromePalette,
 };
 use crate::text::text_paint::{self, DibSurface};
 use windows::Win32::Foundation::RECT;
@@ -41,15 +41,37 @@ const MENU_PANEL_GAP_PIXELS: f32 = 4.0;
 const MENU_RADIUS: f32 = 4.0;
 
 /// The column the mark of a row stands in, before the labels, and
-/// the size of the mark itself: a checkbox a mode is turned over
+/// the size of the mark itself: a check mark a mode is turned over
 /// with, or a disc the size of a point of ink, both small enough to
 /// sit inside a row without being the row.
 const MENU_MARKER_ROOM_PIXELS: f32 = 16.0;
 const MENU_MARKER_RADIUS_PIXELS: f32 = 2.5;
-/// The side of the checkbox a check row is marked with: a square
-/// big enough for the check drawn in it to be read, and small
-/// enough to sit in the room the marks stand in.
-const MENU_CHECKBOX_PIXELS: f32 = 9.0;
+/// The span of the check mark a check row carries, drawn alone in
+/// the marker column when the setting the row stands for is on and
+/// not at all when it is off: there is no box around it.
+const MENU_CHECK_PIXELS: f32 = 9.0;
+/// The side of the triangle the Seek row carries at its right,
+/// pointing toward the panel the row opens: small enough to sit in
+/// the row's own pad without being the row.
+const MENU_ARROW_PIXELS: f32 = 7.0;
+/// The wash a row under the pointer carries: the same lift a
+/// caption button takes under the hand, so that a menu and the
+/// chrome above it read as one app.
+const MENU_ROW_HOVER: f32 = 0.10;
+
+/// Which side of a panel the arrow on its last row points to — the
+/// side the panel the row opens sits on, so that the mark reads the
+/// way the row behaves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum MenuArrow {
+    /// Nothing: the row opens nothing, so it carries no arrow.
+    #[default]
+    None,
+    /// The panel the row opens sits to this one's right.
+    Right,
+    /// The panel the row opens sits to this one's left.
+    Left,
+}
 
 /// Where a card's menu is, in the window's own coordinates: the panel it
 /// floats in, and the rows inside it.
@@ -64,6 +86,11 @@ pub(crate) struct MenuPopup {
     /// How many rows the panel holds: what the panel's own height was worked
     /// out from, and what a point is answered against (`menu_row_at`).
     pub(crate) rows: i32,
+    /// Which way the arrow on the panel's last row points, or nothing for a
+    /// panel whose rows open nothing. It is the placement's answer rather
+    /// than the window's, because it is the placement that knows which side
+    /// the panel a row opens ended up on (see `menu_flyout_from_menu`).
+    pub(crate) arrow: MenuArrow,
 }
 
 /// The mark a row of a card's menu carries, which is what says
@@ -74,8 +101,9 @@ pub(crate) struct MenuPopup {
 pub(crate) enum MenuMark {
     /// Nothing: the row carries no mark at all.
     None,
-    /// A checkbox, checked where the setting the row stands
-    /// for is on, and empty where it is off.
+    /// The check a row carries where the setting it stands for is
+    /// on; a row whose setting is off carries no mark at all, so the
+    /// mark is the check alone with no box around it.
     Check(bool),
     /// The disc of the choice in force.
     Bullet,
@@ -154,6 +182,7 @@ pub(crate) fn menu_popup_from_point(
         rows_top: top + pad,
         row_height,
         rows: rows.len() as i32,
+        arrow: MenuArrow::None,
     }
 }
 
@@ -163,36 +192,42 @@ pub(crate) fn menu_popup_from_point(
 /// beside it.
 pub(crate) struct MenuFlyout {
     /// The main menu's panel, as `menu_popup_from_point`
-    /// placed it — pulled left of the point where the
-    /// window is too narrow to hold the flyout beside it
-    /// there, so that the flyout fits beside it at the
-    /// window's right edge instead.
+    /// placed it — left where the anchor put it, moved only
+    /// where the window is too narrow to hold the two panels
+    /// at their own width, which is the one case the two are
+    /// narrowed to fit. Its last row carries the arrow saying
+    /// which side the flyout ended up on.
     pub(crate) menu: MenuPopup,
-    /// The flyout's own panel: right of the main menu's
-    /// right edge, top-aligned with the seek row.
+    /// The flyout's own panel: beside the main menu — right
+    /// of its right edge where it fits there, left of its
+    /// left edge where it does not — top-aligned with the
+    /// seek row.
     pub(crate) popup: MenuPopup,
 }
 
 /// The seek flyout the menu's Seek row opens, placed from
-/// the main menu the row belongs to: right of the main
-/// menu's own right edge, top-aligned with the Seek row —
-/// the main menu's third row — so the menu the flyout
-/// came from stays wholly visible beside it.
+/// the main menu the row belongs to: a small gap right of
+/// the main menu's own right edge, top-aligned with the
+/// Seek row — the main menu's third row — so the menu the
+/// flyout came from stays wholly visible beside it.
 ///
-/// The two panels are placed together, because the menu
-/// is anchored at a point anywhere in the window and a
-/// flyout opening to its right may run off the window's
-/// own edge: a window too narrow for the flyout beside
-/// the menu at that place is a menu pulled left until the
-/// flyout fits beside it at the window's own right edge,
-/// and a window too narrow for the two panels at their
-/// own width is the two of them narrowed to half the room
-/// the window leaves between its own edges — the menu at
-/// the window's left edge, the flyout right of it. Either
-/// way the menu stays wholly visible and uncovered, and
-/// the flyout stays inside the window to be pressed, which
-/// is the same discipline the menu's own panel is placed
-/// by (`menu_popup_from_point`): never off an edge, never
+/// Where the flyout does not fit to the right of the menu,
+/// it flips to the menu's left, a small gap left of the
+/// menu's own left edge with the same top alignment — the
+/// standard Windows behavior — and the arrow on the Seek
+/// row flips with it. The menu is anchored where it stands
+/// in both, because the point the right-click landed is
+/// the user's own and only a window too narrow for the
+/// panel at all moves it.
+///
+/// A window too narrow for the flyout on either side is
+/// the two panels narrowed to half the room the window
+/// leaves between its own edges — the menu at the window's
+/// left edge and the flyout right of it. Either way the
+/// menu stays wholly visible and uncovered, and the flyout
+/// stays inside the window to be pressed, which is the
+/// same discipline the menu's own panel is placed by
+/// (`menu_popup_from_point`): never off an edge, never
 /// past the bottom, narrowed if the window is narrower
 /// than the panel.
 pub(crate) fn menu_flyout_from_menu(
@@ -204,36 +239,43 @@ pub(crate) fn menu_flyout_from_menu(
 ) -> MenuFlyout {
     let (panel_width, row_height, pad, gap) = menu_panel_sizes(width, dpi);
 
-    // The flyout hangs from the Seek row, which is the main
-    // menu's third row: its top is that row's own top, moved
-    // up only as far as the window's own bottom makes it and
-    // never past the top — the holding the menu's own panel
-    // has, because a flyout off the bottom is rows a hand
-    // cannot read.
+    // The flyout hangs from the Seek row, which is the
+    // main menu's third row: its top is that row's own
+    // top, moved up only as far as the window's own
+    // bottom makes it and never past the top — the holding
+    // the menu's own panel has, because a flyout off the
+    // bottom is rows a hand cannot read.
     let flyout_height = (pad * 2 + flyout_rows.len() as i32 * row_height).max(1);
     let top = (menu.rows_top + 2 * menu.row_height)
         .min(height.saturating_sub(flyout_height).max(0))
         .max(0);
 
-    // Where the two panels' own edges go. The flyout's
-    // first place is a small gap right of the main menu's
-    // right edge; the main menu is pulled left of the
-    // button to make that room where the window is too
-    // narrow for it there; and the two are narrowed to fit
-    // the window where it is too narrow for them at their
-    // own width.
-    let (menu_left, menu_right, flyout_left) = if menu.panel.right + gap + panel_width <= width {
-        (menu.panel.left, menu.panel.right, menu.panel.right + gap)
-    } else if width >= 2 * panel_width + gap {
-        (
-            width - 2 * panel_width - gap,
-            width - panel_width - gap,
-            width - panel_width,
-        )
-    } else {
-        let half = ((width - gap) / 2).max(8).min(width.max(8));
-        (0, half, width - half)
-    };
+    // Where the two panels' own edges go, and which way
+    // the Seek row's arrow points because of it. The
+    // flyout's first place is a small gap right of the
+    // main menu's right edge; where that does not fit it
+    // flips to a small gap left of the menu's own left
+    // edge; and where neither fits the two are narrowed to
+    // fit the window.
+    let (menu_left, menu_right, flyout_left, arrow) =
+        if menu.panel.right + gap + panel_width <= width {
+            (
+                menu.panel.left,
+                menu.panel.right,
+                menu.panel.right + gap,
+                MenuArrow::Right,
+            )
+        } else if menu.panel.left - gap - panel_width >= 0 {
+            (
+                menu.panel.left,
+                menu.panel.right,
+                menu.panel.left - gap - panel_width,
+                MenuArrow::Left,
+            )
+        } else {
+            let half = ((width - gap) / 2).max(8).min(width.max(8));
+            (0, half, width - half, MenuArrow::Right)
+        };
     // The flyout's own width is the room the window leaves
     // it, which is the panel's own width everywhere but the
     // narrowed pair, where it is the half the window leaves.
@@ -250,6 +292,7 @@ pub(crate) fn menu_flyout_from_menu(
             rows_top: menu.rows_top,
             row_height: menu.row_height,
             rows: menu.rows,
+            arrow,
         },
         popup: MenuPopup {
             panel: RECT {
@@ -261,8 +304,34 @@ pub(crate) fn menu_flyout_from_menu(
             rows_top: top + pad,
             row_height,
             rows: flyout_rows.len() as i32,
+            arrow: MenuArrow::None,
         },
     }
+}
+
+/// Whether a point in the window lies in the gap between the two
+/// panels of a menu: the room a pointer crosses on its way between the
+/// main menu and its flyout, which keeps the flyout up while the
+/// pointer is in it rather than making the hand re-find the Seek row.
+///
+/// The gap is the room between the panels' two facing edges, and it
+/// runs from the top of whichever of the Seek row and the flyout
+/// begins higher to the bottom of whichever ends lower, so that a
+/// pointer crossing at the row the flyout is hung from is in it even
+/// where a short window has moved the flyout off that row.
+pub(crate) fn menu_flyout_gap_holds(menu: &MenuPopup, flyout: &MenuPopup, x: i32, y: i32) -> bool {
+    let (left, right) = if flyout.panel.left >= menu.panel.right {
+        (menu.panel.right, flyout.panel.left)
+    } else {
+        (flyout.panel.right, menu.panel.left)
+    };
+
+    let seek_top = menu.rows_top + (menu.rows - 1) * menu.row_height;
+    let seek_bottom = seek_top + menu.row_height;
+    let top = flyout.panel.top.min(seek_top);
+    let bottom = flyout.panel.bottom.max(seek_bottom);
+
+    x >= left && x <= right && y >= top && y <= bottom
 }
 
 /// Which row of a menu a point is, or nothing at all where the point is not
@@ -283,7 +352,8 @@ pub(crate) fn menu_row_at(popup: &MenuPopup, x: i32, y: i32) -> Option<usize> {
 }
 
 /// Paint a card's menu into the window's own pixels, over what is behind it:
-/// the panel, and the rows' labels and marks in it.
+/// the panel, the wash under the row the pointer is on, and the rows' labels
+/// and marks in it.
 ///
 /// The panel and its shadow are put down straight into the buffer, because
 /// that is what they are: a thing drawn over the picture, with the picture
@@ -293,12 +363,17 @@ pub(crate) fn menu_row_at(popup: &MenuPopup, x: i32, y: i32) -> Option<usize> {
 /// written over, which is the only place they are wanted (`composite_text_into`).
 /// It is the same road a tool tip's name takes, because a menu's labels are
 /// the same kind of thing a tool tip's name is.
+///
+/// `hover` is the row the pointer is on, if it is on one, which is painted
+/// under a wash of the theme's own: it is the same tick that decides where
+/// the pointer is and what the wash is drawn from (see `refresh_pin_menu`).
 pub(crate) fn paint_menu_popup(
     buffer: &mut [u8],
     width: i32,
     palette: &ChromePalette,
     popup: &MenuPopup,
     rows: &[MenuRow],
+    hover: Option<usize>,
     surface: &DibSurface,
     scale: f32,
 ) {
@@ -361,6 +436,14 @@ pub(crate) fn paint_menu_popup(
         scale,
     );
 
+    // The two colours a row's own band is drawn in: the panel's own page
+    // where the pointer is elsewhere, and the theme's wash where it is on
+    // the row. The wash is the label's background as well as the row's, so
+    // that the run carried across from the surface lands on the wash rather
+    // than punching the panel's page through it.
+    let base = palette.hover(0.0);
+    let wash = palette.hover(MENU_ROW_HOVER);
+
     // Each row's own box, which its label is drawn in: the label is centred
     // in the row's own height, held to the room the marker leaves it and to
     // the panel's own far pad, so a label longer than the room is cut by the
@@ -376,19 +459,37 @@ pub(crate) fn paint_menu_popup(
             right: (label_left + measured.max(0)).min(panel.right - pad),
             bottom: (top + cell).min(panel.bottom),
         });
+
+        // The row under the pointer is washed before anything is drawn in
+        // it, so that its label, its mark and its arrow are all read over
+        // the wash rather than under it.
+        if hover == Some(index) {
+            fill_box(
+                buffer,
+                width,
+                RECT {
+                    left: panel.left,
+                    top: row_top,
+                    right: panel.right,
+                    bottom: row_top + popup.row_height,
+                },
+                wash,
+                1.0,
+            );
+        }
     }
 
     let mut painter = text_paint::RunPainter::new(surface, scale);
     for (index, (box_, row)) in boxes.iter().zip(rows).enumerate() {
-        // The label's background is the panel's own colour, so that where the
-        // run is not a letter it is exactly what the panel already is.
+        // The label's background is the row's own colour, so that where the
+        // run is not a letter it is exactly what the row already is.
         painter.draw(
             &row.label,
             box_.left,
             *box_,
             &style,
             palette.foreground,
-            palette.hover(0.0),
+            if hover == Some(index) { wash } else { base },
         );
 
         // The mark of the row, in the room the labels
@@ -401,15 +502,12 @@ pub(crate) fn paint_menu_popup(
         let row_middle = row_top as f32 + (popup.row_height / 2) as f32 + 0.5;
         match row.mark {
             MenuMark::None => {}
-            MenuMark::Check(on) => paint_menu_check(
-                buffer,
-                width,
-                marker,
-                row_middle,
-                on,
-                scale,
-                palette.foreground,
-            ),
+            MenuMark::Check(true) => {
+                paint_menu_check(buffer, width, marker, row_middle, scale, palette.foreground)
+            }
+            // A setting that is off carries nothing at all: the check alone
+            // says whether it is on, and an empty box is not drawn.
+            MenuMark::Check(false) => {}
             MenuMark::Bullet => fill_disc(
                 buffer,
                 width,
@@ -420,6 +518,32 @@ pub(crate) fn paint_menu_popup(
                 1.0,
             ),
         }
+    }
+
+    // The arrow on the panel's last row, at the row's own right, pointing
+    // the way the panel the row opens sits: the row that opens the flyout
+    // is the panel's last, and the placement is what knows which side the
+    // flyout ended up on (see `menu_flyout_from_menu`).
+    if popup.arrow != MenuArrow::None {
+        let index = (popup.rows - 1).max(0);
+        let row_top = popup.rows_top + index * popup.row_height;
+        let center_y = row_top as f32 + (popup.row_height / 2) as f32 + 0.5;
+        let half = (MENU_ARROW_PIXELS * scale / 2.0).max(1.5);
+        let center_x = panel.right as f32 - pad as f32 - half;
+        let points: [(f32, f32); 3] = match popup.arrow {
+            MenuArrow::Right => [
+                (center_x - half, center_y - half),
+                (center_x - half, center_y + half),
+                (center_x + half, center_y),
+            ],
+            MenuArrow::Left => [
+                (center_x + half, center_y - half),
+                (center_x + half, center_y + half),
+                (center_x - half, center_y),
+            ],
+            MenuArrow::None => [(0.0, 0.0); 3],
+        };
+        fill_polygon(buffer, width, &points, palette.foreground, 1.0);
     }
 
     // GDI leaves the alpha byte of everything it draws at zero (see the module
@@ -450,49 +574,26 @@ pub(crate) fn paint_menu_popup(
     composite_text_into(surface, buffer, width, panel);
 }
 
-/// The checkbox a check row is marked with: a square at the
-/// row's own middle, in the room the labels are held away
-/// from, its outline a stroke one logical pixel thick like
-/// the window buttons' own marks, with the check drawn in
-/// when the setting the row stands for is on and the square
-/// left empty when it is off — the empty square says as much
-/// as the checked one, which is what a check a hand can read
-/// is.
+/// The check a check row is marked with: a small check mark at the
+/// row's own middle, in the room the labels are held away from — no
+/// box around it, because the row that is on is read from the check
+/// alone and a row that is off carries nothing at all.
+///
+/// Two strokes one logical pixel thick, drawn the way the window
+/// buttons' own marks are: from the mark's left shoulder down to its
+/// middle and up to its right shoulder.
 fn paint_menu_check(
     buffer: &mut [u8],
     width: i32,
     center_x: f32,
     center_y: f32,
-    on: bool,
     scale: f32,
     ink: [u8; 3],
 ) {
-    let side = (MENU_CHECKBOX_PIXELS * scale).round().max(5.0);
-    let half = side / 2.0;
-    let square_left = (center_x - half).round() as i32;
-    let square_top = (center_y - half).round() as i32;
-    let square = RECT {
-        left: square_left,
-        top: square_top,
-        right: square_left + side as i32,
-        bottom: square_top + side as i32,
-    };
-
-    // The square's outline, drawn inside its own edges so
-    // that the box is the size it was asked for rather than
-    // a stroke wider on each side.
-    let stroke = text_paint::scaled(1, scale) as f32;
-    stroke_box(buffer, width, square, stroke, ink, 1.0);
-
-    if !on {
-        return;
-    }
-
-    // The check: two strokes from the box's own left shoulder
-    // down to its middle and up to its right shoulder, each
-    // the same one logical pixel the box around them is drawn
-    // with.
+    let side = (MENU_CHECK_PIXELS * scale).round().max(5.0);
     let third = side / 3.0;
+    let stroke = text_paint::scaled(1, scale) as f32;
+
     stroke_segment(
         buffer,
         width,

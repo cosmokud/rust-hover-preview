@@ -311,10 +311,16 @@ pub(super) fn refresh_pin_chrome(
     // a popup that belongs on screen only while it is being used (see `refresh_pin_volume`).
     let closed = refresh_pin_volume(pin, cursor);
 
+    // The card's menu is asked about on this clock as well: it is a panel over the card, and
+    // where the pointer is on it is a question the same tick answers — the row under the hand
+    // to wash, the Seek row's hover timer, and whether a flyout that is up is still wanted (see
+    // `refresh_pin_menu`). It is asked of every kind and answers nothing where no menu is up.
+    let menu = refresh_pin_menu(pin, now, cursor);
+
     // A bubble has no caption and no window of its own on the screen, so it has no name to be
     // saying and no button to say it about: a name is put away with the window it belongs to.
     if pin.collapsed {
-        return closed || pin.tooltip.refresh(None, now);
+        return closed || menu || pin.tooltip.refresh(None, now);
     }
 
     // A kind whose chrome the pointer can ask for has strips the pointer asks for, and this is
@@ -383,7 +389,7 @@ pub(super) fn refresh_pin_chrome(
         .and(pin.hovered);
     let spoken = pin.tooltip.refresh(spoken, now);
 
-    spoken || shown || closed || card
+    spoken || shown || closed || card || menu
 }
 
 /// The card's own control the pointer is on, asked of the cursor's place on the screen rather than

@@ -30,6 +30,17 @@ pub(super) struct PinMenu {
     /// window's own coordinates: the panel's top-left, held inside
     /// the window by the placement (see `pin_chrome::menu_popup_from_point`).
     pub(super) point: (i32, i32),
+    /// The row of the main menu the pointer is over, for the wash the
+    /// row under the hand is painted with, or nothing where the
+    /// pointer is not on a row (see `refresh_pin_menu`).
+    pub(super) hover_main: Option<usize>,
+    /// The row of the flyout the pointer is over, for the same wash.
+    pub(super) hover_flyout: Option<usize>,
+    /// When the pointer came onto the Seek row, while the hover timer
+    /// that opens the flyout is running: cleared the moment the
+    /// pointer leaves the row, so that a hand only passing over it
+    /// opens nothing (see `refresh_pin_menu`).
+    pub(super) seek_since: Option<Instant>,
 }
 
 /// What a repaint draws the card's menu from: the
@@ -43,12 +54,15 @@ pub(super) struct PinMenu {
 pub(super) struct PinMenuPaint {
     pub(super) popup: pin_chrome::MenuPopup,
     pub(super) rows: Vec<pin_chrome::MenuRow>,
+    /// The row of the main menu the pointer is over, for the
+    /// wash the row under the hand is painted with.
+    pub(super) hover: Option<usize>,
     /// The Seek row's flyout, when it is up: its panel
-    /// right of the main menu's, top-aligned with the
+    /// beside the main menu's, top-aligned with the
     /// Seek row, and the rows in it. The main menu's
     /// panel is `popup` as the flyout's own placement
-    /// pulled it left to make the flyout room (see
-    /// `pin_chrome::menu_flyout_from_menu`).
+    /// leaves it — on one side of the point the right-click
+    /// landed or the other (see `pin_chrome::menu_flyout_from_menu`).
     pub(super) flyout: Option<PinMenuFlyout>,
 }
 
@@ -61,7 +75,16 @@ pub(super) struct PinMenuPaint {
 pub(super) struct PinMenuFlyout {
     pub(super) popup: pin_chrome::MenuPopup,
     pub(super) rows: Vec<pin_chrome::MenuRow>,
+    /// The row of the flyout the pointer is over, for its wash.
+    pub(super) hover: Option<usize>,
 }
+
+/// How long the pointer rests on the Seek row before its flyout opens:
+/// the Windows-like hover delay, long enough that a hand on its way
+/// across the row does not open a panel it did not mean to, and short
+/// enough that a hand meaning to use the row does not wait (see
+/// `refresh_pin_menu`).
+const PIN_MENU_HOVER_DELAY: Duration = Duration::from_millis(150);
 
 /// The ways a pinned sound can start, in the order the menu lists them:
 /// the same four, in the same order, the tray's own
@@ -243,6 +266,7 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
                 Some(PinMenuFlyout {
                     popup: placed.popup,
                     rows: choices,
+                    hover: pin.menu.hover_flyout,
                 }),
             )
         }
@@ -252,7 +276,90 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
         ),
     };
 
-    Some(PinMenuPaint { popup, rows, flyout })
+    Some(PinMenuPaint {
+        popup,
+        rows,
+        hover: pin.menu.hover_main,
+        flyout,
+    })
+}
+
+/// Ask the card's menu about the pointer, on the tick that already drives
+/// the pin's chrome, answering whether anything about it changed — which is
+/// whether the window owes a repaint for it.
+///
+/// Three things are settled here and nowhere else, because they are all
+/// questions about where the pointer is right now rather than about anything
+/// the window was sent: the row the pointer is on, which is washed; whether
+/// the pointer has rested on the Seek row long enough for its flyout to open;
+/// and whether a flyout that is up is still wanted. A pointer that merely
+/// crosses the Seek row opens nothing — the timer is cleared the moment it
+/// leaves — and a flyout that is up stays up while the pointer is on the Seek
+/// row, in the gap between the panels, or on the flyout itself, and goes when
+/// the pointer is on another row or off the menu entirely (see
+/// `pin_chrome::menu_flyout_gap_holds`).
+///
+/// The pointer is read as a place on the screen and taken against the
+/// window's own box, the conversion `refresh_pin_volume` makes, for the same
+/// reason it makes it: a pointer that has left the pin sends it nothing more,
+/// so a wash or a flyout left up under one is a mark on a hand that is gone.
+pub(super) fn refresh_pin_menu(
+    pin: &mut PinnedPreview,
+    now: Instant,
+    cursor: Option<(i32, i32)>,
+) -> bool {
+    if !pin.menu.open {
+        return false;
+    }
+
+    let Some(paint) = pinned_menu_paint(pin) else {
+        return false;
+    };
+
+    let window = pin.window_box();
+    let at = cursor.map(|(x, y)| (x - window.0, y - window.1));
+
+    let hover_main = at.and_then(|(x, y)| pin_chrome::menu_row_at(&paint.popup, x, y));
+    let hover_flyout = paint
+        .flyout
+        .as_ref()
+        .and_then(|flyout| at.and_then(|(x, y)| pin_chrome::menu_row_at(&flyout.popup, x, y)));
+
+    // The Seek row is the main menu's last: it is the row the flyout hangs
+    // from, whatever the panel holds (see `menu_rows`).
+    let seek_row = (paint.rows.len() as i32 - 1).max(0) as usize;
+    let on_seek = hover_main == Some(seek_row);
+
+    // The timer: it starts when the pointer comes onto the Seek row and is
+    // cleared the moment it leaves, so a crossing opens nothing.
+    let seek_since = match on_seek {
+        true => pin.menu.seek_since.or(Some(now)),
+        false => None,
+    };
+    let rested = seek_since.is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
+
+    // Whether a flyout that is up is still wanted: the pointer is on the Seek
+    // row, the gap, or the flyout itself.
+    let kept = on_seek
+        || hover_flyout.is_some()
+        || paint.flyout.as_ref().is_some_and(|flyout| {
+            at.is_some_and(|(x, y)| {
+                pin_chrome::menu_flyout_gap_holds(&paint.popup, &flyout.popup, x, y)
+            })
+        });
+
+    let seek = (pin.menu.seek || rested) && kept;
+
+    let changed = pin.menu.hover_main != hover_main
+        || pin.menu.hover_flyout != hover_flyout
+        || pin.menu.seek != seek
+        || pin.menu.seek_since != seek_since;
+    pin.menu.hover_main = hover_main;
+    pin.menu.hover_flyout = hover_flyout;
+    pin.menu.seek = seek;
+    pin.menu.seek_since = seek_since;
+
+    changed
 }
 
 /// A press on a pinned window with the card's menu up, answering whether
@@ -289,13 +396,12 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
                 toggle_pin_mode_audio_loop();
                 false
             }
-            // The seek row: the door the flyout comes through. While the
-            // flyout is down, the press is the one that opens it beside
-            // the menu; while it is up, the press is the one that puts
-            // it back — the menu itself stays up, its rows still
-            // showing.
+            // The seek row: the door the flyout comes through. A press on
+            // it opens the flyout beside the menu and the menu stays up,
+            // its rows still showing — the same door the hover opens, for
+            // a hand that has come to press rather than wait.
             _ => {
-                with_pin(|pin| pin.menu.seek = !pin.menu.seek);
+                with_pin(|pin| pin.menu.seek = true);
                 true
             }
         },
@@ -354,6 +460,9 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
         pin.menu.open = true;
         pin.menu.seek = false;
         pin.menu.point = (x, y);
+        pin.menu.hover_main = None;
+        pin.menu.hover_flyout = None;
+        pin.menu.seek_since = None;
     });
     render_layered_preview(hwnd);
 }

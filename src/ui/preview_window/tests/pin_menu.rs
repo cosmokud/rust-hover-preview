@@ -648,13 +648,12 @@ fn a_choice_made_in_the_flyout_is_written_down_and_puts_the_whole_menu_away() {
     );
 }
 
-/// A press on the Seek row while its flyout is up is
-/// the one that puts the flyout back: the row is the
-/// door the flyout came through, so a hand pressing it
-/// again is a hand taking the flyout back — the menu
-/// itself stays up, its three rows still showing.
+/// A press on the Seek row is the door the flyout comes through: the
+/// flyout opens beside the menu, and the menu itself stays up, its
+/// three rows still showing. A hand that has come to press rather than
+/// wait for the hover does not have to.
 #[test]
-fn a_press_on_the_seek_row_while_its_flyout_is_up_puts_it_back() {
+fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -663,13 +662,11 @@ fn a_press_on_the_seek_row_while_its_flyout_is_up_puts_it_back() {
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
-    with_pin(|pin| {
-        pin.menu.open = true;
-        pin.menu.seek = true;
-    });
+    with_pin(|pin| pin.menu.open = true);
     let Some(paint) = pinned_menu_geometry() else {
         panic!("a menu that is up is painted");
     };
+    assert!(paint.flyout.is_none(), "the menu opens on its main page");
 
     // The middle of the Seek row, the main menu's
     // third row.
@@ -682,12 +679,12 @@ fn a_press_on_the_seek_row_while_its_flyout_is_up_puts_it_back() {
         "a hand on the Seek row is the menu's own"
     );
 
-    // The menu is still up, on its three rows, with the
-    // flyout put back.
+    // The menu is still up, on its three rows, with the flyout up
+    // beside it.
     let Some(paint) = pinned_menu_geometry() else {
         panic!("the menu is still up")
     };
-    assert!(paint.flyout.is_none(), "the flyout is put back");
+    assert!(paint.flyout.is_some(), "the press opened the flyout");
     let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, ["Shuffle Mode", "Loop", "Seek"]);
 }
@@ -746,4 +743,242 @@ fn a_press_outside_both_panels_puts_the_whole_menu_away() {
             "so the whole menu is put away"
         );
     }
+}
+
+/// The screen point a window-relative point of these tests' sound pin
+/// is: its window's box begins at (100, 100), so a point on the menu is
+/// taken to the screen the way the chrome tick takes the pointer.
+fn on_screen(point: (i32, i32)) -> (i32, i32) {
+    (100 + point.0, 100 + point.1)
+}
+
+/// The window-relative middle of a row of the main menu.
+fn menu_row_point(paint: &PinMenuPaint, index: usize) -> (i32, i32) {
+    (
+        (paint.popup.panel.left + paint.popup.panel.right) / 2,
+        paint.popup.rows_top
+            + index as i32 * paint.popup.row_height
+            + paint.popup.row_height / 2,
+    )
+}
+
+/// Ask the chrome tick about a screen point, for the pin that is up,
+/// answering whether anything changed.
+fn tick(cursor: Option<(i32, i32)>, now: Instant) -> bool {
+    pin_state()
+        .and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            Some(refresh_pin_chrome(pin, now, cursor))
+        })
+        .unwrap_or(false)
+}
+
+/// Whether the pin that is up has its Seek flyout up.
+fn flyout_is_up() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.menu.seek))
+        .unwrap_or(false)
+}
+
+/// Hovering the Seek row opens its flyout after a short delay, and not
+/// before: the first tick starts the timer, the flyout waits while the
+/// pointer has not rested long enough, and it opens on the tick that
+/// finds the delay elapsed.
+#[test]
+fn hovering_the_seek_row_opens_the_flyout_after_a_short_delay() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    with_pin(|pin| {
+        pin.menu.open = true;
+        pin.menu.point = (20, 20);
+    });
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let seek = on_screen(menu_row_point(&paint, 2));
+
+    let t0 = Instant::now();
+
+    // The first tick the pointer is on the Seek row starts the timer;
+    // the flyout is not up yet, however many ticks pass before the
+    // delay is reached.
+    tick(Some(seek), t0);
+    assert!(!flyout_is_up(), "the flyout waits for the hover delay");
+    tick(Some(seek), t0 + Duration::from_millis(100));
+    assert!(
+        !flyout_is_up(),
+        "the flyout is not up before the delay has elapsed"
+    );
+
+    // Once the pointer has rested there for the delay, it opens.
+    assert!(
+        tick(Some(seek), t0 + Duration::from_millis(200)),
+        "the flyout opening is a change worth a repaint"
+    );
+    assert!(flyout_is_up(), "the flyout opens after the delay");
+}
+
+/// Leaving the Seek row before the delay has elapsed cancels the timer:
+/// a hand crossing the row on its way somewhere else opens nothing, and
+/// waiting there afterwards does not open it either.
+#[test]
+fn leaving_the_seek_row_before_the_delay_cancels_its_flyout() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    with_pin(|pin| {
+        pin.menu.open = true;
+        pin.menu.point = (20, 20);
+    });
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let seek = on_screen(menu_row_point(&paint, 2));
+    let shuffle = on_screen(menu_row_point(&paint, 0));
+
+    let t0 = Instant::now();
+    tick(Some(seek), t0);
+    // The pointer leaves the row before the delay: the timer is cleared.
+    tick(Some(shuffle), t0 + Duration::from_millis(50));
+    assert!(!flyout_is_up(), "it did not open before the delay");
+
+    // And it never opens on this rest, however long it lasts.
+    tick(Some(shuffle), t0 + Duration::from_millis(400));
+    assert!(
+        !flyout_is_up(),
+        "leaving the Seek row before the delay cancels the flyout"
+    );
+}
+
+/// A flyout that is up stays up while the pointer is over the Seek row,
+/// the gap between the panels, or the flyout itself, and goes when the
+/// pointer hovers another main-menu row or leaves the menu entirely.
+#[test]
+fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    with_pin(|pin| {
+        pin.menu.open = true;
+        pin.menu.point = (20, 20);
+    });
+
+    // Open the flyout by resting on the Seek row past the delay.
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let seek = on_screen(menu_row_point(&paint, 2));
+    let t0 = Instant::now();
+    tick(Some(seek), t0);
+    tick(Some(seek), t0 + Duration::from_millis(200));
+    assert!(flyout_is_up(), "the flyout opened");
+
+    // Over the flyout itself: it stays.
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let flyout = paint.flyout.as_ref().expect("the flyout is up");
+    let on_flyout = on_screen((
+        (flyout.popup.panel.left + flyout.popup.panel.right) / 2,
+        flyout.popup.rows_top + flyout.popup.row_height / 2,
+    ));
+    tick(Some(on_flyout), t0 + Duration::from_millis(300));
+    assert!(flyout_is_up(), "the flyout stays up under the pointer");
+
+    // In the gap between the two panels, at the Seek row's own height:
+    // it stays up across it.
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let flyout = paint.flyout.as_ref().expect("the flyout is up");
+    let gap = on_screen((
+        (paint.popup.panel.right + flyout.popup.panel.left) / 2,
+        paint.popup.rows_top + 2 * paint.popup.row_height + paint.popup.row_height / 2,
+    ));
+    tick(Some(gap), t0 + Duration::from_millis(400));
+    assert!(
+        flyout_is_up(),
+        "the flyout stays up while the pointer crosses the gap"
+    );
+
+    // On the Shuffle Mode row: it hides.
+    let shuffle = on_screen(menu_row_point(&paint, 0));
+    assert!(
+        tick(Some(shuffle), t0 + Duration::from_millis(500)),
+        "the flyout going is a change worth a repaint"
+    );
+    assert!(
+        !flyout_is_up(),
+        "the flyout hides when the pointer hovers another row"
+    );
+
+    // Opened again, then the pointer leaves the menu entirely: it hides.
+    let seek = on_screen(menu_row_point(&paint, 2));
+    tick(Some(seek), t0 + Duration::from_millis(600));
+    tick(Some(seek), t0 + Duration::from_millis(800));
+    assert!(flyout_is_up(), "the flyout opened again");
+    tick(Some((-1000, -1000)), t0 + Duration::from_millis(900));
+    assert!(
+        !flyout_is_up(),
+        "the flyout hides when the pointer leaves the menu entirely"
+    );
+}
+
+/// The row under the pointer is the row the paint washes: the main
+/// menu's own row where the pointer is on the main menu, and the
+/// flyout's row where it is on the flyout.
+#[test]
+fn the_row_under_the_pointer_is_the_row_that_is_washed() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    with_pin(|pin| {
+        pin.menu.open = true;
+        pin.menu.point = (20, 20);
+    });
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let loop_row = on_screen(menu_row_point(&paint, 1));
+    let t0 = Instant::now();
+
+    assert!(
+        tick(Some(loop_row), t0),
+        "the row under the pointer is a change worth a repaint"
+    );
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    assert_eq!(
+        paint.hover,
+        Some(1),
+        "the Loop row is the one the pointer is on"
+    );
+    assert!(
+        paint.flyout.is_none(),
+        "the flyout is down on the main page"
+    );
+
+    // And on the flyout: its own row is the one washed.
+    with_pin(|pin| pin.menu.seek = true);
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let flyout = paint.flyout.as_ref().expect("the flyout is up");
+    let choice = on_screen((
+        (flyout.popup.panel.left + flyout.popup.panel.right) / 2,
+        flyout.popup.rows_top + 2 * flyout.popup.row_height + flyout.popup.row_height / 2,
+    ));
+    tick(Some(choice), t0 + Duration::from_millis(50));
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    assert_eq!(
+        paint.flyout.as_ref().expect("the flyout is up").hover,
+        Some(2),
+        "the flyout's third row is the one the pointer is on"
+    );
 }
