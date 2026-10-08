@@ -87,9 +87,11 @@ pub(crate) struct MenuPopup {
     /// out from, and what a point is answered against (`menu_row_at`).
     pub(crate) rows: i32,
     /// Which way the arrow on the panel's last row points, or nothing for a
-    /// panel whose rows open nothing. It is the placement's answer rather
-    /// than the window's, because it is the placement that knows which side
-    /// the panel a row opens ended up on (see `menu_flyout_from_menu`).
+    /// panel whose rows open nothing. It is the flyout's tier's answer
+    /// rather than the window's, because the tier is what knows which side
+    /// the panel a row opens sits on (`menu_flyout_tier`) — which is why
+    /// the main menu's own panel carries it whether the flyout is up or
+    /// not, the same tier asked either way.
     pub(crate) arrow: MenuArrow,
 }
 
@@ -152,6 +154,11 @@ fn menu_panel_sizes(width: i32, dpi: u32) -> (i32, i32, i32, i32) {
 /// too small to hold the panel at all is a panel held at its own top-left
 /// corner, with the pair narrowed to fit where a flyout is up beside it
 /// (see `menu_flyout_from_menu`).
+///
+/// The panel carries the arrow on its last row pointing the way the flyout
+/// opens, from the same tier the flyout's own placement asks
+/// (`menu_flyout_tier`) — so the arrow is there whether the flyout is up
+/// or not, and it is the same arrow either way.
 pub(crate) fn menu_popup_from_point(
     point: (i32, i32),
     width: i32,
@@ -172,7 +179,7 @@ pub(crate) fn menu_popup_from_point(
     let left = point.0.min(width.saturating_sub(panel_width)).max(0);
     let top = point.1.min(height.saturating_sub(panel_height)).max(0);
 
-    MenuPopup {
+    let placed = MenuPopup {
         panel: RECT {
             left,
             top,
@@ -183,7 +190,19 @@ pub(crate) fn menu_popup_from_point(
         row_height,
         rows: rows.len() as i32,
         arrow: MenuArrow::None,
-    }
+    };
+
+    // Which way the Seek row's arrow points: the tier the flyout's own
+    // placement asks (`menu_flyout_tier`), of the panel as it stands
+    // here. The panel's placement is this function's alone — the tier's
+    // narrowing of the main menu stays a flyout-up concern — but the
+    // arrow is carried either way, so the Seek row points the way its
+    // flyout opens whether the flyout is up or not, and the answer the
+    // flyout's placement gives is the one the menu carried without it.
+    let (_menu_left, _menu_right, _flyout_left, arrow) =
+        menu_flyout_tier(&placed, width, dpi);
+
+    MenuPopup { arrow, ..placed }
 }
 
 /// Where the seek flyout is, in the window's own
@@ -203,6 +222,49 @@ pub(crate) struct MenuFlyout {
     /// left edge where it does not — top-aligned with the
     /// seek row.
     pub(crate) popup: MenuPopup,
+}
+
+/// Where the flyout's tier puts the two panels' own edges, and which way
+/// the Seek row's arrow points because of it: the flyout's first place is
+/// a small gap right of the main menu's own right edge; where that does
+/// not fit it flips to a small gap left of the menu's own left edge; and
+/// where neither fits, the two are narrowed to half the room the window
+/// leaves between its own edges — the menu at the window's left edge and
+/// the flyout at its right, which points the arrow right.
+///
+/// The one computation of that tier, asked both by the main menu's own
+/// placement (`menu_popup_from_point`) and by the flyout's
+/// (`menu_flyout_from_menu`), so that the arrow the main menu's panel
+/// carries is always the side its flyout opens on, whether the flyout is
+/// up or not: the main menu's own placement takes the arrow from this
+/// and leaves the panel where it stands — the narrowing the tier answers
+/// for the main menu being a flyout-up concern — and the flyout's own
+/// placement applies the whole answer.
+fn menu_flyout_tier(
+    menu: &MenuPopup,
+    width: i32,
+    dpi: u32,
+) -> (i32, i32, i32, MenuArrow) {
+    let (panel_width, _row_height, _pad, gap) = menu_panel_sizes(width, dpi);
+
+    if menu.panel.right + gap + panel_width <= width {
+        (
+            menu.panel.left,
+            menu.panel.right,
+            menu.panel.right + gap,
+            MenuArrow::Right,
+        )
+    } else if menu.panel.left - gap - panel_width >= 0 {
+        (
+            menu.panel.left,
+            menu.panel.right,
+            menu.panel.left - gap - panel_width,
+            MenuArrow::Left,
+        )
+    } else {
+        let half = ((width - gap) / 2).max(8).min(width.max(8));
+        (0, half, width - half, MenuArrow::Right)
+    }
 }
 
 /// The seek flyout the menu's Seek row opens, placed from
@@ -237,7 +299,7 @@ pub(crate) fn menu_flyout_from_menu(
     dpi: u32,
     flyout_rows: &[MenuRow],
 ) -> MenuFlyout {
-    let (panel_width, row_height, pad, gap) = menu_panel_sizes(width, dpi);
+    let (panel_width, row_height, pad, _gap) = menu_panel_sizes(width, dpi);
 
     // The flyout hangs from the Seek row, which is the
     // main menu's third row: its top is that row's own
@@ -250,32 +312,15 @@ pub(crate) fn menu_flyout_from_menu(
         .min(height.saturating_sub(flyout_height).max(0))
         .max(0);
 
-    // Where the two panels' own edges go, and which way
-    // the Seek row's arrow points because of it. The
-    // flyout's first place is a small gap right of the
-    // main menu's right edge; where that does not fit it
-    // flips to a small gap left of the menu's own left
-    // edge; and where neither fits the two are narrowed to
-    // fit the window.
-    let (menu_left, menu_right, flyout_left, arrow) =
-        if menu.panel.right + gap + panel_width <= width {
-            (
-                menu.panel.left,
-                menu.panel.right,
-                menu.panel.right + gap,
-                MenuArrow::Right,
-            )
-        } else if menu.panel.left - gap - panel_width >= 0 {
-            (
-                menu.panel.left,
-                menu.panel.right,
-                menu.panel.left - gap - panel_width,
-                MenuArrow::Left,
-            )
-        } else {
-            let half = ((width - gap) / 2).max(8).min(width.max(8));
-            (0, half, width - half, MenuArrow::Right)
-        };
+    // Where the two panels' own edges go, and which way the
+    // Seek row's arrow points because of it: the tier the
+    // main menu's own placement asks for the same arrow
+    // (`menu_flyout_tier`), applied whole here — the main
+    // menu narrowed where the window is too narrow for the
+    // two panels at their own width, the flyout at the
+    // tier's own place beside it — so the arrow does not
+    // move when the flyout comes up.
+    let (menu_left, menu_right, flyout_left, arrow) = menu_flyout_tier(menu, width, dpi);
     // The flyout's own width is the room the window leaves
     // it, which is the panel's own width everywhere but the
     // narrowed pair, where it is the half the window leaves.
@@ -522,8 +567,9 @@ pub(crate) fn paint_menu_popup(
 
     // The arrow on the panel's last row, at the row's own right, pointing
     // the way the panel the row opens sits: the row that opens the flyout
-    // is the panel's last, and the placement is what knows which side the
-    // flyout ended up on (see `menu_flyout_from_menu`).
+    // is the panel's last, and the flyout's tier is what knows which side
+    // the flyout sits on (`menu_flyout_tier`) — which is why the main
+    // menu's panel carries the arrow whether the flyout is up or not.
     if popup.arrow != MenuArrow::None {
         let index = (popup.rows - 1).max(0);
         let row_top = popup.rows_top + index * popup.row_height;
