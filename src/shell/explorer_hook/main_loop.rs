@@ -500,6 +500,18 @@ pub fn run_explorer_hook() {
         // rather than sleeping deeply, and what is not quiet behind it is the pin's own following
         // where `Pin Mode … Update Preview` asks for it (see `PinUpdateWatch`).
         if pinned() {
+            // The tick's one reading of the pointer, taken at the tick's
+            // opening and before the input pass reads the press bits: every
+            // question this tick asks about the pointer — including which
+            // window a press landed on — is a question about that one
+            // reading, the same discipline the tick below takes (see
+            // `PointerTick`). A press's window is judged from the reading
+            // the tick opened with, and never from one made after the pass
+            // has run: the first press on a window is the press that
+            // activates it, and what the pointer stands on can settle
+            // differently between the two readings.
+            let pointer = read_pointer();
+
             // The state is read here too, on the clock the ladder keeps it on, so the one thing
             // this branch does not ask about is not left to go stale behind the pin: the loop's
             // record for the engines' idle timer comes from the window the user is actually in.
@@ -529,11 +541,26 @@ pub fn run_explorer_hook() {
             // reaches its procedure — is the one thing answered from here: the card's menu, where
             // it is up, is put away by the preview loop on the tick this ask is taken (see
             // `request_pin_menu_dismiss`). Nothing else about the pin is touched, and a press on
-            // the pin window itself is not published (see `press_is_outside_the_pin_window`).
-            let on_pin_window = focus_move.clicked
-                && read_pointer().is_some_and(|pointer| preview_window_is_at(pointer.window));
-            if press_is_outside_the_pin_window(focus_move.clicked, on_pin_window) {
+            // the pin window itself is not published (see `pin_menu_dismiss_ask`).
+            let published = pin_menu_dismiss_ask(focus_move.clicked, pointer.as_ref());
+            if published {
                 request_pin_menu_dismiss();
+            }
+
+            // The publication as the press that was read says it: the press,
+            // the window the tick's one reading named, and the verdict that
+            // reading produced. A press that was read but not published is
+            // the one that says which of the three was wrong — the probe
+            // counters cannot (see `note_pin_click!`).
+            if focus_move.clicked {
+                note_pin_click!(
+                    "DISMISS press {}  win {}  published {}",
+                    focus_move.clicked as u8,
+                    pointer.map_or_else(|| "none".to_string(), |tick| {
+                        window_class_of(tick.window)
+                    }),
+                    published as u8,
+                );
             }
 
             // What the loop itself saw on a pinned tick, before anything is decided about it: a

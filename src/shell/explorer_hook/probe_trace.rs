@@ -131,12 +131,17 @@ pub(super) fn flush_probe_counts(now: Instant, last: &mut Instant, path: &Path) 
 /// A click lost to a race reads, in a counter, exactly like a click that never happened.
 macro_rules! note_pin_click {
     ($($line:tt)*) => {
-        if let Some(path) = HOOK_TRACE.then(|| std::env::temp_dir().join("rhp-pin-click-trace.log"))
-        {
+        // The gate is read here rather than through `HOOK_TRACE`, so the
+        // macro stands on its own wherever it is written from: the preview
+        // loop's take of the dismissal ask writes one too, and that is a
+        // part of the app this module is not in scope of. The line itself
+        // is still built inside the guard, so a run with no trace pays
+        // nothing for one.
+        if std::env::var_os("RHP_HOOK_TRACE").is_some() {
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(path)
+                .open(std::env::temp_dir().join("rhp-pin-click-trace.log"))
             {
                 use std::io::Write;
                 let _ = writeln!(file, $($line)*);

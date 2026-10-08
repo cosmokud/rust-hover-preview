@@ -176,6 +176,49 @@ fn a_press_on_another_window_is_published_but_one_on_the_pin_is_not() {
     );
 }
 
+/// The dismissal verdict answers from the tick's one reading of the pointer —
+/// the one the tick opened with — and from nothing else: the press the tick's
+/// input pass read is judged against the window that reading named, and never
+/// against a window a reading made later in the tick would name. The first
+/// press on a window is the press that activates it, and the two readings of
+/// one tick can name different windows, so the verdict is asked of the tick's
+/// own reading alone. A reading that named no window at all is not the pin's
+/// own either, so a press under it is still published; a tick with no press
+/// publishes nothing, whichever window its reading named.
+///
+/// The one case this cannot put on a screen is the reading that names the
+/// pin's own window — that identity belongs to a window on somebody's screen,
+/// which is a rule that goes untested (see
+/// `a_press_on_another_window_is_published_but_one_on_the_pin_is_not` for the
+/// rule itself, with the window's identity handed in).
+#[test]
+fn the_dismissal_verdict_answers_from_the_ticks_opening_pointer_read() {
+    let foreign = PointerTick {
+        point: POINT { x: 12, y: 34 },
+        dpi: 96,
+        // Some other app's window. No test has the preview window up, so the
+        // identity check answers false for any handle a test can name.
+        window: HWND(1 as *mut _),
+    };
+
+    assert!(
+        pin_menu_dismiss_ask(true, Some(&foreign)),
+        "a press whose tick read another window is published"
+    );
+    assert!(
+        pin_menu_dismiss_ask(true, None),
+        "a press whose tick read no pointer at all is not a press on the pin window"
+    );
+    assert!(
+        !pin_menu_dismiss_ask(false, Some(&foreign)),
+        "a tick with no press publishes nothing, whichever window its reading named"
+    );
+    assert!(
+        !pin_menu_dismiss_ask(false, None),
+        "and neither does one that pressed nothing and read no pointer"
+    );
+}
+
 /// A pointer that has left the item the preview on screen is about has moved,
 /// whether or not it went far enough to clear the threshold: the threshold is a
 /// hand's own jitter, and a row of the list crossed under it would otherwise

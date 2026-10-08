@@ -474,7 +474,8 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
 /// which is what a press on another window means here (see
 /// `requests::request_pin_menu_dismiss`).
 pub(super) fn take_pin_menu_dismiss() -> bool {
-    if !PIN_MENU_DISMISS_REQUESTED.swap(false, Ordering::AcqRel) {
+    let asked = PIN_MENU_DISMISS_REQUESTED.swap(false, Ordering::AcqRel);
+    if !asked {
         return false;
     }
 
@@ -485,5 +486,16 @@ pub(super) fn take_pin_menu_dismiss() -> bool {
             pin.menu.open = false;
         }
     });
+
+    // The ask being taken, as this side of the seam sees it: the
+    // flag's value before the swap, and whether the menu was up to
+    // put away. The hook's side of the same ask is the trace its
+    // pinned tick writes (see `note_pin_click!`).
+    crate::shell::explorer_hook::note_pin_click!(
+        "DISMISS taken  asked {}  menu_up {}",
+        asked as u8,
+        was_up as u8,
+    );
+
     was_up
 }
