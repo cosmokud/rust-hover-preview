@@ -327,6 +327,25 @@ pub(super) fn press_is_outside_the_pin_window(pressed: bool, on_pin_window: bool
     pressed && !on_pin_window
 }
 
+/// The dismissal ask for one pinned tick: whether a press the tick's input
+/// pass read puts the card's menu away. Both halves of the ask are facts of
+/// the tick's one reading — the press from the pass, the window from the
+/// pointer reading the tick opened with — so a press is judged against the
+/// window as that reading named it, and never against a window a reading
+/// made later in the tick would name: the first press on a window is the
+/// press that activates it, and the two readings of one tick can name
+/// different windows. The rule itself, with the window's identity handed in,
+/// is `press_is_outside_the_pin_window`.
+pub(super) fn pin_menu_dismiss_ask(
+    clicked: bool,
+    tick_pointer: Option<&PointerTick>,
+) -> bool {
+    let on_pin_window = clicked
+        && tick_pointer.is_some_and(|pointer| preview_window_is_at(pointer.window));
+
+    press_is_outside_the_pin_window(clicked, on_pin_window)
+}
+
 /// Whether a press read on this tick is one a listing can answer for: the window it landed
 /// on is Explorer's or this app's own, it is still there, and it is not a popup covering the
 /// listing.
