@@ -133,10 +133,11 @@ fn four_choices() -> Vec<MenuRow> {
 /// The seek flyout hangs right of the main menu's own
 /// right edge, top-aligned with the Seek row — the main
 /// menu's third row — so the menu the flyout came from
-/// stays wholly visible beside it. The window is one the
-/// flyout fits in beside the menu at the point, which is
-/// asked of more than one width and one display's own
-/// scale, because the scale is what sizes the two panels.
+/// stays wholly visible beside it, and the Seek row's
+/// arrow points that way. The window is one the flyout
+/// fits in beside the menu at the point, which is asked
+/// of more than one width and one display's own scale,
+/// because the scale is what sizes the two panels.
 #[test]
 fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
     let menu_rows = three_rows();
@@ -144,10 +145,9 @@ fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
 
     // A window the flyout fits in beside the menu at the
     // point, at the scale of a 96-DPI display and at
-    // a second width, where the gap the flyout is held off
-    // the menu by is the same four logical pixels the menu
-    // is held off the point by.
-    for width in [520i32, 600i32] {
+    // a second width: the gap the flyout is held off the
+    // menu by is four logical pixels at 96 DPI.
+    for width in [620i32, 700i32] {
         let placed =
             menu_flyout_from_menu(
                 &menu_popup_from_point(a_point(), width, 300, 96, &menu_rows),
@@ -157,9 +157,15 @@ fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
                 &flyout_rows,
             );
 
-        // The flyout's left edge is a small gap right of the
-        // main menu's own right edge, and its top is the Seek
-        // row's own top — the row the flyout is hung from.
+        // The menu is left where the point anchored it, and
+        // the flyout's left edge is a small gap right of its
+        // own right edge, its top the Seek row's own top —
+        // the row the flyout is hung from.
+        assert_eq!(
+            (placed.menu.panel.left, placed.menu.panel.top),
+            a_point(),
+            "the menu stays where the point anchored it"
+        );
         assert_eq!(
             placed.popup.panel.left,
             placed.menu.panel.right + 4,
@@ -169,6 +175,11 @@ fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
             placed.popup.panel.top,
             placed.menu.rows_top + 2 * placed.menu.row_height,
             "the flyout is top-aligned with the Seek row"
+        );
+        assert_eq!(
+            placed.menu.arrow,
+            MenuArrow::Right,
+            "the Seek row's arrow points at the flyout on its right"
         );
 
         // Both panels are inside the window they belong to.
@@ -184,8 +195,8 @@ fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
     // where both panels are bigger than they are at 96 DPI
     // and the gap is the six logical pixels that is.
     let placed = menu_flyout_from_menu(
-        &menu_popup_from_point(a_point(), 700, 300, 144, &menu_rows),
-        700,
+        &menu_popup_from_point(a_point(), 760, 300, 144, &menu_rows),
+        760,
         300,
         144,
         &flyout_rows,
@@ -195,81 +206,85 @@ fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
         placed.popup.panel.top,
         placed.menu.rows_top + 2 * placed.menu.row_height
     );
+    assert_eq!(placed.menu.arrow, MenuArrow::Right);
     for panel in [placed.menu.panel, placed.popup.panel] {
         assert!(panel.left >= 0);
-        assert!(panel.right <= 700);
+        assert!(panel.right <= 760);
         assert!(panel.top >= 0);
         assert!(panel.bottom <= 300);
     }
 }
 
-/// Both panels stay inside the window at every width: the
-/// button the menu hangs from stands in the window's top
-/// corner, where a menu tucked to it leaves a flyout no
-/// room but the corner's own — so a window too narrow for
-/// the flyout beside the menu there is a menu pulled left,
-/// off the button, until the flyout fits beside it at the
-/// window's own right edge, and a window too narrow for
-/// the two panels at their own width is the two of them
-/// narrowed to half the room the window leaves between its
-/// own edges. A window too short to hold the flyout below
-/// the Seek row is a flyout held at the window's own
-/// bottom, the same holding the menu's own panel has. Each
-/// holding is asked of more than one display's own scale.
+/// Where the flyout does not fit right of the menu, it flips to the
+/// menu's own left, a small gap off its left edge with the same top
+/// alignment — the standard Windows behavior — and the Seek row's
+/// arrow flips with it. The menu is not moved to make room on the
+/// right; it stays where the point anchored it.
+#[test]
+fn the_seek_flyout_flips_left_where_it_does_not_fit_right() {
+    let menu_rows = three_rows();
+    let flyout_rows = four_choices();
+
+    // A window wide enough for the flyout but not beside the
+    // menu where the point anchored it: the menu's right edge
+    // is the window's own, so the flyout goes to its left.
+    for (width, dpi, gap, panel_width) in [(400i32, 96u32, 4i32, 150i32), (500, 144, 6, 225)] {
+        let placed = menu_flyout_from_menu(
+            &menu_popup_from_point(a_point(), width, 300, dpi, &menu_rows),
+            width,
+            300,
+            dpi,
+            &flyout_rows,
+        );
+
+        assert_eq!(
+            placed.menu.arrow,
+            MenuArrow::Left,
+            "the Seek row's arrow points at the flyout on its left"
+        );
+        assert_eq!(
+            placed.popup.panel.left,
+            placed.menu.panel.left - gap - panel_width,
+            "the flyout sits a gap left of the menu's own left edge"
+        );
+        assert!(
+            placed.popup.panel.right <= placed.menu.panel.left,
+            "and it does not cover the menu"
+        );
+        assert_eq!(
+            placed.popup.panel.top,
+            placed.menu.rows_top + 2 * placed.menu.row_height,
+            "the flipped flyout is top-aligned with the Seek row"
+        );
+
+        // The menu is left where the point anchored it, and both
+        // panels are inside the window.
+        assert_eq!(placed.menu.panel.right, width, "the menu did not move");
+        for panel in [placed.menu.panel, placed.popup.panel] {
+            assert!(panel.left >= 0, "a panel is off the window's left");
+            assert!(panel.right <= width, "a panel is off the window's right");
+            assert!(panel.top >= 0 && panel.bottom <= 300);
+        }
+    }
+}
+
+/// Both panels stay inside the window at every width: where the
+/// flyout fits on neither side of the menu it is anchored at — a
+/// window too narrow for the two panels at their own width — the two
+/// are narrowed to half the room the window leaves between its own
+/// edges, the menu at the window's left edge and the flyout right of
+/// it, the arrow pointing at it. A window too short to hold the
+/// flyout below the Seek row is a flyout held at the window's own
+/// bottom, the same holding the menu's own panel has. Each holding is
+/// asked of more than one display's own scale.
 #[test]
 fn both_panels_stay_inside_the_window_at_every_width() {
     let menu_rows = three_rows();
     let flyout_rows = four_choices();
 
-    // A window the flyout runs off the right edge of at the
-    // menu's tucked place, but one two panels fit in side by
-    // side: the menu is pulled left until the flyout fits
-    // beside it at the window's right edge, and the menu
-    // stays inside the window and uncovered.
-    let pulled = menu_flyout_from_menu(
-        &menu_popup_from_point(a_point(), 400, 300, 96, &menu_rows),
-        400,
-        300,
-        96,
-        &flyout_rows,
-    );
-    assert_eq!(
-        pulled.popup.panel.right,
-        400,
-        "the flyout is held at the window's right edge"
-    );
-    assert_eq!(
-        pulled.popup.panel.left,
-        pulled.menu.panel.right + 4,
-        "and it is still right of the menu"
-    );
-    assert!(
-        pulled.menu.panel.left >= 0,
-        "the menu pulled left is still inside the window"
-    );
-    assert!(
-        pulled.menu.panel.right < pulled.popup.panel.left,
-        "and the pulled menu is not covered by the flyout"
-    );
-
-    // The same holding at a display's own larger scale, where
-    // the panels are bigger than the window can hold side by
-    // side at the button's side.
-    let pulled = menu_flyout_from_menu(
-        &menu_popup_from_point(a_point(), 500, 300, 144, &menu_rows),
-        500,
-        300,
-        144,
-        &flyout_rows,
-    );
-    assert_eq!(pulled.popup.panel.right, 500);
-    assert_eq!(pulled.popup.panel.left, pulled.menu.panel.right + 6);
-    assert!(pulled.menu.panel.left >= 0);
-    assert!(pulled.menu.panel.right < pulled.popup.panel.left);
-
-    // A window too narrow for the two panels at their own
-    // width: the two are narrowed to half the room the
-    // window leaves between its own edges, the menu at the
+    // A window too narrow for the flyout on either side of the
+    // menu at the point: the two are narrowed to half the room
+    // the window leaves between its own edges, the menu at the
     // window's left edge and the flyout right of it.
     let split = menu_flyout_from_menu(
         &menu_popup_from_point(a_point(), 250, 300, 96, &menu_rows),
@@ -283,17 +298,14 @@ fn both_panels_stay_inside_the_window_at_every_width() {
         0,
         "a window too narrow for the two holds the menu at its left"
     );
-    assert_eq!(
-        split.popup.panel.right,
-        250,
-        "and the flyout at its right"
-    );
+    assert_eq!(split.popup.panel.right, 250, "and the flyout at its right");
     assert_eq!(
         split.popup.panel.left,
         split.menu.panel.right + 4,
         "the narrowed flyout is still right of the narrowed menu"
     );
     assert!(split.menu.panel.right < split.popup.panel.left);
+    assert_eq!(split.menu.arrow, MenuArrow::Right);
 
     // And the same narrowing at a display's own larger scale.
     let split = menu_flyout_from_menu(
@@ -349,10 +361,10 @@ fn every_menu_row_stays_visible_and_uncovered_while_the_flyout_is_up() {
     let flyout_rows = four_choices();
 
     let placements = [
-        (600i32, 300i32, 96u32), // the flyout at the menu's side
-        (400, 300, 96),          // the menu pulled left
+        (620i32, 300i32, 96u32), // the flyout to the menu's right
+        (400, 300, 96),          // flipped to the menu's left
         (250, 300, 96),          // the two narrowed
-        (500, 300, 144),         // pulled left at a larger scale
+        (500, 300, 144),         // flipped left at a larger scale
         (250, 300, 144),         // narrowed at a larger scale
     ];
 
@@ -368,10 +380,12 @@ fn every_menu_row_stays_visible_and_uncovered_while_the_flyout_is_up() {
         let flyout = placed.popup;
 
         // The flyout is beside the menu, not over it: its panel
-        // starts at or after the menu's own right edge, so no
-        // row of the menu is covered.
+        // lies wholly off one of the menu's own sides, so no row
+        // of the menu is covered — the flyout is to the menu's
+        // right where it fits there and to its left where it does
+        // not (see `menu_flyout_from_menu`).
         assert!(
-            flyout.panel.left >= menu.panel.right,
+            flyout.panel.left >= menu.panel.right || flyout.panel.right <= menu.panel.left,
             "the flyout does not cover the menu ({}x{} at {} DPI)",
             width,
             height,
@@ -448,12 +462,12 @@ fn a_point_is_a_row_only_inside_the_rows() {
 }
 
 /// A row's mark is painted in the room the labels are held away
-/// from, and each kind of mark is its own art there: a check row
-/// a square, checked where the setting is on and empty where it
-/// is off, and a choice of a seek page its disc. The row that
+/// from, and each kind of mark is its own art there: a check row the
+/// check alone — no box — where the setting is on and nothing at all
+/// where it is off, and a choice of a seek page its disc. The row that
 /// carries no mark carries nothing there at all.
 #[test]
-fn each_kind_of_mark_is_its_own_art_in_the_room_before_the_labels() {
+fn a_check_row_carries_a_check_alone_and_a_choice_its_disc() {
     let (width, height) = (400i32, 300i32);
 
     // What is behind the menu: a flat colour the theme holds
@@ -494,7 +508,7 @@ fn each_kind_of_mark_is_its_own_art_in_the_room_before_the_labels() {
         },
     ];
     let popup = menu_popup_from_point(a_point(), width, height, 96, &rows);
-    paint_menu_popup(&mut buffer, width, &palette, &popup, &rows, &surface, 1.0);
+    paint_menu_popup(&mut buffer, width, &palette, &popup, &rows, None, &surface, 1.0);
 
     // The room the marks stand in: the pad the panel holds its
     // rows in and the column the marks are centred in, inside
@@ -550,13 +564,6 @@ fn each_kind_of_mark_is_its_own_art_in_the_room_before_the_labels() {
                 + 0.5,
         )
     };
-    let far_from = |ink: &[(i32, i32)], at: (f32, f32), past: f32| {
-        ink.iter().any(|&(x, y)| {
-            let dx = x as f32 + 0.5 - at.0;
-            let dy = y as f32 + 0.5 - at.1;
-            (dx * dx + dy * dy).sqrt() > past
-        })
-    };
     let near_to = |ink: &[(i32, i32)], at: (f32, f32), within: f32| {
         ink.iter().all(|&(x, y)| {
             let dx = x as f32 + 0.5 - at.0;
@@ -565,24 +572,29 @@ fn each_kind_of_mark_is_its_own_art_in_the_room_before_the_labels() {
         })
     };
 
-    // The checked row: a square in the room, and the check
-    // drawn in it — which is ink the empty square of the row
-    // below does not carry.
+    // The checked row: a check mark in the room and nothing
+    // around it — the box is gone. Its ink is held near the
+    // mark's own centre, which is what a check alone is rather
+    // than the square that used to be drawn around one.
     let checked = row_ink(0);
-    let empty = row_ink(1);
-    assert!(!checked.is_empty(), "a checked row carries a box");
-    assert!(!empty.is_empty(), "an unchecked row carries an empty box");
+    assert!(!checked.is_empty(), "a checked row carries its check");
     assert!(
-        checked.len() > empty.len(),
-        "the check is drawn in: the checked box carries more ink than the empty one"
+        near_to(&checked, centre(0), 5.0),
+        "the check alone stands in the room, with no box around it"
+    );
+    // And the check is a check and not a dot: its ink lies on
+    // both sides of the mark's own centre column.
+    assert!(
+        checked.iter().any(|&(x, _)| (x as f32 + 0.5) < centre(0).0)
+            && checked.iter().any(|&(x, _)| (x as f32 + 0.5) > centre(0).0),
+        "the check reaches across its own middle"
     );
 
-    // The box of a check row is a square rather than a dot:
-    // its ink reaches the corners of the room it stands in,
-    // far from the mark's own centre.
+    // The row whose setting is off: nothing at all in the room —
+    // no empty box, no mark.
     assert!(
-        far_from(&checked, centre(0), 4.0),
-        "the box of a check row is a square, not a dot"
+        row_ink(1).is_empty(),
+        "a setting that is off carries nothing at all"
     );
 
     // The row that carries no mark: nothing at all in the room.
@@ -596,6 +608,173 @@ fn each_kind_of_mark_is_its_own_art_in_the_room_before_the_labels() {
     assert!(
         near_to(&bullet, centre(3), 4.0),
         "the mark of a choice is a disc, held near the centre"
+    );
+}
+
+/// A row under the pointer is washed: the band the pointer is on is
+/// painted the theme's own lift, and no other row is — which is what
+/// tells a hand where on the menu it is about to land.
+#[test]
+fn the_row_under_the_pointer_is_washed() {
+    let (width, height) = (400i32, 300i32);
+    let backdrop = [90u8, 60, 30];
+    let palette = ChromePalette {
+        background: [30, 34, 42],
+        foreground: [198, 202, 210],
+        accent: [86, 182, 194],
+        dark: true,
+    };
+    let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
+
+    // The row under the pointer is the second one, and the menu is
+    // painted with it asked for.
+    let hovered = 1usize;
+    let rows = three_rows();
+    let popup = menu_popup_from_point(a_point(), width, height, 96, &rows);
+
+    let band = |index: usize| {
+        let top = popup.rows_top + index as i32 * popup.row_height;
+        (top, top + popup.row_height)
+    };
+    let page = [palette.background[2], palette.background[1], palette.background[0]];
+
+    // A pixel of a row that is the row's own colour and nothing
+    // else: the far pad at the row's own left, left of the marker
+    // column, where no label or mark is drawn.
+    let background_of = |buffer: &[u8], index: usize| {
+        let (top, _) = band(index);
+        let at = (((top + 2) * width) as usize + (popup.panel.left + 2) as usize) * 4;
+        [buffer[at], buffer[at + 1], buffer[at + 2]]
+    };
+
+    let mut buffer = vec![0u8; (width * height * 4) as usize];
+    for pixel in buffer.as_chunks_mut::<4>().0 {
+        pixel[0] = backdrop[0];
+        pixel[1] = backdrop[1];
+        pixel[2] = backdrop[2];
+        pixel[3] = 255;
+    }
+    paint_menu_popup(
+        &mut buffer,
+        width,
+        &palette,
+        &popup,
+        &rows,
+        Some(hovered),
+        &surface,
+        1.0,
+    );
+
+    assert_ne!(
+        background_of(&buffer, hovered),
+        page,
+        "the row under the pointer is washed, not the panel's own page"
+    );
+    for other in [0usize, 2] {
+        assert_eq!(
+            background_of(&buffer, other),
+            page,
+            "a row the pointer is not on is the panel's own page"
+        );
+    }
+}
+
+/// The Seek row carries an arrow at its own right, pointing toward the
+/// side the flyout sits on: a filled triangle whose ink is on that row
+/// and nowhere else, and whose point is the side the placement chose.
+#[test]
+fn the_seek_row_carries_an_arrow_pointing_at_the_flyout() {
+    let (width, height) = (620i32, 300i32);
+    let backdrop = [90u8, 60, 30];
+    let palette = ChromePalette {
+        background: [30, 34, 42],
+        foreground: [198, 202, 210],
+        accent: [86, 182, 194],
+        dark: true,
+    };
+    let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
+
+    // The same menu painted twice: once with no arrow at all, once
+    // with the arrow pointing right and once pointing left. The ink
+    // in the band at the row's own right is the arrow's.
+    let paint = |arrow: MenuArrow| -> Vec<u8> {
+        let mut popup = menu_popup_from_point(a_point(), width, height, 96, &three_rows());
+        popup.arrow = arrow;
+        let mut buffer = vec![0u8; (width * height * 4) as usize];
+        for pixel in buffer.as_chunks_mut::<4>().0 {
+            pixel[0] = backdrop[0];
+            pixel[1] = backdrop[1];
+            pixel[2] = backdrop[2];
+            pixel[3] = 255;
+        }
+        paint_menu_popup(
+            &mut buffer,
+            width,
+            &palette,
+            &popup,
+            &three_rows(),
+            None,
+            &surface,
+            1.0,
+        );
+        buffer
+    };
+
+    let base = menu_popup_from_point(a_point(), width, height, 96, &three_rows());
+    let row_top = base.rows_top + 2 * base.row_height;
+    // The band at the row's own right that the arrow stands in: from a
+    // little inside the panel's right edge to a little inside it again,
+    // short of the hairline the panel is outlined with.
+    let columns = base.panel.right - 25..base.panel.right - 3;
+    let page = [palette.background[2], palette.background[1], palette.background[0]];
+    let behind = [backdrop[2], backdrop[1], backdrop[0]];
+
+    // The ink of the arrow in the row that carries it: the pixels of
+    // the seek row's right band that are neither the page nor the
+    // backdrop.
+    let arrow_ink = |buffer: &[u8]| -> Vec<(i32, i32)> {
+        let mut ink = Vec::new();
+        for y in row_top..row_top + base.row_height {
+            for x in columns.clone() {
+                let at = ((y * width + x) as usize) * 4;
+                if buffer[at..at + 3] != page && buffer[at..at + 3] != behind {
+                    ink.push((x, y));
+                }
+            }
+        }
+        ink
+    };
+
+    let plain = paint(MenuArrow::None);
+    let right = paint(MenuArrow::Right);
+    let left = paint(MenuArrow::Left);
+
+    assert!(
+        arrow_ink(&plain).is_empty(),
+        "a row that opens nothing carries no arrow"
+    );
+    assert!(
+        !arrow_ink(&right).is_empty(),
+        "the Seek row carries an arrow where the flyout is to its right"
+    );
+    assert!(
+        !arrow_ink(&left).is_empty(),
+        "and an arrow where the flyout is to its left"
+    );
+
+    // Which way it points: the two are the same triangle turned about
+    // the mark's own middle, so the ink of the left-pointing one is
+    // further right than the right-pointing one's — its point is the
+    // left edge and its base the right for one, and the other way
+    // round for the other.
+    let mean = |ink: &[(i32, i32)]| {
+        ink.iter().map(|&(x, _)| x as f64).sum::<f64>() / ink.len() as f64
+    };
+    let right_ink = arrow_ink(&right);
+    let left_ink = arrow_ink(&left);
+    assert!(
+        mean(&left_ink) > mean(&right_ink),
+        "the left-pointing arrow's ink sits further right than the right-pointing one's"
     );
 }
 
@@ -627,7 +806,7 @@ fn a_menu_is_painted_as_a_panel_of_the_theme_over_what_is_behind_it() {
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
     let rows = three_rows();
     let popup = menu_popup_from_point(a_point(), width, height, 96, &rows);
-    paint_menu_popup(&mut buffer, width, &palette, &popup, &rows, &surface, 1.0);
+    paint_menu_popup(&mut buffer, width, &palette, &popup, &rows, None, &surface, 1.0);
 
     // The panel is the theme's own page colour, drawn over what is
     // behind it: the bottom pad is the page and opaque, not the

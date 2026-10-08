@@ -382,6 +382,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     &palette,
                     &menu.popup,
                     &menu.rows,
+                    menu.hover,
                     surface,
                     paint.dpi as f32 / 96.0,
                 );
@@ -401,6 +402,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                         &palette,
                         &flyout.popup,
                         &flyout.rows,
+                        flyout.hover,
                         surface,
                         paint.dpi as f32 / 96.0,
                     );

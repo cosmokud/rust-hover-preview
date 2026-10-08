@@ -37,8 +37,8 @@ pub(crate) use caption::{
     button_at, button_boxes, measure_caption_text, paint_caption, Caption, CaptionButton,
 };
 pub(crate) use menu::{
-    menu_flyout_from_menu, menu_popup_from_point, menu_row_at, paint_menu_popup, MenuFlyout,
-    MenuPopup, MenuMark, MenuRow,
+    menu_flyout_from_menu, menu_flyout_gap_holds, menu_popup_from_point, menu_row_at,
+    paint_menu_popup, MenuArrow, MenuMark, MenuPopup, MenuRow,
 };
 pub(crate) use primitives::{stroke_segment, surface_pixels, ChromePalette};
 pub(crate) use transport::{
