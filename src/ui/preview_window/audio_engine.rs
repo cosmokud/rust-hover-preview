@@ -421,7 +421,7 @@ pub(super) fn normalizing_audio() -> bool {
     normalize_available_for(wanted)
 }
 
-/// The same question for a video's soundtrack, which is a setting of its own and off where the app
+/// The same question for a video's soundtrack, which is a setting of its own and on where the app
 /// starts (see `normalize_video_volume`).
 pub(super) fn normalizing_video() -> bool {
     let wanted = CONFIG

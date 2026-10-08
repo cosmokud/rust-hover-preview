@@ -336,12 +336,12 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Normalize** — The first row of each half, above the levels.
     - A file's integrated loudness is measured (ITU-R BS.1770 LUFS, by FFmpeg's `ebur128`) and brought to `-14 LUFS` before it plays, so a folder of sounds — or a set of films — is heard at one level rather than at each file's own.
     - A file is not lifted past its own true peak, so a quiet one is corrected as far as its headroom allows rather than clipped.
-    - On by default for **Audio** and off for **Video**, whose soundtrack is heard beside a picture that was asked for and whose measurement is a decode of the film.
+    - On by default for both **Audio** and **Video** — a film's audio is a decode of the film, and measuring it costs the same decode a sound file's measurement already pays.
     - Both are greyed out unless FFmpeg is installed — FFmpeg is what measures the loudness and what applies the gain.
     - The loudness is measured once per file and kept, so only a file's first hover waits for it.
   - **Remember Level** — The row under **Normalize**, above the levels.
     - Whether a level moved with a pinned window's own volume knob is the level the next preview is played at.
-    - Off by default for both halves, so a knob belongs to the window it was turned on and the level in the list above it is what every preview starts from.
+    - On by default for both **Audio** and **Video**, so a level turned with a knob is the level the next preview is played at.
     - With it on, letting go of the knob writes the level to `config.ini` and the next hover — or the next film — is played at it; nothing is rebuilt on screen and a preview already playing is left where it is.
     - A pinned window also keeps that level across the other kind: a sound turned up to 100% and then stepped onto a film and back is played at 100% again, where a knob left on a film is kept for films rather than for the sounds either side of it.
   - **Audio Seek** — Where in a file a hovered sound starts playing.
@@ -480,10 +480,10 @@ vector_background=checkerboard
 ; Volume
 audio_seek=remember
 audio_volume=10
-normalize_video_volume=false
+normalize_video_volume=true
 normalize_volume=true
-remember_audio_volume=false
-remember_video_volume=false
+remember_audio_volume=true
+remember_video_volume=true
 video_volume=0
 
 ; Performance
