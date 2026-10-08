@@ -374,10 +374,12 @@ pub(super) fn refresh_pin_menu(
 /// whole menu goes away with it — while a press anywhere else is a press
 /// that has left the menu, which puts both panels away.
 ///
-/// Nothing is captured and nothing is held, because a menu is a thing a
+/// Nothing is held, because a menu is a thing a
 /// hand reads rather than a thing it carries: the press is answered
 /// where it landed, and the panel is one paint away from being gone (see
-/// `open_pin_menu`).
+/// `open_pin_menu`). The pointer itself is held while the menu is up —
+/// taken in `open_pin_menu` and let go below with the menu — so a press
+/// anywhere outside the window still arrives here to be answered.
 pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     let Some(paint) = pinned_menu_geometry() else {
         return false;
@@ -434,6 +436,11 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
 
     if !stays_up {
         with_pin(|pin| pin.menu.open = false);
+        // The menu held the pointer while it was up, so it lets it go
+        // with it: a window still holding the pointer after its menu is
+        // gone is a window every click on the desktop is delivered to
+        // instead of whatever the click was aimed at.
+        release_pin_capture(hwnd);
     }
     render_layered_preview(hwnd);
 
@@ -468,7 +475,54 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
         pin.menu.hover_flyout = None;
         pin.menu.seek_since = None;
     });
+    // The menu is this window's own, so the window takes the pointer while
+    // it is up: a press anywhere else — another app, the taskbar — arrives
+    // here first, and the first one puts the menu away rather than reaching
+    // through to whatever was aimed at. Without it no outside press ever
+    // reaches this window at all, and only the hook's poll sees one a tick
+    // later, which is the press the menu stayed up through.
+    let _ = SetCapture(hwnd);
     render_layered_preview(hwnd);
+}
+
+/// Whether the card's menu is up: what an outside press is answered against
+/// before anything the press would otherwise do (see `window_proc`).
+pub(super) fn pin_menu_is_open() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.menu.open))
+        .unwrap_or(false)
+}
+
+/// Whether a point in the window's own coordinates is outside the window:
+/// what a press the menu's capture delivered from elsewhere is told apart
+/// by. A captured press aimed at another app or the taskbar arrives here
+/// with coordinates outside the window's own box, and answering it as a
+/// press on the card would drag the window for a hand on another window.
+pub(super) fn pin_menu_point_is_outside(x: i32, y: i32) -> bool {
+    let Some(size) = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+    else {
+        return false;
+    };
+    x < 0 || y < 0 || x >= size.0 || y >= size.1
+}
+
+/// Put the card's menu away where it is up, answering whether it came down:
+/// the whole menu goes — both panels — and the pointer with it, while the
+/// pin itself is left standing. A press that arrived from elsewhere is what
+/// this answers; a repaint is owed where it did.
+pub(super) unsafe fn close_pin_menu(hwnd: HWND) -> bool {
+    let mut was_up = false;
+    with_pin(|pin| {
+        if pin.menu.open {
+            was_up = true;
+            pin.menu.open = false;
+        }
+    });
+    if was_up {
+        release_pin_capture(hwnd);
+        render_layered_preview(hwnd);
+    }
+    was_up
 }
 
 /// Take the ask the Explorer hook left for a press that landed on another window and put the

@@ -1094,3 +1094,70 @@ fn the_loop_takes_a_foreign_press_ask_and_puts_the_menu_away() {
     assert!(pinned_menu_geometry().is_none(), "both panels are away");
     assert!(pinned(), "and the pin that was standing is left standing");
 }
+
+/// Closing the menu from the window side puts both panels away and leaves
+/// the pin standing: the answer a captured outside press gets, rather than
+/// the hook's ask a tick later.
+#[test]
+fn closing_the_menu_from_the_window_side_puts_both_panels_away() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    let hwnd = HWND(0x1000 as *mut _);
+    unsafe { open_pin_menu(hwnd, 20, 20) };
+    assert!(pin_menu_is_open(), "the menu is up");
+    assert!(pinned_menu_geometry().is_some(), "both panels are painted");
+
+    assert!(
+        unsafe { close_pin_menu(hwnd) },
+        "closing an open menu says it came down"
+    );
+    assert!(!pin_menu_is_open(), "and the menu is away");
+    assert!(pinned_menu_geometry().is_none(), "both panels with it");
+    assert!(pinned(), "while the pin that was standing is left standing");
+
+    assert!(
+        !unsafe { close_pin_menu(hwnd) },
+        "closing a menu that is down says there was nothing to put away"
+    );
+}
+
+/// A point outside the window's own box is outside it, and a point in it is
+/// not: what a captured press aimed at another app or the taskbar is told
+/// apart by.
+#[test]
+fn a_point_outside_the_window_is_outside_and_one_inside_is_not() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    let (width, height) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+        .expect("the pin that was installed");
+
+    assert!(!pin_menu_point_is_outside(0, 0), "the top-left is inside");
+    assert!(
+        !pin_menu_point_is_outside(width - 1, height - 1),
+        "so is the bottom-right"
+    );
+    assert!(
+        pin_menu_point_is_outside(-1, 10),
+        "a captured press from the left is outside"
+    );
+    assert!(
+        pin_menu_point_is_outside(width, 10),
+        "and one from the right is too"
+    );
+    assert!(
+        pin_menu_point_is_outside(10, height),
+        "as is one from below"
+    );
+}
