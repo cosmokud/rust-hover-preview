@@ -123,7 +123,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
 
     let top = menu_rows();
     let labels: Vec<&str> = top.iter().map(|row| row.label.as_str()).collect();
-    assert_eq!(labels, ["Shuffle Mode", "Loop", "Seek"]);
+    assert_eq!(labels, ["Shuffle", "Loop", "Seek"]);
     assert!(
         matches!(top[0].mark, pin_chrome::MenuMark::Check(true)),
         "shuffle is on, so its row is checked"
@@ -221,7 +221,7 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     // It opens on its main page: the two toggles and the Seek row, each
     // carrying the mark of the setting it stands for.
     let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
-    assert_eq!(labels, ["Shuffle Mode", "Loop", "Seek"]);
+    assert_eq!(labels, ["Shuffle", "Loop", "Seek"]);
     assert!(
         matches!(paint.rows[0].mark, pin_chrome::MenuMark::Check(false)),
         "shuffle is off, so its row is an empty box"
@@ -379,7 +379,7 @@ fn a_press_on_a_mode_row_turns_its_setting_over_and_writes_it_down() {
     };
 
     // The middle of the first row, which is the row the
-    // Shuffle Mode setting is the face of.
+    // Shuffle setting is the face of.
     let x = (paint.popup.panel.left + paint.popup.panel.right) / 2;
     let y = paint.popup.rows_top + paint.popup.row_height / 2;
     assert!(
@@ -412,7 +412,7 @@ fn a_press_on_a_mode_row_turns_its_setting_over_and_writes_it_down() {
     let rows = menu_rows();
     assert!(
         matches!(rows[0].mark, pin_chrome::MenuMark::Check(true)),
-        "the Shuffle Mode row is checked now"
+        "the Shuffle row is checked now"
     );
 
     // And the panel is away, because a toggle is an answer
@@ -425,7 +425,7 @@ fn a_press_on_a_mode_row_turns_its_setting_over_and_writes_it_down() {
 
 /// The second mode row turns its own setting over the same
 /// way: the Loop row is the checkbox of the loop setting,
-/// and a press on it is the press on the Shuffle Mode row's
+/// and a press on it is the press on the Shuffle row's
 /// own, asked of the other row.
 #[test]
 fn a_press_on_the_loop_row_turns_the_loop_setting_over() {
@@ -757,7 +757,7 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
     };
     assert!(paint.flyout.is_some(), "the press opened the flyout");
     let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
-    assert_eq!(labels, ["Shuffle Mode", "Loop", "Seek"]);
+    assert_eq!(labels, ["Shuffle", "Loop", "Seek"]);
 }
 
 /// A press outside both panels puts the whole menu
@@ -978,7 +978,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
         "the flyout stays up while the pointer crosses the gap"
     );
 
-    // On the Shuffle Mode row: it hides.
+    // On the Shuffle row: it hides.
     let shuffle = on_screen(menu_row_point(&paint, 0));
     assert!(
         tick(Some(shuffle), t0 + Duration::from_millis(500)),
