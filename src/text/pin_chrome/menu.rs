@@ -90,6 +90,23 @@ pub(crate) struct MenuRow {
     pub(crate) mark: MenuMark,
 }
 
+/// The sizes a menu's panels are placed by, at a display's
+/// own scale: the width of a panel, the height of a row,
+/// the pad a panel holds its rows in, and the gap a panel
+/// is held off the button it came from and off the panel
+/// beside it.
+fn menu_panel_sizes(width: i32, dpi: u32) -> (i32, i32, i32, i32) {
+    let scale = dpi as f32 / 96.0;
+    (
+        text_paint::scaled(MENU_PANEL_WIDTH_PIXELS as i32, scale)
+            .max(8)
+            .min(width.max(8)),
+        text_paint::scaled(MENU_ROW_HEIGHT_PIXELS as i32, scale).max(1),
+        text_paint::scaled(MENU_PAD_PIXELS as i32, scale).max(0),
+        text_paint::scaled(MENU_PANEL_GAP_PIXELS as i32, scale).max(0),
+    )
+}
+
 /// The menu a card's gear opens, hung from that button's own
 /// box in the window's own coordinates — the box the card's
 /// own arithmetic answers for the gear, which reaches the
@@ -116,13 +133,7 @@ pub(crate) fn menu_popup_from_button(
     dpi: u32,
     rows: &[MenuRow],
 ) -> MenuPopup {
-    let scale = dpi as f32 / 96.0;
-    let panel_width = text_paint::scaled(MENU_PANEL_WIDTH_PIXELS as i32, scale)
-        .max(8)
-        .min(width.max(8));
-    let row_height = text_paint::scaled(MENU_ROW_HEIGHT_PIXELS as i32, scale).max(1);
-    let pad = text_paint::scaled(MENU_PAD_PIXELS as i32, scale).max(0);
-    let gap = text_paint::scaled(MENU_PANEL_GAP_PIXELS as i32, scale).max(0);
+    let (panel_width, row_height, pad, gap) = menu_panel_sizes(width, dpi);
 
     let panel_height = (pad * 2 + rows.len() as i32 * row_height).max(1);
 
@@ -155,6 +166,115 @@ pub(crate) fn menu_popup_from_button(
         rows_top: top + pad,
         row_height,
         rows: rows.len() as i32,
+    }
+}
+
+/// Where the seek flyout is, in the window's own
+/// coordinates: the main menu's panel as the flyout's
+/// own placement leaves it, and the flyout's panel
+/// beside it.
+pub(crate) struct MenuFlyout {
+    /// The main menu's panel, as `menu_popup_from_button`
+    /// placed it — pulled left of the button where the
+    /// window is too narrow to hold the flyout beside it
+    /// there, so that the flyout fits beside it at the
+    /// window's right edge instead.
+    pub(crate) menu: MenuPopup,
+    /// The flyout's own panel: right of the main menu's
+    /// right edge, top-aligned with the seek row.
+    pub(crate) popup: MenuPopup,
+}
+
+/// The seek flyout the menu's Seek row opens, placed from
+/// the main menu the row belongs to: right of the main
+/// menu's own right edge, top-aligned with the Seek row —
+/// the main menu's third row — so the menu the flyout
+/// came from stays wholly visible beside it.
+///
+/// The two panels are placed together, because the button
+/// the menu hangs from stands in the window's top corner,
+/// where a menu tucked to it leaves a flyout no room but
+/// the corner's own: a window too narrow for the flyout
+/// beside the menu at the button's side is a menu pulled
+/// left, off the button, until the flyout fits beside it
+/// at the window's own right edge, and a window too narrow
+/// for the two panels at their own width is the two of
+/// them narrowed to half the room the window leaves
+/// between its own edges — the menu at the window's left
+/// edge, the flyout right of it. Either way the menu
+/// stays wholly visible and uncovered, and the flyout
+/// stays inside the window to be pressed, which is the
+/// same discipline the menu's own panel is placed by
+/// (`menu_popup_from_button`): never off an edge, never
+/// past the bottom, narrowed if the window is narrower
+/// than the panel.
+pub(crate) fn menu_flyout_from_menu(
+    menu: &MenuPopup,
+    width: i32,
+    height: i32,
+    dpi: u32,
+    flyout_rows: &[MenuRow],
+) -> MenuFlyout {
+    let (panel_width, row_height, pad, gap) = menu_panel_sizes(width, dpi);
+
+    // The flyout hangs from the Seek row, which is the main
+    // menu's third row: its top is that row's own top, moved
+    // up only as far as the window's own bottom makes it and
+    // never past the top — the holding the menu's own panel
+    // has, because a flyout off the bottom is rows a hand
+    // cannot read.
+    let flyout_height = (pad * 2 + flyout_rows.len() as i32 * row_height).max(1);
+    let top = (menu.rows_top + 2 * menu.row_height)
+        .min(height.saturating_sub(flyout_height).max(0))
+        .max(0);
+
+    // Where the two panels' own edges go. The flyout's
+    // first place is a small gap right of the main menu's
+    // right edge; the main menu is pulled left of the
+    // button to make that room where the window is too
+    // narrow for it there; and the two are narrowed to fit
+    // the window where it is too narrow for them at their
+    // own width.
+    let (menu_left, menu_right, flyout_left) = if menu.panel.right + gap + panel_width <= width {
+        (menu.panel.left, menu.panel.right, menu.panel.right + gap)
+    } else if width >= 2 * panel_width + gap {
+        (
+            width - 2 * panel_width - gap,
+            width - panel_width - gap,
+            width - panel_width,
+        )
+    } else {
+        let half = ((width - gap) / 2).max(8).min(width.max(8));
+        (0, half, width - half)
+    };
+    // The flyout's own width is the room the window leaves
+    // it, which is the panel's own width everywhere but the
+    // narrowed pair, where it is the half the window leaves.
+    let flyout_width = (width - flyout_left).min(panel_width);
+
+    MenuFlyout {
+        menu: MenuPopup {
+            panel: RECT {
+                left: menu_left,
+                top: menu.panel.top,
+                right: menu_right,
+                bottom: menu.panel.bottom,
+            },
+            rows_top: menu.rows_top,
+            row_height: menu.row_height,
+            rows: menu.rows,
+        },
+        popup: MenuPopup {
+            panel: RECT {
+                left: flyout_left,
+                top,
+                right: flyout_left + flyout_width,
+                bottom: top + flyout_height,
+            },
+            rows_top: top + pad,
+            row_height,
+            rows: flyout_rows.len() as i32,
+        },
     }
 }
 

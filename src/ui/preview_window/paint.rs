@@ -385,6 +385,26 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     surface,
                     paint.dpi as f32 / 96.0,
                 );
+
+                // The Seek row's flyout, beside the main menu:
+                // the same panel over the media, its labels
+                // written on the same surface and carried across
+                // its own panel, which is the only place they are
+                // wanted — the surface is the size of the whole
+                // window and the two panels do not overlap, so
+                // what the first panel carried across left the
+                // second's own rows alone.
+                if let Some(flyout) = menu.flyout.as_ref() {
+                    pin_chrome::paint_menu_popup(
+                        out,
+                        width,
+                        &palette,
+                        &flyout.popup,
+                        &flyout.rows,
+                        surface,
+                        paint.dpi as f32 / 96.0,
+                    );
+                }
             });
         }
     }
@@ -466,9 +486,10 @@ pub(super) struct PinnedPaint {
     /// than recomputed at the paint, so that the panel drawn is the panel a press is answered
     /// against (see `pinned_volume_geometry`).
     pub(super) volume_popup: Option<pin_chrome::VolumePopup>,
-    /// The card's own menu, or nothing while its panel is closed: the panel
-    /// hung from the cell the mark is drawn in and the rows it holds, asked
-    /// of the pin for the reason the volume popup's panel is (see
+    /// The card's own menu, or nothing while its panel is closed: the
+    /// panel hung from the gear the card's menu opens from, the rows it
+    /// holds, and the Seek row's flyout beside it, asked of the pin for
+    /// the reason the volume popup's panel is (see
     /// `pinned_menu_geometry`).
     pub(super) menu: Option<PinMenuPaint>,
     /// Whether the bar's controls do anything for the engine playing this file (see
