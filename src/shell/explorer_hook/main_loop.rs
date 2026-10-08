@@ -524,6 +524,18 @@ pub fn run_explorer_hook() {
             let (update, on_hover) = pin_update_settings();
             let focus_move = focus_move_input();
 
+            // A press the pin's own window cannot see — it is `WS_EX_NOACTIVATE` and holds no
+            // capture, so a hand on another app's window, the tray, or the pin's own bubble never
+            // reaches its procedure — is the one thing answered from here: the card's menu, where
+            // it is up, is put away by the preview loop on the tick this ask is taken (see
+            // `request_pin_menu_dismiss`). Nothing else about the pin is touched, and a press on
+            // the pin window itself is not published (see `press_is_outside_the_pin_window`).
+            let on_pin_window = focus_move.clicked
+                && read_pointer().is_some_and(|pointer| preview_window_is_at(pointer.window));
+            if press_is_outside_the_pin_window(focus_move.clicked, on_pin_window) {
+                request_pin_menu_dismiss();
+            }
+
             // What the loop itself saw on a pinned tick, before anything is decided about it: a
             // press that never reaches this line was spent before the hook read it, which no
             // reading of anything downstream can say.

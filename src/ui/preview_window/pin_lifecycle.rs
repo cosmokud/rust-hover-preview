@@ -10,6 +10,13 @@ use super::*;
 /// next tick, through the same path its own close button takes.
 pub(super) static PIN_END_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// The card's menu was asked to come down, by the Explorer hook, because a press landed on a
+/// window that is not the pin's own. The pin window is `WS_EX_NOACTIVATE` and holds no
+/// capture, so a press on another window never reaches its procedure and the hook's poll is
+/// the only side that sees it (see `requests::request_pin_menu_dismiss`). Only the menu goes:
+/// the pin itself is left standing, and the loop takes the ask on its next tick.
+pub(super) static PIN_MENU_DISMISS_REQUESTED: AtomicBool = AtomicBool::new(false);
+
 impl PinnedPreview {
     /// The box the window occupies: the media's own box with the caption above it and the transport
     /// bar below it — or the media's box itself, for a kind whose chrome is drawn over it, since a

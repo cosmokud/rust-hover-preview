@@ -314,6 +314,19 @@ pub(super) fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -
     over_explorer || over_our_own
 }
 
+/// Whether a press read on a pinned tick is one the Explorer hook publishes so the card's
+/// menu is put away: a press that landed anywhere but the pin's own window. The pin window is
+/// `WS_EX_NOACTIVATE` and holds no capture, so a press on another window never reaches its
+/// procedure — the hook's poll is the only side that sees it — and this is the rule that
+/// publishes it over the pin-end seam (see `request_pin_menu_dismiss`). On the pin's own
+/// window the menu has its own answer (`pinned_menu_press`), so a press there is not
+/// published. The answer is handed in rather than read here, because the rule that can only
+/// be tested by putting a window on somebody's screen is a rule that goes untested (see
+/// `preview_window_is_at`).
+pub(super) fn press_is_outside_the_pin_window(pressed: bool, on_pin_window: bool) -> bool {
+    pressed && !on_pin_window
+}
+
 /// Whether a press read on this tick is one a listing can answer for: the window it landed
 /// on is Explorer's or this app's own, it is still there, and it is not a popup covering the
 /// listing.

@@ -466,3 +466,24 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
     });
     render_layered_preview(hwnd);
 }
+
+/// Take the ask the Explorer hook left for a press that landed on another window and put the
+/// card's menu away where it is up, answering whether it came down — a repaint is owed where
+/// it did. It is the preview loop's own read of the ask, taken on its tick (see
+/// `PIN_MENU_DISMISS_REQUESTED`), and only the menu goes: the pin itself is left standing,
+/// which is what a press on another window means here (see
+/// `requests::request_pin_menu_dismiss`).
+pub(super) fn take_pin_menu_dismiss() -> bool {
+    if !PIN_MENU_DISMISS_REQUESTED.swap(false, Ordering::AcqRel) {
+        return false;
+    }
+
+    let mut was_up = false;
+    with_pin(|pin| {
+        if pin.menu.open {
+            was_up = true;
+            pin.menu.open = false;
+        }
+    });
+    was_up
+}

@@ -23,6 +23,16 @@ pub fn request_pin_end() {
     PIN_END_REQUESTED.store(true, Ordering::Release);
 }
 
+/// Ask for the card's menu to be put away, from any thread — the Explorer hook's answer to a
+/// press that landed on a window that is not the pin's own. The pin window is
+/// `WS_EX_NOACTIVATE` and holds no capture, so a press on another window never reaches its
+/// procedure: the hook's poll is the only side that sees every press, and this is the seam a
+/// pin's own end rides (see `request_pin_end`). Asking twice is asking once, and only the
+/// menu goes — the pin itself is left standing.
+pub fn request_pin_menu_dismiss() {
+    PIN_MENU_DISMISS_REQUESTED.store(true, Ordering::Release);
+}
+
 /// Whether a pin has been closed since this was last asked. The Explorer hook reads it once
 /// per tick to know that what is under the pointer is a hover it has not answered yet: the
 /// file it was on when the pin went up is not a file the pointer has left and come back to,

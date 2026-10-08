@@ -982,3 +982,44 @@ fn the_row_under_the_pointer_is_the_row_that_is_washed() {
         "the flyout's third row is the one the pointer is on"
     );
 }
+
+/// A press that landed on another window is closed from the hook side: the ask the
+/// Explorer hook publishes is taken by the loop's own tick, which puts the whole menu
+/// away — both panels — and leaves the pin standing. A tick with no such ask leaves a
+/// menu that is up exactly where it is.
+#[test]
+fn the_loop_takes_a_foreign_press_ask_and_puts_the_menu_away() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    // Any ask another test left behind is taken before this one asks its own.
+    take_pin_menu_dismiss();
+
+    // A menu that is up with its flyout beside it: both panels are what the ask puts away.
+    with_pin(|pin| {
+        pin.menu.open = true;
+        pin.menu.seek = true;
+    });
+    assert!(pinned_menu_geometry().is_some(), "the menu is up");
+
+    // A tick that no press reached leaves it where it is.
+    assert!(
+        !take_pin_menu_dismiss(),
+        "with no ask there is nothing for the loop to close"
+    );
+    assert!(pinned_menu_geometry().is_some(), "so the menu stays up");
+
+    // The hook's ask for a press on another window, taken on the loop's tick.
+    request_pin_menu_dismiss();
+    assert!(
+        take_pin_menu_dismiss(),
+        "the ask is taken and the menu is the thing it closes"
+    );
+    assert!(pinned_menu_geometry().is_none(), "both panels are away");
+    assert!(pinned(), "and the pin that was standing is left standing");
+}
