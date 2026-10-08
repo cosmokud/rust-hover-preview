@@ -360,8 +360,11 @@ pub fn run_preview_window() {
             }
             // A press the pin's own window never saw — on another app's window, the tray, or
             // the pin's own bubble — is the hook's ask to put the card's menu away: only the
-            // menu goes, and the pin itself stands (see `take_pin_menu_dismiss`).
+            // menu goes, and the pin itself stands (see `take_pin_menu_dismiss`). The menu's
+            // own capture answers these first where it is held; this is the road where it is
+            // not, and it lets the pointer go with the menu it puts away.
             if take_pin_menu_dismiss() {
+                release_pin_capture(hwnd);
                 render_layered_preview(hwnd);
             }
 

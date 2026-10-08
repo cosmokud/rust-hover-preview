@@ -195,6 +195,11 @@ pub(super) unsafe extern "system" fn window_proc(
             // behind is half a walk, not one.
             if wparam.0 as u32 == WA_INACTIVE {
                 pin_release_focus();
+                // Whatever is in front now was clicked into rather than
+                // pressed here, so a menu left up over the card goes away
+                // with the activation: the capture path answers presses, and
+                // this answers the activation change that came without one.
+                close_pin_menu(hwnd);
             }
             LRESULT(0)
         }
@@ -270,6 +275,17 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(1)
         }
         WM_LBUTTONDOWN => {
+            let (x, y) = message_point(lparam);
+            // A captured press aimed elsewhere — another app, the taskbar —
+            // while the card's menu is up: the menu goes away with it, and the
+            // press goes no further. No focus is taken for it and no drag is
+            // begun from it: the hand is on another window, and answering it
+            // as a press on the card would carry this window for that hand.
+            if pin_menu_is_open() && pin_menu_point_is_outside(x, y) {
+                close_pin_menu(hwnd);
+                return LRESULT(0);
+            }
+
             // A press on a pinned window is what makes it the window the user is in. A pin is
             // behind everything, so the press is the only thing that says the user means it rather
             // than the file behind it — and once the keyboard is here, the keys the pin answers are
@@ -281,7 +297,6 @@ pub(super) unsafe extern "system" fn window_proc(
             // A press on a pinned window is the pin's before it is anything else's: the volume
             // popup over the picture, the caption's buttons, the caption itself, an edge, and the
             // media under the hand are all things a window does with a pointer (see `pinned_press`).
-            let (x, y) = message_point(lparam);
             if pinned() && (pinned_volume_press(hwnd, x, y) || pinned_press(hwnd, x, y)) {
                 return LRESULT(0);
             }
@@ -355,7 +370,24 @@ pub(super) unsafe extern "system" fn window_proc(
             // release below.
             if pinned() {
                 let (x, y) = message_point(lparam);
+                // A captured right-click aimed elsewhere while the menu is up
+                // puts it away rather than moving it: the panel belongs inside
+                // this window, and a point outside it is a hand that has left.
+                if pin_menu_is_open() && pin_menu_point_is_outside(x, y) {
+                    close_pin_menu(hwnd);
+                    return LRESULT(0);
+                }
                 open_pin_menu(hwnd, x, y);
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_MBUTTONDOWN => {
+            // A middle press while the menu is up puts it away wherever it
+            // landed: the menu is answered press by press, and no middle press
+            // is a row's own.
+            if pin_menu_is_open() {
+                close_pin_menu(hwnd);
                 return LRESULT(0);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
