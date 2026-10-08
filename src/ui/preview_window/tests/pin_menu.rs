@@ -92,14 +92,15 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
     );
 }
 
-/// The panel a menu opens hangs from the cell the card's mark is
-/// drawn in: its left edge on the cell's own left edge, below
-/// the cell's own row rather than over it, and inside the window
-/// the pin stands in — and a menu that is not up is nothing at
-/// all, which is what a paint with no panel to draw is answered
-/// with.
+/// The panel a menu opens hangs from the gear the card's
+/// menu opens from: its left edge on the gear's own left
+/// edge, moved left only as far as the window's own edge
+/// makes it, below the gear's own row rather than over it,
+/// and inside the window the pin stands in — and a menu
+/// that is not up is nothing at all, which is what a paint
+/// with no panel to draw is answered with.
 #[test]
-fn the_menu_hangs_from_the_cell_the_mark_is_drawn_in() {
+fn the_menu_hangs_from_the_gear_the_card_s_menu_opens_from() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -131,11 +132,11 @@ fn the_menu_hangs_from_the_cell_the_mark_is_drawn_in() {
         panic!("a menu that is up is painted");
     };
 
-    // The cell the menu hangs from, in the window's own
-    // coordinates: the card's own box for the cell, moved down
+    // The gear the menu hangs from, in the window's own
+    // coordinates: the card's own box for it, moved down
     // by the band the card is drawn in (see
     // `pinned_audio_volume_popup`).
-    let (width, height, cell) = pin_state()
+    let (width, height, gear) = pin_state()
         .and_then(|pinned| {
             let pin = pinned.pin()?;
             let (width, height) = pin.window_size();
@@ -145,7 +146,7 @@ fn the_menu_hangs_from_the_cell_the_mark_is_drawn_in() {
                 pinned_transport_height(pin.dpi, pin.transport_bar),
                 pin.overlay,
             );
-            let cell = audio_preview::control_box(
+            let gear = audio_preview::control_box(
                 CardControl::Menu,
                 (pin.content.2 - pin.content.0).max(1) as u32,
                 pin.dpi,
@@ -156,20 +157,30 @@ fn the_menu_hangs_from_the_cell_the_mark_is_drawn_in() {
                 width,
                 height,
                 RECT {
-                    top: cell.top + top,
-                    ..cell
+                    top: gear.top + top,
+                    ..gear
                 },
             ))
         })
         .expect("the pin that was installed");
 
+    // The panel's left edge is the gear's own, moved left
+    // only as far as the window's own edge makes it: the
+    // gear stands in the top corner, and a panel the window
+    // has no room for beside it is a panel the edge moved
+    // (see `pin_chrome::menu_popup_from_bullet`).
+    let panel_width = paint.popup.panel.right - paint.popup.panel.left;
     assert_eq!(
-        paint.popup.panel.left, cell.left,
-        "the panel's left edge is the cell's own"
+        paint.popup.panel.left,
+        gear
+            .left
+            .min(width.saturating_sub(panel_width).max(0))
+            .max(0),
+        "the panel's left edge is the gear's own, moved left only as far as the window's own edge makes it"
     );
     assert!(
-        paint.popup.panel.top >= cell.bottom,
-        "the panel hangs below the cell's row, not over it"
+        paint.popup.panel.top >= gear.bottom,
+        "the panel hangs below the gear's row, not over it"
     );
     assert!(paint.popup.panel.right <= width, "the panel is inside the window");
     assert!(

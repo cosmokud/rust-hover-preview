@@ -960,12 +960,12 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
             // answers the way it answers a caption button (see `pin_command_request`).
             CardControl::Minimize => ask_pin(PinCommand::Minimize),
             CardControl::Close => ask_pin(PinCommand::Close),
-            // The menu the cell the card's mark is drawn in opens: the
-            // press that armed this release is the hamburger's own, and
-            // the release is what puts the panel up or away — the same
-            // press-and-release a caption button follows, because the
-            // cell is a control of the card's like any other (see
-            // `toggle_pin_menu`).
+            // The menu the card's gear opens: the press that
+            // armed this release is the gear's own, and the
+            // release is what puts the panel up or away — the
+            // same press-and-release a caption button follows,
+            // because the gear is a control of the card's like
+            // any other (see `toggle_pin_menu`).
             CardControl::Menu => toggle_pin_menu(hwnd),
             CardControl::Seek => {}
         }

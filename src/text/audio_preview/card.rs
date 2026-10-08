@@ -156,7 +156,7 @@ pub(crate) struct Card {
 }
 
 /// The parts of a pinned sound's card a pointer can be on: the three buttons at the left of the
-/// bar, the bar itself, the volume button at its right, and the two window buttons standing in
+/// bar, the bar itself, the volume button at its right, and the three window buttons standing in
 /// the card's top margin.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CardControl {
@@ -179,12 +179,13 @@ pub(crate) enum CardControl {
     /// The window button that ends the pin, the player and the window together, which is the
     /// pin's own close command asked for (see `pinned_audio_control_release`).
     Close,
-    /// The menu the card's mark opens, in the cell the mark is drawn in: the
-    /// shuffle, loop and seek switches of a pinned sound. The cell is a
-    /// control only while the window buttons are up, because the stripes the
-    /// cell becomes while they are are what that band is for (see `paint`),
-    /// and it is hit-tested before the window buttons so that the cell wins
-    /// in its own box (see `control_at`).
+    /// The menu the card's gear opens, in the window-button band: the
+    /// shuffle, loop and seek switches of a pinned sound. The gear is a
+    /// window button rather than one of the card's own controls, because
+    /// what it opens is the pin's own menu rather than the sound's: it is
+    /// a control only while the window buttons are up, the band it stands
+    /// in being what comes and goes (see `paint`), and it is hit-tested
+    /// ahead of the minimize in its own box (see `control_at`).
     Menu,
 }
 
@@ -200,7 +201,7 @@ pub(crate) struct CardChrome {
     pub volume: u32,
     pub hovered: Option<CardControl>,
     pub pressed: Option<CardControl>,
-    /// Whether the two window buttons are showing, which is what the card is painted
+    /// Whether the three window buttons are showing, which is what the card is painted
     /// from: a hand near the window's top border or near the buttons themselves.
     pub window_buttons: bool,
 }
@@ -438,11 +439,15 @@ pub(crate) fn bar_share_at(
 /// by one arithmetic and drawn by another answers a press in the middle of the facts line (see
 /// `BarRow`).
 ///
-/// The two window buttons in the top margin are answered before anything else, and the order is
+/// The three window buttons in the top margin are answered before anything else, and the order is
 /// not arbitrary: a press on one is a press on a button of the window, which is a thing a hand
 /// is on before it is a hand on the card, and the cushion above a drawn button reaches into the
 /// name line's own leading — the one band of the card the row's controls do not share rows with,
 /// which is what keeps the two questions apart even where they overlap (see `window_button_boxes`).
+/// The gear is asked about ahead of the minimize, so a hand on it is a hand on the menu it opens
+/// rather than on the minimize beside it (see `window_button_at`). They are controls only while
+/// they are showing: the band they stand in comes and goes with the pointer's nearness to the
+/// window's own top border (see `window_button_band`).
 ///
 /// The volume button is answered next, and the order after that is not arbitrary either: it is
 /// this app's own control rather than the player's, exactly as the transport bar's own volume
@@ -468,24 +473,15 @@ pub(crate) fn control_at(
         let boxes = control_boxes(&metrics, width, controls)?;
         let row = bar_row(&metrics);
 
-        // The menu the cell the card's mark is drawn in opens, asked of
-        // before anything else the card carries: the cell is its own box,
-        // and a hand in it is a hand on the menu. It is a control only
-        // while the window buttons are up, because the stripes the cell
-        // becomes while they are are what that band is for (see `paint`),
-        // and it stands first in the chain so that the cell wins in its
-        // own box (see the order above).
-        let menu = window_buttons.then(|| {
-            boxes
-                .rect(CardControl::Menu)
-                .filter(|rect| holds(*rect, x, y))
-                .map(|_| CardControl::Menu)
-        });
-
-        // The two window buttons, which a hand on the top margin is on before
+        // The three window buttons, which a hand on the top margin is on before
         // it is on anything the card carries lower down (see the order above).
-        menu.flatten()
-            .or_else(|| boxes.window_button_at(x, y))
+        // They are controls only while they are showing, because the band they
+        // stand in is the one thing on the card that comes and goes (see
+        // `window_button_band`), and the gear answers ahead of the minimize
+        // within its own box (see `window_button_at`).
+        window_buttons
+            .then(|| boxes.window_button_at(x, y))
+            .flatten()
             .or_else(|| {
                 boxes
                     .rect(CardControl::Volume)
