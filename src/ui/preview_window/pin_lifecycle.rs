@@ -936,7 +936,6 @@ pub(super) fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Optio
         pin.dpi,
         pinned_audio_options(pin),
         true,
-        pin.audio_window_buttons
     )
 }
 

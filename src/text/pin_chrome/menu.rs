@@ -1,7 +1,8 @@
-//! The menu a pinned sound's card opens from its gear: the panel that
-//! floats over the media below the card, and the rows in it.
+//! The menu a pinned sound's card opens from a right-click on its window:
+//! the panel that floats over the media below the card, and the rows in
+//! it.
 //!
-//! The panel is placed by the button the press came from and drawn the way a
+//! The panel is placed at the point the press landed and drawn the way a
 //! tool tip is drawn — the theme's own page colour, a hairline around it, a
 //! shadow under it, and labels written through GDI onto a surface of the
 //! window's own size and carried across (`paint_menu_popup`) — because a menu
@@ -32,7 +33,7 @@ const MENU_PANEL_WIDTH_PIXELS: f32 = 150.0;
 const MENU_ROW_HEIGHT_PIXELS: f32 = 22.0;
 const MENU_PAD_PIXELS: f32 = 6.0;
 
-/// How far the panel hangs below the band the button stands
+/// How far the panel is held off the band the button stands
 /// in, and how round its corners are: the tooltip's own
 /// radius, because the two panels are the two of the same
 /// kind.
@@ -93,8 +94,7 @@ pub(crate) struct MenuRow {
 /// The sizes a menu's panels are placed by, at a display's
 /// own scale: the width of a panel, the height of a row,
 /// the pad a panel holds its rows in, and the gap a panel
-/// is held off the button it came from and off the panel
-/// beside it.
+/// is held off the panel beside it.
 fn menu_panel_sizes(width: i32, dpi: u32) -> (i32, i32, i32, i32) {
     let scale = dpi as f32 / 96.0;
     (
@@ -107,60 +107,48 @@ fn menu_panel_sizes(width: i32, dpi: u32) -> (i32, i32, i32, i32) {
     )
 }
 
-/// The menu a card's gear opens, hung from that button's own
-/// box in the window's own coordinates — the box the card's
-/// own arithmetic answers for the gear, which reaches the
-/// window's own top edge above the drawn glyph and down to
-/// the bottom of the band the window buttons stand in. The
-/// panel hangs below that band rather than over it, with its
-/// right edge tucked to the button's own left edge a small
-/// gap off it — the placement that leaves a flyout room to
-/// the panel's right — and its rows held in from its ends.
+/// The menu a card's right-click opens, anchored at the point the
+/// click landed in the window's own coordinates: the panel's top-left
+/// is that point, held inside the window — moved left only as far as
+/// the window's own right edge demands and up only as far as its
+/// bottom does — so a click near an edge opens a panel a hand can
+/// still reach.
+///
+/// The panel is placed here rather than recomputed from anything the
+/// card drew, because a right-click is a point on the window rather
+/// than a button: the old button-anchored menu hung off the gear's
+/// own box, and the gear is gone (see `pin_menu::open_pin_menu`).
 ///
 /// `rows` is what the panel is sized to hold, so the panel and the rows the
-/// window puts in it cannot disagree about how tall the panel is. The panel
-/// is kept inside the window it belongs to — a panel off the side of a window
-/// is a row a hand cannot reach, and one off the bottom is rows that cannot be
-/// read at all — so a window too narrow to hold the panel beside the button is
-/// a panel narrowed to the window and held at its own left (because a panel
-/// running off the side of a window is rows no hand can read), and one too
-/// short to hold the panel below the button is a panel held at the window's
-/// own bottom, where the hand that opened it can still reach it.
-pub(crate) fn menu_popup_from_button(
-    button: RECT,
+/// window puts in it cannot disagree about how tall the panel is. A window
+/// too small to hold the panel at all is a panel held at its own top-left
+/// corner, with the pair narrowed to fit where a flyout is up beside it
+/// (see `menu_flyout_from_menu`).
+pub(crate) fn menu_popup_from_point(
+    point: (i32, i32),
     width: i32,
     height: i32,
     dpi: u32,
     rows: &[MenuRow],
 ) -> MenuPopup {
-    let (panel_width, row_height, pad, gap) = menu_panel_sizes(width, dpi);
+    let (panel_width, row_height, pad, _gap) = menu_panel_sizes(width, dpi);
 
     let panel_height = (pad * 2 + rows.len() as i32 * row_height).max(1);
 
-    // The right edge is tucked to the button's own left edge, a
-    // small gap off it, so a flyout has room to the panel's
-    // right. It is moved right only as far as the window's own
-    // left edge makes it — a window too narrow to hold the panel
-    // beside the button is a panel held at the window's own
-    // left edge — and never past the window's own right.
-    let right = button
-        .left
-        .saturating_sub(gap)
-        .clamp(panel_width, width.max(panel_width));
-    let left = right - panel_width;
-    // The panel hangs below the band the button stands in rather
-    // than over it — the way the volume popup floats clear of the
-    // button that opened it — moved up only as far as the
-    // window's own bottom makes it, and never past the top.
-    let top = (button.bottom + gap)
-        .min(height.saturating_sub(panel_height).max(0))
-        .max(0);
+    // The panel's top-left is the point the menu was asked for, held
+    // between the window's own edges: a left or top past the window is
+    // held at it, and one that would run the panel off the right or the
+    // bottom is moved back by the room it lacks. A window smaller than
+    // the panel leaves the room a negative number, which is the
+    // panel held at the window's own top-left corner.
+    let left = point.0.min(width.saturating_sub(panel_width)).max(0);
+    let top = point.1.min(height.saturating_sub(panel_height)).max(0);
 
     MenuPopup {
         panel: RECT {
             left,
             top,
-            right,
+            right: left + panel_width,
             bottom: top + panel_height,
         },
         rows_top: top + pad,
@@ -174,8 +162,8 @@ pub(crate) fn menu_popup_from_button(
 /// own placement leaves it, and the flyout's panel
 /// beside it.
 pub(crate) struct MenuFlyout {
-    /// The main menu's panel, as `menu_popup_from_button`
-    /// placed it — pulled left of the button where the
+    /// The main menu's panel, as `menu_popup_from_point`
+    /// placed it — pulled left of the point where the
     /// window is too narrow to hold the flyout beside it
     /// there, so that the flyout fits beside it at the
     /// window's right edge instead.
@@ -191,21 +179,20 @@ pub(crate) struct MenuFlyout {
 /// the main menu's third row — so the menu the flyout
 /// came from stays wholly visible beside it.
 ///
-/// The two panels are placed together, because the button
-/// the menu hangs from stands in the window's top corner,
-/// where a menu tucked to it leaves a flyout no room but
-/// the corner's own: a window too narrow for the flyout
-/// beside the menu at the button's side is a menu pulled
-/// left, off the button, until the flyout fits beside it
-/// at the window's own right edge, and a window too narrow
-/// for the two panels at their own width is the two of
-/// them narrowed to half the room the window leaves
-/// between its own edges — the menu at the window's left
-/// edge, the flyout right of it. Either way the menu
-/// stays wholly visible and uncovered, and the flyout
-/// stays inside the window to be pressed, which is the
-/// same discipline the menu's own panel is placed by
-/// (`menu_popup_from_button`): never off an edge, never
+/// The two panels are placed together, because the menu
+/// is anchored at a point anywhere in the window and a
+/// flyout opening to its right may run off the window's
+/// own edge: a window too narrow for the flyout beside
+/// the menu at that place is a menu pulled left until the
+/// flyout fits beside it at the window's own right edge,
+/// and a window too narrow for the two panels at their
+/// own width is the two of them narrowed to half the room
+/// the window leaves between its own edges — the menu at
+/// the window's left edge, the flyout right of it. Either
+/// way the menu stays wholly visible and uncovered, and
+/// the flyout stays inside the window to be pressed, which
+/// is the same discipline the menu's own panel is placed
+/// by (`menu_popup_from_point`): never off an edge, never
 /// past the bottom, narrowed if the window is narrower
 /// than the panel.
 pub(crate) fn menu_flyout_from_menu(

@@ -653,7 +653,7 @@ fn a_pinned_card_carries_its_four_controls_where_they_are_drawn() {
         let rect = control_box(control, width, 96, options(), true).expect("a box to press");
         let centre = ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
         assert_eq!(
-            control_at(centre.0, centre.1, width, 96, options(), true, true),
+            control_at(centre.0, centre.1, width, 96, options(), true),
             Some(control),
             "the middle of {control:?} is {control:?}"
         );
@@ -694,38 +694,21 @@ fn a_pinned_card_carries_its_four_controls_where_they_are_drawn() {
     let _ = boxes;
 }
 
-/// The gear that opens the card's menu is the menu's: a hand in
-/// the gear's box is a hand on the menu while the window buttons
-/// are up — and only while they are up, because the gear is one
-/// of the buttons, and the buttons are a control only while they
-/// are showing (see `window_button_band`). The cell the card's
-/// mark is drawn in answers for nothing at all, at any time: the
-/// mark is the mark again, a plain bullet no hand can press (see
-/// `BULLET`).
+/// The two window buttons a pinned sound carries are answered in their
+/// own boxes and nowhere else: a hand in one is a hand on that button,
+/// and the cell the card's mark is drawn in answers for nothing at all —
+/// the mark is a plain bullet no hand can press (see `BULLET`). There is
+/// no third window button: the card's menu opens from a right-click on
+/// the window rather than from a gear (see `pin_menu::open_pin_menu`).
 #[test]
-fn the_gear_is_the_menu_s_while_the_window_buttons_are_up() {
+fn the_two_window_buttons_are_answered_in_their_own_boxes() {
     let (width, _) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
     let page = scrolled(&pinned(), width, 0);
     let boxes = page.boxes.as_ref().expect("a card that carries controls");
 
-    // The gear's own box, and the middle of it.
-    let gear = boxes.rect(CardControl::Menu).expect("the gear's box");
-    let middle = ((gear.left + gear.right) / 2, (gear.top + gear.bottom) / 2);
-    assert_eq!(
-        control_at(middle.0, middle.1, width, 96, options(), true, true),
-        Some(CardControl::Menu),
-        "the gear is the menu's while the window buttons are up"
-    );
-    assert_eq!(
-        control_at(middle.0, middle.1, width, 96, options(), true, false),
-        None,
-        "and it answers for nothing while they are down"
-    );
-
     // The cell the card's mark is drawn in, read of the name line's
-    // own first run: the mark and the room after it. The menu moved
-    // to the gear, so the cell is the mark's own box and nothing
-    // else, at any time — a hand in it is a hand on no control.
+    // own first run: the mark and the room after it, and a hand in it
+    // is a hand on no control.
     let mark = &page.header[0];
     let cell = RECT {
         left: mark.x,
@@ -734,117 +717,16 @@ fn the_gear_is_the_menu_s_while_the_window_buttons_are_up() {
         bottom: page.header_top + page.header_height,
     };
     let centre = ((cell.left + cell.right) / 2, (cell.top + cell.bottom) / 2);
-    for window_buttons in [true, false] {
-        assert_eq!(
-            control_at(centre.0, centre.1, width, 96, options(), true, window_buttons),
-            None,
-            "the cell the mark is drawn in answers for nothing, window buttons {window_buttons}"
-        );
-    }
+    assert_eq!(
+        control_at(centre.0, centre.1, width, 96, options(), true),
+        None,
+        "the cell the mark is drawn in answers for nothing"
+    );
 
-    // The window buttons keep their own boxes, which the gear's
-    // does not reach: each is answered in its own box either way.
+    // The two window buttons keep their own boxes, and the card answers
+    // for each in its own box — wherever it stands, with no flag saying
+    // whether the band it stands in is showing.
     for (control, button) in [
-        (CardControl::Minimize, boxes.minimize.hit),
-        (CardControl::Close, boxes.close.hit),
-    ] {
-        let centre = ((button.left + button.right) / 2, (button.top + button.bottom) / 2);
-        assert_eq!(
-            control_at(centre.0, centre.1, width, 96, options(), true, true),
-            Some(control),
-            "{control:?} keeps its own box"
-        );
-    }
-}
-
-/// The gear is the third window button: the same square the
-/// minimize and the close are, stood in the same row immediately
-/// left of the minimize, with the same gap between the two of
-/// them as the minimize has to the close — at every font the
-/// card is drawn at, which is every share the menu offers (see
-/// `every_share_answers_the_anchor_s_card_scaled`).
-#[test]
-fn the_gear_stands_immediately_left_of_the_minimize() {
-    for font in [63u32, 125, 188, 250, 313] {
-        let options = options_at(font);
-        let (width, _) = measure(&pinned(), 4096, 2160, 96, options).expect("a measured card");
-        let page = scrolled_at(&pinned(), width, 0, options);
-        let boxes = page.boxes.as_ref().expect("a card that carries controls");
-
-        // The same square the other two are: the same side, stood
-        // in the same row.
-        for (name, button) in [
-            ("the minimize", &boxes.minimize),
-            ("the close", &boxes.close),
-        ] {
-            assert_eq!(
-                (
-                    boxes.gear.drawn.right - boxes.gear.drawn.left,
-                    boxes.gear.drawn.bottom - boxes.gear.drawn.top,
-                ),
-                (
-                    button.drawn.right - button.drawn.left,
-                    button.drawn.bottom - button.drawn.top,
-                ),
-                "the gear is the same square as {name} at {font}%"
-            );
-        }
-        assert_eq!(
-            boxes.gear.drawn.top, boxes.minimize.drawn.top,
-            "and in the minimize's row at {font}%"
-        );
-
-        // Immediately left of the minimize, with the same gap
-        // between the two of them as the minimize has to the
-        // close: the gap the window buttons stand in, read of
-        // the metrics rather than of the boxes, so that the
-        // boxes are what is being asked about.
-        let dc = unsafe { CreateCompatibleDC(None) };
-        let metrics = TextMetrics::new(dc, 96, options.font_scale_percent).expect("metrics");
-        let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
-        unsafe {
-            let _ = DeleteDC(dc);
-        }
-        assert_eq!(
-            boxes.gear.drawn.right + gap,
-            boxes.minimize.drawn.left,
-            "the gear stands back from the minimize by the gap at {font}%"
-        );
-        assert_eq!(
-            boxes.minimize.drawn.right + gap,
-            boxes.close.drawn.left,
-            "and the minimize back from the close by the same one at {font}%"
-        );
-
-        // And the gear is stood back from the window's own top
-        // edge by the gap, the way the other two are, and inside
-        // the card.
-        assert_eq!(
-            boxes.gear.drawn.top, gap,
-            "the gear's drawn box begins at the gap at {font}%"
-        );
-        assert!(
-            boxes.gear.drawn.left >= 0 && boxes.gear.drawn.right <= width as i32,
-            "and inside a card {} wide at {font}%: {:?}",
-            width,
-            boxes.gear.drawn
-        );
-    }
-}
-
-/// The three window buttons are answered in their own boxes, the
-/// gear ahead of the minimize: a hand on the gear is a hand on
-/// the menu, not on the minimize beside it — which is what
-/// ordering the gear first in the chain is for, since the boxes
-/// do not overlap and a hand in one is a hand on one alone.
-#[test]
-fn the_gear_is_answered_ahead_of_the_minimize_in_its_own_box() {
-    let (width, _) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
-    let page = scrolled(&pinned(), width, 0);
-    let boxes = page.boxes.as_ref().expect("a card that carries controls");
-
-    for (control, button) in [
-        (CardControl::Menu, &boxes.gear),
         (CardControl::Minimize, &boxes.minimize),
         (CardControl::Close, &boxes.close),
     ] {
@@ -858,29 +740,26 @@ fn the_gear_is_answered_ahead_of_the_minimize_in_its_own_box() {
             "the middle of {control:?} is {control:?} and nothing beside it"
         );
         assert_eq!(
-            control_at(middle.0, middle.1, width, 96, options(), true, true),
+            control_at(middle.0, middle.1, width, 96, options(), true),
             Some(control),
-            "and the card answers for it there while the window buttons are up"
+            "and the card answers for it there"
         );
     }
 
-    // The gaps between the three of them are the card's own, and
-    // the margin to the left of the gear as well: a hand in
-    // either is a hand on none of the buttons.
-    let gear_gap = (boxes.gear.drawn.right + boxes.minimize.drawn.left) / 2;
+    // The gap between the two of them is the card's own, and the margin
+    // to the left of the minimize as well: a hand in either is a hand on
+    // no button.
     let button_gap = (boxes.minimize.drawn.right + boxes.close.drawn.left) / 2;
     let middle_row = (boxes.minimize.drawn.top + boxes.minimize.drawn.bottom) / 2;
-    for between in [gear_gap, button_gap] {
-        assert_eq!(
-            boxes.window_button_at(between, middle_row),
-            None,
-            "the gap between two buttons is no button's: ({between}, {middle_row})"
-        );
-    }
+    assert_eq!(
+        boxes.window_button_at(button_gap, middle_row),
+        None,
+        "the gap between the two is no button's"
+    );
     assert_eq!(
         boxes.window_button_at(0, middle_row),
         None,
-        "the margin to the left of the gear is the card's own"
+        "the margin to the left of the minimize is the card's own"
     );
 }
 
@@ -991,7 +870,7 @@ fn the_hover_card_is_the_card_it_has_always_been() {
     for y in (0..page.height as i32).step_by(3) {
         for x in (0..plain as i32).step_by(7) {
             assert_eq!(
-                control_at(x, y, plain, 96, options(), false, true),
+                control_at(x, y, plain, 96, options(), false),
                 None,
                 "a point on a hover's card is on no control: ({x}, {y})"
             );
@@ -1059,7 +938,6 @@ fn a_seek_is_measured_across_the_bar_and_not_across_the_buttons() {
             width,
             96,
             options(),
-            true,
             true
         ),
         Some(CardControl::Volume),
@@ -1163,7 +1041,7 @@ fn lit(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
     }
 }
 
-/// The three window buttons stand in the card's top corner, over the name line: the
+/// The two window buttons stand in the card's top corner, over the name line: the
 /// drawn boxes begin at the gap below the window's own top edge and reach into the
 /// name line's own rows — room the margin does not have, a button being twice the
 /// side the margin alone would hold — and the name keeps the box and the scroll it
@@ -1202,7 +1080,7 @@ fn the_window_buttons_stand_in_the_top_corner_over_the_name_line() {
     // the margin does not have: the drawn box reaches into the name line's own
     // rows, which is where a button that size ends.
     let margin_side = metrics.padding - gap * 2;
-    for button in [&boxes.gear, &boxes.minimize, &boxes.close] {
+    for button in [&boxes.minimize, &boxes.close] {
         assert_eq!(
             button.drawn.top, gap,
             "a drawn box stood back by the gap from the window's own top edge: {:?}",
@@ -1237,11 +1115,6 @@ fn the_window_buttons_stand_in_the_top_corner_over_the_name_line() {
         boxes.minimize.drawn.right,
         boxes.close.drawn.left - gap,
         "and the minimize stands beside it with the same gap between the two"
-    );
-    assert_eq!(
-        boxes.gear.drawn.right,
-        boxes.minimize.drawn.left - gap,
-        "and the gear stands beside the minimize with the same gap between the two"
     );
 
     // The name's own box is the card's content box — the same box it is drawn
@@ -1384,7 +1257,7 @@ fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
     );
 }
 
-/// The three window buttons are answered where their glyphs are drawn and a little
+/// The two window buttons are answered where their glyphs are drawn and a little
 /// beyond them: the middle of a drawn box is the button, the hit box reaches the
 /// window's own top edge above it and a cushion below it, and a row past the
 /// cushion is nothing at all.
@@ -1394,20 +1267,18 @@ fn a_window_button_is_answered_where_its_glyph_is_and_a_little_beyond_it() {
     let page = scrolled(&pinned(), width, 0);
     let boxes = page.boxes.as_ref().expect("a card that carries controls");
 
-    // The gaps between the buttons, which are the card's own margin as far as
+    // The gap between the buttons, which is the card's own margin as far as
     // a press is concerned: a button is a box, not a band.
     let between = (boxes.minimize.drawn.right + boxes.close.drawn.left) / 2;
-    let gear_gap = (boxes.gear.drawn.right + boxes.minimize.drawn.left) / 2;
 
     for (control, button) in [
-        (CardControl::Menu, &boxes.gear),
         (CardControl::Minimize, &boxes.minimize),
         (CardControl::Close, &boxes.close),
     ] {
         let drawn = button.drawn;
         let hit = boxes.rect(control).expect("a box to press");
         let middle = (drawn.left + drawn.right) / 2;
-        let at = |x: i32, y: i32| control_at(x, y, width, 96, options(), true, true);
+        let at = |x: i32, y: i32| control_at(x, y, width, 96, options(), true);
 
         // The middle of the drawn box, and the window's own top row above it:
         // the cushion the hit box reaches to is part of the button, which is
@@ -1472,15 +1343,10 @@ fn a_window_button_is_answered_where_its_glyph_is_and_a_little_beyond_it() {
             None,
             "and so is the gap between the minimize and the close"
         );
-        assert_eq!(
-            at(gear_gap, (drawn.top + drawn.bottom) / 2),
-            None,
-            "and so is the gap between the gear and the minimize"
-        );
     }
 }
 
-/// The three window buttons wear nothing but their marks: at rest each is drawn in
+/// The two window buttons wear nothing but their marks: at rest each is drawn in
 /// the card's own ink, the one the pointer is on or holds is drawn in the accent
 /// the played part of the bar is drawn in, and the corner around them is the
 /// page's own color in every state — no wash, no box, no fill, in any state.
@@ -1504,14 +1370,6 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
     let resting = render(&pinned(), width, height, 96, options()).expect("a painted card");
     let hovered = render(
         &lit(Some(CardControl::Minimize), None),
-        width,
-        height,
-        96,
-        options(),
-    )
-    .expect("a painted card");
-    let menu_hovered = render(
-        &lit(Some(CardControl::Menu), None),
         width,
         height,
         96,
@@ -1544,9 +1402,9 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
             .any(|y| (box_.left..box_.right).any(|x| pixel(painted, x, y) == want))
     };
 
-    // At rest, all three buttons are drawn in the card's own ink — the ink the
+    // At rest, both buttons are drawn in the card's own ink — the ink the
     // row's glyphs are painted in, verbatim.
-    for button in [&boxes.gear, &boxes.minimize, &boxes.close] {
+    for button in [&boxes.minimize, &boxes.close] {
         assert!(
             holds(&resting, button.drawn, ink(foreground)),
             "a resting button is drawn in the card's own ink: {:?}",
@@ -1565,33 +1423,21 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
         "and the one beside it keeps the card's ink"
     );
     assert!(
-        holds(&menu_hovered, boxes.gear.drawn, ink(accent)),
-        "the gear the pointer is on is drawn in the accent as well"
-    );
-    assert!(
-        holds(&menu_hovered, boxes.minimize.drawn, ink(foreground)),
-        "and the one beside it keeps the card's ink"
-    );
-    assert!(
         holds(&held, boxes.close.drawn, ink(accent)),
         "and a held button is drawn in the accent as well"
     );
 
-    // The corner is the page's own color everywhere but the three drawn boxes, in
+    // The corner is the page's own color everywhere but the two drawn boxes, in
     // every state: nothing of a button is drawn but its mark, so there is no
     // wash under one and no box around one.
-    for painted in [&resting, &hovered, &menu_hovered, &held] {
+    for painted in [&resting, &hovered, &held] {
         for y in 0..page.header_top {
             for x in 0..width as i32 {
-                let on_a_button = [
-                    &boxes.gear.drawn,
-                    &boxes.minimize.drawn,
-                    &boxes.close.drawn,
-                ]
-                .iter()
-                .any(|drawn| {
-                    x >= drawn.left && x < drawn.right && y >= drawn.top && y < drawn.bottom
-                });
+                let on_a_button = [&boxes.minimize.drawn, &boxes.close.drawn]
+                    .iter()
+                    .any(|drawn| {
+                        x >= drawn.left && x < drawn.right && y >= drawn.top && y < drawn.bottom
+                    });
                 if on_a_button {
                     continue;
                 }
@@ -1604,9 +1450,8 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
         }
     }
 
-    // The minimize is one dash: a single pixel row of ink inside its box. The
-    // close is two strokes crossing, and the gear a ring with spokes, which are
-    // more than one row.
+    // The minimize is one dash: a single pixel row of ink inside its box, and
+    // the close two strokes crossing, which are more than one row.
     let rows_of_ink = |painted: &(Vec<u8>, u32, u32), box_: RECT| -> Vec<i32> {
         (box_.top..box_.bottom)
             .filter(|&y| (box_.left..box_.right).any(|x| pixel(painted, x, y) != ink(page_color)))
@@ -1620,9 +1465,5 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
     assert!(
         rows_of_ink(&resting, boxes.close.drawn).len() > 1,
         "and the close is two strokes crossing, more than one row of them"
-    );
-    assert!(
-        rows_of_ink(&resting, boxes.gear.drawn).len() > 1,
-        "and the gear is a ring with spokes, more than one row of them"
     );
 }

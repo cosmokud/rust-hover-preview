@@ -847,16 +847,12 @@ pub(super) unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> b
     // `pin_shows_an_audio_card`). The pin's remembered options are taken in the same look,
     // because they are the options the card is drawn at — the press is answered against the
     // layout the card is drawn in, not the configuration's (see `pinned_audio_options`).
-    let (shows, options, window_buttons) = pin_state()
+    let (shows, options) = pin_state()
         .and_then(|pinned| {
             let pin = pinned.pin()?;
-            Some((
-                pin_shows_an_audio_card(pin),
-                pinned_audio_options(pin),
-                pin.audio_window_buttons,
-            ))
+            Some((pin_shows_an_audio_card(pin), pinned_audio_options(pin)))
         })
-        .unwrap_or((false, current_audio_options(), false));
+        .unwrap_or((false, current_audio_options()));
     if !shows {
         return false;
     }
@@ -882,7 +878,7 @@ pub(super) unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> b
 
     let (media_x, media_y) = media_point(x, y);
     let Some(control) =
-        audio_preview::control_at(media_x, media_y, width, dpi, options, true, window_buttons)
+        audio_preview::control_at(media_x, media_y, width, dpi, options, true)
     else {
         return false;
     };
@@ -960,13 +956,6 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
             // answers the way it answers a caption button (see `pin_command_request`).
             CardControl::Minimize => ask_pin(PinCommand::Minimize),
             CardControl::Close => ask_pin(PinCommand::Close),
-            // The menu the card's gear opens: the press that
-            // armed this release is the gear's own, and the
-            // release is what puts the panel up or away — the
-            // same press-and-release a caption button follows,
-            // because the gear is a control of the card's like
-            // any other (see `toggle_pin_menu`).
-            CardControl::Menu => toggle_pin_menu(hwnd),
             CardControl::Seek => {}
         }
     }

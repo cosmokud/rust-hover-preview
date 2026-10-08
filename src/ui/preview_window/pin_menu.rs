@@ -1,5 +1,5 @@
-//! The menu a pinned sound's card opens from the gear in its
-//! top corner: the state of it, the rows it holds, and what a press
+//! The menu a pinned sound's card opens from a right-click on its
+//! window: the state of it, the rows it holds, and what a press
 //! on one of them does.
 //!
 //! The menu is the card's own rather than the tray's, so its rows are
@@ -26,6 +26,10 @@ pub(super) struct PinMenu {
     /// Whether the Seek row's flyout is up beside the menu,
     /// rather than the menu holding its three rows alone.
     pub(super) seek: bool,
+    /// Where the right-click that opened the panel landed, in the
+    /// window's own coordinates: the panel's top-left, held inside
+    /// the window by the placement (see `pin_chrome::menu_popup_from_point`).
+    pub(super) point: (i32, i32),
 }
 
 /// What a repaint draws the card's menu from: the
@@ -189,8 +193,8 @@ fn set_pin_mode_audio_seek(seek: AudioSeek) {
 }
 
 /// Where the card's menu floats, or nothing while it is closed: the
-/// panel hung from the gear the card's menu opens from, holding the
-/// rows of the page it is showing.
+/// panel anchored at the point the right-click that opened it landed,
+/// holding the rows of the page it is showing.
 ///
 /// It is asked of the pin rather than recomputed at the paint, so that
 /// the panel drawn is the panel a press is answered against (see
@@ -203,16 +207,15 @@ pub(super) fn pinned_menu_geometry() -> Option<PinMenuPaint> {
 }
 
 /// The menu as it is painted: the rows the main
-/// page holds, the panel hung from the gear's own
-/// box for those rows to be drawn in, and the
+/// page holds, the panel anchored at the point the
+/// right-click that opened it landed, and the
 /// Seek row's flyout beside it when the flyout is
 /// up.
 ///
-/// The panel is hung from the gear's own box, from the card's own
-/// arithmetic rather than from anything kept beside it, so a panel
-/// opened after a change to Audio Scaling hangs off the gear as the
-/// card drew it (see `pinned_audio_volume_popup`, which is the same
-/// road the volume button's panel takes).
+/// The panel is anchored at the pin's own remembered click point, in
+/// the window's own coordinates, and held inside the window by the
+/// placement (see `pin_chrome::menu_popup_from_point`), so a panel
+/// opened on a hand near an edge is a panel a hand can still reach.
 fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     if !pin_shows_an_audio_card(pin) {
         return None;
@@ -221,24 +224,6 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     let rows = menu_rows();
     let choices = pin.menu.seek.then(seek_rows);
     let (width, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(
-        height,
-        pin.caption,
-        pinned_transport_height(pin.dpi, pin.transport_bar),
-        pin.overlay,
-    );
-
-    let gear = audio_preview::control_box(
-        CardControl::Menu,
-        (pin.content.2 - pin.content.0).max(1) as u32,
-        pin.dpi,
-        pinned_audio_options(pin),
-        true,
-    )?;
-    let button = RECT {
-        top: gear.top + top,
-        ..gear
-    };
 
     // The flyout's own placement is what says where the main
     // menu itself is, because the two panels are placed together
@@ -247,9 +232,7 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     let (popup, flyout) = match choices {
         Some(choices) => {
             let placed = pin_chrome::menu_flyout_from_menu(
-                &pin_chrome::menu_popup_from_button(
-                    button, width, height, pin.dpi, &rows,
-                ),
+                &pin_chrome::menu_popup_from_point(pin.menu.point, width, height, pin.dpi, &rows),
                 width,
                 height,
                 pin.dpi,
@@ -264,9 +247,7 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
             )
         }
         None => (
-            pin_chrome::menu_popup_from_button(
-                button, width, height, pin.dpi, &rows,
-            ),
+            pin_chrome::menu_popup_from_point(pin.menu.point, width, height, pin.dpi, &rows),
             None,
         ),
     };
@@ -282,29 +263,14 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
 /// whole menu goes away with it — while a press anywhere else is a press
 /// that has left the menu, which puts both panels away.
 ///
-/// The gear that opens the menu is left out on purpose: a
-/// press on it is the press every card control follows, held
-/// and acted on at the release, and the release is what
-/// toggles the panel (see `pinned_audio_control_release`) —
-/// putting the panel away here would have the release open it
-/// straight back up, which is the same bargain the volume
-/// button's press makes (see the top of `pinned_press`).
-///
 /// Nothing is captured and nothing is held, because a menu is a thing a
 /// hand reads rather than a thing it carries: the press is answered
 /// where it landed, and the panel is one paint away from being gone (see
-/// `toggle_pin_menu`).
+/// `open_pin_menu`).
 pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     let Some(paint) = pinned_menu_geometry() else {
         return false;
     };
-
-    // A press on the gear the menu came out of is the press that opens
-    // and closes it, left to the road every card control follows (see
-    // `pinned_audio_control_press`).
-    if pressed_on_the_gear(x, y) {
-        return false;
-    }
 
     // The row the press landed on, if it landed on one: each panel's own
     // rows are what a press is answered against, and the pad around them
@@ -364,31 +330,30 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     true
 }
 
-/// Whether a press is on the gear the card's menu opens from: asked
-/// of the card's own layout rather than of the panel, because the
-/// gear is a fact of the card whether the menu is up or not (see
-/// `pin_audio_control_at`).
-fn pressed_on_the_gear(x: i32, y: i32) -> bool {
-    pin_state()
-        .and_then(|pinned| {
-            let pin = pinned.pin()?;
-            Some(pin_audio_control_at(pin, x, y) == Some(CardControl::Menu))
-        })
-        .unwrap_or(false)
-}
-
-/// The card's menu put up or put away by the press on the gear that
-/// opens it: the gear's press and release, which is the road every card
-/// control follows (see `pinned_audio_control_release`).
+/// The card's menu put up by a right-click on the pin's window, at the
+/// point the right-click landed: a second right-click while the panel is
+/// up moves it to the new point rather than putting it away.
+///
+/// It is the pin's own menu and only a sound's card carries one, so a
+/// right-click on a pin showing anything else opens nothing at all (see
+/// `pin_shows_an_audio_card`).
 ///
 /// A menu put up is put up on its main page, the
 /// flyout put away: a hand that opens the menu has
 /// come for the toggles, and the choices are one
 /// row away.
-pub(super) unsafe fn toggle_pin_menu(hwnd: HWND) {
+pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
+    let audio = pin_state()
+        .and_then(|pinned| pinned.pin().map(pin_shows_an_audio_card))
+        .unwrap_or(false);
+    if !audio {
+        return;
+    }
+
     with_pin(|pin| {
-        pin.menu.open = !pin.menu.open;
+        pin.menu.open = true;
         pin.menu.seek = false;
+        pin.menu.point = (x, y);
     });
     render_layered_preview(hwnd);
 }
