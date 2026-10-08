@@ -284,6 +284,77 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_nothing() {
     );
 }
 
+/// The painted menu carries the Seek row's arrow with the flyout
+/// down — the arrow is a property of the main menu's panel, the
+/// one placement answering it whether the flyout is up or not —
+/// and the flyout's own panel and rows are carried only while the
+/// flyout is up: the paint carries no flyout at all until it is,
+/// which is what keeps the row's door sign up without its room.
+#[test]
+fn the_menu_carries_its_arrow_with_the_flyout_down() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    with_pin(|pin| pin.menu.open = true);
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("a menu that is up is painted");
+    };
+
+    // The arrow, carried while the flyout is down: not nothing,
+    // the side the flyout opens on.
+    assert_ne!(
+        paint.popup.arrow,
+        pin_chrome::MenuArrow::None,
+        "the Seek row carries its arrow with the flyout down"
+    );
+
+    // The flyout's panel and rows are absent until the flyout
+    // is up.
+    assert!(
+        paint.flyout.is_none(),
+        "the flyout's panel is carried only while the flyout is up"
+    );
+
+    // And when the flyout is up, its rows are carried and the
+    // arrow is the side its panel is on — the same arrow the
+    // menu carried without it.
+    let arrow = paint.popup.arrow;
+    with_pin(|pin| pin.menu.seek = true);
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("the menu is still up");
+    };
+    let Some(flyout) = paint.flyout.as_ref() else {
+        panic!("the flyout is up")
+    };
+    assert_eq!(
+        flyout.rows.len(),
+        4,
+        "the flyout's rows are carried while the flyout is up"
+    );
+    assert_eq!(
+        paint.popup.arrow, arrow,
+        "the arrow does not move when the flyout comes up"
+    );
+    match paint.popup.arrow {
+        pin_chrome::MenuArrow::Right => assert!(
+            flyout.popup.panel.left >= paint.popup.panel.right,
+            "the flyout opens on the arrow's side, right"
+        ),
+        pin_chrome::MenuArrow::Left => assert!(
+            flyout.popup.panel.right <= paint.popup.panel.left,
+            "the flyout opens on the arrow's side, left"
+        ),
+        pin_chrome::MenuArrow::None => {
+            panic!("the Seek row carries an arrow while the menu is up")
+        }
+    }
+}
+
 /// A press on one of the two mode rows turns the setting it
 /// stands for over, writes it down, and puts the panel away:
 /// the row is a check toggle, so a press on it is an answer

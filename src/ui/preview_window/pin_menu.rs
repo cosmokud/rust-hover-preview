@@ -251,7 +251,11 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     // The flyout's own placement is what says where the main
     // menu itself is, because the two panels are placed together
     // to keep both of them inside the window (see
-    // `pin_chrome::menu_flyout_from_menu`).
+    // `pin_chrome::menu_flyout_from_menu`). With the flyout down,
+    // the main menu is placed alone — and carries the same arrow
+    // the flyout's placement answers, both placements asking the
+    // one tier the flyout opens in, so the Seek row points the way
+    // its flyout opens whether the flyout is up or not.
     let (popup, flyout) = match choices {
         Some(choices) => {
             let placed = pin_chrome::menu_flyout_from_menu(

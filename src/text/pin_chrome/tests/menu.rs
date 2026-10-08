@@ -268,6 +268,111 @@ fn the_seek_flyout_flips_left_where_it_does_not_fit_right() {
     }
 }
 
+/// The Seek row carries its arrow whenever the menu is up, whether
+/// its flyout is up or not: the arrow is a property of the main
+/// menu's own panel, answered from the same tier the flyout's own
+/// placement asks (see `menu_flyout_tier`), so the row says it opens
+/// a submenu before the submenu is there — the way every submenu
+/// door reads. Asked of every tier a window gives the pair, at more
+/// than one display's own scale, which is what sizes the panels.
+#[test]
+fn the_seek_row_carries_its_arrow_while_the_flyout_is_down() {
+    let rows = three_rows();
+
+    // The tiers, at the widths that give them: a window the flyout
+    // fits in right of the menu at the point, a window wide enough
+    // only for the flyout to the menu's left, and a window too narrow
+    // for the two panels at their own width, which narrows them — the
+    // narrowed pair pointing the arrow right, the flyout being at the
+    // window's right half.
+    let placements = [
+        (620i32, 300i32, 96u32, MenuArrow::Right), // the flyout fits right
+        (400, 300, 96, MenuArrow::Left), // the flyout flips left
+        (250, 300, 96, MenuArrow::Right), // the two are narrowed
+        (760, 300, 144, MenuArrow::Right), // fits right, larger scale
+        (500, 300, 144, MenuArrow::Left), // flips left, larger scale
+        (250, 300, 144, MenuArrow::Right), // narrowed, larger scale
+    ];
+
+    for (width, height, dpi, arrow) in placements {
+        let popup = menu_popup_from_point(a_point(), width, height, dpi, &rows);
+        assert_eq!(
+            popup.arrow, arrow,
+            "the Seek row's arrow points the way its flyout opens, with the flyout down ({}x{} at {} DPI)",
+            width, height, dpi
+        );
+
+        // The panel itself is the main menu's own placement: the anchor
+        // held inside the window, and the whole panel inside it — the
+        // tier's narrowing of the main menu is a flyout-up concern, not
+        // this one's.
+        assert!(popup.panel.left >= 0 && popup.panel.right <= width);
+        assert!(popup.panel.top >= 0 && popup.panel.bottom <= height);
+    }
+}
+
+/// The arrow the main menu carries while the flyout is down is the side
+/// the flyout opens on when it does open: the arrow and the flyout's
+/// placement are one computation, the same tier asked of the same panel
+/// (`menu_flyout_tier`), so the arrow cannot disagree with the flyout —
+/// and it does not move when the flyout comes up. Asked of every tier a
+/// window gives the pair.
+#[test]
+fn the_arrow_while_the_flyout_is_down_is_the_side_the_flyout_opens_on() {
+    let menu_rows = three_rows();
+    let flyout_rows = four_choices();
+
+    let placements = [
+        (620i32, 300i32, 96u32), // the flyout fits right
+        (400, 300, 96), // the flyout flips left
+        (250, 300, 96), // the two are narrowed
+        (760, 300, 144), // fits right, larger scale
+        (500, 300, 144), // flips left, larger scale
+        (250, 300, 144), // narrowed, larger scale
+    ];
+
+    for (width, height, dpi) in placements {
+        // The panel as the main menu's own placement answers it, with the
+        // flyout down, and the arrow it carries.
+        let down = menu_popup_from_point(a_point(), width, height, dpi, &menu_rows);
+        assert_ne!(
+            down.arrow,
+            MenuArrow::None,
+            "the Seek row carries an arrow while the menu is up ({}x{} at {} DPI)",
+            width, height, dpi
+        );
+
+        // The same panel with the flyout up: the two placed together,
+        // the flyout beside the menu.
+        let placed = menu_flyout_from_menu(&down, width, height, dpi, &flyout_rows);
+
+        assert_eq!(
+            placed.menu.arrow, down.arrow,
+            "the arrow does not move when the flyout comes up ({}x{} at {} DPI)",
+            width, height, dpi
+        );
+
+        // And the flyout's panel is on the side the arrow points: right
+        // of the menu where the arrow points right, left of it where the
+        // arrow points left.
+        match down.arrow {
+            MenuArrow::Right => assert!(
+                placed.popup.panel.left >= placed.menu.panel.right,
+                "the flyout opens right of the menu, the arrow's side ({}x{} at {} DPI)",
+                width, height, dpi
+            ),
+            MenuArrow::Left => assert!(
+                placed.popup.panel.right <= placed.menu.panel.left,
+                "the flyout opens left of the menu, the arrow's side ({}x{} at {} DPI)",
+                width, height, dpi
+            ),
+            MenuArrow::None => {
+                unreachable!("the Seek row always carries an arrow while the menu is up")
+            }
+        }
+    }
+}
+
 /// Both panels stay inside the window at every width: where the
 /// flyout fits on neither side of the menu it is anchored at — a
 /// window too narrow for the two panels at their own width — the two
@@ -776,6 +881,59 @@ fn the_seek_row_carries_an_arrow_pointing_at_the_flyout() {
         mean(&left_ink) > mean(&right_ink),
         "the left-pointing arrow's ink sits further right than the right-pointing one's"
     );
+}
+
+/// The flyout's panel is absent while the flyout is down: the
+/// menu paints its own panel alone, so the room the flyout would
+/// open into — the gap right of the main menu's own right edge
+/// and beyond it, over the Seek row's band — holds nothing of the
+/// menu, which is what a panel that is not carried is rather than
+/// one painted empty. The arrow the row carries sits inside the
+/// panel, not out in that room.
+#[test]
+fn the_flyout_s_panel_is_not_painted_while_the_flyout_is_down() {
+    let (width, height) = (620i32, 300i32);
+
+    // What is behind the menu: a flat colour the theme holds
+    // nothing of, so anything of the menu is told apart from it.
+    let backdrop = [90u8, 60, 30];
+    let palette = ChromePalette {
+        background: [30, 34, 42],
+        foreground: [198, 202, 210],
+        accent: [86, 182, 194],
+        dark: true,
+    };
+    let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
+
+    let rows = three_rows();
+    let popup = menu_popup_from_point(a_point(), width, height, 96, &rows);
+    let mut buffer = vec![0u8; (width * height * 4) as usize];
+    for pixel in buffer.as_chunks_mut::<4>().0 {
+        pixel[0] = backdrop[0];
+        pixel[1] = backdrop[1];
+        pixel[2] = backdrop[2];
+        pixel[3] = 255;
+    }
+    paint_menu_popup(&mut buffer, width, &palette, &popup, &rows, None, &surface, 1.0);
+
+    // The room the flyout would open into while it is down: from
+    // the gap the flyout is held off the menu by — a small gap
+    // right of the main menu's own right edge — to the window's
+    // own right edge, over the Seek row's band, the band the
+    // flyout is top-aligned with when it is up. A window the
+    // flyout fits in, so the room is empty because nothing is
+    // carried into it, not because there is no room for it.
+    let seek_top = popup.rows_top + 2 * popup.row_height;
+    for y in seek_top..seek_top + popup.row_height {
+        for x in popup.panel.right + 4..width {
+            let at = ((y * width + x) as usize) * 4;
+            assert_eq!(
+                &buffer[at..at + 3],
+                &backdrop,
+                "the flyout's panel is not painted while the flyout is down"
+            );
+        }
+    }
 }
 
 /// A menu is painted as the theme's own panel over what is behind it:
