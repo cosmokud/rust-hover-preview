@@ -14,6 +14,11 @@
 //! toggles and the seek choices without either knowing about the other. What
 //! a press on a row means is the window's question and not this module's;
 //! where a point answers a row is ([`menu_row_at`]).
+//!
+//! The main menu's panel is only as wide as its longest row plus the marks
+//! and the pads, measured at the display's own scale
+//! ([`menu_main_panel_width`]); the Seek row's flyout keeps a fixed width
+//! ([`MENU_PANEL_WIDTH_PIXELS`]), the way it always has.
 
 use super::bubble::composite_text_into;
 use super::primitives::{
@@ -23,15 +28,27 @@ use super::primitives::{
 use crate::text::text_paint::{self, DibSurface};
 use windows::Win32::Foundation::RECT;
 
-/// The width of the panel, the height of a row, and the room the panel holds
-/// its rows in, in the units a display's scale multiplies. The width is a
-/// fixed one rather than one measured from the labels, for the same reason the
-/// volume popup's is: a panel that is one size every time it opens is a panel
-/// a hand learns, and the longest label the menu carries fits the width with
-/// room to spare.
-const MENU_PANEL_WIDTH_PIXELS: f32 = 150.0;
+/// The width of the seek flyout's panel, the height of a row, and the
+/// room the panel holds its rows in, in the units a display's scale
+/// multiplies. The flyout's width is a fixed one rather than one measured
+/// from the labels, for the same reason the volume popup's is: a panel
+/// that is one size every time it opens is a panel a hand learns, and the
+/// longest label the flyout carries fits the width with room to spare.
+/// The main menu's own panel is measured from its rows instead (see
+/// `menu_main_panel_width`).
+pub(super) const MENU_PANEL_WIDTH_PIXELS: f32 = 150.0;
 const MENU_ROW_HEIGHT_PIXELS: f32 = 22.0;
-const MENU_PAD_PIXELS: f32 = 6.0;
+pub(super) const MENU_PAD_PIXELS: f32 = 6.0;
+
+/// The narrowest the main menu's own panel is ever held, whatever its rows
+/// measure: the room the marks stand in and the pads on either side of it,
+/// with room for several characters of the theme's own face besides, so
+/// that a menu of the shortest rows still paints a panel a hand can read
+/// rather than a sliver. Every label the menu carries today is wider than
+/// it — the longest, "Shuffle Mode", asks for a panel past it at every
+/// scale — which is why the floor never holds the real menu open (see
+/// `menu_main_panel_width`).
+pub(super) const MENU_PANEL_MIN_PIXELS: f32 = 64.0;
 
 /// How far the panel is held off the band the button stands
 /// in, and how round its corners are: the tooltip's own
@@ -44,7 +61,7 @@ const MENU_RADIUS: f32 = 4.0;
 /// the size of the mark itself: a check mark a mode is turned over
 /// with, or a disc the size of a point of ink, both small enough to
 /// sit inside a row without being the row.
-const MENU_MARKER_ROOM_PIXELS: f32 = 16.0;
+pub(super) const MENU_MARKER_ROOM_PIXELS: f32 = 16.0;
 const MENU_MARKER_RADIUS_PIXELS: f32 = 2.5;
 /// The span of the check mark a check row carries, drawn alone in
 /// the marker column when the setting the row stands for is on and
@@ -124,7 +141,13 @@ pub(crate) struct MenuRow {
 /// The sizes a menu's panels are placed by, at a display's
 /// own scale: the width of a panel, the height of a row,
 /// the pad a panel holds its rows in, and the gap a panel
-/// is held off the panel beside it.
+/// is held off the panel beside it. The width is the seek
+/// flyout's own fixed one — the main menu's panel is
+/// measured from its rows instead (see
+/// `menu_main_panel_width`), so the flyout's placements
+/// and the tier they ask are the ones that read this
+/// width, and the main menu's own placement asks for the
+/// row height, the pad and the gap only.
 fn menu_panel_sizes(width: i32, dpi: u32) -> (i32, i32, i32, i32) {
     let scale = dpi as f32 / 96.0;
     (
@@ -135,6 +158,48 @@ fn menu_panel_sizes(width: i32, dpi: u32) -> (i32, i32, i32, i32) {
         text_paint::scaled(MENU_PAD_PIXELS as i32, scale).max(0),
         text_paint::scaled(MENU_PANEL_GAP_PIXELS as i32, scale).max(0),
     )
+}
+
+/// The width of the main menu's own panel, at the display's own
+/// scale, measured from the rows it is handed: the longest row's
+/// label as the theme draws it, plus the room the marks stand in
+/// and the pad the panel holds its rows in on either side of it —
+/// the room the panel's own paint asks for (`paint_menu_popup`),
+/// so the panel is exactly as wide as its longest row needs it
+/// and no wider.
+///
+/// Measured the way the card's own layout measures for the window
+/// buttons' band (`window_button_band`): a throwaway display
+/// context, made for this one layout pass and released on its
+/// drop path, with the theme font the labels are painted in. The
+/// scale is the display's own — the one the panel's labels are
+/// painted at — so what is measured is the room the paint draws.
+/// A context that cannot be made is a panel of the floor below,
+/// and a window narrower than the panel is the panel held to the
+/// window's own width, which is the holding the placement clamps
+/// to (`menu_popup_from_point`).
+fn menu_main_panel_width(rows: &[MenuRow], dpi: u32, width: i32) -> i32 {
+    let scale = dpi as f32 / 96.0;
+
+    // The throwaway context the measurement is made on: a memory
+    // DC with a single pixel of nothing drawn on it, created for
+    // this one pass and released when it ends, the way the card's
+    // layout measures for the window buttons' band.
+    let longest = DibSurface::create(1, 1).map(|surface| {
+        let style = caption_style([0, 0, 0]);
+        rows.iter()
+            .map(|row| measure_text(&surface, &style, &row.label, scale))
+            .max()
+            .unwrap_or(0)
+    });
+
+    let label = longest.unwrap_or(0);
+    let marker_room = text_paint::scaled(MENU_MARKER_ROOM_PIXELS as i32, scale).max(0);
+    let pads = 2 * text_paint::scaled(MENU_PAD_PIXELS as i32, scale).max(0);
+
+    (label + marker_room + pads)
+        .max(text_paint::scaled(MENU_PANEL_MIN_PIXELS as i32, scale))
+        .min(width.max(8))
 }
 
 /// The menu a card's right-click opens, anchored at the point the
@@ -150,7 +215,9 @@ fn menu_panel_sizes(width: i32, dpi: u32) -> (i32, i32, i32, i32) {
 /// own box, and the gear is gone (see `pin_menu::open_pin_menu`).
 ///
 /// `rows` is what the panel is sized to hold, so the panel and the rows the
-/// window puts in it cannot disagree about how tall the panel is. A window
+/// window puts in it cannot disagree about how tall the panel is, nor about
+/// how wide: its own width is measured from the longest of them
+/// (`menu_main_panel_width`). A window
 /// too small to hold the panel at all is a panel held at its own top-left
 /// corner, with the pair narrowed to fit where a flyout is up beside it
 /// (see `menu_flyout_from_menu`).
@@ -166,7 +233,13 @@ pub(crate) fn menu_popup_from_point(
     dpi: u32,
     rows: &[MenuRow],
 ) -> MenuPopup {
-    let (panel_width, row_height, pad, _gap) = menu_panel_sizes(width, dpi);
+    let (_flyout_width, row_height, pad, _gap) = menu_panel_sizes(width, dpi);
+
+    // The main menu's own width is measured from the rows it
+    // holds, not the flyout's fixed one: the panel is only as
+    // wide as its longest row plus the marks and the pads (see
+    // `menu_main_panel_width`).
+    let panel_width = menu_main_panel_width(rows, dpi, width);
 
     let panel_height = (pad * 2 + rows.len() as i32 * row_height).max(1);
 
