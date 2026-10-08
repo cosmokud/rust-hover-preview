@@ -904,7 +904,8 @@ fn a_check_row_carries_a_check_alone_and_a_choice_its_disc() {
 
     // The room the marks stand in: the pad the panel holds its
     // rows in and the column the marks are centred in, inside
-    // the panel's own edge and short of the labels it holds.
+    // the hairline that keeps the panel off what is behind it
+    // and short of the labels it holds.
     let marks = popup.panel.left + 1..popup.panel.left + 22;
 
     /// The pixels of a band of the buffer that are neither the

@@ -3,7 +3,7 @@
 //! it.
 //!
 //! The panel is placed at the point the press landed and drawn the way a
-//! tool tip is drawn less its hairline — the theme's own page colour, a
+//! tool tip is drawn — the theme's own page colour, a hairline around it, a
 //! shadow under it, and labels written through GDI onto a surface of the
 //! window's own size and carried across (`paint_menu_popup`) — because a menu
 //! is the same kind of thing over the media a tool tip is: a panel a hand
@@ -23,7 +23,7 @@
 use super::bubble::composite_text_into;
 use super::primitives::{
     caption_style, fill_box, fill_disc, fill_polygon, fill_round_rect, measure_text,
-    stroke_segment, surface_pixels, ChromePalette,
+    stroke_round_rect, stroke_segment, surface_pixels, ChromePalette,
 };
 use crate::text::text_paint::{self, DibSurface};
 use windows::Win32::Foundation::RECT;
@@ -41,13 +41,17 @@ const MENU_ROW_HEIGHT_PIXELS: f32 = 22.0;
 pub(super) const MENU_PAD_PIXELS: f32 = 6.0;
 
 /// The room the main menu's own panel holds to the right of its
-/// longest row's label, past the pad the labels are held in by:
-/// the panel is measured to its longest row, which would
-/// otherwise leave the longest label hard against the panel's
-/// own edge. This is the number to change for a roomier or a
-/// tighter main menu — the flyout's panel is a fixed width and
-/// keeps its own pads (`MENU_PAD_PIXELS`).
-pub(super) const MENU_PANEL_RIGHT_ROOM_PIXELS: f32 = 12.0;
+/// longest row's label: the same room the panel holds to the
+/// left of it — the pad and the marks' column together
+/// (`MENU_PAD_PIXELS` and `MENU_MARKER_ROOM_PIXELS`) — so the
+/// longest row sits as far from the panel's right edge as it
+/// does from its left. The panel is measured to its longest row,
+/// which would otherwise leave the longest label hard against
+/// the panel's own edge. To hold a fixed room instead of the
+/// left's, this is the number to change — the flyout's panel is
+/// a fixed width and keeps its own pads.
+pub(super) const MENU_PANEL_RIGHT_ROOM_PIXELS: f32 =
+    MENU_PAD_PIXELS + MENU_MARKER_ROOM_PIXELS;
 
 /// The narrowest the main menu's own panel is ever held, whatever its rows
 /// measure: the room the marks stand in and the pads on either side of it,
@@ -515,12 +519,14 @@ pub(crate) fn paint_menu_popup(
     let radius = (MENU_RADIUS * scale).max(1.0);
     let shadow = (2.0 * scale).round().max(1.0) as i32;
 
-    // The shadow and the panel are the tooltip's own, less the
-    // hairline a tool tip carries and a menu does not: a flat
-    // face of the theme's own page colour rather than a shaded
-    // one, because the labels are laid over it in a flat colour
-    // of their own; and a shadow under it that makes it float
-    // over the media rather than sit in it.
+    // The shadow, the panel and its hairline are the tooltip's
+    // own three, so a menu reads as the same kind of floating
+    // panel a tool tip is: a flat face of the theme's own page
+    // colour rather than a shaded one, because the labels are
+    // laid over it in a flat colour of their own; a hairline
+    // that keeps it off a picture of a colour close to its own,
+    // subtler than a tool tip's own; and a shadow under it that
+    // makes it float over the media rather than sit in it.
     fill_round_rect(
         buffer,
         width,
@@ -542,6 +548,15 @@ pub(crate) fn paint_menu_popup(
         radius,
         palette.hover(0.0),
         palette.hover(0.0),
+        1.0,
+    );
+    stroke_round_rect(
+        buffer,
+        width,
+        panel,
+        radius,
+        (1.0 * scale).round().max(1.0),
+        palette.hover(0.15),
         1.0,
     );
 
