@@ -29,6 +29,7 @@ use super::commands::{
     toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
     toggle_render_html, toggle_startup, toggle_trigger_key_affect_pin_mode,
     toggle_trigger_key_enabled, toggle_video_engine_fallback, toggle_video_hw_accel,
+    toggle_video_subtitles,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
@@ -61,7 +62,8 @@ use super::ids::{
     ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
     ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
     ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
-    ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE,
+    ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SUBTITLES, ID_TRAY_VIDEO_VOLUME_BASE,
+    ID_TRAY_WEBVIEW_IDLE_BASE,
     TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND,
     VIDEO_ENGINE_CHOICES, WM_TRAYICON,
 };
@@ -266,6 +268,11 @@ unsafe extern "system" fn tray_window_proc(
                     // player rather than by anything on screen.
                     ID_TRAY_REMEMBER_VOLUME => toggle_remember_audio_volume(),
                     ID_TRAY_REMEMBER_VIDEO_VOLUME => toggle_remember_video_volume(),
+                    // The row below the `Video` half of the `Volume` submenu: whether a
+                    // film's own subtitle tracks are probed for and copied out at all,
+                    // which is read where a probe runs and where a player is started
+                    // rather than by anything on screen.
+                    ID_TRAY_VIDEO_SUBTITLES => toggle_video_subtitles(),
                     // A level of either half of the `Volume` submenu, by the position it was
                     // listed at. The two halves offer the same levels, so one table answers for
                     // both and each range is what says which setting was meant.

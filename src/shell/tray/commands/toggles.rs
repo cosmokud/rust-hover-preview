@@ -238,6 +238,27 @@ pub(in super::super) fn toggle_video_engine_fallback() {
     crate::ui::preview_window::forget_video_geometry();
 }
 
+/// Whether a film's own subtitle tracks are probed for and copied out at all,
+/// from the `Video Subtitles` row below the `Video` half of the `Volume`
+/// submenu.
+///
+/// Nothing on screen is rebuilt: the switch is read where a probe runs and
+/// where a player is started, on the next hover. What the probe holds is
+/// given up for the reason the engine choice moving gives it up — a geometry
+/// answered while subtitles were wanted carries subtitle streams, a sidecar
+/// and a copy that a probe under the new answer would not have (see
+/// `forget_video_geometry`), and an extraction running for a film is dropped
+/// rather than left to read a film nobody will draw subtitles from (see
+/// `keep_extraction_for`).
+pub(in super::super) fn toggle_video_subtitles() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.video_subtitles = !config.video_subtitles;
+        config.save();
+    }
+    crate::ui::preview_window::forget_video_geometry();
+    crate::ui::preview_window::keep_extraction_for(None);
+}
+
 /// Whether a page of HTML is drawn by the browser engine rather than shown as its markup.
 ///
 /// What changes is which of the two things draws a `.htm`, and the whole menu is read from

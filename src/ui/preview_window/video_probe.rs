@@ -81,6 +81,16 @@ pub(super) struct VideoHeader {
     pub(super) attachment_codecs: Vec<String>,
 }
 
+/// Whether a film's subtitle tracks are wanted at all, which is the `Volume →
+/// Video Subtitles` setting's own answer: off where the app starts, so a probe
+/// names no subtitle stream, a launch copies none out and a player draws none.
+pub(super) fn subtitles_wanted() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.video_subtitles)
+        .unwrap_or(DEFAULT_VIDEO_SUBTITLES)
+}
+
 /// Read all three of a file's header answers with one pass over it: the shape of its first
 /// picture, its length, and its subtitle streams.
 pub(super) fn probe_video_header(path: &PathBuf) -> Option<VideoHeader> {
@@ -111,8 +121,20 @@ pub(super) fn probe_video_header(path: &PathBuf) -> Option<VideoHeader> {
             // along for the same shape of reason: it is the one field the extraction needs and
             // the header already holds, so asking for it here saves the second read of the file
             // the extraction's command would otherwise be built from (see `parse_stream_codecs`).
+            //
+            // Both of those, and `stream_disposition=default` (which is what marks the player's
+            // own first choice, see `parse_subtitle_streams`), exist in the list for the
+            // subtitle answers alone — so where the `Video Subtitles` switch is off they are
+            // asked for not at all, and the header pass never names a subtitle stream. The
+            // parsers tolerate their absence: they key off lines that are simply not printed
+            // (see `probe_video_geometry`, which zeroes the answers anyway, because
+            // `codec_type=subtitle` is still asked of every stream and so still prints).
             "-show_entries",
-            "stream=index,codec_type,codec_name,width,height:stream_disposition=default:format=duration",
+            if subtitles_wanted() {
+                "stream=index,codec_type,codec_name,width,height:stream_disposition=default:format=duration"
+            } else {
+                "stream=index,codec_type,width,height:format=duration"
+            },
             "-of",
             "default=noprint_wrappers=1",
         ])
@@ -595,12 +617,20 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         std::thread::scope(|scope| {
             let header = scope.spawn(|| probe_video_header(path));
             let candidates = scope.spawn(|| collect_video_crop_candidates(path));
-            let sidecar = scope.spawn(|| video_launch::sidecar_for(path));
+            // The sidecar leg runs only where subtitles are wanted: it is a walk of
+            // the film's folder for a file nothing would ever draw beside the film
+            // otherwise, and the walk is paid whether it answers or not (see
+            // `video_launch::sidecar_for`, which holds the gate itself too).
+            let sidecar = if subtitles_wanted() {
+                Some(scope.spawn(|| video_launch::sidecar_for(path)))
+            } else {
+                None
+            };
 
             (
                 header.join().unwrap_or(None),
                 candidates.join().unwrap_or_default(),
-                sidecar.join().unwrap_or(None),
+                sidecar.and_then(|sidecar| sidecar.join().unwrap_or(None)),
             )
         })
     };
@@ -666,6 +696,19 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         attachment_codecs,
     } = header;
 
+    // The gate is answered here rather than left to the parsers: the header pass names
+    // no subtitle stream where the switch is off (see `probe_video_header`), but it
+    // still prints a `codec_type=subtitle` line for every subtitle stream the file
+    // holds, so the parsers would still count a stream nothing may draw. The three
+    // answers are zeroed whatever the header said, which is what turns every
+    // subtitle path off for this file — the pin's track rows, `extraction_due` and
+    // the filter all read them out of the geometry entry below.
+    let (subtitles, subtitle_codecs, attachment_codecs) = if subtitles_wanted() {
+        (subtitles, subtitle_codecs, attachment_codecs)
+    } else {
+        (SubtitleStreams::default(), Vec::new(), Vec::new())
+    };
+
     // The film's soundtrack is measured beside its geometry where `Normalize` is on for videos —
     // but on a thread of its own, and that is the whole of the change.
     //
@@ -710,9 +753,10 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // What this probe leaves for that launch is the answer itself: the small files a pass before
     // it left, the sidecar beside the film, and the codec names the pass's own command is built
     // from, all held together in the geometry entry below.
-    let derived = if native {
+    let derived = if native || !subtitles_wanted() {
         // A player that shows no subtitles has nothing to draw from a copied track, so the folder
-        // is not read for one either (see `subtitle_files` and `video_player`).
+        // is not read for one either (see `subtitle_files` and `video_player`); the switch off is
+        // that same answer for the whole of the file, and `resolve` holds it too.
         None
     } else {
         subtitle_files::resolve(path, &subtitle_codecs)

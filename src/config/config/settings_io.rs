@@ -122,6 +122,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "pin_mode_audio_shuffle",
             "remember_audio_volume",
             "remember_video_volume",
+            "video_subtitles",
             "video_volume",
         ],
     ),

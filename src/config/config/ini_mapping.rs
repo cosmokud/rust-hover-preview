@@ -358,6 +358,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "video_subtitles",
+            Some(self.video_subtitles.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "office_engine_idle",
             Some(self.office_engine_idle.as_str()),
         );
@@ -867,6 +872,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_engine_fallback") {
             self.video_engine_fallback = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_subtitles") {
+            self.video_subtitles = value;
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "office_engine_idle") {
             if let Some(idle) = EngineIdle::from_str(&value) {

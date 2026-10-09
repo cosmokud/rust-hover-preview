@@ -303,6 +303,11 @@ pub const DEFAULT_VIDEO_ENGINE: VideoEngine = VideoEngine::Best;
 /// Whether an explicitly chosen engine that cannot play a file falls through to the others:
 /// on, so a film no media-engine decoder reaches is still played rather than shown as nothing.
 pub const DEFAULT_VIDEO_ENGINE_FALLBACK: bool = true;
+/// Whether a film's own subtitle tracks are probed for and copied out at
+/// all: off, so a hover is a read of the film's header and nothing else,
+/// and a film is played without subtitles rather than paid for on every
+/// launch (see `preview_window::subtitle_files` and `video_probe`).
+pub const DEFAULT_VIDEO_SUBTITLES: bool = false;
 /// The resolution above which `VideoEngine::Hybrid` leaves a film to FFmpeg's player: 3.2 million
 /// pixels, which is between 1080p and QHD, so a 1440p film is handed over and a 1080p one is drawn
 /// here. It is total pixels and not an axis, because what it stands for is how much there is to

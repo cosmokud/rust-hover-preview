@@ -34,7 +34,8 @@ use super::ids::{
     ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS,
     ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
     ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
-    ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_VOLUME_BASE,
+    ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SUBTITLES,
+    ID_TRAY_VIDEO_VOLUME_BASE,
     ID_TRAY_WEBVIEW_IDLE_BASE, MAX_TRAY_CUSTOM_THEMES, TRAY_CUSTOM_THEMES,
 };
 use super::submenus::{
@@ -65,7 +66,8 @@ use crate::config::config::{
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
     DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_SUBTITLES,
+    DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
     VOLUME_CHOICES,
 };
 use crate::config::theme_files;
@@ -1067,6 +1069,14 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|config| (config.remember_audio_volume, config.remember_video_volume))
         .unwrap_or((DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME));
+    // Whether a film's own subtitle tracks are probed for and copied out at all,
+    // read the same way the two switches above the levels are: a switch about a
+    // film's picture rather than a level of the list under the halves, so it is
+    // a row of its own below the `Video` half (see `video_subtitles`).
+    let video_subtitles = CONFIG
+        .lock()
+        .map(|config| config.video_subtitles)
+        .unwrap_or(DEFAULT_VIDEO_SUBTITLES);
     // Asked again here for the reason the `Codecs` rows are asked again: a machine that has just
     // been given FFmpeg is answered from the machine rather than from the hover that cached it
     // (see `codecs::refresh`).
@@ -1142,6 +1152,15 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         video_levels.0 as usize,
         w!("Video"),
+    );
+    // The one row between the halves: whether a film's own subtitle tracks are
+    // probed for and copied out at all, a switch below the `Video` half it is
+    // asked about rather than a level of either list under the halves.
+    let _ = AppendMenuW(
+        volume_menu,
+        MF_STRING | if video_subtitles { MF_CHECKED } else { MF_UNCHECKED },
+        ID_TRAY_VIDEO_SUBTITLES as usize,
+        w!("Video Subtitles"),
     );
     let _ = AppendMenuW(
         volume_menu,

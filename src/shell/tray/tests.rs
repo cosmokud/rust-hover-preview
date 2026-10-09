@@ -1039,6 +1039,7 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_NORMALIZE_VIDEO_VOLUME,
             ID_TRAY_REMEMBER_VOLUME,
             ID_TRAY_REMEMBER_VIDEO_VOLUME,
+            ID_TRAY_VIDEO_SUBTITLES,
             ID_TRAY_VIDEO_HW_ACCEL,
             ID_TRAY_PRIORITIZE_KEYBOARD,
             ID_TRAY_EXIT,
