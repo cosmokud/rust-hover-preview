@@ -562,7 +562,11 @@ fn draw_histogram(
 
     for bar in 0..BARS {
         let shape = 0.35 + 0.65 * (0.5 + 0.5 * (phase + bar as f32 * 0.9).sin());
-        let half = inner * 0.86 * level * shape / 2.0;
+        // How much of the face a bar at full level reaches — the number of vertical steps the level
+        // is read out in, since a bar's height is rounded to whole rows of pixels. A taller bar puts
+        // the same small change in the mixer's peak across more rows, which is what makes a quiet
+        // change show; the reach stops just short of the ring so a bar at full level does not meet it.
+        let half = inner * 0.9 * level * shape;
         let top = (center.1 - half).round() as i32;
         let bottom = (center.1 + half).round() as i32;
 
@@ -581,6 +585,11 @@ fn draw_histogram(
         left += bar_width + gap;
     }
 }
+
+/// How opaque the playback mark is laid down. The triangle and the two bars say what the file on
+/// screen is *doing* on top of something else worth seeing — a film's own frame, or the meter of a
+/// sound — so they are drawn a little short of solid and let the media read through them.
+const MARK_OPACITY: f32 = 0.8;
 
 fn paint_mark(
     buffer: &mut [u8],
@@ -611,7 +620,7 @@ fn paint_mark(
                         x as i32,
                         (center.1 - y as f32) as i32,
                         foreground,
-                        1.0,
+                        MARK_OPACITY,
                     );
                     put(
                         buffer,
@@ -619,7 +628,7 @@ fn paint_mark(
                         x as i32,
                         (center.1 + y as f32) as i32,
                         foreground,
-                        1.0,
+                        MARK_OPACITY,
                     );
                 }
             }
@@ -646,7 +655,7 @@ fn paint_mark(
                         bottom: (center.1 + height / 2.0).round() as i32,
                     },
                     foreground,
-                    1.0,
+                    MARK_OPACITY,
                 );
             }
         }
