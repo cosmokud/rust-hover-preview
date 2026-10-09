@@ -403,9 +403,20 @@ impl MediaType {
     }
 
     /// The mark the bubble carries when there is no picture to stand in for one.
-    pub(super) fn bubble_mark(&self) -> pin_chrome::BubbleMark {
+    ///
+    /// What a bubble stands for is asked of the kind and the *playback* together, because the mark
+    /// is the answer to both and there is no bubble to ask on a tick later: a film and a sound
+    /// carry the glyph of what they are doing at the moment the pin collapsed, where a page is a
+    /// page whether or not anything is being read from it.
+    pub(super) fn bubble_mark(&self, playing: bool) -> pin_chrome::BubbleMark {
         match self {
-            Self::Video | Self::NativeVideo | Self::Audio => pin_chrome::BubbleMark::Play,
+            Self::Video | Self::NativeVideo | Self::Audio => {
+                if playing {
+                    pin_chrome::BubbleMark::Play
+                } else {
+                    pin_chrome::BubbleMark::Pause
+                }
+            }
             Self::Text | Self::Archive | Self::Peazip => pin_chrome::BubbleMark::Page,
             _ => pin_chrome::BubbleMark::Picture,
         }

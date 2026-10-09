@@ -275,6 +275,7 @@ mod layout;
 mod media_scales;
 mod pin_audio_facts;
 mod pin_audio_seek;
+mod pin_bubble_art;
 mod pin_cards;
 mod pin_edges;
 mod pin_frames;

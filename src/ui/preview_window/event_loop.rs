@@ -141,6 +141,21 @@ pub fn run_preview_window() {
         let mut last_topmost_check = Instant::now();
         // When the transport bar was last painted: its playhead moves on its own.
         let mut last_pin_repaint = Instant::now();
+        // How often a collapsed pin's bubble is painted while its bars move.
+        //
+        // It is the one window of this app's that is redrawn for no reason but that it is *moving*:
+        // a sound's histogram is a shape made of the level on screen now, and the level of a sound
+        // that is playing changes every few milliseconds — so the bubble is painted a little under
+        // thirty times a second, which a hand reads as motion and which is the same order the
+        // transport bar's own playhead is painted at (`PIN_TRANSPORT_REPAINT_MS`). Nothing else
+        // about a bubble moves, so nothing else is on this clock (see the bubble repaint below).
+        const BUBBLE_REPAINT: Duration = Duration::from_millis(33);
+        // The play state a collapsed pin's bubble was last painted for, and when it was last
+        // painted: what it stands for is asked of the file's own player, and a film paused by a key
+        // sends this loop nothing — so the answer is compared against the one the bubble was drawn
+        // with rather than waited for (see `bubble_is_playing`).
+        let mut last_bubble_playing: Option<bool> = None;
+        let mut last_bubble_repaint = Instant::now();
 
         // Background loading support
         let (load_tx, load_rx): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
@@ -625,6 +640,48 @@ pub fn run_preview_window() {
                 // thrown while the pin is a bubble is answered on the next one (see
                 // `settle_bubble_playback`).
                 settle_bubble_playback(&mut audio_started, &mut audio_start_offset);
+
+                // The bubble a collapsed pin leaves is made of what the pin's media has to show —
+                // a frame, or the level a sound is being heard at — so it is painted again when any
+                // of the three things it is made of has changed: the playback it stands for, a frame
+                // grabbed for it out of a film FFmpeg plays, and the clock, while a sound's bars
+                // move. Nothing else asks for a bubble repaint: a bubble over a picture is painted
+                // once, at the collapse, and a bubble that is not up is never painted at all (see
+                // `BUBBLE_REPAINT`).
+                //
+                // The playback is asked of the file's own player rather than of anything this loop
+                // wrote down, because a film paused by a key in its own window sends this thread
+                // nothing: what says the bubble is out of date is the answer differing from the one
+                // it was drawn with, which is the whole of what the comparison below is for.
+                if pin_is_collapsed() {
+                    let playing = bubble_is_playing();
+                    let animating = playing && current_media_kind() == Some(PreviewType::Audio);
+                    let frame_ready = BUBBLE_FRAME_READY.swap(false, Ordering::AcqRel);
+                    let changed = last_bubble_playing != Some(playing);
+                    let due = animating && last_bubble_repaint.elapsed() >= BUBBLE_REPAINT;
+
+                    if changed || due || frame_ready {
+                        last_bubble_playing = Some(playing);
+                        if due {
+                            last_bubble_repaint = Instant::now();
+                        }
+
+                        // The bubble's own window, from this thread and no other: what is painted
+                        // is a layered-window blit out of a surface this thread drew for exactly
+                        // that window (see `repaint_pin_bubble`).
+                        repaint_pin_bubble();
+                    }
+                } else {
+                    // A pin with its window up has no bubble, and nothing of a bubble outlives the
+                    // collapse it was made for: the play state is forgotten and the frame grabbed
+                    // for it is dropped, so a pin collapsed later starts on its own file's frame
+                    // rather than on the one before it (see `BUBBLE_FRAME`).
+                    last_bubble_playing = None;
+                    BUBBLE_FRAME_READY.store(false, Ordering::Release);
+                    if let Ok(mut frame) = BUBBLE_FRAME.lock() {
+                        *frame = None;
+                    }
+                }
 
                 // And the same for a bar that is drawn against a player this app started: what
                 // it is allowed to claim is settled against the player that is actually there,

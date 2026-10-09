@@ -45,6 +45,7 @@
 //! - `video_retire` - handing one film over to the next.
 //! - `video_hw` - what a film is decoded on, and how it loops.
 //! - `audio_engine` - a sound, its loudness, its player and its clock.
+//! - `audio_meter` - the level the sound on screen is being heard at, off the mixer's own meter.
 //! - `event_loop` - `run_preview_window` itself.
 //!
 //! The parts share one namespace through this module - each reads the others as one set of items
@@ -55,6 +56,7 @@
 
 mod animated;
 mod audio_engine;
+mod audio_meter;
 mod dimensions;
 mod displays;
 mod engine_render;
