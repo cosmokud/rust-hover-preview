@@ -44,6 +44,7 @@ pub(super) use toggles::{
     toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
     toggle_render_html, toggle_startup, toggle_trigger_key_affect_pin_mode,
     toggle_trigger_key_enabled, toggle_video_engine_fallback, toggle_video_hw_accel,
+    toggle_video_subtitles,
 };
 
 // The four that turn an id back into the choice it was listed for. No window proc asks for

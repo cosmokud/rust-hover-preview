@@ -115,7 +115,7 @@ use crate::config::config::{
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
     DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL,
-    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_WEBP_PLAYBACK_FPS, VIDEO_FFMPEG_ABOVE_PIXELS,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES, DEFAULT_WEBP_PLAYBACK_FPS, VIDEO_FFMPEG_ABOVE_PIXELS,
 };
 use crate::engines::calibre_render;
 use crate::engines::imagemagick_render;
@@ -278,6 +278,7 @@ pub(crate) use requests::show_preview;
 pub(crate) use requests::show_preview_keyboard;
 pub(crate) use requests::take_pin_resumed;
 pub(crate) use requests::update_pinned_preview;
+pub(crate) use subtitle_files::keep_extraction_for;
 pub(crate) use subtitle_files::trim_now as trim_subtitle_cache;
 pub(crate) use tick::preview_stall_ms;
 pub(crate) use tick::PREVIEW_SENDER;
