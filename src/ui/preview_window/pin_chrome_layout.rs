@@ -568,6 +568,10 @@ pub(super) fn settle_pinned_audio_toggle(
     offset: &mut f64,
     paused: &mut Option<f64>,
 ) {
+    // TEMP-WEDGE: entry mark (see tick.rs).
+    if WEDGE_ARMED.load(Ordering::Acquire) {
+        wedge_log("> settle_pinned_audio_toggle");
+    }
     if !PIN_AUDIO_TOGGLE.swap(false, Ordering::AcqRel) {
         return;
     }
@@ -618,6 +622,10 @@ pub(super) fn settle_pinned_audio_seek(
     offset: &mut f64,
     paused: &mut Option<f64>,
 ) {
+    // TEMP-WEDGE: entry mark (see tick.rs).
+    if WEDGE_ARMED.load(Ordering::Acquire) {
+        wedge_log("> settle_pinned_audio_seek");
+    }
     let seconds = {
         let Ok(mut request) = PIN_AUDIO_SEEK.lock() else {
             return;
@@ -937,6 +945,10 @@ pub(super) fn settle_pinned_audio_volume(
     offset: &mut f64,
     paused: &mut Option<f64>,
 ) {
+    // TEMP-WEDGE: entry mark (see tick.rs).
+    if WEDGE_ARMED.load(Ordering::Acquire) {
+        wedge_log("> settle_pinned_audio_volume");
+    }
     if !PIN_AUDIO_VOLUME.swap(false, Ordering::AcqRel) {
         return;
     }
