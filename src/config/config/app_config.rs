@@ -6,6 +6,7 @@ use crate::readers::tone_map::Curve;
 
 use super::defaults::{
     DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_VOLUME,
+    DEFAULT_CHECK_FOR_UPDATES,
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME,
@@ -35,6 +36,10 @@ use super::setting_types::{
 pub struct AppConfig {
     pub is_first_run: bool,
     pub run_at_startup: bool,
+    /// Whether the app asks GitHub for a newer release on its own, at startup and when the
+    /// menu is opened — on where the app starts, and the `System → Check for Updates` row
+    /// is the switch (see `DEFAULT_CHECK_FOR_UPDATES`).
+    pub check_for_updates: bool,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
     /// The modifier the trigger key watches, by name.
@@ -615,6 +620,7 @@ impl Default for AppConfig {
         Self {
             is_first_run: false,
             run_at_startup: true,
+            check_for_updates: DEFAULT_CHECK_FOR_UPDATES,
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
             preview_enabled: true,
             trigger_key: "alt".to_string(),

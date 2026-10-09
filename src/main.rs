@@ -250,7 +250,8 @@ fn main() {
     // The check for a newer release is asked for here, as the run starts: the row
     // it may put in the menu should be there the first time the menu is opened
     // rather than only after an opening of its own asked for a check. It runs on a
-    // thread of its own, so nothing here waits on GitHub.
+    // thread of its own, so nothing here waits on GitHub — and nothing is asked
+    // at all where the checks are switched off (see `check_for_updates`).
     app::updates::request_check();
     trace.step("update check");
 

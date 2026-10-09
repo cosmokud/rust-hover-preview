@@ -1,16 +1,19 @@
 //! What this machine has: every engine and every codec extension a preview leans on.
 //!
-//! Two answers are asked of the machine as a whole, and one question is asked per hover.
-//! The tray's `Codecs` submenu asks for the whole list, once, when the menu is built —
-//! that is the moment a user is looking at what is installed, and the moment an answer is
-//! allowed to change. The video path asks the question of its own, which engine plays a
-//! video, and asks it once per hover — which is what the cache below is for. And the
-//! question of whether a document's own application is installed is asked per hover as
-//! well: it is what decides where an Office document's page comes from, whether from
-//! Office or from the render engine beside it (see `office_formats::app_installed`). It is
-//! a registry read like every other probe here, cheap enough to be asked per hover, and
-//! asking it again is also what lets an application installed while the app is running be
-//! used by the next hover rather than by the next restart.
+//! The answers the machine's own media stack gives — the decoders a video or sound
+//! format is played by, and the picture codecs an image format is opened with — are
+//! asked once a process and kept below, because what they answer is what the machine
+//! *is*: a codec extension installed while the app is running shows up at the next
+//! restart, the way every other machine-answer does. The two answers asked again are
+//! FFmpeg's own (see [`refresh`]), because a machine that has just been given FFmpeg
+//! is one that should start using it at the next opening of the menu rather than at
+//! the next restart. And the question of whether a document's own application is
+//! installed is asked per hover as well: it is what decides where an Office document's
+//! page comes from, whether from Office or from the render engine beside it (see
+//! `office_formats::app_installed`). It is a registry read like every other probe
+//! here, cheap enough to be asked per hover, and asking it again is also what lets an
+//! application installed while the app is running be used by the next hover rather
+//! than by the next restart.
 //!
 //! Nothing here starts anything. An Office engine is asked for by its ProgID, which is a
 //! registry read rather than a process; a decoder is asked for by enumerating what is
@@ -19,6 +22,7 @@
 //! and the one for Office would leave an application running behind a menu.
 
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use windows::core::{IUnknown, Interface, GUID};
@@ -360,12 +364,12 @@ pub fn engines() -> Vec<Row> {
 
 /// Ask again, which is what the tray's menu build does before it lists the answers.
 ///
-/// Every other probe is asked on demand and answers from the machine at that moment. The
-/// answers that are kept are FFmpeg's own — the player a video is played by, and the meter and
-/// the player a sound's loudness is measured and applied with — because they are asked on every
-/// video hover and every sound hover, and a hover must not go looking through the `PATH` for
-/// them: opening the menu is what lets a machine that has just been given FFmpeg start using
-/// it, rather than a restart.
+/// The answers that are cleared are FFmpeg's own — the player a video is played by, and the
+/// meter and the player a sound's loudness is measured and applied with — because they are
+/// asked on every video hover and every sound hover, and a hover must not go looking through
+/// the `PATH` for them: opening the menu is what lets a machine that has just been given
+/// FFmpeg start using it, rather than a restart. Every other probe is answered from the
+/// answers the process keeps (see `ProbedCodec`), or read from the registry as it is asked.
 pub fn refresh() {
     if let Ok(mut cached) = FFPLAY.lock() {
         *cached = None;
@@ -525,12 +529,26 @@ fn find_program(name: &str) -> Option<PathBuf> {
         .find(|program| program.is_file())
 }
 
-/// Whether a decoder for one compressed video format is registered.
+/// Whether a decoder for one compressed video format is registered, asked of the
+/// machine once a process and kept (see `ProbedCodec`).
 ///
 /// The input type is what is asked for, because that is the side a decoder is named by: an
 /// extension package adds an MFT whose *input* is HEVC, AV1, VP9 or MPEG-2, and what it
 /// produces is not this app's business.
 fn video_decoder(subtype: &GUID) -> bool {
+    let key = ProbedCodec::Video(subtype.data1, subtype.data2, subtype.data3, subtype.data4);
+    if let Some(answer) = probed_codec(&key) {
+        return answer;
+    }
+
+    let answer = enumerate_video_decoder(subtype);
+    remember_probed_codec(key, answer);
+    answer
+}
+
+/// The enumeration itself: what is registered for the format, asked of the machine
+/// where the answer the process keeps does not already hold it.
+fn enumerate_video_decoder(subtype: &GUID) -> bool {
     if !mf_started() {
         return false;
     }
@@ -568,7 +586,8 @@ fn video_decoder(subtype: &GUID) -> bool {
     enumerated.is_ok() && count > 0
 }
 
-/// Whether a decoder for one audio codec is registered.
+/// Whether a decoder for one audio codec is registered, asked of the machine once a
+/// process and kept (see `ProbedCodec`).
 ///
 /// The same question as the video one above and asked the same way, of the audio category
 /// rather than the video's: an input type of the codec and the machine's own answer, with the
@@ -576,6 +595,19 @@ fn video_decoder(subtype: &GUID) -> bool {
 /// asked by playing rather than by enumerating (see `video_player::audio_probe`), because a
 /// registered decoder is not the whole of whether a file plays.
 fn audio_decoder(subtype: &GUID) -> bool {
+    let key = ProbedCodec::Audio(subtype.data1, subtype.data2, subtype.data3, subtype.data4);
+    if let Some(answer) = probed_codec(&key) {
+        return answer;
+    }
+
+    let answer = enumerate_audio_decoder(subtype);
+    remember_probed_codec(key, answer);
+    answer
+}
+
+/// The enumeration itself, asked of the machine where the answer the process keeps
+/// does not already hold it.
+fn enumerate_audio_decoder(subtype: &GUID) -> bool {
     if !mf_started() {
         return false;
     }
@@ -611,13 +643,27 @@ fn audio_decoder(subtype: &GUID) -> bool {
     enumerated.is_ok() && count > 0
 }
 
-/// Whether a WIC codec claims one of `mime_types`.
+/// Whether a WIC codec claims one of `mime_types`, asked of the machine once a
+/// process and kept (see `ProbedCodec`).
 ///
 /// A codec extension announces itself as a component of the imaging factory rather than as
 /// a file, so this is "is a decoder for this kind of picture installed" asked of the place
 /// it is installed to. Nothing is decoded and no picture is needed: what is listed is what
 /// a `.heic` would be opened by.
-fn image_codec(mime_types: &[&str]) -> bool {
+fn image_codec(mime_types: &'static [&'static str]) -> bool {
+    let key = ProbedCodec::Image(mime_types.first().copied().unwrap_or(""));
+    if let Some(answer) = probed_codec(&key) {
+        return answer;
+    }
+
+    let answer = enumerate_image_codec(mime_types);
+    remember_probed_codec(key, answer);
+    answer
+}
+
+/// The walk of the imaging factory's components itself, asked of the machine where
+/// the answer the process keeps does not already hold it.
+fn enumerate_image_codec(mime_types: &'static [&'static str]) -> bool {
     // The imaging factory is a COM object, so the thread asking for it has to be in an
     // apartment. This is asked here rather than left to whichever probe ran first: the
     // three groups are three calls, and a caller is free to ask for this one alone.
@@ -734,3 +780,41 @@ static FFPLAY: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
 /// and the player that applies it — kept the way the player's own answer is and cleared by the
 /// same [`refresh`].
 static NORMALIZE: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
+
+/// One answer the machine's own media stack has been asked for, named by what was
+/// asked of it: the decoder registered for one video or audio format, or the picture
+/// codec that claims one of the MIME types a picture format is asked about.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ProbedCodec {
+    /// A video decoder, named by the format it decodes.
+    Video(u32, u16, u16, [u8; 8]),
+    /// An audio decoder, named the same way.
+    Audio(u32, u16, u16, [u8; 8]),
+    /// A picture codec, named by the first of the MIME types it is asked about — the
+    /// one each set asked of it begins with, and the one no other set does.
+    Image(&'static str),
+}
+
+/// The answers the machine's media stack has already given, for the rest of the
+/// process: the decoders and the picture codecs, each of which is an enumeration of
+/// everything the machine has registered — the expensive answer, and the one a menu
+/// that is opened often is not asked again (see `ProbedCodec` for what is named by
+/// what).
+static PROBED_CODECS: Lazy<Mutex<HashMap<ProbedCodec, bool>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// An answer already asked for, from the ones the process keeps.
+fn probed_codec(key: &ProbedCodec) -> Option<bool> {
+    PROBED_CODECS
+        .lock()
+        .ok()
+        .and_then(|probes| probes.get(key).copied())
+}
+
+/// An answer kept, so that the next time it is asked it is not asked of the machine
+/// again.
+fn remember_probed_codec(key: ProbedCodec, answer: bool) {
+    if let Ok(mut probes) = PROBED_CODECS.lock() {
+        probes.insert(key, answer);
+    }
+}

@@ -22,7 +22,8 @@ use super::commands::{
     set_pin_nav_file_types, set_pin_mode_audio_seek, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
     set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
     set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
-    set_video_scale, set_video_volume, set_webview_idle, toggle_engine_persistent,
+    set_video_scale, set_video_volume, set_webview_idle, toggle_check_for_updates,
+    toggle_engine_persistent,
     toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_enabled,
     toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
@@ -173,13 +174,12 @@ unsafe extern "system" fn tray_window_proc(
                             updates::Answer::Cancel => {}
                         }
                     }
-                    // The `System → Check for Updates` row: a check asked
-                    // for now, past the once-an-hour one an opening of the
-                    // menu makes. What it finds is offered on the row above
-                    // this menu's `System` submenu, and said in a dialog of
-                    // its own where there is nothing to put on.
+                    // The `System → Check for Updates` switch: whether the app asks
+                    // GitHub for a newer release on its own. What a check finds is
+                    // offered on the row above this menu's `System` submenu, and
+                    // nowhere at all where there is nothing to put on.
                     ID_TRAY_CHECK_UPDATES => {
-                        updates::force_check(TRAY_HWND);
+                        toggle_check_for_updates();
                     }
                     ID_TRAY_ENABLE => {
                         toggle_preview_enabled();
