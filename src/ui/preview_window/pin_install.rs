@@ -69,6 +69,12 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
         audio: None,
         walk,
     };
+    // TEMP-WEDGE: see tick.rs.
+    wedge_log(&format!(
+        "swap_pinned_media {} incoming={:?}",
+        file.path.display(),
+        file.media.media_type,
+    ));
 
     // The pin is being shown another file, so the copy of the film it was showing is dropped:
     // the pass reads the whole film, and the film the window is actually showing is the one
@@ -105,9 +111,10 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     let player_coming = pinned_player_is_coming(file.media.media_type);
     cover_step_swap_for_video(player_coming);
     if file.media.media_type.is_native_video() {
-        stop_pinned_player();
+        // TEMP-WEDGE: see tick.rs.
+        wedge_timed("swap stop_pinned_player", 300, stop_pinned_player);
     } else {
-        take_down_pinned_media();
+        wedge_timed("swap take_down_pinned_media", 300, take_down_pinned_media);
     }
 
     if file.media.media_type.is_engine() {
@@ -136,13 +143,24 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
         // starts one before its preview goes up: an engine that will not play the file is a file
         // with no preview rather than a box of the placeholder pixels a video is loaded with.
         let (video_width, video_height) = (file.media.current_width(), file.media.current_height());
-        video_player::play(
-            &file.path,
-            video_width,
-            video_height,
-            volume,
-            probed_picture(&file.path, video_width, video_height),
-        );
+        // TEMP-WEDGE: see tick.rs.
+        wedge_log(&format!(
+            "swap native play {} at {video_width}x{video_height}",
+            file.path.display(),
+        ));
+        wedge_timed("swap video_player::play", 300, || {
+            video_player::play(
+                &file.path,
+                video_width,
+                video_height,
+                volume,
+                probed_picture(&file.path, video_width, video_height),
+            );
+        });
+        wedge_log(&format!(
+            "swap native play returned playing={}",
+            video_player::is_playing(),
+        ));
 
         if !video_player::is_playing() {
             // A refusal rather than a wait, and it is the refusal this has always given: the

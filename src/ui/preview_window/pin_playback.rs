@@ -1966,6 +1966,10 @@ fn prepare_resume_frame() {
 /// as the park stands, and the tick's own raise is answered out of the hand for the same reason,
 /// so the tick that takes the park back is the one that has to place the window.
 pub(super) fn settle_pinned_park() -> bool {
+    // TEMP-WEDGE: entry mark (see tick.rs).
+    if WEDGE_ARMED.load(Ordering::Acquire) {
+        wedge_log("> settle_pinned_park");
+    }
     settle_pinned_park_where(
         &Win32PinWindow,
         video_window_for(VIDEO_PID.load(Ordering::SeqCst)).is_some(),

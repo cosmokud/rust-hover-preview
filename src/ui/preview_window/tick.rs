@@ -291,6 +291,8 @@ pub(super) fn spawn_pin_watchdog() {
             // only argument, and the reason is what says which end is taking it (see
             // `pin_window::end_pin`).
             let window = Win32PinWindow;
+            // TEMP-WEDGE: see the block below `preview_stall_ms`.
+            wedge_log("WATCHDOG ending hung pin");
             let owed = end_pin(Reason::Hung, &window);
 
             // What is not done on this thread is the window work, because the loop is the
@@ -314,6 +316,359 @@ pub(super) fn spawn_pin_watchdog() {
 pub fn preview_stall_ms() -> u64 {
     let alive = PREVIEW_ALIVE_MS.load(Ordering::Relaxed);
     (PREVIEW_CLOCK.elapsed().as_millis() as u64).saturating_sub(alive)
+}
+
+// TEMP-WEDGE instrumentation: pin down where the preview thread wedges on an
+// ffplay -> native pin swap. Everything in this block goes away once diagnosed.
+static WEDGE_TICK: AtomicU64 = AtomicU64::new(0);
+/// Set once a native hold is outstanding; the settle entry/exit marks below
+/// only log from then on, so an ordinary run stays quiet.
+pub(super) static WEDGE_ARMED: AtomicBool = AtomicBool::new(false);
+// TEMP-WEDGE: ring of the last pin-state acquisitions (thread, file, line,
+// age), so the stackwatch can name whoever took the pin lock last. A holder
+// that vanished leaves its thread id behind even where no live stack shows it.
+static WEDGE_RING: Mutex<Vec<(u32, &'static str, u32, u64)>> = Mutex::new(Vec::new());
+// TEMP-WEDGE: the preview thread's id, for the stack capture below.
+static PREVIEW_TID: AtomicU32 = AtomicU32::new(0);
+
+/// TEMP-WEDGE: record one acquisition of the pin lock.
+pub(super) fn wedge_note_acquire(location: &'static std::panic::Location<'static>) {
+    if let Ok(mut ring) = WEDGE_RING.lock() {
+        ring.push((
+            unsafe { windows::Win32::System::Threading::GetCurrentThreadId() },
+            location.file(),
+            location.line(),
+            WEDGE_CLOCK.elapsed().as_millis() as u64,
+        ));
+        while ring.len() > 32 {
+            ring.remove(0);
+        }
+    }
+}
+
+/// TEMP-WEDGE: dump the ring into the log.
+pub(super) fn wedge_dump_ring() {
+    let ring = WEDGE_RING.lock().map(|ring| ring.clone()).unwrap_or_default();
+    let now = WEDGE_CLOCK.elapsed().as_millis() as u64;
+    for (tid, file, line, at) in ring {
+        let file = file.rsplit(['/', '\\']).next().unwrap_or(file);
+        wedge_log(&format!(
+            "pinlock tid={tid} {file}:{line} {}ms ago",
+            now.saturating_sub(at),
+        ));
+    }
+}
+static WEDGE_STACK_DONE: AtomicBool = AtomicBool::new(false);
+static WEDGE_CLOCK: Lazy<Instant> = Lazy::new(Instant::now);
+static WEDGE_STALL_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// The wedge log: a line per swap event plus a heartbeat while a pin is up,
+/// so the tail shows the last thing the loop did before it stopped turning.
+pub(super) fn wedge_log(line: &str) {
+    let path = std::env::temp_dir().join("rhp-wedge.log");
+    let stamp = WEDGE_CLOCK.elapsed().as_millis();
+    let line = format!("[{stamp:>10} ms] {line}\n");
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        use std::io::Write;
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// Note one more turn of the preview loop (see `wedge_spawn_watchdog`).
+pub(super) fn wedge_tick() {
+    WEDGE_TICK.fetch_add(1, Ordering::Relaxed);
+    // The thread being watched (see `wedge_spawn_stackwatch`).
+    let tid = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+    PREVIEW_TID.store(tid, Ordering::Release);
+}
+
+/// Run `f`, logging where it takes longer than `slow_ms` to come back —
+/// a call that never comes back is the wedge, and its label is the last line.
+pub(super) fn wedge_timed<T>(label: &str, slow_ms: u64, f: impl FnOnce() -> T) -> T {
+    let started = Instant::now();
+    let out = f();
+    let ms = started.elapsed().as_millis() as u64;
+    if ms >= slow_ms {
+        wedge_log(&format!("SLOW {label} took {ms} ms"));
+    }
+    out
+}
+
+/// Watch an armed hold and, when the tick stops turning behind it, write the
+/// wedged preview thread's own stack into the log: the exact call it is stuck
+/// in, with symbol names from the PDBs beside the exe. Suspends the thread
+/// only to copy its context out, then resumes it at once — everything slow
+/// (walking, symbol lookup, logging) runs after the resume, so a thread held
+/// mid-allocator cannot wedge this one on the allocator.
+pub(super) fn wedge_spawn_stackwatch() {
+    std::thread::spawn(|| {
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            if !RUNNING.load(Ordering::Acquire) {
+                return;
+            }
+            if !WEDGE_ARMED.load(Ordering::Acquire) {
+                continue;
+            }
+            let before = WEDGE_TICK.load(Ordering::Relaxed);
+            std::thread::sleep(Duration::from_secs(6));
+            if WEDGE_TICK.load(Ordering::Relaxed) != before {
+                continue;
+            }
+            if WEDGE_STACK_DONE.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            wedge_log("stackwatch: tick stalled behind an armed hold, capturing");
+            wedge_capture_stack();
+            wedge_log("stackwatch: pin-lock acquisitions (newest last)");
+            wedge_dump_ring();
+            return;
+        }
+    });
+}
+
+/// Suspend the preview thread, copy its context, resume it, then walk and log.
+fn wedge_capture_stack() {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Diagnostics::Debug::*;
+    use windows::Win32::System::Threading::*;
+
+    let tid = PREVIEW_TID.load(Ordering::Acquire);
+    if tid == 0 {
+        wedge_log("stackwatch: no preview thread recorded");
+        return;
+    }
+
+    let process = unsafe { GetCurrentProcess() };
+    // PDBs live beside the exe; name the folder explicitly rather than
+    // trusting the default search path.
+    let search = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()));
+    let wide: Vec<u16> = search
+        .map(|dir| {
+            dir.as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .unwrap_or_else(|| vec![0]);
+    unsafe {
+        if SymInitializeW(
+            process,
+            windows_core::PCWSTR(wide.as_ptr()),
+            // Invade the process so every loaded module (ntdll, the exe and
+            // its PDBs) is visible to the walker and the lookup: without it
+            // module bases resolve to nothing and the walk derails past the
+            // system frames.
+            true,
+        )
+        .is_err()
+        {
+            wedge_log("stackwatch: SymInitialize failed");
+            return;
+        }
+    }
+
+    let thread = unsafe {
+        OpenThread(
+            THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+            false,
+            tid,
+        )
+    };
+    let Ok(thread) = thread else {
+        wedge_log("stackwatch: OpenThread failed");
+        return;
+    };
+    wedge_capture_one(process, thread, tid, "preview");
+
+    // Every other thread too: whatever holds the lock the preview thread is
+    // wedged on is one of them, and its own stack names where it stands.
+    wedge_capture_others(process, tid);
+
+    wedge_log("stackwatch: done");
+}
+
+/// Suspend one thread, copy its context, resume it at once, then walk the
+/// copied context and log the frames under `label`.
+fn wedge_capture_one(
+    process: windows::Win32::Foundation::HANDLE,
+    thread: windows::Win32::Foundation::HANDLE,
+    tid: u32,
+    label: &str,
+) {
+    use windows::Win32::System::Diagnostics::Debug::*;
+    use windows::Win32::System::Threading::*;
+
+    // The only two calls made while the thread is held: no allocation in
+    // between, so a thread frozen mid-allocator cannot take this one down
+    // with it.
+    let mut context: CONTEXT = unsafe { std::mem::zeroed() };
+    context.ContextFlags = CONTEXT_FULL_AMD64;
+    let (suspended, context_ok) = unsafe {
+        let suspended = SuspendThread(thread) != u32::MAX;
+        let ok = GetThreadContext(thread, &mut context).is_ok();
+        (suspended, ok)
+    };
+    if suspended {
+        unsafe {
+            ResumeThread(thread);
+        }
+    }
+    if !suspended || !context_ok {
+        unsafe {
+            let _ = CloseHandle(thread);
+        }
+        wedge_log("stackwatch: suspend/context failed");
+        return;
+    }
+
+    let mut frame: STACKFRAME64 = unsafe { std::mem::zeroed() };
+    frame.AddrPC.Offset = context.Rip;
+    frame.AddrPC.Mode = AddrModeFlat;
+    frame.AddrFrame.Offset = context.Rbp;
+    frame.AddrFrame.Mode = AddrModeFlat;
+    frame.AddrStack.Offset = context.Rsp;
+    frame.AddrStack.Mode = AddrModeFlat;
+
+    let mut depth = 0u32;
+    while depth < 64 {
+        let walked = unsafe {
+            StackWalk64(
+                0x8664,
+                process,
+                thread,
+                &mut frame,
+                &mut context as *mut CONTEXT as *mut std::ffi::c_void,
+                None,
+                Some(wedge_fn_table_access),
+                Some(wedge_get_module_base),
+                None,
+            )
+        };
+        if !walked.as_bool() || frame.AddrPC.Offset == 0 {
+            break;
+        }
+        let addr = frame.AddrPC.Offset;
+        let mut displacement: u64 = 0;
+        let mut buf =
+            vec![0u8; std::mem::size_of::<SYMBOL_INFOW>() + 256 * std::mem::size_of::<u16>()];
+        let name = unsafe {
+            let sym = buf.as_mut_ptr() as *mut SYMBOL_INFOW;
+            (*sym).SizeOfStruct = std::mem::size_of::<SYMBOL_INFOW>() as u32;
+            (*sym).MaxNameLen = 255;
+            if SymFromAddrW(process, addr, Some(&mut displacement), sym).is_ok() {
+                let len = (*sym).NameLen as usize;
+                String::from_utf16_lossy(std::slice::from_raw_parts(
+                    (*sym).Name.as_ptr(),
+                    len.min(255),
+                ))
+            } else {
+                String::from("<unknown>")
+            }
+        };
+        wedge_log(&format!("stack [{label}] #{depth}: {name}+{displacement:#x} ({addr:#x})"));
+        if frame.AddrReturn.Offset == 0 {
+            break;
+        }
+        depth += 1;
+    }
+    unsafe {
+        let _ = CloseHandle(thread);
+    }
+    wedge_log(&format!("stackwatch [{label}]: captured {depth} frames"));
+}
+
+/// TEMP-WEDGE: capture every other thread of this process under its own
+/// label, so the holder of whatever the preview thread is wedged on shows
+/// itself. Skips this watchdog thread (suspending it would wedge the watch).
+fn wedge_capture_others(process: windows::Win32::Foundation::HANDLE, preview: u32) {
+    use windows::Win32::System::Diagnostics::ToolHelp::*;
+    use windows::Win32::System::Threading::*;
+
+    let me_myself = unsafe { GetCurrentThreadId() };
+    let own_pid = unsafe { GetCurrentProcessId() };
+    let snapshot =
+        unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0).unwrap_or_default() };
+    if snapshot.is_invalid() {
+        wedge_log("stackwatch: thread snapshot failed");
+        return;
+    }
+
+    let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+    let mut more = unsafe { Thread32First(snapshot, &mut entry).is_ok() };
+    while more {
+        let tid = entry.th32ThreadID;
+        if entry.th32OwnerProcessID == own_pid && tid != me_myself && tid != preview {
+            let thread = unsafe {
+                OpenThread(
+                    THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                    false,
+                    tid,
+                )
+            };
+            match thread {
+                Ok(thread) => {
+                    let label = format!("thread-{tid}");
+                    wedge_capture_one(process, thread, tid, &label);
+                }
+                Err(_) => {
+                    wedge_log(&format!("stackwatch [thread-{tid}]: OpenThread failed"));
+                }
+            }
+        }
+        more = unsafe { Thread32Next(snapshot, &mut entry).is_ok() };
+    }
+    unsafe {
+        let _ = CloseHandle(snapshot);
+    }
+}
+
+/// TEMP-WEDGE shims: `StackWalk64` wants plain `extern "system"` callbacks,
+/// and the imported DbgHelp helpers are generic wrappers, so these adapt.
+unsafe extern "system" fn wedge_fn_table_access(
+    hprocess: HANDLE,
+    addrbase: u64,
+) -> *mut std::ffi::c_void {
+    use windows::Win32::System::Diagnostics::Debug::SymFunctionTableAccess64;
+    SymFunctionTableAccess64(hprocess, addrbase)
+}
+
+/// TEMP-WEDGE: see `wedge_fn_table_access`.
+unsafe extern "system" fn wedge_get_module_base(hprocess: HANDLE, address: u64) -> u64 {
+    use windows::Win32::System::Diagnostics::Debug::SymGetModuleBase64;
+    SymGetModuleBase64(hprocess, address)
+}
+
+/// Watch the loop turn and log when it stops while a pin is up: the tail
+/// then reads as the heartbeat stopping after the last swap event.
+pub(super) fn wedge_spawn_watchdog() {
+    std::thread::spawn(|| {
+        let mut last = WEDGE_TICK.load(Ordering::Relaxed);
+        let mut still = 0u32;
+        while RUNNING.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_secs(1));
+            if !pinned() {
+                last = WEDGE_TICK.load(Ordering::Relaxed);
+                still = 0;
+                continue;
+            }
+            let now = WEDGE_TICK.load(Ordering::Relaxed);
+            wedge_log(&format!("heartbeat tick={now}"));
+            if now == last {
+                still += 1;
+                if still == 3 && !WEDGE_STALL_LOGGED.swap(true, Ordering::AcqRel) {
+                    wedge_log("TICK STALLED with a pin up — loop is wedged");
+                }
+            } else {
+                still = 0;
+                WEDGE_STALL_LOGGED.store(false, Ordering::Release);
+            }
+            last = now;
+        }
+    });
 }
 
 /// The number of times the window has been taken down, and the lock that makes a

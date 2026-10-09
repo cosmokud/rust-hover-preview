@@ -380,6 +380,10 @@ pub(super) fn orphaned_video_kills_push_for_test(pid: u32) {
 /// with, and every path here is a handful of non-blocking Windows calls, so the wait a relaunch
 /// asks on this thread is a wait measured in microseconds.
 pub(super) fn settle_video_retirement() {
+    // TEMP-WEDGE: entry mark (see tick.rs).
+    if WEDGE_ARMED.load(Ordering::Acquire) {
+        wedge_log("> settle_video_retirement");
+    }
     // The orphan reaper runs with no pin up: a teardown hands unconfirmed
     // kills here precisely because no settle will retry them afterwards, so
     // this must not wait on the retirement below having anything to do.
@@ -434,10 +438,18 @@ pub(super) fn settle_video_retirement() {
 /// the second the film had reached is kept, so the bar goes on showing where it stopped and a
 /// press starts it from there — but the button stops claiming there is something playing to pause.
 pub(super) fn settle_pinned_transport() {
+    // TEMP-WEDGE: statement marks (see tick.rs); the tail names the wedge.
+    let armed = WEDGE_ARMED.load(Ordering::Acquire);
+    if armed {
+        wedge_log("> transport: media_type");
+    }
     if current_media_type() != Some(MediaType::Video) || !pinned() {
         return;
     }
 
+    if armed {
+        wedge_log("> transport: gesture");
+    }
     // A gesture that killed owns the dead interval: the frozen hold, the
     // claim and the stopped clock are the press's to write and the end's to
     // take back, so a player nothing is behind reconciles nothing here.
@@ -445,19 +457,38 @@ pub(super) fn settle_pinned_transport() {
         return;
     }
 
+    if armed {
+        wedge_log("> transport: process");
+    }
     if is_video_process_running() {
         return;
     }
 
-    let pinned = pin_state();
-    let pin = pinned.as_ref().and_then(|pinned| pinned.pin());
-    let played = pin.and_then(|pin| pin_playhead(&pin.transport).or(pin.transport.paused_at));
+    if armed {
+        wedge_log("> transport: pin");
+    }
+    // Read in one look and let the lock go before the reconcile below
+    // re-locks: the reconcile writes through `update_pin_transport`, which
+    // takes the pin's lock itself, and a guard held across it is a thread
+    // waiting on a lock it owns (see `pin_media_is_alive` for the rule).
+    let played = {
+        let Some(pinned) = pin_state() else {
+            return;
+        };
+        let Some(pin) = pinned.pin() else {
+            return;
+        };
+        pin_playhead(&pin.transport).or(pin.transport.paused_at)
+    };
     let Some(played) = played else {
         // Nothing was ever claimed and nothing is running: a bar with nothing behind it, which is
         // the state a pin that is only just starting is in and is not a reconciliation to make.
         return;
     };
 
+    if armed {
+        wedge_log("> transport: update");
+    }
     update_pin_transport(|transport| transport.player_gone(played));
 }
 
@@ -612,6 +643,10 @@ pub(super) fn loop_ended_pinned_player() -> bool {
 /// window up, and the bar's own answer to that is a play button — which begins the file again
 /// rather than leaving it stuck (see `settle_pinned_transport`).
 pub(super) fn settle_pending_hold() {
+    // TEMP-WEDGE: entry mark (see tick.rs).
+    if WEDGE_ARMED.load(Ordering::Acquire) {
+        wedge_log("> settle_pending_hold");
+    }
     if current_media_type() != Some(MediaType::Video) {
         return;
     }
