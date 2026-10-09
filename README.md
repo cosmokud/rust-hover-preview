@@ -480,8 +480,8 @@ vector_background=checkerboard
 ; Volume
 audio_seek=remember
 audio_volume=10
-normalize_video_volume=true
-normalize_volume=true
+normalize_video_volume=false
+normalize_volume=false
 remember_audio_volume=true
 remember_video_volume=true
 video_volume=0

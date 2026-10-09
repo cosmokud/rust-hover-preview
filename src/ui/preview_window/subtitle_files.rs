@@ -868,7 +868,7 @@ fn folder_bytes(folder: &Path) -> u64 {
         .sum()
 }
 
-/// The one lock every test that stands the `Video Subtitles` switch holds
+/// The one lock every test that stands the `Subtitles` switch holds
 /// for its whole run, and the guard that stands it — shared by every test
 /// module whose answer the switch turns (this one's own, the `video_launch`
 /// sidecar walks and the pin's adopted reload), because the switch is a
@@ -883,7 +883,7 @@ fn folder_bytes(folder: &Path) -> u64 {
 #[cfg(test)]
 pub(super) static SUBTITLE_SWITCH_TESTS: Mutex<()> = Mutex::new(());
 
-/// The `Volume → Video Subtitles` switch, stood where a test wants it and put
+/// The `Volume → Video → Subtitles` switch, stood where a test wants it and put
 /// back when the guard is dropped — the house pattern (`CardFontSettings` in
 /// `tests::pin_cards`), because the configuration is process-global and these
 /// tests run beside others that answer against the machine's own setting.

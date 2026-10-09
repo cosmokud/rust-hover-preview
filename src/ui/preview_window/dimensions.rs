@@ -173,7 +173,7 @@ pub(super) fn video_sidecar(path: &Path) -> Option<PathBuf> {
 /// A file's subtitle streams, as the probe that measured it read them, or none at all for a file
 /// the probe has no answer for.
 ///
-/// The `Volume → Video Subtitles` switch answers *no* streams wherever it is off —
+/// The `Volume → Video → Subtitles` switch answers *no* streams wherever it is off —
 /// the same answer the probe itself gives under it (see `probe_video_geometry`) —
 /// and this is asked directly by the pin's transport, so the gate is answered here
 /// too rather than only in the geometry the probe caches.
@@ -198,7 +198,7 @@ pub(super) fn video_subtitles(path: &Path) -> SubtitleStreams {
 /// Whether the small files this app copied out of this film's own subtitle tracks are ready to
 /// draw, as the probe's answer for the film holds them.
 ///
-/// The `Volume → Video Subtitles` switch answers `false` wherever it is off — no
+/// The `Volume → Video → Subtitles` switch answers `false` wherever it is off — no
 /// copy is wanted, so none can be ready — and this is asked directly by the pin's
 /// take-up, so the gate is answered here too rather than only in the geometry the
 /// probe caches.
