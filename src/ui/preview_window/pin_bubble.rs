@@ -1,5 +1,12 @@
-//! The pin's bubble: the smaller window that stands beside it for a collapsed pin, the mark
-//! drawn in it, and the drag that carries it.
+//! The pin's bubble: the smaller window that stands beside it for a collapsed pin, what is drawn
+//! inside it, and the drag that carries it.
+//!
+//! What is drawn inside it is the pin's own media where a bubble can show it — the frame a film is
+//! on, the first plate of a page, the picture a picture is — and a mark saying what kind of thing
+//! it stands for where it cannot (see `bubble_art` and `pin_chrome::BubbleMark`). One kind is
+//! neither: a film FFmpeg's player is drawing holds no frame on this side at all, so a frame is
+//! taken out of the file for it, off this thread and off the collapse's own path (see
+//! `grab_video_frame`).
 
 use super::*;
 
@@ -8,6 +15,41 @@ pub(super) const PIN_BUBBLE_CLASS: PCWSTR = w!("RustHoverPreviewPinBubble");
 
 /// The bubble's window, or zero while no pin is collapsed.
 pub(super) static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// One frame of a film FFmpeg's player is drawing, as the bubble shows it: the picture, already
+/// scaled to cover a square and cropped to the middle of it, and the side of that square.
+///
+/// It is held as one thing rather than as a pair of statics because the two are one fact — a
+/// picture of `side × side` BGRA is what the bubble paints — and a reader that could see the
+/// picture without the size it was cropped for would be reading a frame of nothing.
+#[derive(Clone)]
+pub(super) struct BubbleFrame {
+    pub(super) pixels: Vec<u8>,
+    pub(super) side: u32,
+}
+
+/// The frame taken for the bubble a collapsed film left, if it has landed yet.
+///
+/// It is a slot beside the bubble rather than a part of the pin, because that is what it is: the
+/// frame belongs to the *collapsed* window, whose own media is off the screen and whose process is
+/// drawing somewhere else — and a pin put back up has no bubble for it to be shown in.
+pub(super) static BUBBLE_FRAME: Lazy<Mutex<Option<BubbleFrame>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether a frame has landed in the slot above since the bubble was last painted.
+///
+/// The grab is a process on a thread of its own, so the paint that put the bubble up cannot be the
+/// one that shows what the grab found: this is the note it leaves, and the loop's next tick reads
+/// it and paints the bubble again (see the bubble repaint in `run_preview_window`). It is raised
+/// whether or not a frame came back — a file with no frame to give is a bubble that stays as it
+/// was, and a flag left standing for a grab that answered nothing is a repaint every tick.
+pub(super) static BUBBLE_FRAME_READY: AtomicBool = AtomicBool::new(false);
+
+/// How fast the wave in a sound's histogram travels, in radians a second.
+///
+/// A rate of its own rather than a period counted in repaints, because the phase is worked out from
+/// the wall clock and nothing else: the loop's cadence is what makes the bars *move*, and this is
+/// what says how far a bar has moved between two of its ticks (see `render_pin_bubble`).
+const BUBBLE_PHASE_RADIANS_PER_SECOND: f32 = 2.4;
 
 /// A drag of the bubble in progress, as the two things the press measured: where in the bubble the
 /// hand took hold of it — the pointer's offset from the window's own corner — and where the pointer
@@ -95,8 +137,145 @@ pub(super) fn collapse_pin() {
             show_pin_taskbar();
         } else {
             show_pin_bubble(anchor);
+
+            // And the frame the bubble of a film FFmpeg plays is to show, which no player of that
+            // kind has left here: it is read out of the file at the second the pin's bar was
+            // showing, on a thread of its own, and the bubble goes up on the theme's face until it
+            // lands (see `grab_bubble_frame`).
+            grab_bubble_frame(anchor);
         }
     }
+}
+
+/// Take the frame the bubble a collapsed film leaves is to show, and leave it in the slot above.
+///
+/// **A film FFmpeg's player is drawing holds no frame on this side**, which is the whole of why
+/// this exists: that engine draws in a window of somebody else's and what this app has of it is a
+/// process and a second on a bar, so the one picture a bubble can show of such a film is a frame
+/// read out of the file (see `grab_video_frame`). Every other kind has its picture already — a
+/// picture, a page and an engine's document are decoded or drawn by this app and the bubble samples
+/// what the pin is holding, a film the media engine plays keeps its frame in memory, and a sound is
+/// drawn as a meter rather than as a picture (see `bubble_art`).
+///
+/// It is spawned rather than waited for because a grab is a process launch: the bubble is up before
+/// the launch has finished, and what the frame changes is the picture inside the circle rather than
+/// whether there is a bubble at all. The thread is deliberately short and unnamed — it spawns a
+/// child, waits for it under a bound, and leaves one frame in a slot (see `BUBBLE_FRAME_READY`).
+///
+/// **The pin's lock is not held across the spawn and neither is the media's.** Everything the grab
+/// needs — the kind, the file, the second the bar is showing and the size the bubble was made — is
+/// read here, one ask at a time, and what the thread is handed is the answers rather than the pin.
+fn grab_bubble_frame(anchor: ScreenRegion) {
+    // A frame from the last collapse is a frame of another file: the slot is emptied here rather
+    // than when the frame lands, so a grab that never answers leaves a bubble with nothing in it
+    // rather than one showing the film before this one.
+    if let Ok(mut frame) = BUBBLE_FRAME.lock() {
+        *frame = None;
+    }
+    BUBBLE_FRAME_READY.store(false, Ordering::Release);
+
+    if current_media_type() != Some(MediaType::Video) {
+        return;
+    }
+
+    let Some((path, _)) = pinned_media_owner() else {
+        return;
+    };
+
+    let at = pinned_playhead().unwrap_or(0.0);
+    let side = logical_px(dpi_at(anchor.0, anchor.1), PIN_BUBBLE_PIXELS).max(16) as u32;
+
+    std::thread::spawn(move || {
+        if let Some(pixels) = grab_video_frame(&path, at, side) {
+            if let Ok(mut frame) = BUBBLE_FRAME.lock() {
+                *frame = Some(BubbleFrame { pixels, side });
+            }
+        }
+
+        BUBBLE_FRAME_READY.store(true, Ordering::Release);
+    });
+}
+
+/// One frame of a film FFmpeg's player is drawing, taken for the bubble the pin collapses into.
+///
+/// The frame is *read* rather than copied, and that is the whole of the difference between this and
+/// every other kind's picture: what a bubble shows of a film the media engine plays is the frame
+/// already in memory, where this engine's picture is on the screen and nowhere else. So the file is
+/// opened at the second the bar is showing, one frame is decoded, and it comes back scaled to cover
+/// a `side × side` square and cropped to the middle of it — the same shape, and from the same
+/// corner, that every other bubble's picture is cut to (see `bubble_thumbnail`).
+///
+/// The output is raw BGRA on stdout, which is what the preview's own frame is in: a picture is not
+/// encoded and decoded again for a process boundary when the bytes are what is wanted either side
+/// of it. `-pix_fmt bgra` is asked for by name rather than left to the file, because what the file
+/// holds is a codec's own arrangement of the colour and this side wants the one the compositor
+/// reads.
+///
+/// It is bounded at three seconds and it is a *bound* on the wait rather than a budget for it
+/// (`video_probe::wait_bounded`): a grab that outlasts it is a process killed rather than a thread
+/// held, and the answer is the same `None` a file FFmpeg cannot open gives — the bubble keeps the
+/// face it was painted with. The child is hidden and adopted like every other process this app
+/// starts, so a machine closed mid-grab leaves no `ffmpeg` behind.
+///
+/// **The frame is drained on a thread of its own, and the bound is what that thread is for.** A
+/// child has to write the whole of its frame before it can leave, and a pipe that nobody is
+/// reading takes only its own buffer's worth: a frame bigger than that — a bubble at a high display
+/// scale is a few tens of kilobytes, which is at or past the buffer — blocks `ffmpeg` in the middle
+/// of its write, so the wait below would expire on a grab that was never given the chance to
+/// finish. Reading as the child writes is what lets it reach the end of its one frame and exit; the
+/// answer is the first `side × side × 4` bytes of what was read.
+pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8>> {
+    let expected = side as usize * side as usize * 4;
+    if expected == 0 {
+        return None;
+    }
+
+    let mut command = engine_processes::hidden_command("ffmpeg");
+    command
+        .arg("-v")
+        .arg("error")
+        .arg("-nostdin")
+        .arg("-ss")
+        .arg(format!("{at:.3}"))
+        .arg("-i")
+        .arg(path)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-vf")
+        .arg(format!(
+            "scale={side}:{side}:force_original_aspect_ratio=increase,crop={side}:{side}"
+        ))
+        .arg("-f")
+        .arg("rawvideo")
+        .arg("-pix_fmt")
+        .arg("bgra")
+        .arg("-")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    let mut child = command.spawn().ok()?;
+    let _ = engine_processes::adopt(child.id());
+
+    // The frame is read as the child writes it, on a thread of its own: the child cannot exit
+    // until the whole of it is out, and a pipe read only after the wait would leave the child
+    // blocked mid-write on any frame larger than the pipe's own buffer (see the note above).
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        use std::io::Read;
+
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+
+    let landed = video_probe::wait_bounded(child, Duration::from_secs(3));
+    let bytes = reader.join().unwrap_or_default();
+
+    // A grab that ran past its bound answered nothing, whatever the reader had taken by the time
+    // the child was killed.
+    landed?;
+    (bytes.len() >= expected).then(|| bytes[..expected].to_vec())
 }
 
 /// The box of a pinned window's minimize button, in screen coordinates: what each collapse puts its
@@ -580,8 +759,14 @@ pub(super) unsafe fn pin_bubble_window() -> Option<HWND> {
     Some(hwnd)
 }
 
-/// Paint the bubble: the round window a collapsed pin leaves, with the picture the pin was
-/// showing inside it where its kind has one (see `pin_chrome::paint_bubble`).
+/// Paint the bubble: the round window a collapsed pin leaves, with what its media has to show
+/// inside the circle where it has anything (see `pin_chrome::paint_bubble`).
+///
+/// The phase the bars of a sound are drawn at is taken from the wall clock rather than kept beside
+/// the bubble, and that is what keeps the wave moving while nothing else about the bubble changes:
+/// the loop repaints it on a cadence, and what makes one repaint differ from the next is the clock
+/// it reads (see the bubble repaint in `run_preview_window`). Every other kind's art is a picture
+/// and does not care what the phase says.
 pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
     let mut rect = RECT::default();
     if GetWindowRect(hwnd, &mut rect).is_err() {
@@ -599,8 +784,27 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
         return;
     };
 
-    let (thumbnail, mark) = bubble_art(width);
-    let art = thumbnail.as_deref().map(|pixels| (pixels, width, height));
+    let (art, mark) = bubble_art(width);
+    let phase = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs_f32() * BUBBLE_PHASE_RADIANS_PER_SECOND)
+        .unwrap_or(0.0);
+
+    // The owned art is what outlives the call that made it — a frame read out of a file, a
+    // thumbnail cut down to the bubble's own size — and the chrome paints from a picture it is
+    // lent, so this is the one place the two meet (see `BubbleArtOwned`).
+    let art = match &art {
+        BubbleArtOwned::Picture(pixels, art_width, art_height) => pin_chrome::BubbleArt::Picture {
+            pixels,
+            width: *art_width,
+            height: *art_height,
+        },
+        BubbleArtOwned::Audio(level) => pin_chrome::BubbleArt::Audio {
+            level: *level,
+            phase,
+        },
+        BubbleArtOwned::None => pin_chrome::BubbleArt::None,
+    };
 
     pin_chrome::paint_bubble(out, width, height, &palette, art, mark);
 
@@ -635,24 +839,112 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
     }
 }
 
-/// What the bubble is drawn with: the picture the pin holds, where its kind has one, and the
-/// mark its kind is otherwise.
-pub(super) fn bubble_art(side: u32) -> (Option<Vec<u8>>, pin_chrome::BubbleMark) {
+/// Paint the bubble again, if one is up.
+///
+/// The bubble is a window of its own with a surface of its own, so a repaint is the whole circle:
+/// the loop asks for one when the playback the bubble stands for has turned over, when a frame
+/// grabbed for it has landed, and once a frame while its bars animate (see the bubble repaint in
+/// `run_preview_window`). Nothing is painted where no bubble is up, which is every pin that is
+/// showing its window.
+pub(super) unsafe fn repaint_pin_bubble() {
+    let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    if hwnd != 0 {
+        render_pin_bubble(HWND(hwnd as *mut _));
+    }
+}
+
+/// What the bubble is drawn with, owned: the chrome paints from a picture it is lent, and this is
+/// the side that makes one.
+///
+/// The two are deliberately not the same type. What the chrome takes is a picture somebody else is
+/// holding — a frame in the media, alive for the length of a paint — and what a bubble *has* is a
+/// picture made for it: a frame read out of a file by a process, or a thumbnail cut down to the
+/// bubble's own size. One of those outlives the call that asked for it and the other does not, and
+/// the difference is the whole of what the two types are (see `bubble_art`).
+pub(super) enum BubbleArtOwned {
+    /// A picture of `side × side` BGRA, and the side it was cut to.
+    Picture(Vec<u8>, u32, u32),
+    /// The level the sound on screen is being heard at, 0.0..=1.0.
+    Audio(f32),
+    /// Nothing to show inside the circle: the face, and the mark on it.
+    None,
+}
+
+/// What the bubble is drawn with: the picture the whole pin has to show inside the circle, the
+/// level a sound is being heard at, or nothing — together with the mark its kind carries.
+///
+/// The kind decides which of the three, and each arm answers the question its own way: a film
+/// FFmpeg plays shows the frame that was grabbed for it, a film the media engine plays shows the
+/// frame the engine is holding, a sound shows the meter — **while it is playing**, because a
+/// histogram is a picture of a level and a paused sound has no level to draw, so it is answered
+/// with the pause glyph instead. Everything else whose kind *is* a picture shows the same
+/// thumbnail a page's first plate is cut to.
+///
+/// **The playback is asked before the media is locked, and never while it is held.** The question
+/// is answered out of the media itself — a sound's player process is a field of it, and a film's
+/// transport is the pin's — so asking it under this lock would be this thread asking for a lock it
+/// already holds, which is not a wait but a stop. It is also why the answer cannot be asked again
+/// further down: everything below runs with the media in hand (see `bubble_is_playing`).
+pub(super) fn bubble_art(side: u32) -> (BubbleArtOwned, pin_chrome::BubbleMark) {
+    let playing = bubble_is_playing();
+
     let Ok(media) = CURRENT_MEDIA.lock() else {
-        return (None, pin_chrome::BubbleMark::Picture);
+        return (BubbleArtOwned::None, pin_chrome::BubbleMark::Picture);
     };
     let Some(media) = media.as_ref() else {
-        return (None, pin_chrome::BubbleMark::Picture);
+        return (BubbleArtOwned::None, pin_chrome::BubbleMark::Picture);
     };
 
-    let mark = media.media_type.bubble_mark();
-    let thumbnail = media
-        .media_type
-        .has_bubble_picture()
-        .then(|| bubble_thumbnail(media, side))
-        .flatten();
+    let mark = media.media_type.bubble_mark(playing);
+    let art = match media.media_type {
+        MediaType::Video => BUBBLE_FRAME
+            .lock()
+            .ok()
+            .and_then(|frame| frame.clone())
+            .map(|frame| BubbleArtOwned::Picture(frame.pixels, frame.side, frame.side))
+            .unwrap_or(BubbleArtOwned::None),
+        MediaType::NativeVideo => bubble_thumbnail(media, side)
+            .map(|pixels| BubbleArtOwned::Picture(pixels, side, side))
+            .unwrap_or(BubbleArtOwned::None),
+        MediaType::Audio if playing => {
+            BubbleArtOwned::Audio(audio_meter::output_peak().unwrap_or(0.0))
+        }
+        kind if kind.has_bubble_picture() => bubble_thumbnail(media, side)
+            .map(|pixels| BubbleArtOwned::Picture(pixels, side, side))
+            .unwrap_or(BubbleArtOwned::None),
+        _ => BubbleArtOwned::None,
+    };
 
-    (thumbnail, mark)
+    (art, mark)
+}
+
+/// Whether the media the bubble stands for is playing now.
+///
+/// A film is the pin's own transport, asked the way its bar asks it (see `pin_is_playing`). A sound
+/// is not: neither of the two players behind a sound's card is a transport this app keeps, so the
+/// question is put to the players themselves — a process of this app's is one this app started and
+/// can see, and the engine's own is a session in this process — and a sound with neither behind it
+/// is a sound that is not playing rather than an answer that could not be given.
+///
+/// **It is asked before the media's lock is taken and never during it**: a sound's arm reaches for
+/// that lock itself (the player process is a field of the media), and a lock a thread already holds
+/// is a stop rather than a wait (see `bubble_art`).
+pub(super) fn bubble_is_playing() -> bool {
+    match current_media_type() {
+        Some(MediaType::Video) | Some(MediaType::NativeVideo) => pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin_is_playing(&pin.transport)))
+            .unwrap_or(false),
+        Some(MediaType::Audio) => {
+            let running = CURRENT_MEDIA
+                .lock()
+                .ok()
+                .and_then(|media| media.as_ref().map(|media| media.video_process.is_some()))
+                .unwrap_or(false);
+
+            running || video_player::is_playing()
+        }
+        _ => false,
+    }
 }
 
 /// The picture inside the bubble: the frame the pin is holding, shrunk to cover a square and

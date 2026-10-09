@@ -14,8 +14,8 @@
 //! (`paint_failure_mark`).
 
 use super::primitives::{
-    caption_style, draw_cross, fill_box, fill_round_rect, put, stroke_round_rect, surface_pixels,
-    ChromePalette,
+    caption_style, draw_cross, fill_box, fill_disc, fill_round_rect, put, stroke_round_rect,
+    surface_pixels, ChromePalette,
 };
 use crate::text::text_paint::{self, DibSurface};
 use windows::Win32::Foundation::RECT;
@@ -267,17 +267,50 @@ pub(super) fn composite_text_into(surface: &DibSurface, out: &mut [u8], width: i
 /// The mark a bubble carries when the pin it stands for has no picture to show inside it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum BubbleMark {
-    /// Something that plays: a video or a sound.
+    /// Something that plays, and is playing: a play triangle.
     Play,
+    /// Something that plays, and is paused: two bars.
+    Pause,
     /// A page: text, an archive's listing, a document, a book.
     Page,
     /// A picture whose frame is not in hand.
     Picture,
 }
 
-/// Paint the round bubble a collapsed pin becomes: a face of the theme's own color, a ring of
-/// its accent around it, the picture that was pinned inside it where there is one, and a soft
-/// shadow under it so that it reads as floating over whatever is behind it.
+impl BubbleMark {
+    /// Whether this mark is a playback one — which is the one family of marks drawn *over* a
+    /// picture rather than instead of one: a bubble standing for a film or a sound has something
+    /// of its own behind the glyph (a frame, or the histogram of the level on screen) and the
+    /// glyph says what the file is doing on top of it, where a page and a picture have nothing
+    /// inside the circle but themselves (see `paint_bubble`).
+    pub(crate) fn is_playback(self) -> bool {
+        matches!(self, Self::Play | Self::Pause)
+    }
+}
+
+/// What a bubble draws inside its ring where the pin it stands for has something to show there:
+/// the picture the file is, or the level the sound on screen is being heard at.
+///
+/// The picture is borrowed rather than owned because the picture *is* — what a bubble shows of a
+/// film already decoded is that frame's own bytes, and a bubble that copied them would be a second
+/// copy of a picture this app is holding at the very moment the pin collapses (see `bubble_art`).
+pub(crate) enum BubbleArt<'a> {
+    /// A picture already cropped to `side × side` BGRA (an image, or a video frame).
+    Picture {
+        pixels: &'a [u8],
+        width: u32,
+        height: u32,
+    },
+    /// The live level of the sound on screen (0.0..=1.0) and the animation phase in radians.
+    Audio { level: f32, phase: f32 },
+    /// No art: the face alone, with the mark on it.
+    None,
+}
+
+/// Paint the round bubble a collapsed pin becomes: a face of the theme's own color, a ring around
+/// it, the picture that was pinned inside it where there is one — or, for a sound, the row of bars
+/// the level on screen is drawn as — and a soft shadow under it so that it reads as floating over
+/// whatever is behind it.
 ///
 /// It is written straight into the buffer rather than through a surface: a bubble is a circle
 /// and a picture, and neither of the two needs a device context. What the buffer is, is the
@@ -287,7 +320,7 @@ pub(crate) fn paint_bubble(
     width: u32,
     height: u32,
     palette: &ChromePalette,
-    thumbnail: Option<(&[u8], u32, u32)>,
+    art: BubbleArt<'_>,
     mark: BubbleMark,
 ) {
     let width = width as i32;
@@ -296,7 +329,19 @@ pub(crate) fn paint_bubble(
 
     let radius = (width.min(height) as f32) / 2.0 - 1.0;
     let center = (width as f32 / 2.0, height as f32 / 2.0);
-    let ring = (1.6 * scale).clamp(1.0, 4.0);
+    let ring_thickness = (1.6 * scale).clamp(1.0, 4.0);
+
+    // The ring is the picture's own colour where there is a picture to take one from, and the
+    // theme's accent where there is not — which is the whole of what "the bubble belongs to the
+    // file" means at a glance. A hairline of the theme around somebody else's photograph is a
+    // hairline of this app around it; a hairline of the photograph's own colour is the picture
+    // itself coming to its own edge, which is what a window onto a file should look like. A
+    // picture that is transparent everywhere has no colour to give, and the accent stands (see
+    // `average_color`).
+    let ring = match &art {
+        BubbleArt::Picture { pixels, .. } => average_color(pixels).unwrap_or(palette.accent),
+        _ => palette.accent,
+    };
 
     buffer.fill(0);
 
@@ -330,52 +375,210 @@ pub(crate) fn paint_bubble(
 
             // The picture inside the bubble, clipped to the circle the ring leaves: what a
             // pinned preview looks like from outside the window it collapsed out of.
-            let inner = radius - ring;
-            match thumbnail {
-                Some((pixels, thumb_width, thumb_height))
-                    if distance <= inner && thumb_width > 0 && thumb_height > 0 =>
-                {
+            let inner = radius - ring_thickness;
+            let sample = match &art {
+                BubbleArt::Picture {
+                    pixels,
+                    width: picture_width,
+                    height: picture_height,
+                } if distance <= inner && *picture_width > 0 && *picture_height > 0 => {
                     let u = ((x as f32 + 0.5 - center.0) / (inner * 2.0) + 0.5).clamp(0.0, 0.999);
                     let v = ((y as f32 + 0.5 - center.1) / (inner * 2.0) + 0.5).clamp(0.0, 0.999);
-                    let sx = (u * thumb_width as f32) as u32;
-                    let sy = (v * thumb_height as f32) as u32;
-                    let index = (sy as usize * thumb_width as usize + sx as usize) * 4;
-                    if index + 3 < pixels.len() {
-                        let sample = &pixels[index..index + 4];
-                        let color = [sample[2], sample[1], sample[0]];
-                        put(
-                            buffer,
-                            width,
-                            x,
-                            y,
-                            color,
-                            coverage * (sample[3] as f32 / 255.0),
-                        );
-                        continue;
-                    }
+                    let sx = (u * *picture_width as f32) as u32;
+                    let sy = (v * *picture_height as f32) as u32;
+                    let index = (sy as usize * *picture_width as usize + sx as usize) * 4;
+
+                    // A pixel the picture does not cover is not a pixel of the picture: what is
+                    // behind the bubble is the desktop, so a hole in the frame has to be the face
+                    // rather than a hole in the circle, and the face is what the fall-through
+                    // below writes.
+                    pixels
+                        .get(index..index + 4)
+                        .filter(|pixel| pixel[3] != 0)
+                        .map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
                 }
-                _ => {}
+                _ => None,
+            };
+
+            if let Some(sample) = sample {
+                put(
+                    buffer,
+                    width,
+                    x,
+                    y,
+                    [sample[0], sample[1], sample[2]],
+                    coverage * (sample[3] as f32 / 255.0),
+                );
+                continue;
             }
 
             // The ring, and the face inside it where no picture stands in for one.
             if distance > inner {
-                put(buffer, width, x, y, palette.accent, coverage);
+                put(buffer, width, x, y, ring, coverage);
             } else {
                 put(buffer, width, x, y, palette.background, coverage);
             }
         }
     }
 
-    if thumbnail.is_none() {
+    // The bars the level is drawn as, laid down before the glyph because the glyph goes over
+    // them: what the mark of a playing sound says is what the *sound* is doing, and a row of bars
+    // drawn through a play triangle is neither a triangle nor a meter (see `draw_histogram`).
+    if let BubbleArt::Audio { level, phase } = &art {
+        draw_histogram(
+            buffer,
+            width,
+            center,
+            radius - ring_thickness,
+            ring,
+            *level,
+            *phase,
+        );
+    }
+
+    // The mark, and the two cases it is drawn in. A bubble with nothing inside it carries the mark
+    // as its whole answer, and a bubble standing for something that plays carries it *over* what
+    // it is showing — which is the play/pause of the file on screen, and is the one thing about a
+    // bubble that changes while nothing else does.
+    if matches!(&art, BubbleArt::None) || mark.is_playback() {
+        if matches!(&art, BubbleArt::Picture { .. }) {
+            // A glyph over a photograph is a glyph over anything a photograph can be, and half of
+            // what a photograph can be is as bright as the glyph. So a faint dark disc goes down
+            // first, which does not hide the frame — it is a third of an opaque black, at half
+            // the face — and does make the triangle read on a white sky. The audio face needs
+            // none of it: it is the theme's own background, and the theme is what the glyph was
+            // chosen against.
+            fill_disc(
+                buffer,
+                width,
+                center.0,
+                center.1,
+                (radius - ring_thickness) * 0.5,
+                [0, 0, 0],
+                0.35,
+            );
+        }
+
         paint_mark(
             buffer,
             width,
             center,
-            radius - ring,
+            radius - ring_thickness,
             palette.foreground,
             palette.accent,
             mark,
         );
+    }
+}
+
+/// The mean colour of a picture, sampled rather than walked whole.
+///
+/// **It is the cheap average and it is meant to be.** A bubble is drawn in the moment a pin
+/// collapses, on the thread that owns the frame, and a pass over every pixel of a 4K frame at that
+/// moment is a stall the user reads as the bubble taking a breath before it appears. A few
+/// thousand samples answer the same question — a ring is one colour wide and not a survey — so the
+/// stride is worked out from the picture's own length, and two pictures of a million pixels and of
+/// a hundred cost the same to ask.
+///
+/// A pixel the picture does not cover is not a pixel of it: an alpha of zero is skipped rather
+/// than counted as black, so the average of a frame with a hole in it is the average of what is
+/// drawn. A picture that is transparent everywhere has no colour to give, and answers nothing —
+/// which the caller reads as *no colour from here* and answers with the theme's accent.
+pub(super) fn average_color(pixels: &[u8]) -> Option<[u8; 3]> {
+    let count = pixels.len() / 4;
+    if count == 0 {
+        return None;
+    }
+
+    let step = (count / 4096).max(1);
+
+    // Summed in the order a colour is written — the buffer is BGRA and a palette is RGB — so that
+    // what comes out is a colour the ring can be given directly.
+    let mut sum = [0u32; 3];
+    let mut seen = 0u32;
+
+    for index in (0..count).step_by(step) {
+        let pixel = &pixels[index * 4..index * 4 + 4];
+        if pixel[3] == 0 {
+            continue;
+        }
+
+        sum[0] += pixel[2] as u32;
+        sum[1] += pixel[1] as u32;
+        sum[2] += pixel[0] as u32;
+        seen += 1;
+    }
+
+    (seen > 0).then(|| {
+        [
+            (sum[0] / seen) as u8,
+            (sum[1] / seen) as u8,
+            (sum[2] / seen) as u8,
+        ]
+    })
+}
+
+/// A symmetrical row of bars across the bubble, driven by one loudness number and a phase.
+///
+/// The sound on screen is a sound and not a spectrum: what a bubble over one is asked is *is it
+/// making a noise, and how much*, which is one number — the system's own output peak, read as a
+/// call rather than as a transform (see `audio_meter`). A frequency analysis would be a window of
+/// samples per repaint, on the thread that draws the bubble, for a shape that at forty-four pixels
+/// across reads the same either way.
+///
+/// A row of bars rather than one, and shaped rather than equal, because that is what a meter is:
+/// one bar says how loud and stops there, where a row says *something is playing* — which is the
+/// whole of what a bubble standing for a sound has to say, the card's own clock being the other
+/// half of it and off the screen by then. The shapes are one another delayed by a fixed step of
+/// the phase, so the row reads as a wave travelling along it rather than as a block of level.
+///
+/// **Every pixel written asks the circle**, and the asking is per pixel rather than taken for
+/// granted from the bars: the row is as wide as the face is, and the face narrows at its own ends,
+/// so a bar at either end growing to its full height would have its corners out in the ring —
+/// written over the bubble's edge, which is the one thing this must never do (see `paint_bubble`).
+fn draw_histogram(
+    buffer: &mut [u8],
+    width: i32,
+    center: (f32, f32),
+    inner: f32,
+    color: [u8; 3],
+    level: f32,
+    phase: f32,
+) {
+    const BARS: usize = 7;
+
+    let level = level.clamp(0.0, 1.0);
+    if level <= 0.0 {
+        return;
+    }
+
+    // The bar and the gap are the same width, which is what makes the row read as bars rather
+    // than as a filled band at a glance: the width is a share of the face, so the row is the same
+    // fraction of every bubble it is drawn in.
+    let bar_width = (inner * 2.0 / (BARS as f32 * 2.0)).max(2.0);
+    let gap = bar_width;
+    let total = BARS as f32 * bar_width + (BARS - 1) as f32 * gap;
+    let mut left = center.0 - total / 2.0;
+
+    for bar in 0..BARS {
+        let shape = 0.35 + 0.65 * (0.5 + 0.5 * (phase + bar as f32 * 0.9).sin());
+        let half = inner * 0.86 * level * shape / 2.0;
+        let top = (center.1 - half).round() as i32;
+        let bottom = (center.1 + half).round() as i32;
+
+        // A bar is at least one row tall whatever the level rounds to: a bar that drew nothing
+        // would be a gap in the row, and a gap in the row is a bar that is not there.
+        for x in (left.round() as i32)..((left + bar_width).round() as i32) {
+            for y in top..bottom.max(top + 1) {
+                let dx = x as f32 + 0.5 - center.0;
+                let dy = y as f32 + 0.5 - center.1;
+                if (dx * dx + dy * dy).sqrt() <= inner {
+                    put(buffer, width, x, y, color, 1.0);
+                }
+            }
+        }
+
+        left += bar_width + gap;
     }
 }
 
@@ -419,6 +622,32 @@ fn paint_mark(
                         1.0,
                     );
                 }
+            }
+        }
+        BubbleMark::Pause => {
+            // Two bars: the same mark a player's own pause button is, and the answer to the same
+            // question the triangle answers the other way. They are drawn as two boxes rather
+            // than as one box with a slot cut out of it, because there is no cutting out here —
+            // every shape in this module is written one pixel at a time and the gap between the
+            // two is the space the two boxes leave (see `fill_box`).
+            let bar = (size * 0.16).max(1.0);
+            let height = size * 0.62;
+            let gap = size * 0.12;
+            let left = center.0 - bar - gap / 2.0;
+
+            for offset in [0.0, bar + gap] {
+                fill_box(
+                    buffer,
+                    width,
+                    RECT {
+                        left: (left + offset).round() as i32,
+                        top: (center.1 - height / 2.0).round() as i32,
+                        right: (left + offset + bar).round() as i32,
+                        bottom: (center.1 + height / 2.0).round() as i32,
+                    },
+                    foreground,
+                    1.0,
+                );
             }
         }
         BubbleMark::Page => {

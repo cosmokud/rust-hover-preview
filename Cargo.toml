@@ -40,6 +40,11 @@ windows = { version = "0.58", features = [
     "Win32_System_Variant",
     "Win32_System_WinRT",
     "Win32_Media_MediaFoundation",
+    # The level the sound on screen is being heard at, which is what the bubble a collapsed
+    # sound becomes draws its bars from: the mixer's own meter on this machine's output
+    # endpoint, asked as a call rather than transformed (`audio_meter`).
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
     # The update check, which is the one thing in this app that asks the network
     # anything: WinHTTP rather than an HTTP crate of its own, so the connection
     # is the machine's — its certificate store, and the proxy the user
