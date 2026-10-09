@@ -1,4 +1,5 @@
 use super::*;
+use super::super::subtitle_files::VideoSubtitlesSetting;
 
 /// A video behind the pin, as the reload's own guard reads it: the kind this app plays with
 /// FFmpeg, taken away and handed back by the test that stands one — the same shape `ws_j` uses
@@ -138,6 +139,10 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
+    // The switch on: this is the take-up's answer with the setting a film's
+    // subtitles are wanted for, which is the answer it has always given (see
+    // `VideoSubtitlesSetting`).
+    let _setting = VideoSubtitlesSetting::stood_at(true);
     let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();

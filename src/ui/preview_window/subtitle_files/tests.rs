@@ -90,8 +90,13 @@ fn the_one_pass_copies_every_track_that_has_a_small_form() {
 /// derived files are read by every probe after the one that wrote them, in memory and on disk, so
 /// ignoring a stale answer here is what lets such a film be previewed again without the user
 /// having to clear anything.
+///
+/// This is the resolver's answer with the switch on, which is the answer it has
+/// always given — so the switch is stood on for the whole of the test (see
+/// `VideoSubtitlesSetting`).
 #[test]
 fn a_stale_pgs_copy_is_not_read_back_as_an_answer() {
+    let _setting = VideoSubtitlesSetting::stood_at(true);
     let dir = std::env::temp_dir().join(format!("subtitle-sup-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
     let film = dir.join("episode.mkv");
@@ -205,8 +210,13 @@ fn an_extraction_is_due_only_for_a_film_that_has_something_to_copy_and_nowhere_t
 /// subtitle-relative index — a track with no small form keeps its place as a hole rather than
 /// shifting its neighbours — and a folder with nothing, or with no pass's mark behind it, is the
 /// answer that nothing has been copied yet.
+///
+/// This is the resolver's answer with the switch on, which is the answer it has
+/// always given — so the switch is stood on for the whole of the test (see
+/// `VideoSubtitlesSetting`).
 #[test]
 fn what_is_already_in_the_folder_is_answered_by_track_with_its_fonts() {
+    let _setting = VideoSubtitlesSetting::stood_at(true);
     let dir = std::env::temp_dir().join(format!("subtitle-files-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
     let film = dir.join("episode.mkv");
@@ -270,8 +280,13 @@ fn what_is_already_in_the_folder_is_answered_by_track_with_its_fonts() {
 /// was cut short — or from a build before this one, whose failure path left its outputs open and
 /// behind — would be read as an answer and named to a filter that cannot open what is in it. The
 /// mark is written after the pass's last file, and it is the whole of what tells the two apart.
+///
+/// This is the resolver's answer with the switch on, which is the answer it has
+/// always given — so the switch is stood on for the whole of the test (see
+/// `VideoSubtitlesSetting`).
 #[test]
 fn a_folder_is_an_answer_only_where_the_pass_said_it_finished() {
+    let _setting = VideoSubtitlesSetting::stood_at(true);
     let dir = std::env::temp_dir().join(format!("subtitle-finished-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
     let film = dir.join("episode.mkv");
@@ -309,8 +324,13 @@ fn a_folder_is_an_answer_only_where_the_pass_said_it_finished() {
 /// cannot open an empty file, failed to build its graph and took the player down with it on
 /// every hover and every pin. A marked folder is a folder FFmpeg closed every file of, so this
 /// is a belt beside a brace; what it must never do is answer.
+///
+/// This is the resolver's answer with the switch on, which is the answer it has
+/// always given — so the switch is stood on for the whole of the test (see
+/// `VideoSubtitlesSetting`).
 #[test]
 fn a_copy_with_no_bytes_is_not_an_answer() {
+    let _setting = VideoSubtitlesSetting::stood_at(true);
     let dir = std::env::temp_dir().join(format!("subtitle-empty-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
     let film = dir.join("episode.mkv");
@@ -471,6 +491,120 @@ fn a_discarded_film_leaves_no_folder_for_a_later_probe_to_trust() {
         "what a failed or dropped pass wrote goes with it: a later probe reads the folder as an \
          answer, and half a copy is not one"
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With the switch off, a film whose tracks would otherwise be copied out is asked
+/// for nothing at the launch: the ask that spawns the one extraction pass claims no
+/// slot, so no `ffmpeg` pass is ever started for a film no subtitle will be drawn
+/// from.
+///
+/// The geometry here is the one a probe answers for a film with a copyable embedded
+/// track — a subtitle stream counted, a codec with a small form, no sidecar, nothing
+/// copied yet — which is the shape `request_extraction` acts on wherever the switch
+/// is on (see `extraction_due`). What is asserted is the slot rather than the
+/// filesystem, because the slot is the one place a spawned pass would be: empty, so
+/// the gate is what held the ask back rather than a geometry that had nothing to copy.
+#[test]
+fn with_the_switch_off_a_film_that_would_be_copied_is_asked_for_nothing() {
+    let _setting = VideoSubtitlesSetting::stood_at(false);
+    let film = Path::new("hl-subtitles-off.mkv");
+    let geometry = VideoGeometry {
+        width: 1920,
+        height: 1080,
+        frame_width: 1920,
+        frame_height: 1080,
+        crop: None,
+        duration: None,
+        subtitles: SubtitleStreams { count: 1, first: 0 },
+        sidecar: None,
+        derived: None,
+        subtitle_codecs: vec!["ass".to_string()],
+        attachment_codecs: Vec::new(),
+        subtitle_extraction_failed: false,
+    };
+
+    request_extraction(film, Some(&geometry));
+
+    assert!(
+        RUNNING.lock().expect("the extraction slot").running.is_none(),
+        "the switch off claims no slot: the pass that would read the whole film is \
+         never spawned"
+    );
+}
+
+/// With the switch off, a folder a pass left behind is not an answer — the gate is
+/// answered at the probe (see `probe_video_geometry`), and `resolve` holds it for the
+/// geometries probed while the switch was on and for the passes that outlived it —
+/// while the same folder is the answer itself with the switch on.
+#[test]
+fn with_the_switch_off_an_extracted_folder_is_not_an_answer() {
+    let dir =
+        std::env::temp_dir().join(format!("subtitle-gate-resolve-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+    let film = dir.join("episode.mkv");
+    std::fs::write(&film, b"stand-in").expect("a stand-in film is writable");
+
+    let folder = film_folder(&film);
+    std::fs::create_dir_all(&folder).expect("the film's own folder is creatable");
+    std::fs::write(folder.join("sub0.ass"), b"[Script Info]\n")
+        .expect("a stand-in copy is writable");
+    std::fs::write(folder.join(FINISHED_MARKER), b"").expect("the pass's own mark is writable");
+    let codecs = ["ass".to_string()];
+
+    {
+        let _setting = VideoSubtitlesSetting::stood_at(false);
+        assert!(
+            resolve(&film, &codecs).is_none(),
+            "the switch off answers none for a folder the pass finished writing, \
+             because no subtitle is drawn from it"
+        );
+    }
+
+    {
+        let _setting = VideoSubtitlesSetting::stood_at(true);
+        assert!(
+            resolve(&film, &codecs).is_some(),
+            "and the switch on answers the copy, as it always was"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With the switch off, the sidecar beside a film is not found — the probe skips the
+/// walk of the film's folder (see `probe_video_geometry`) and `sidecar_for` holds the
+/// gate itself — while the same film beside the same file is answered with the switch
+/// on.
+#[test]
+fn with_the_switch_off_a_sidecar_beside_the_film_is_not_found() {
+    let dir =
+        std::env::temp_dir().join(format!("subtitle-gate-sidecar-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
+    let film = dir.join("episode.mkv");
+    std::fs::write(&film, b"stand-in").expect("a stand-in film is writable");
+    let sidecar = dir.join("episode.srt");
+    std::fs::write(&sidecar, b"1\n00:00:01,000 --> 00:00:02,000\nx\n")
+        .expect("a stand-in sidecar is writable");
+
+    {
+        let _setting = VideoSubtitlesSetting::stood_at(false);
+        assert!(
+            video_launch::sidecar_for(&film).is_none(),
+            "the switch off answers none for a sidecar that is there, because no \
+             subtitle is drawn from it"
+        );
+    }
+
+    {
+        let _setting = VideoSubtitlesSetting::stood_at(true);
+        assert_eq!(
+            video_launch::sidecar_for(&film),
+            Some(sidecar),
+            "and the switch on answers the file beside the film, as it always was"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -54,6 +54,25 @@ pub(in super::super) fn toggle_preview_enabled() {
     }
 }
 
+/// Whether the app asks GitHub for a newer release on its own: the `System → Check
+/// for Updates` row, on where the app starts. Turning it on asks at once rather than
+/// at the next opening of the menu, so the row above the submenu reports what the
+/// check found without waiting for one; turning it off asks nothing further, and the
+/// row is gone while there is nothing already on offer to say.
+pub(in super::super) fn toggle_check_for_updates() {
+    let enabled = if let Ok(mut config) = CONFIG.lock() {
+        config.check_for_updates = !config.check_for_updates;
+        config.save();
+        config.check_for_updates
+    } else {
+        return;
+    };
+
+    if enabled {
+        crate::app::updates::request_check();
+    }
+}
+
 /// Whether the pin key is watched is a setting rather than a view of one, and two
 /// things have to be told about a change to it: the hook procedure that watches the
 /// key reads a number rather than the configuration, and a preview that is pinned
@@ -236,6 +255,27 @@ pub(in super::super) fn toggle_video_engine_fallback() {
         config.save();
     }
     crate::ui::preview_window::forget_video_geometry();
+}
+
+/// Whether a film's own subtitle tracks are probed for and copied out at all,
+/// from the `Subtitles` row at the top of the `Video` half of the `Volume`
+/// submenu.
+///
+/// Nothing on screen is rebuilt: the switch is read where a probe runs and
+/// where a player is started, on the next hover. What the probe holds is
+/// given up for the reason the engine choice moving gives it up — a geometry
+/// answered while subtitles were wanted carries subtitle streams, a sidecar
+/// and a copy that a probe under the new answer would not have (see
+/// `forget_video_geometry`), and an extraction running for a film is dropped
+/// rather than left to read a film nobody will draw subtitles from (see
+/// `keep_extraction_for`).
+pub(in super::super) fn toggle_video_subtitles() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.video_subtitles = !config.video_subtitles;
+        config.save();
+    }
+    crate::ui::preview_window::forget_video_geometry();
+    crate::ui::preview_window::keep_extraction_for(None);
 }
 
 /// Whether a page of HTML is drawn by the browser engine rather than shown as its markup.

@@ -301,6 +301,15 @@ fn limit_bytes() -> u64 {
 /// `drawable_copy`): a folder an older build left a PGS copy in is not an answer, and naming one
 /// of those to the filter is the same failed graph by another road.
 pub(super) fn resolve(path: &Path, codecs: &[String]) -> Option<DerivedSubtitles> {
+    // The gate, answered here for a geometry probed while the switch was on and for a
+    // pass that outlived it (`finish` asks this after the switch may have moved): the
+    // probe zeroes its own answers where the switch is off (see `probe_video_geometry`),
+    // and this is the defence in depth beneath it — a folder nobody will draw a
+    // subtitle from is not an answer, whatever the disk holds.
+    if !subtitles_wanted() {
+        return None;
+    }
+
     let folder = film_folder(path);
 
     if !folder.join(FINISHED_MARKER).is_file() {
@@ -603,6 +612,14 @@ pub(super) fn spawn_subtitle_extraction(path: &Path, codecs: &[String], attachme
 /// comes through it — a hover installed, a pin shown another file, a seek — so a film whose copy
 /// was dropped when the user moved on is asked for again by the next launch that shows it.
 pub(super) fn request_extraction(path: &Path, geometry: Option<&VideoGeometry>) {
+    // The gate: this ask is the one that spawns the extraction pass — a whole read
+    // of the film (see the note at the top of this module) — and it is placed at the
+    // launch, so a film whose subtitles are not wanted is played without them rather
+    // than paid for on every showing (see `video_subtitles`).
+    if !subtitles_wanted() {
+        return;
+    }
+
     let Some(geometry) = geometry else {
         return;
     };
@@ -628,7 +645,12 @@ pub(super) fn request_extraction(path: &Path, geometry: Option<&VideoGeometry>) 
 
 /// Keep only the extraction of `keep` running, asking the one slot to drop every other one (see
 /// `Slot::keep` and `RUNNING`).
-pub(super) fn keep_extraction_for(keep: Option<&Path>) {
+///
+/// `pub(crate)` for the same reason `trim_now` is: the tray's `Volume → Video
+/// Subtitles` switch reaches it through `preview_window`'s re-export, to drop an
+/// extraction running for a film the switch now says no subtitle will be drawn
+/// from (see `toggle_video_subtitles`).
+pub(crate) fn keep_extraction_for(keep: Option<&Path>) {
     if let Ok(mut slot) = RUNNING.lock() {
         slot.keep(keep);
     }
@@ -844,6 +866,63 @@ fn folder_bytes(folder: &Path) -> u64 {
             _ => 0,
         })
         .sum()
+}
+
+/// The one lock every test that stands the `Subtitles` switch holds
+/// for its whole run, and the guard that stands it — shared by every test
+/// module whose answer the switch turns (this one's own, the `video_launch`
+/// sidecar walks and the pin's adopted reload), because the switch is a
+/// process-global every test runs beside the others on.
+///
+/// The tests need the switch at opposite ends — the tests of a folder a pass
+/// already extracted need it on, and the gate tests need it off — so a guard
+/// that only stood and restored would leave a neighbour mid-assertion
+/// answering for the setting another test had just moved (the same reason the
+/// slot test holds a `Slot` of its own rather than the `RUNNING` one, see
+/// `one_extraction_at_a_time_is_the_slot_the_newest_window_takes`).
+#[cfg(test)]
+pub(super) static SUBTITLE_SWITCH_TESTS: Mutex<()> = Mutex::new(());
+
+/// The `Volume → Video → Subtitles` switch, stood where a test wants it and put
+/// back when the guard is dropped — the house pattern (`CardFontSettings` in
+/// `tests::pin_cards`), because the configuration is process-global and these
+/// tests run beside others that answer against the machine's own setting.
+///
+/// The guard holds `SUBTITLE_SWITCH_TESTS` for as long as it stands the switch,
+/// which is the whole of the test: two tests that need the switch at different
+/// answers never run at once (see the note above the lock).
+#[cfg(test)]
+pub(super) struct VideoSubtitlesSetting {
+    was: bool,
+    /// The lock held for the test's whole run, released after the switch is put
+    /// back (fields drop after the `Drop` below has run).
+    _tests: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl VideoSubtitlesSetting {
+    /// Stands the switch where a test wants it, holding what the machine's own
+    /// setting was to put back and the lock that keeps the switch stood for the
+    /// whole of the test.
+    pub(super) fn stood_at(wanted: bool) -> Self {
+        let _tests = SUBTITLE_SWITCH_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = config.video_subtitles;
+        config.video_subtitles = wanted;
+
+        Self { was, _tests }
+    }
+}
+
+#[cfg(test)]
+impl Drop for VideoSubtitlesSetting {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.video_subtitles = self.was;
+        }
+    }
 }
 
 #[cfg(test)]

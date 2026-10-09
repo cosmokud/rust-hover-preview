@@ -193,6 +193,12 @@ pub(super) const ID_TRAY_AUDIO_SEEK_BASE: u16 = 1390;
 /// starting a sound is one of four, and a click on one of the
 /// pin's is never a click on one of the hover's.
 pub(super) const ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE: u16 = 1394;
+/// The first row of the `Video` half of the `Volume` submenu, above `Normalize`:
+/// whether a film's own subtitle tracks are probed for and copied out
+/// at all. It is a switch about a film's picture rather than a level of the
+/// list under it, so it takes an id of its own, beside the volume switches
+/// above it, where no level can be read from it.
+pub(super) const ID_TRAY_VIDEO_SUBTITLES: u16 = 1524;
 /// The `Volume → Audio` submenu's first row: whether a sound's measured loudness is brought to one
 /// level before it is played (see `Normalize`).
 ///
@@ -201,7 +207,7 @@ pub(super) const ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE: u16 = 1394;
 /// stretch the levels are read from.
 pub(super) const ID_TRAY_NORMALIZE_VOLUME: u16 = 1525;
 /// The video half's own row of the same name, which is the same switch asked about a film's
-/// soundtrack: a setting of its own, and one that starts switched on along with its sound half
+/// soundtrack: a setting of its own, and one that starts switched off along with its sound half
 /// (see `normalize_video_volume`). It carries the id beside its sound half's, so neither row is
 /// ever read as a level of a list under it.
 pub(super) const ID_TRAY_NORMALIZE_VIDEO_VOLUME: u16 = 1526;
@@ -282,9 +288,9 @@ pub(super) const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 /// neither can be read as a click on one of those.
 pub(super) const ID_TRAY_RESET_SETTINGS: u16 = 1520;
 pub(super) const ID_TRAY_RESET_LISTS: u16 = 1521;
-/// The `System → Check for Updates` row: a check asked for now, past the
-/// once-an-hour one an opening of the menu makes, with what the check found
-/// said in a dialog of its own where there is nothing to put on.
+/// The `System → Check for Updates` row: whether the app asks GitHub for a newer
+/// release on its own, at startup and when the menu is opened (see
+/// `check_for_updates`). On where the app starts.
 ///
 /// It is a switch of a question rather than a level of a list, so it takes an
 /// id of its own — the one the reset rows beside it leave free, where a row of

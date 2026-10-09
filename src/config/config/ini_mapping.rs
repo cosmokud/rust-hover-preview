@@ -38,6 +38,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "check_for_updates",
+            Some(self.check_for_updates.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "hover_delay_ms",
             Some(self.hover_delay_ms.to_string()),
         );
@@ -363,6 +368,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "video_subtitles",
+            Some(self.video_subtitles.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "office_engine_idle",
             Some(self.office_engine_idle.as_str()),
         );
@@ -479,6 +489,12 @@ impl AppConfig {
     pub(super) fn apply_ini(&mut self, ini: &Ini) {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "run_at_startup") {
             self.run_at_startup = value;
+        }
+        // Whether the app asks GitHub for a newer release on its own. A file written
+        // before the setting existed has no key for it, so a fresh installation checks
+        // and a file that says nothing about it is left where it starts.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "check_for_updates") {
+            self.check_for_updates = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "hover_delay_ms") {
             self.hover_delay_ms = value;
@@ -682,7 +698,8 @@ impl AppConfig {
             self.pin_mode_audio_loop = value;
         }
         // Whether a sound's loudness is measured and brought to one level, which a file
-        // written before the setting existed has no key for: a fresh installation normalizes, and a
+        // written before the setting existed has no key for: a fresh installation does not
+        // normalize, and a
         // file that says nothing about it is left where it starts.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "normalize_volume") {
             self.normalize_volume = value;
@@ -880,6 +897,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_engine_fallback") {
             self.video_engine_fallback = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_subtitles") {
+            self.video_subtitles = value;
         }
         if let Some(value) = ini.get(CONFIG_SECTION, "office_engine_idle") {
             if let Some(idle) = EngineIdle::from_str(&value) {

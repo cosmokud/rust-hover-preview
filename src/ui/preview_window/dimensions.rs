@@ -173,6 +173,11 @@ pub(super) fn video_sidecar(path: &Path) -> Option<PathBuf> {
 /// A file's subtitle streams, as the probe that measured it read them, or none at all for a file
 /// the probe has no answer for.
 ///
+/// The `Volume → Video → Subtitles` switch answers *no* streams wherever it is off —
+/// the same answer the probe itself gives under it (see `probe_video_geometry`) —
+/// and this is asked directly by the pin's transport, so the gate is answered here
+/// too rather than only in the geometry the probe caches.
+///
 /// "No answer" is answered as *no subtitle streams* rather than as nothing, because the two
 /// callers want the same thing out of it and only one of them can tell them apart: a relaunch
 /// naming `-sst s:0` at a file the probe never read is a player asked for a track in a file it
@@ -180,6 +185,10 @@ pub(super) fn video_sidecar(path: &Path) -> Option<PathBuf> {
 /// never be guessed at. So an unprobed file plays with the player's own choice, which is what it
 /// has always done, and is re-seeded the moment the probe answers (see `PinTransport::subtitle`).
 pub(super) fn video_subtitles(path: &Path) -> SubtitleStreams {
+    if !subtitles_wanted() {
+        return SubtitleStreams { count: 0, first: 0 };
+    }
+
     match cached_video_geometry(path) {
         Some(ProbedGeometry::Measured(geometry)) => geometry.subtitles,
         _ => SubtitleStreams { count: 0, first: 0 },
@@ -189,6 +198,11 @@ pub(super) fn video_subtitles(path: &Path) -> SubtitleStreams {
 /// Whether the small files this app copied out of this film's own subtitle tracks are ready to
 /// draw, as the probe's answer for the film holds them.
 ///
+/// The `Volume → Video → Subtitles` switch answers `false` wherever it is off — no
+/// copy is wanted, so none can be ready — and this is asked directly by the pin's
+/// take-up, so the gate is answered here too rather than only in the geometry the
+/// probe caches.
+///
 /// What asks is the pin's take-up: the `ffplay` a hover began is adopted by the pin as it stands
 /// (see `take_up_pinned_window`), so a player begun while the copy was still coming is one a
 /// pinned window would draw on without the subtitles — and the take-up begins it again where
@@ -196,6 +210,10 @@ pub(super) fn video_subtitles(path: &Path) -> SubtitleStreams {
 /// probe has answered for is answered `false` here on the same terms as `video_subtitles`: an
 /// answer nothing read is not a copy, and a player begun for such a film has nothing to correct.
 pub(super) fn video_copy_ready(path: &Path) -> bool {
+    if !subtitles_wanted() {
+        return false;
+    }
+
     match cached_video_geometry(path) {
         Some(ProbedGeometry::Measured(geometry)) => geometry.derived.is_some(),
         _ => false,
