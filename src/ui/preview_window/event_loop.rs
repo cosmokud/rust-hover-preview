@@ -132,13 +132,6 @@ pub fn run_preview_window() {
         // And the thread that gives up on a pin this loop has stopped turning, which is the
         // one thing the loop itself cannot do (see `spawn_pin_watchdog`).
         spawn_pin_watchdog();
-        // TEMP-WEDGE: see tick.rs.
-        wedge_spawn_watchdog();
-        wedge_spawn_stackwatch();
-        wedge_log(&format!(
-            "startup hwaccel={:?}",
-            video_hw_accel_device().map(str::to_string),
-        ));
         let mut current_generation: u64 = 0;
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
@@ -279,7 +272,6 @@ pub fn run_preview_window() {
             // stopped, and a loop waiting on the channel is working (see
             // `preview_stall_ms`).
             note_preview_alive();
-            wedge_tick(); // TEMP-WEDGE: see tick.rs.
 
             // And the same note for the pin, which is a narrower question with a much
             // shorter bound: a loop that is not turning while a window the user is
@@ -302,10 +294,6 @@ pub fn run_preview_window() {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
-            }
-            // TEMP-WEDGE bisection round 2 (hold-gated; tail names the wedge).
-            if pin_swap_hold.is_some() {
-                wedge_log("tick: pump done");
             }
 
             // Detect resume from sleep (WM_POWERBROADCAST handler sets this flag).
@@ -510,11 +498,6 @@ pub fn run_preview_window() {
                     }
                 }
 
-                // TEMP-WEDGE bisection round 2 (see "tick: pump done").
-                if pin_swap_hold.is_some() {
-                    wedge_log("tick: failcheck done");
-                }
-
                 // A step the caption's own walk buttons took is a pick like any other, and is
                 // held in the walk rather than in the pick slot: the file it stands on is the
                 // file to be shown, and the walk is what carries it on when that file turns out
@@ -556,12 +539,7 @@ pub fn run_preview_window() {
                     pin_walk = Some(walk);
                 }
 
-                // TEMP-WEDGE bisection round 2 (see "tick: pump done").
-            if pin_swap_hold.is_some() {
-                wedge_log("tick: commands done");
-            }
-
-            // The wait is over where its answer landed in this tick, and where it has run
+                // The wait is over where its answer landed in this tick, and where it has run
                 // for as long as this app will wait for a question it asked: a folder on a
                 // share that never answers is a walk that ends rather than an arc that turns
                 // for ever. The pin keeps the file it is showing either way (see
@@ -642,10 +620,6 @@ pub fn run_preview_window() {
                 // `settle_pinned_park`).
                 settle_pinned_park();
                 settle_pending_hold();
-                // TEMP-WEDGE bisection round 2 (see "tick: pump done").
-                if pin_swap_hold.is_some() {
-                    wedge_log("tick: settles done");
-                }
 
                 // What a key does to a pinned text preview, polled rather than waited for: a pin
                 // that the user has not pressed is a window nobody is in, and a window nobody is
@@ -681,11 +655,6 @@ pub fn run_preview_window() {
                             pin.content.3 - pin.content.1,
                         );
                     }
-                }
-
-                // TEMP-WEDGE bisection round 2 (see "tick: pump done").
-                if pin_swap_hold.is_some() {
-                    wedge_log("tick: videopos done");
                 }
 
                 // A transport bar's playhead moves while its file plays, so the window is painted
@@ -753,11 +722,6 @@ pub fn run_preview_window() {
 
                     render_layered_preview(hwnd);
                 }
-            }
-
-            // TEMP-WEDGE bisection: hold-gated tick markers; the tail names the wedge.
-            if pin_swap_hold.is_some() {
-                wedge_log("tick: top done");
             }
 
             // A player that has been started and has not put its window up yet is being
@@ -995,11 +959,7 @@ pub fn run_preview_window() {
                     // is where those frames are wanted, and it is asked once a tick whether
                     // or not this one is (see `PinSwapHold`).
                     if media.media_type.is_native_video() && pin_swap_hold.is_none() {
-                        // TEMP-WEDGE: a take that never comes back is the wedge.
-                        let took = wedge_timed("loop take_native_video_frame", 300, || {
-                            media.take_native_video_frame()
-                        });
-                        if took {
+                        if media.take_native_video_frame() {
                             needs_repaint = true;
                         } else if let Some(failing) = video_player::failing_path() {
                             // A file the engine has had long enough to have handed a
@@ -1163,10 +1123,6 @@ pub fn run_preview_window() {
             //
             // The hide count is read once for both this and the arm below, so the two cannot be
             // answering about different hovers because a hide landed between them.
-            // TEMP-WEDGE bisection (see "tick: top done").
-            if pin_swap_hold.is_some() {
-                wedge_log("tick: media done");
-            }
             let epoch = hidden_epoch();
             let first_frame_landed = first_frame_wait.as_ref().and_then(|wait| {
                 first_frame_lands(
@@ -1813,10 +1769,6 @@ pub fn run_preview_window() {
                 } else {
                     Some(carried_preview_messages.remove(0))
                 };
-            }
-            // TEMP-WEDGE bisection (see "tick: top done").
-            if pin_swap_hold.is_some() {
-                wedge_log("tick: at drain");
             }
             while let Some(preview_msg) = next_preview_msg.or_else(|| rx.try_recv().ok()) {
                 next_preview_msg = None;
@@ -2601,14 +2553,7 @@ pub fn run_preview_window() {
                 take_pin_relayout(&mut pin_relayout);
             }
 
-            // TEMP-WEDGE bisection (see "tick: top done").
-            if pin_swap_hold.is_some() {
-                wedge_log("tick: at settle");
-            }
-            // TEMP-WEDGE: a settle/swap/install that never comes back is the wedge.
-            let swap = wedge_timed("settle_pin_swap", 300, || {
-                settle_pin_swap(&mut pin_swap_hold, &mut pin_load)
-            });
+            let swap = settle_pin_swap(&mut pin_swap_hold, &mut pin_load);
 
             if let Some(swap) = swap {
                 // The loop's own record of what the pin is showing, borrowed for whichever of
@@ -2638,38 +2583,16 @@ pub fn run_preview_window() {
                     // window changes: the file on screen is the one it had, the arc the load
                     // put up is left turning over it, and the loop's own per-tick take is kept
                     // off the standing file until the frame lands (see `PinSwapHold`).
-                    PinSwap::Holding(hold) => {
-                        wedge_log(&format!("swap Holding {}", hold.file.path.display()));
-                        // TEMP-WEDGE: arm the settle marks (see tick.rs).
-                        WEDGE_ARMED.store(true, Ordering::Release);
-                        pin_swap_hold = Some(hold)
-                    }
+                    PinSwap::Holding(hold) => pin_swap_hold = Some(hold),
                     // A file this app cannot read, a file still in the cloud, a player that
                     // would not start, or a wait that has run out of reasons to go on: nothing
                     // of it to show, so the walk is asked for the next file rather than left on
                     // one that cannot be shown — and where the walk has nothing left to ask
                     // for, the mark for the file is what the pin is left standing over (see
                     // `pin_step_off` and `show_pin_failure`).
-                    PinSwap::Refused { path, walk } => {
-                        wedge_log(&format!("swap Refused {}", path.display()));
-                        refuse_pinned_media(install, path, walk)
-                    }
-                    PinSwap::Ready(file) => {
-                        wedge_log(&format!(
-                            "swap Ready {} kind={:?}",
-                            file.path.display(),
-                            file.media.media_type,
-                        ));
-                        wedge_timed("install_pinned_media", 300, || {
-                            install_pinned_media(install, file)
-                        });
-                    }
+                    PinSwap::Refused { path, walk } => refuse_pinned_media(install, path, walk),
+                    PinSwap::Ready(file) => install_pinned_media(install, file),
                 }
-            }
-
-            // TEMP-WEDGE bisection (see "tick: top done").
-            if pin_swap_hold.is_some() {
-                wedge_log("tick: swap done");
             }
 
             // The pin's request, if it made one, is the newest thing that happened and speaks
@@ -3700,10 +3623,6 @@ pub fn run_preview_window() {
                 // or down may have installed another kind behind the hint: classify
                 // it again on the next tick rather than waiting for the periodic
                 // refresh, so an animation never starts half a second late.
-                // TEMP-WEDGE bisection (see "tick: top done").
-                if pin_swap_hold.is_some() {
-                    wedge_log("tick: bottom");
-                }
                 let tick_has_wait = pending_load.is_some()
                     || pin_load.is_some()
                     || pin_walk_wait.is_some()

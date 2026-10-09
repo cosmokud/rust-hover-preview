@@ -172,11 +172,6 @@ pub(super) unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // TEMP-WEDGE: name the dispatched message that never returns. Pinned-only
-    // so an ordinary run stays quiet; the tail of the log is the wedge.
-    if pinned() {
-        wedge_log(&format!("msg {msg}"));
-    }
     match msg {
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
             reset_preview_after_display_change(hwnd);

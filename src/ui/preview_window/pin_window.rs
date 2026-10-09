@@ -262,12 +262,8 @@ static PIN_STATE: Mutex<PinState> = Mutex::new(PinState::Down);
 /// `PINNED` did: a pin whose state cannot be read is a pin nothing can be asked about, and
 /// "there is no pin" is the answer that has always been given. The teardown is the one thing
 /// that reads through it, and says why (see `end_pin`).
-// TEMP-WEDGE: track_caller records who takes the pin lock last (see tick.rs).
-#[track_caller]
 pub(super) fn pin_state() -> Option<MutexGuard<'static, PinState>> {
-    let guard = PIN_STATE.lock().ok()?;
-    super::tick::wedge_note_acquire(std::panic::Location::caller());
-    Some(guard)
+    PIN_STATE.lock().ok()
 }
 
 /// Whether a pin is up: the published copy, and the answer every thread may take without a lock.
