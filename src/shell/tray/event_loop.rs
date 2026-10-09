@@ -22,13 +22,15 @@ use super::commands::{
     set_pin_minimize_to, set_pin_nav_file_types, set_pin_mode_audio_seek, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
     set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
     set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
-    set_video_scale, set_video_volume, set_webview_idle, toggle_engine_persistent,
+    set_video_scale, set_video_volume, set_webview_idle, toggle_check_for_updates,
+    toggle_engine_persistent,
     toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_enabled,
     toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
     toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
     toggle_render_html, toggle_startup, toggle_trigger_key_affect_pin_mode,
     toggle_trigger_key_enabled, toggle_video_engine_fallback, toggle_video_hw_accel,
+    toggle_video_subtitles,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
@@ -62,7 +64,8 @@ use super::ids::{
     ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
     ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
     ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
-    ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE,
+    ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SUBTITLES, ID_TRAY_VIDEO_VOLUME_BASE,
+    ID_TRAY_WEBVIEW_IDLE_BASE,
     TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND,
     VIDEO_ENGINE_CHOICES, WM_TRAYICON,
 };
@@ -173,13 +176,12 @@ unsafe extern "system" fn tray_window_proc(
                             updates::Answer::Cancel => {}
                         }
                     }
-                    // The `System → Check for Updates` row: a check asked
-                    // for now, past the once-an-hour one an opening of the
-                    // menu makes. What it finds is offered on the row above
-                    // this menu's `System` submenu, and said in a dialog of
-                    // its own where there is nothing to put on.
+                    // The `System → Check for Updates` switch: whether the app asks
+                    // GitHub for a newer release on its own. What a check finds is
+                    // offered on the row above this menu's `System` submenu, and
+                    // nowhere at all where there is nothing to put on.
                     ID_TRAY_CHECK_UPDATES => {
-                        updates::force_check(TRAY_HWND);
+                        toggle_check_for_updates();
                     }
                     ID_TRAY_ENABLE => {
                         toggle_preview_enabled();
@@ -270,6 +272,11 @@ unsafe extern "system" fn tray_window_proc(
                     // player rather than by anything on screen.
                     ID_TRAY_REMEMBER_VOLUME => toggle_remember_audio_volume(),
                     ID_TRAY_REMEMBER_VIDEO_VOLUME => toggle_remember_video_volume(),
+                    // The row below the `Video` half of the `Volume` submenu: whether a
+                    // film's own subtitle tracks are probed for and copied out at all,
+                    // which is read where a probe runs and where a player is started
+                    // rather than by anything on screen.
+                    ID_TRAY_VIDEO_SUBTITLES => toggle_video_subtitles(),
                     // A level of either half of the `Volume` submenu, by the position it was
                     // listed at. The two halves offer the same levels, so one table answers for
                     // both and each range is what says which setting was meant.

@@ -56,6 +56,7 @@
 //!   this app gives cannot be given by posting one (see `rewind_launch`).
 
 use super::media_types::DerivedSubtitles;
+use super::subtitles_wanted;
 use std::path::Path;
 
 /// The devices worth asking a video to decode on, in the order they are worth asking.
@@ -218,6 +219,14 @@ pub fn subtitle_filter(
 /// `read_dir` of one folder, and what it costs is the size of that folder rather than anything
 /// about the film.
 pub(super) fn sidecar_for(path: &Path) -> Option<std::path::PathBuf> {
+    // The gate: the probe is this function's only caller and asks it only where
+    // subtitles are wanted (see `probe_video_geometry`), and the answer is kept
+    // honest here as well, so that the walk of the film's folder is one no other
+    // road can start for a file nothing will draw beside the film.
+    if !subtitles_wanted() {
+        return None;
+    }
+
     let stem = path.with_extension("");
 
     if let Some(sidecar) = SIDECAR_EXTENSIONS
@@ -414,6 +423,7 @@ pub fn rewind_due(playing: bool, duration: Option<f64>, position: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::subtitle_files::VideoSubtitlesSetting;
     use std::path::PathBuf;
 
     /// A setting that is on asks for the devices worth trying, and one that is off asks for none.
@@ -790,6 +800,10 @@ mod tests {
     /// it is reached only once the plain swap has already found nothing.
     #[test]
     fn a_sidecar_named_for_its_language_is_drawn_rather_than_walked_past() {
+        // The switch on: these are the answers the walk has always given,
+        // which is the answer under the setting a film's subtitles are
+        // wanted for (see `VideoSubtitlesSetting`).
+        let _setting = VideoSubtitlesSetting::stood_at(true);
         let dir = std::env::temp_dir().join(format!("hl-lang-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
         let video = dir.join("episode.mkv");
@@ -855,6 +869,10 @@ mod tests {
     /// years starts depending on which other files happen to be beside it.
     #[test]
     fn the_plain_sidecar_still_wins_over_one_named_for_its_language() {
+        // The switch on, as the test beside this one stands it: the answers
+        // here are the ones the walk has always given (see
+        // `VideoSubtitlesSetting`).
+        let _setting = VideoSubtitlesSetting::stood_at(true);
         let dir = std::env::temp_dir().join(format!("hl-lang-priority-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
         let video = dir.join("episode.mkv");
@@ -891,6 +909,10 @@ mod tests {
     /// user did not mean.
     #[test]
     fn a_sidecar_is_only_the_one_beside_the_video_and_never_the_video_s_own_name_appended() {
+        // The switch on, so the walk these boundaries pin is the one that runs
+        // rather than the gate answering the question before it is asked (see
+        // `VideoSubtitlesSetting`).
+        let _setting = VideoSubtitlesSetting::stood_at(true);
         let dir = std::env::temp_dir().join(format!("hl-lang-bounds-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
         let elsewhere = dir.join("other-folder");
@@ -941,6 +963,10 @@ mod tests {
     /// the whole of what "no subtitles" asks for.
     #[test]
     fn a_video_with_no_subtitles_anywhere_is_given_no_subtitle_filter() {
+        // The switch on, so the walk runs and answers nothing, rather than the
+        // gate answering the question before the walk is asked (see
+        // `VideoSubtitlesSetting`).
+        let _setting = VideoSubtitlesSetting::stood_at(true);
         let dir = std::env::temp_dir().join(format!("hl-none-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
         let video = dir.join("silent.mkv");

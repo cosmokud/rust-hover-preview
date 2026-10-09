@@ -29,18 +29,22 @@ pub const DEFAULT_AUDIO_VOLUME: u32 = 10;
 /// Whether a sound's measured loudness is brought to one level before it is played, so that a
 /// folder of files is heard at one level rather than at each file's own.
 ///
-/// It is on where the app starts, and FFmpeg is what makes it possible at all: the loudness is
+/// It is off where the app starts — the measurement costs a decode of the file, so a
+/// folder is heard at each file's own level until one asks for the single one — and
+/// FFmpeg is what makes it possible at all: the loudness is
 /// measured by FFmpeg's own scanner and the gain is applied by FFmpeg's own player, where the
 /// engine Windows has can only quieten a file — a level is attenuation there, and full volume
 /// is as loud as it goes (see `codecs::normalize_available`).
-pub const DEFAULT_NORMALIZE_VOLUME: bool = true;
+pub const DEFAULT_NORMALIZE_VOLUME: bool = false;
 /// Whether a video's soundtrack is brought to the same level before it is played, on the same
 /// terms and by the same measurement as a sound file's own (see above).
 ///
-/// It is on where the app starts, on the same terms as the sound's own: a folder of films is
-/// heard at one level rather than at each film's own, and the cost of the measurement — a
-/// decode of the film — is the same one the sound's already pays (see above).
-pub const DEFAULT_NORMALIZE_VIDEO_VOLUME: bool = true;
+/// It is off where the app starts, on the same terms as the sound's own: the cost of the
+/// measurement — a decode of the whole film, rather than the small file a sound is — is
+/// the one thing a hover of a film should not be made to pay before its picture is up,
+/// so a folder of films is heard at each film's own level until one asks for the single
+/// one (see above).
+pub const DEFAULT_NORMALIZE_VIDEO_VOLUME: bool = false;
 /// Whether a sound's previewed level is kept between hovers, or whether the level the setting
 /// names is the level every sound is previewed at.
 ///
@@ -138,6 +142,13 @@ pub const MAX_TTC_FACE: u32 = 10;
 /// machine without it keeps the text preview however the setting is written (see
 /// `webview_preview::draws`).
 pub const DEFAULT_RENDER_HTML: bool = false;
+/// Whether the app asks GitHub for a newer release on its own.
+///
+/// It is on where the app starts: the check is a read of a four-kilobyte file at most once
+/// every six hours, on a thread of its own, and the row above the `System` submenu is how
+/// a newer release is offered. Off, nothing is asked at any moment — neither at startup
+/// nor when the menu is opened — and the row never appears (see `request_check`).
+pub const DEFAULT_CHECK_FOR_UPDATES: bool = true;
 pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 125;
 pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;
@@ -303,6 +314,11 @@ pub const DEFAULT_VIDEO_ENGINE: VideoEngine = VideoEngine::Best;
 /// Whether an explicitly chosen engine that cannot play a file falls through to the others:
 /// on, so a film no media-engine decoder reaches is still played rather than shown as nothing.
 pub const DEFAULT_VIDEO_ENGINE_FALLBACK: bool = true;
+/// Whether a film's own subtitle tracks are probed for and copied out at
+/// all: off, so a hover is a read of the film's header and nothing else,
+/// and a film is played without subtitles rather than paid for on every
+/// launch (see `preview_window::subtitle_files` and `video_probe`).
+pub const DEFAULT_VIDEO_SUBTITLES: bool = false;
 /// The resolution above which `VideoEngine::Hybrid` leaves a film to FFmpeg's player: 3.2 million
 /// pixels, which is between 1080p and QHD, so a 1440p film is handed over and a 1080p one is drawn
 /// here. It is total pixels and not an axis, because what it stands for is how much there is to

@@ -6,6 +6,7 @@ use crate::readers::tone_map::Curve;
 
 use super::defaults::{
     DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_VOLUME,
+    DEFAULT_CHECK_FOR_UPDATES,
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME,
@@ -15,7 +16,7 @@ use super::defaults::{
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TICK_MS, DEFAULT_TTC_FACE,
     DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL,
-    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBP_PLAYBACK_FPS,
     DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use super::setting_types::{
@@ -35,6 +36,10 @@ use super::setting_types::{
 pub struct AppConfig {
     pub is_first_run: bool,
     pub run_at_startup: bool,
+    /// Whether the app asks GitHub for a newer release on its own, at startup and when the
+    /// menu is opened — on where the app starts, and the `System → Check for Updates` row
+    /// is the switch (see `DEFAULT_CHECK_FOR_UPDATES`).
+    pub check_for_updates: bool,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
     /// The modifier the trigger key watches, by name.
@@ -245,7 +250,7 @@ pub struct AppConfig {
     ///
     /// A setting of its own rather than a level among the ones above it, because it is a
     /// question about the file rather than about the hover: a level says how loud this app
-    /// should be, and this says where a file's own loudness is counted from. It is on where the app
+    /// should be, and this says where a file's own loudness is counted from. It is off where the app
     /// starts, and on a machine without FFmpeg it does nothing at all — what measures the loudness
     /// and what applies the gain are both FFmpeg's (see `codecs::normalize_available`), which is
     /// also why the tray greys the row where FFmpeg is not installed.
@@ -482,6 +487,12 @@ pub struct AppConfig {
     /// where the choice names an engine rather than `Best`, since `Best` is a walk of the same
     /// list already.
     pub video_engine_fallback: bool,
+    /// Whether a film's own subtitle tracks are probed for and copied out at
+    /// all, which is the tray's `Volume → Video → Subtitles` switch: off, so a
+    /// hover is a read of the film's header and nothing else, and a film is
+    /// played without subtitles rather than paid for on every launch (see
+    /// `preview_window::subtitle_files` and `video_probe`).
+    pub video_subtitles: bool,
     /// How long the Office engine a family started is kept after that family's
     /// last page, which is the tray's `Engine → Microsoft Office TTL` setting.
     pub office_engine_idle: EngineIdle,
@@ -614,6 +625,7 @@ impl Default for AppConfig {
         Self {
             is_first_run: false,
             run_at_startup: true,
+            check_for_updates: DEFAULT_CHECK_FOR_UPDATES,
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
             preview_enabled: true,
             trigger_key: "alt".to_string(),
@@ -683,6 +695,7 @@ impl Default for AppConfig {
             office_engine: DEFAULT_OFFICE_ENGINE,
             video_engine: DEFAULT_VIDEO_ENGINE,
             video_engine_fallback: DEFAULT_VIDEO_ENGINE_FALLBACK,
+            video_subtitles: DEFAULT_VIDEO_SUBTITLES,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),
             webview_idle: EngineIdle::Seconds(DEFAULT_WEBVIEW_IDLE_SECS),
             libreoffice_idle: EngineIdle::Seconds(DEFAULT_LIBREOFFICE_IDLE_SECS),

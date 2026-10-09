@@ -35,7 +35,8 @@ use super::ids::{
     ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS,
     ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
     ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
-    ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_VOLUME_BASE,
+    ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SUBTITLES,
+    ID_TRAY_VIDEO_VOLUME_BASE,
     ID_TRAY_WEBVIEW_IDLE_BASE, MAX_TRAY_CUSTOM_THEMES, TRAY_CUSTOM_THEMES,
 };
 use super::submenus::{
@@ -54,6 +55,7 @@ use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
     PinMinimizeTo, PinNavFileTypes, PreviewType, TextTheme, TriggerKeyMode, DEFAULT_ANIMATED_SCALE,
     DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AUDIO_VOLUME, DEFAULT_AVOID_MODE,
+    DEFAULT_CHECK_FOR_UPDATES,
     DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND,
     DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE,
     DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
@@ -67,7 +69,8 @@ use crate::config::config::{
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
     DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_SUBTITLES,
+    DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
     VOLUME_CHOICES,
 };
 use crate::config::theme_files;
@@ -94,9 +97,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // the app made as it started: opening the menu is the one moment a user is looking
     // for one, and a check asked for here keeps what is offered current however long this
     // run has been up. It costs nothing here — the check runs on a thread of its own and
-    // is answered at most once an hour — and the row above the `System` submenu reports
-    // what the last one found, so an update published since that check is offered on the
-    // opening after this one.
+    // is answered at most once every six hours — and the row above the `System` submenu
+    // reports what the last one found, so an update published since that check is offered
+    // on the opening after this one. Nothing is asked where the setting is off: the
+    // `System → Check for Updates` row is the switch (see `check_for_updates`).
     updates::request_check();
 
     // Add "Enable Preview" with checkmark
@@ -1109,6 +1113,14 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|config| (config.remember_audio_volume, config.remember_video_volume))
         .unwrap_or((DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME));
+    // Whether a film's own subtitle tracks are probed for and copied out at all,
+    // read the same way the two switches above the levels are: a switch about a
+    // film's picture rather than a level of the list under it, so it is a row of
+    // the `Video` half, at its top (see `video_subtitles`).
+    let video_subtitles = CONFIG
+        .lock()
+        .map(|config| config.video_subtitles)
+        .unwrap_or(DEFAULT_VIDEO_SUBTITLES);
     // Asked again here for the reason the `Codecs` rows are asked again: a machine that has just
     // been given FFmpeg is answered from the machine rather than from the hover that cached it
     // (see `codecs::refresh`).
@@ -1138,7 +1150,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                         MF_GRAYED
                     },
                 normalize_id as usize,
-                w!("Normalize"),
+                w!("Normalize (Expensive)"),
             );
             append_labeled_item(
                 levels,
@@ -1146,10 +1158,19 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                 remember_id,
                 remember_volume_label(),
             );
-            let _ = AppendMenuW(levels, MF_SEPARATOR, 0, PCWSTR::null());
         };
 
     let video_levels = CreatePopupMenu().unwrap();
+    // The film's own row, at the top of the half: whether its own subtitle
+    // tracks are probed for and copied out at all — a switch about a film's
+    // picture rather than a level of the list under it, which is why it is a
+    // row of the `Video` half alone and not the sound's (see `video_subtitles`).
+    let _ = AppendMenuW(
+        video_levels,
+        MF_STRING | if video_subtitles { MF_CHECKED } else { MF_UNCHECKED },
+        ID_TRAY_VIDEO_SUBTITLES as usize,
+        w!("Subtitles (Expensive)"),
+    );
     append_switches(
         video_levels,
         normalize_video,
@@ -1157,6 +1178,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         remember_video,
         ID_TRAY_REMEMBER_VIDEO_VOLUME,
     );
+    let _ = AppendMenuW(video_levels, MF_SEPARATOR, 0, PCWSTR::null());
     append_levels(
         video_levels,
         video_volume,
@@ -1172,6 +1194,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         remember_audio,
         ID_TRAY_REMEMBER_VOLUME,
     );
+    let _ = AppendMenuW(audio_levels, MF_SEPARATOR, 0, PCWSTR::null());
     append_levels(
         audio_levels,
         audio_volume,
@@ -1552,19 +1575,27 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // be shown and a package that can be installed to show it — and where the README names
     // a page for that package, picking the row offers to open it.
     //
-    // The answers are asked again here, because this is the one moment a user is looking
-    // at them: a codec extension installed a minute ago shows up the next time the menu is
-    // opened, rather than at the next restart.
+    // The FFmpeg answers are asked again here, because this is the one moment a user is
+    // looking at them: an install from a minute ago shows up the next time the menu is
+    // opened, rather than at the next restart. Every other answer is the one the process
+    // keeps (see `codecs`), asked of the machine once rather than on every opening.
     refresh_codecs();
     append_codecs_menu(menu);
 
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
     // A newer release is offered above the `System` submenu, and only while one
-    // is waiting to be installed: this menu is built from the state of the world
-    // every time it is opened, so the row is there on the first opening after a
-    // check found one and gone while there is nothing to say.
-    if let Some(version) = updates::available() {
+    // is waiting to be installed — and only while the checks are switched on: this
+    // menu is built from the state of the world every time it is opened, so the row
+    // is there on the first opening after a check found one and gone while there is
+    // nothing to say, and never there where nothing is asked for.
+    let offered = CONFIG
+        .lock()
+        .map(|config| config.check_for_updates)
+        .unwrap_or(DEFAULT_CHECK_FOR_UPDATES)
+        .then(updates::available)
+        .flatten();
+    if let Some(version) = offered {
         let label = update_available_label(&version);
         let label_wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
         let _ = AppendMenuW(
@@ -1576,21 +1607,30 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     }
 
     // The `System` submenu: the app's own place in the machine — the update
-    // a check found (the row above asks for one, the first row here asks for
-    // one now), whether this app starts with the session (the registry's
+    // a check found, the `Check for Updates` switch below it (on where the app
+    // starts), whether this app starts with the session (the registry's
     // answer rather than the configuration's), and the configuration's own
     // file and resets. The version the build is of is the submenu's own
     // label, which is where a user looks to see which build is running.
     let system_menu = CreatePopupMenu().unwrap();
 
-    // Ask for a check now, past the once-an-hour one an opening of the menu
-    // makes: the passive check is rate-limited because an opening is not a
-    // reason to ask GitHub anything, but a click that says "ask now" is. What
-    // the check finds is said in a dialog of its own where there is nothing to
-    // put on the menu, and on the row above where there is.
+    // Whether the app asks GitHub for a newer release on its own: the switch the
+    // passive check above answers to, on where the app starts. What a check finds is
+    // said on the row above where there is something to put on the menu, and nowhere
+    // at all where there is not — a check that found nothing is a menu that stays as
+    // it was.
+    let check_for_updates = CONFIG
+        .lock()
+        .map(|config| config.check_for_updates)
+        .unwrap_or(DEFAULT_CHECK_FOR_UPDATES);
     let _ = AppendMenuW(
         system_menu,
-        MF_STRING,
+        MF_STRING
+            | if check_for_updates {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
         ID_TRAY_CHECK_UPDATES as usize,
         w!("Check for Updates"),
     );

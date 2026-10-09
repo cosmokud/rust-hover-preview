@@ -3,7 +3,8 @@
 **In short:** this app collects nothing and sends nothing about you. It has no
 accounts, no telemetry, no crash reporting, and no ads, and the one thing it ever
 asks the network is whether a newer release of itself has been published — which
-it does when it starts and when you open its tray menu, and at most once an hour.
+it does when it starts and when you open its tray menu, and at most once every
+six hours, and never while `Check for Updates` is switched off.
 Everything else it reads stays on your PC, and everything it keeps is listed
 below.
 
@@ -82,9 +83,10 @@ encrypted. Nothing bypasses a password, and no password is ever stored.
 
 The one question this app asks the network is whether a newer release than the
 one you are running has been published, and it asks it when it starts and when
-you open its tray menu. Nothing is checked while you work, and however often you
-open the menu, a check is made at most once an hour — the hour is counted in
-memory, so nothing about it is written to disk.
+you open its tray menu — while `Check for Updates` is switched on, which it is
+unless you turn it off. Nothing is checked while you work, and however often you
+open the menu, a check is made at most once every six hours — the six hours are
+counted in memory, so nothing about it is written to disk.
 
 What it asks for is two files in this project's own GitHub releases: `version.txt`
 at the newest release's stable address, and — where that names a version newer than

@@ -398,7 +398,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 - **Codecs** — What this machine has: Videos, Audio, Images, Engines.
   - A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
 - **System (vX.Y.Z)**
-  - **Check for Updates** — Ask for a check now, past the once-an-hour one an opening of the menu makes. Where one is found, the **Update Available** row appears above this submenu on the menu's next opening; where none is, a dialog says so.
+  - **Check for Updates** — Whether the app asks GitHub for a newer release on its own, at startup and when the menu is opened. On by default; at most once every six hours. Where one is found, the **Update Available** row appears above this submenu on the menu's next opening; where none is, nothing happens. Turning it on asks at once.
   - **Run at Startup** — Add or remove the Windows startup entry.
     - On every start, an entry that names another copy of the app — a portable copy, an older version, a path that has moved — is pointed back at the one you are running.
   - **Edit Config.ini** — Open the configuration file in its default editor.
@@ -419,6 +419,7 @@ Example, trimmed:
 ```ini
 [settings]
 ; General
+check_for_updates=true
 pin_enabled=true
 pin_key=space
 pin_nav_file_types=all
@@ -487,8 +488,8 @@ vector_background=checkerboard
 ; Volume
 audio_seek=remember
 audio_volume=10
-normalize_video_volume=true
-normalize_volume=true
+normalize_video_volume=false
+normalize_volume=false
 remember_audio_volume=true
 remember_video_volume=true
 video_volume=0
@@ -657,7 +658,7 @@ See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 
 ## Privacy
 
-Rust Hover Preview is local-first: previews work without an internet connection, and the only network request is an update check, which runs only when you open the tray menu and at most once an hour. There is no telemetry, analytics, ads, accounts, or crash reporting; it reads only the item you hover or focus in Explorer, locally and only for enabled preview types, and cloud-only placeholders are skipped on purpose while password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use locally installed FFmpeg, LibreOffice, or ImageMagick when available, plus Microsoft Office, Windows' own media engine, and the Windows PDF engine; caches are bounded by `config.ini` — decoded images stay in memory, while the page an engine drew for a document is kept as a file under the temp folder, where Windows is free to clear it. See `PRIVACY.md` for full details.
+Rust Hover Preview is local-first: previews work without an internet connection, and the only network request is an update check, which runs only at startup and when you open the tray menu, at most once every six hours, and never while `Check for Updates` is switched off. There is no telemetry, analytics, ads, accounts, or crash reporting; it reads only the item you hover or focus in Explorer, locally and only for enabled preview types, and cloud-only placeholders are skipped on purpose while password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use locally installed FFmpeg, LibreOffice, or ImageMagick when available, plus Microsoft Office, Windows' own media engine, and the Windows PDF engine; caches are bounded by `config.ini` — decoded images stay in memory, while the page an engine drew for a document is kept as a file under the temp folder, where Windows is free to clear it. See `PRIVACY.md` for full details.
 
 ## License
 
