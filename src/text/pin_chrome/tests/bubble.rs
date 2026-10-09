@@ -204,7 +204,11 @@ fn a_playing_file_and_a_paused_one_are_two_different_marks() {
     assert_ne!(row(&playing), row(&paused));
 
     let middle = (SIDE / 2) as usize;
-    assert_eq!(row(&playing)[middle], glyph());
+    // The middle of the triangle is covered by the mark, so it is no longer the face under it —
+    // the mark is drawn translucent, so it is not the glyph's own colour either (see `paint_mark`).
+    // The middle of the pause mark is the gap between the two bars, which leaves the face showing.
+    assert_ne!(row(&playing)[middle], face());
+    assert_ne!(row(&playing)[middle], glyph());
     assert_eq!(row(&paused)[middle], face());
 }
 
