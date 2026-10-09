@@ -29,18 +29,22 @@ pub const DEFAULT_AUDIO_VOLUME: u32 = 10;
 /// Whether a sound's measured loudness is brought to one level before it is played, so that a
 /// folder of files is heard at one level rather than at each file's own.
 ///
-/// It is on where the app starts, and FFmpeg is what makes it possible at all: the loudness is
+/// It is off where the app starts — the measurement costs a decode of the file, so a
+/// folder is heard at each file's own level until one asks for the single one — and
+/// FFmpeg is what makes it possible at all: the loudness is
 /// measured by FFmpeg's own scanner and the gain is applied by FFmpeg's own player, where the
 /// engine Windows has can only quieten a file — a level is attenuation there, and full volume
 /// is as loud as it goes (see `codecs::normalize_available`).
-pub const DEFAULT_NORMALIZE_VOLUME: bool = true;
+pub const DEFAULT_NORMALIZE_VOLUME: bool = false;
 /// Whether a video's soundtrack is brought to the same level before it is played, on the same
 /// terms and by the same measurement as a sound file's own (see above).
 ///
-/// It is on where the app starts, on the same terms as the sound's own: a folder of films is
-/// heard at one level rather than at each film's own, and the cost of the measurement — a
-/// decode of the film — is the same one the sound's already pays (see above).
-pub const DEFAULT_NORMALIZE_VIDEO_VOLUME: bool = true;
+/// It is off where the app starts, on the same terms as the sound's own: the cost of the
+/// measurement — a decode of the whole film, rather than the small file a sound is — is
+/// the one thing a hover of a film should not be made to pay before its picture is up,
+/// so a folder of films is heard at each film's own level until one asks for the single
+/// one (see above).
+pub const DEFAULT_NORMALIZE_VIDEO_VOLUME: bool = false;
 /// Whether a sound's previewed level is kept between hovers, or whether the level the setting
 /// names is the level every sound is previewed at.
 ///

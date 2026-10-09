@@ -1071,8 +1071,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .unwrap_or((DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME));
     // Whether a film's own subtitle tracks are probed for and copied out at all,
     // read the same way the two switches above the levels are: a switch about a
-    // film's picture rather than a level of the list under the halves, so it is
-    // a row of its own below the `Video` half (see `video_subtitles`).
+    // film's picture rather than a level of the list under it, so it is a row of
+    // the `Video` half, below `Remember Level` (see `video_subtitles`).
     let video_subtitles = CONFIG
         .lock()
         .map(|config| config.video_subtitles)
@@ -1106,7 +1106,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                         MF_GRAYED
                     },
                 normalize_id as usize,
-                w!("Normalize"),
+                w!("Normalize (Expensive)"),
             );
             append_labeled_item(
                 levels,
@@ -1114,7 +1114,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                 remember_id,
                 remember_volume_label(),
             );
-            let _ = AppendMenuW(levels, MF_SEPARATOR, 0, PCWSTR::null());
         };
 
     let video_levels = CreatePopupMenu().unwrap();
@@ -1125,6 +1124,17 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         remember_video,
         ID_TRAY_REMEMBER_VIDEO_VOLUME,
     );
+    // The film's own row, below `Remember Level`: whether its own subtitle
+    // tracks are probed for and copied out at all — a switch about a film's
+    // picture rather than a level of the list under it, which is why it is a
+    // row of the `Video` half alone and not the sound's (see `video_subtitles`).
+    let _ = AppendMenuW(
+        video_levels,
+        MF_STRING | if video_subtitles { MF_CHECKED } else { MF_UNCHECKED },
+        ID_TRAY_VIDEO_SUBTITLES as usize,
+        w!("Subtitles (Expensive)"),
+    );
+    let _ = AppendMenuW(video_levels, MF_SEPARATOR, 0, PCWSTR::null());
     append_levels(
         video_levels,
         video_volume,
@@ -1140,6 +1150,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         remember_audio,
         ID_TRAY_REMEMBER_VOLUME,
     );
+    let _ = AppendMenuW(audio_levels, MF_SEPARATOR, 0, PCWSTR::null());
     append_levels(
         audio_levels,
         audio_volume,
@@ -1152,15 +1163,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         video_levels.0 as usize,
         w!("Video"),
-    );
-    // The one row between the halves: whether a film's own subtitle tracks are
-    // probed for and copied out at all, a switch below the `Video` half it is
-    // asked about rather than a level of either list under the halves.
-    let _ = AppendMenuW(
-        volume_menu,
-        MF_STRING | if video_subtitles { MF_CHECKED } else { MF_UNCHECKED },
-        ID_TRAY_VIDEO_SUBTITLES as usize,
-        w!("Video Subtitles"),
     );
     let _ = AppendMenuW(
         volume_menu,

@@ -674,7 +674,8 @@ impl AppConfig {
             self.pin_mode_audio_loop = value;
         }
         // Whether a sound's loudness is measured and brought to one level, which a file
-        // written before the setting existed has no key for: a fresh installation normalizes, and a
+        // written before the setting existed has no key for: a fresh installation does not
+        // normalize, and a
         // file that says nothing about it is left where it starts.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "normalize_volume") {
             self.normalize_volume = value;

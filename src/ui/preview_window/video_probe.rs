@@ -82,7 +82,7 @@ pub(super) struct VideoHeader {
 }
 
 /// Whether a film's subtitle tracks are wanted at all, which is the `Volume →
-/// Video Subtitles` setting's own answer: off where the app starts, so a probe
+/// Video → Subtitles` setting's own answer: off where the app starts, so a probe
 /// names no subtitle stream, a launch copies none out and a player draws none.
 pub(super) fn subtitles_wanted() -> bool {
     CONFIG
@@ -124,7 +124,7 @@ pub(super) fn probe_video_header(path: &PathBuf) -> Option<VideoHeader> {
             //
             // Both of those, and `stream_disposition=default` (which is what marks the player's
             // own first choice, see `parse_subtitle_streams`), exist in the list for the
-            // subtitle answers alone — so where the `Video Subtitles` switch is off they are
+            // subtitle answers alone — so where the `Subtitles` switch is off they are
             // asked for not at all, and the header pass never names a subtitle stream. The
             // parsers tolerate their absence: they key off lines that are simply not printed
             // (see `probe_video_geometry`, which zeroes the answers anyway, because

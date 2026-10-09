@@ -240,7 +240,7 @@ pub struct AppConfig {
     ///
     /// A setting of its own rather than a level among the ones above it, because it is a
     /// question about the file rather than about the hover: a level says how loud this app
-    /// should be, and this says where a file's own loudness is counted from. It is on where the app
+    /// should be, and this says where a file's own loudness is counted from. It is off where the app
     /// starts, and on a machine without FFmpeg it does nothing at all — what measures the loudness
     /// and what applies the gain are both FFmpeg's (see `codecs::normalize_available`), which is
     /// also why the tray greys the row where FFmpeg is not installed.
@@ -478,7 +478,7 @@ pub struct AppConfig {
     /// list already.
     pub video_engine_fallback: bool,
     /// Whether a film's own subtitle tracks are probed for and copied out at
-    /// all, which is the tray's `Volume → Video Subtitles` switch: off, so a
+    /// all, which is the tray's `Volume → Video → Subtitles` switch: off, so a
     /// hover is a read of the film's header and nothing else, and a film is
     /// played without subtitles rather than paid for on every launch (see
     /// `preview_window::subtitle_files` and `video_probe`).
