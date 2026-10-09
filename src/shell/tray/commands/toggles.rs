@@ -54,6 +54,25 @@ pub(in super::super) fn toggle_preview_enabled() {
     }
 }
 
+/// Whether the app asks GitHub for a newer release on its own: the `System → Check
+/// for Updates` row, on where the app starts. Turning it on asks at once rather than
+/// at the next opening of the menu, so the row above the submenu reports what the
+/// check found without waiting for one; turning it off asks nothing further, and the
+/// row is gone while there is nothing already on offer to say.
+pub(in super::super) fn toggle_check_for_updates() {
+    let enabled = if let Ok(mut config) = CONFIG.lock() {
+        config.check_for_updates = !config.check_for_updates;
+        config.save();
+        config.check_for_updates
+    } else {
+        return;
+    };
+
+    if enabled {
+        crate::app::updates::request_check();
+    }
+}
+
 /// Whether the pin key is watched is a setting rather than a view of one, and two
 /// things have to be told about a change to it: the hook procedure that watches the
 /// key reads a number rather than the configuration, and a preview that is pinned

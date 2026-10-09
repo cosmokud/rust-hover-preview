@@ -38,7 +38,8 @@ pub(super) use setters::{
     set_video_scale, set_video_volume, set_webview_idle,
 };
 pub(super) use toggles::{
-    toggle_engine_persistent, toggle_normalize_video_volume, toggle_normalize_volume,
+    toggle_check_for_updates, toggle_engine_persistent, toggle_normalize_video_volume,
+    toggle_normalize_volume,
     toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
     toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,

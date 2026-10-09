@@ -142,6 +142,13 @@ pub const MAX_TTC_FACE: u32 = 10;
 /// machine without it keeps the text preview however the setting is written (see
 /// `webview_preview::draws`).
 pub const DEFAULT_RENDER_HTML: bool = false;
+/// Whether the app asks GitHub for a newer release on its own.
+///
+/// It is on where the app starts: the check is a read of a four-kilobyte file at most once
+/// every six hours, on a thread of its own, and the row above the `System` submenu is how
+/// a newer release is offered. Off, nothing is asked at any moment — neither at startup
+/// nor when the menu is opened — and the row never appears (see `request_check`).
+pub const DEFAULT_CHECK_FOR_UPDATES: bool = true;
 pub const DEFAULT_TEXT_FONT_SCALE_PERCENT: u32 = 125;
 pub const MIN_TEXT_FONT_SCALE_PERCENT: u32 = 1;
 pub const MAX_TEXT_FONT_SCALE_PERCENT: u32 = 1000;

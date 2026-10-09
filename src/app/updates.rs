@@ -12,8 +12,8 @@
 //! moment a user is looking for one: `show_context_menu` asks for a check as the
 //! menu is built, the check runs on a thread of its own, and the row above the
 //! `System` submenu reports what the last one found. `System → Check for Updates`
-//! is the one moment a user is saying they want the answer whether an hour has
-//! passed or not, so that one is answered past the hour (see `force_check`).
+//! is the switch the checks answer to — on where the app starts, and nothing is
+//! asked at any moment where it is off (see `check_for_updates`).
 //! Nothing here is on a hover's path, and a check that never happens costs a
 //! preview nothing.
 //!
@@ -85,14 +85,14 @@ const INSTALLER_FILE: &str = "rust-hover-preview-setup.exe";
 /// statistics apart from a browser's.
 const USER_AGENT: &str = concat!("RustHoverPreview/", env!("CARGO_PKG_VERSION"));
 
-/// How often the check may be answered, however many times it is asked for. An
-/// hour is often enough for a release, and an opening of the menu is not a
+/// How often the check may be answered, however many times it is asked for. Six
+/// hours is often enough for a release, and an opening of the menu is not a
 /// reason to ask GitHub anything: the check is skipped while the last one is
-/// within this, and the hour is counted however that one ended, so a machine
+/// within this, and the six hours are counted however that one ended, so a machine
 /// that is offline does not ask again on the next menu. Nothing about it is
 /// written down — a run has no record of the run before it — so the check a run
 /// makes as it starts is always its first.
-const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Nothing smaller than this is this app's installer — the smallest one ever
 /// published is a few megabytes — so a truncated download is refused rather
@@ -122,7 +122,19 @@ static CHECKING: AtomicBool = AtomicBool::new(false);
 /// before anyone opens the menu for it. The tray menu is the other: an opening
 /// is the one moment a user is looking for an update, and the one moment the
 /// answer is worth having again.
+///
+/// Nothing is asked where the checks are switched off: the `System → Check for
+/// Updates` row is the switch (see `check_for_updates`), and a run that has been
+/// told not to ask does not start the thread at all.
 pub(crate) fn request_check() {
+    let enabled = crate::CONFIG
+        .lock()
+        .map(|config| config.check_for_updates)
+        .unwrap_or(crate::config::config::DEFAULT_CHECK_FOR_UPDATES);
+    if !enabled {
+        return;
+    }
+
     if CHECKING.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -131,85 +143,6 @@ pub(crate) fn request_check() {
         check();
         CHECKING.store(false, Ordering::SeqCst);
     });
-}
-
-/// Ask for a check now, past the hour the passive one waits out. The
-/// `System → Check for Updates` row is the one moment a user is saying
-/// they want the answer whether an hour has passed or not, so the
-/// interval is not consulted and the answer is the one this moment
-/// gets — which is also what the check a menu opening asks for makes
-/// use of: an asking that is answered is a check that was made, and the
-/// next passive one waits the hour out from it.
-///
-/// The owner is the tray's own window, which is what a dialog of this
-/// app's is centred over where there is one to centre over.
-pub(crate) fn force_check(owner: HWND) {
-    if CHECKING.swap(true, Ordering::SeqCst) {
-        return;
-    }
-
-    let owner = OwnerWindow(owner);
-    std::thread::spawn(move || {
-        forced_check(owner);
-        CHECKING.store(false, Ordering::SeqCst);
-    });
-}
-
-/// A window handle sent to the thread a forced check runs on. A handle
-/// is process-wide — all the thread does with it is own one dialog by
-/// it — so sending it across is the send of a number, not of a
-/// resource.
-struct OwnerWindow(HWND);
-
-unsafe impl Send for OwnerWindow {}
-
-/// The check a forced one is: the version the newest release is
-/// published under, offered where it is newer than the one running, and
-/// told to the user where it is not. A check that could not reach GitHub
-/// answers the same way as one that found nothing new — there is nothing
-/// to put on the menu either way — so the dialog says what it says rather
-/// than which of the two it was.
-fn forced_check(owner: OwnerWindow) {
-    // What a check comes back with is a version and nothing else: the
-    // installer for it is the click's business, so a row nobody has
-    // clicked costs the network nothing at all.
-    let found = newer_release();
-
-    // Noted however this one ended: a check asked for by hand is a check
-    // that was made, and the hour is counted from it the way it is from a
-    // passive one — a check that found nothing, and one that could not
-    // reach GitHub, are both checks that were made, and asking again on
-    // the next opening of the menu is the spam the interval is there to
-    // prevent.
-    if let Ok(mut last) = LAST_CHECK.lock() {
-        *last = Some(Instant::now());
-    }
-
-    match found {
-        Some(version) => {
-            if let Ok(mut offer) = OFFER.lock() {
-                *offer = Some(version);
-            }
-        }
-        None => up_to_date(owner.0),
-    }
-}
-
-/// What a check that found nothing to offer is told: the app is at the
-/// newest release there is, in the platform's own dialog for saying so,
-/// owned by the tray's window — the one window this app has.
-fn up_to_date(owner: HWND) {
-    let caption = wide("Rust Hover Preview");
-    let text = wide("You're up to date.");
-
-    unsafe {
-        MessageBoxW(
-            owner,
-            PCWSTR(text.as_ptr()),
-            PCWSTR(caption.as_ptr()),
-            MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
-        );
-    }
 }
 
 /// The version of the update on offer, where one is: what the menu row is built
@@ -478,7 +411,7 @@ fn due_for_check() -> bool {
 
 /// Remove what earlier versions left for the check: the time they wrote down of
 /// when they last asked, and the installer they fetched before any click. Neither
-/// is kept here any more — the hour is the run's own memory, and the installer is
+/// is kept here any more — the six hours are the run's own memory, and the installer is
 /// fetched for the click that asks for it — so both go at startup, with the other
 /// files earlier versions left behind.
 pub(crate) fn discard_old_files() {

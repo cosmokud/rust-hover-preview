@@ -278,9 +278,9 @@ pub(super) const ID_TRAY_OPEN_CONFIG: u16 = 1040;
 /// neither can be read as a click on one of those.
 pub(super) const ID_TRAY_RESET_SETTINGS: u16 = 1520;
 pub(super) const ID_TRAY_RESET_LISTS: u16 = 1521;
-/// The `System → Check for Updates` row: a check asked for now, past the
-/// once-an-hour one an opening of the menu makes, with what the check found
-/// said in a dialog of its own where there is nothing to put on.
+/// The `System → Check for Updates` row: whether the app asks GitHub for a newer
+/// release on its own, at startup and when the menu is opened (see
+/// `check_for_updates`). On where the app starts.
 ///
 /// It is a switch of a question rather than a level of a list, so it takes an
 /// id of its own — the one the reset rows beside it leave free, where a row of
