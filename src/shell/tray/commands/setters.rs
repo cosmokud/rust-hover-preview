@@ -32,8 +32,9 @@ use crate::app::dialogs;
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_general_disk_cache_mb,
     sanitize_image_cache_mb, sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent,
-    sanitize_tick_ms, AudioSeek, AvoidMode, MarkdownMode, OfficeEngine, PinNavFileTypes,
-    PreviewScale, PreviewType, TextTheme, TriggerKeyMode, VideoEngine, VOLUME_CHOICES,
+    sanitize_tick_ms, AudioSeek, AvoidMode, MarkdownMode, OfficeEngine, PinMinimizeTo,
+    PinNavFileTypes, PreviewScale, PreviewType, TextTheme, TriggerKeyMode, VideoEngine,
+    VOLUME_CHOICES,
 };
 use crate::engines::document_cache;
 use crate::engines::office_render;
@@ -489,6 +490,19 @@ pub(in super::super) fn set_markdown_mode(mode: MarkdownMode) {
 pub(in super::super) fn set_pin_nav_file_types(mode: PinNavFileTypes) {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_nav_file_types = mode;
+        config.save();
+    }
+}
+
+/// Where a pinned window's minimize puts it: the round bubble on the desktop, or the app's own
+/// button in the taskbar.
+///
+/// Nothing on screen changes and nothing is rebuilt. The answer is read the moment the minimize
+/// button is pressed, so a change made while a pin is up is the next minimize's — a pin already
+/// away is left where it was put (see `collapse_pin`).
+pub(in super::super) fn set_pin_minimize_to(target: PinMinimizeTo) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_minimize_to = target;
         config.save();
     }
 }

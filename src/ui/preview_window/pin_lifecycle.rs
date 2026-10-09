@@ -242,6 +242,19 @@ pub(super) fn pin_pause_audio() -> bool {
         .unwrap_or(DEFAULT_PIN_PAUSE_AUDIO)
 }
 
+/// Where a pin the minimize button puts away goes — the round bubble on the desktop, or the app's
+/// own button in the taskbar, as the configuration has it (see `Pin Mode → Minimize`).
+///
+/// It is read the moment the minimize button is pressed rather than every tick: which of the two
+/// a pin is away as is settled when it is put away, and a switch thrown while one is already away
+/// is the next minimize's (see `collapse_pin`).
+pub(super) fn pin_minimize_to() -> PinMinimizeTo {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_minimize_to)
+        .unwrap_or(DEFAULT_PIN_MINIMIZE_TO)
+}
+
 /// The pin a key press asks for, if there is anything on screen to pin: the file the preview
 /// is of, and the box it occupies at this moment.
 ///
@@ -378,18 +391,21 @@ impl PinWindow for Win32PinWindow {
 
     fn hide_pin_windows(&self) {
         // Safety: each handle is read from the slot its own window was created into, and each
-        // is only asked to hide. `hide_pin_bubble` does the same for the bubble, and a handle
-        // to a window that has since gone is refused by the call rather than acted on.
+        // is only asked to hide. The stand-ins a collapse can leave — the bubble and the taskbar
+        // one — go with them (`hide_minimized_pin`), and a handle to a window that has since gone
+        // is refused by the call rather than acted on.
         unsafe {
             hide_pinned_windows();
-            hide_pin_bubble();
         }
+        hide_minimized_pin();
     }
 
     fn hide_pin_bubble(&self) {
-        // The bubble is a window of this app's own and hiding it is a plain call on a handle
-        // read from the slot it was created into, with nothing this fn has to be unsafe about.
-        hide_pin_bubble();
+        // The bubble and the taskbar stand-in are this app's own windows and hiding them is a
+        // plain call on a handle read from the slot each was created into, with nothing this fn
+        // has to be unsafe about. Both are taken down because a pin that ends must leave neither
+        // behind, whichever of the two it was put away as.
+        hide_minimized_pin();
     }
 
     fn repaint(&self) {

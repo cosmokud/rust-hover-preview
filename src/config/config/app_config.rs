@@ -19,13 +19,13 @@ use super::defaults::{
     DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use super::setting_types::{
-    AudioSeek, AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinNavFileTypes, PreviewScale,
-    TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine, DEFAULT_AUDIO_SCALE,
+    AudioSeek, AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinMinimizeTo, PinNavFileTypes,
+    PreviewScale, TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine, DEFAULT_AUDIO_SCALE,
     DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND,
     DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
     DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_LOOP,
-    DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_MODE_AUDIO_SEEK,
+    DEFAULT_PIN_MODE_AUDIO_LOOP, DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO,
     DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_TEXT_SCALE,
     DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
@@ -58,6 +58,11 @@ pub struct AppConfig {
     /// The key that pins the preview on screen, by name — the same spellings the
     /// trigger key accepts, since both are read by the same table.
     pub pin_key: String,
+    /// What a pinned window's minimize button puts it away as: the round bubble left on the
+    /// desktop where the window stood, or the app's own button in the taskbar. It is where a
+    /// window goes rather than what it is, which is why it sits beside the pin's key rather than
+    /// in the walk (see `PinMinimizeTo`).
+    pub pin_minimize_to: PinMinimizeTo,
     /// Whether a pin collapsed into its bubble holds the video it is playing where it is:
     /// on, a film is paused the moment the window becomes a bubble and started again at the
     /// second it was stopped at when the pin comes back up, and off, it plays on behind the
@@ -617,6 +622,7 @@ impl Default for AppConfig {
             trigger_key_affect_pin_mode: DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
             pin_enabled: true,
             pin_key: "space".to_string(),
+            pin_minimize_to: DEFAULT_PIN_MINIMIZE_TO,
             pin_pause_video: DEFAULT_PIN_PAUSE_VIDEO,
             pin_pause_audio: DEFAULT_PIN_PAUSE_AUDIO,
             pin_update_enabled: DEFAULT_PIN_UPDATE_ENABLED,

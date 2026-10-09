@@ -192,6 +192,21 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
         (ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN_UPDATE_HOVER),
         (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_PAUSE_AUDIO),
         (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_PAUSE_VIDEO),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_UPDATE),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_UPDATE_HOVER),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_NAV_ALL),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_NAV_CATEGORY),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_PAUSE_AUDIO),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_PAUSE_VIDEO),
+        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN),
+        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_UPDATE),
+        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_UPDATE_HOVER),
+        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_NAV_ALL),
+        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_NAV_CATEGORY),
+        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_PAUSE_AUDIO),
+        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_PAUSE_VIDEO),
     ] {
         assert_ne!(row, other, "two rows of the menu share the id {row}");
     }
@@ -215,7 +230,12 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
         ),
         (ID_TRAY_SCALE_BASE, BITMAP_SCALE_CHOICES.len() as u16),
     ] {
-        for row in [ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_NAV_CATEGORY] {
+        for row in [
+            ID_TRAY_PIN_NAV_ALL,
+            ID_TRAY_PIN_NAV_CATEGORY,
+            ID_TRAY_PIN_MINIMIZE_BUBBLE,
+            ID_TRAY_PIN_MINIMIZE_TASKBAR,
+        ] {
             assert!(
                 !(base..base + len).contains(&row),
                 "the {row} row is inside the {base} range, so a click on it is read as that \
@@ -238,6 +258,22 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
         defaults.pin_nav_file_types, DEFAULT_PIN_NAV_FILE_TYPES,
         "a pin walks the whole folder until it is told otherwise"
     );
+    assert_eq!(
+        defaults.pin_minimize_to, DEFAULT_PIN_MINIMIZE_TO,
+        "a pin put away goes to the bubble on the desktop until it is told otherwise"
+    );
+}
+
+/// The two places a minimize can put a pin are named for where the pin goes, and the one the
+/// setting starts at is marked as the default, so a user reading the submenu is told both which
+/// place is chosen and which one a setting nobody has changed would have chosen.
+#[test]
+fn the_minimize_rows_say_where_a_pin_goes() {
+    assert_eq!(
+        pin_minimize_label(PinMinimizeTo::Bubble),
+        "To Bubble (Default)"
+    );
+    assert_eq!(pin_minimize_label(PinMinimizeTo::Taskbar), "To Taskbar");
 }
 
 /// The trigger key's second row is a switch of its own beside the one that watches the key,

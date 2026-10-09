@@ -24,10 +24,10 @@ use super::ids::{
 
 use crate::app::dialogs;
 use crate::config::config::{
-    AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinNavFileTypes, PreviewScale,
+    AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewScale,
     TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
     DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MODE_AUDIO_SEEK,
-    DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
+    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
@@ -199,6 +199,17 @@ pub(super) fn pin_nav_label(types: PinNavFileTypes) -> &'static str {
         PinNavFileTypes::All => "All Files",
         PinNavFileTypes::Category => "Same Category",
     }
+}
+
+/// What the two places a pinned window's minimize can put it are called, with the one the setting
+/// starts at marked as the default (see `default_label` and `PinMinimizeTo`).
+pub(super) fn pin_minimize_label(target: PinMinimizeTo) -> String {
+    let label = match target {
+        PinMinimizeTo::Bubble => "To Bubble",
+        PinMinimizeTo::Taskbar => "To Taskbar",
+    };
+
+    default_label(label, target == DEFAULT_PIN_MINIMIZE_TO)
 }
 
 /// The row under each half of the `Volume` submenu's `Normalize`: whether a

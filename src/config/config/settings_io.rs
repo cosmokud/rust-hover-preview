@@ -43,13 +43,19 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "pin_enabled",
             "pin_key",
             "pin_nav_file_types",
-            "pin_pause_audio",
-            "pin_pause_video",
             "pin_update_enabled",
             "pin_update_on_hover",
             "preview_enabled",
             "run_at_startup",
         ],
+    ),
+    // Where a pin put away by its own minimize goes, and what such a pin holds where it is —
+    // the `Pin Mode → Minimize` submenu, which is why the three sit under one heading rather
+    // than beside the pin's own key: they are what the minimize button does, not how a pin is
+    // taken up.
+    (
+        "Minimize",
+        &["pin_minimize_to", "pin_pause_audio", "pin_pause_video"],
     ),
     (
         "Preview Types",

@@ -84,9 +84,18 @@ pub(super) fn collapse_pin() {
     // be a second thread waiting on it — this one, from its own loop.
     give_the_keyboard_back(&Win32PinWindow);
 
+    // Where the pin goes is the configuration's answer, read here rather than carried by the pin:
+    // the round bubble stands on the desktop where the minimize button was, and the taskbar
+    // stand-in leaves the app in the taskbar instead with the pin off the screen (see
+    // `pin_minimize_to`). Everything above is the same either way — which is why only the last
+    // step of a collapse differs.
     unsafe {
         hide_pinned_windows();
-        show_pin_bubble(anchor);
+        if pin_minimize_to() == PinMinimizeTo::Taskbar {
+            show_pin_taskbar();
+        } else {
+            show_pin_bubble(anchor);
+        }
     }
 }
 
@@ -154,6 +163,12 @@ pub(super) fn pinned_minimize_box(pin: &PinnedPreview) -> ScreenRegion {
 /// stands in its media band — the player's window, the browser's — is put back with it, and what
 /// the collapse parked is started again by the tick this runs in (see `settle_bubble_playback`).
 pub(super) fn restore_pin() {
+    // Whether the pin was put away into the taskbar is read before anything is hidden, because
+    // hiding the stand-in is what takes the answer away. A pin restored from the taskbar goes
+    // back exactly where it stood: there is no bubble on the desktop to place it beside, and the
+    // pointer the button was clicked with is on the taskbar rather than on the work area.
+    let from_taskbar = pin_taskbar_is_showing();
+
     {
         let Some(mut pinned) = pin_state() else {
             return;
@@ -171,13 +186,15 @@ pub(super) fn restore_pin() {
         // bubble was clicked with, rather than where it stood when it was collapsed: the bubble is
         // the bit of the pin the hand is on, and what the hand gets back is a window placed beside
         // it the way this app places everything else (see `placed_pin_box`).
-        if let Some(window) = placed_pin_box(pin, &DESKTOPS) {
-            pin.content =
-                content_box_of(window, pin.dpi, pin.transport_bar, pin.overlay, pin.caption);
+        if !from_taskbar {
+            if let Some(window) = placed_pin_box(pin, &DESKTOPS) {
+                pin.content =
+                    content_box_of(window, pin.dpi, pin.transport_bar, pin.overlay, pin.caption);
+            }
         }
     }
 
-    hide_pin_bubble();
+    hide_minimized_pin();
 
     unsafe {
         let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);

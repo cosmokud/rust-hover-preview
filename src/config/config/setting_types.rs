@@ -969,3 +969,47 @@ impl PinNavFileTypes {
 /// What the pin's own buttons step through unless the configuration says otherwise: every
 /// file this build can preview, which is the answer that makes them a way through a folder.
 pub const DEFAULT_PIN_NAV_FILE_TYPES: PinNavFileTypes = PinNavFileTypes::All;
+
+/// What a pinned window's minimize button puts it away as, unless the configuration says
+/// otherwise.
+///
+/// A pin is a window the user put there, and a caption's minimize is how it is put away for a
+/// while. There are two places it can go, and they are two different things to want: `Bubble`
+/// leaves a small round mark on the desktop where the window stood — a preview put down for a
+/// moment, with nothing of this app in the taskbar — and `Taskbar` takes the window off the
+/// screen and leaves the app's own button in the taskbar instead, which is the way the rest of
+/// the desktop puts a window away.
+///
+/// It is a question of its own rather than part of the pin because it is about where a window
+/// goes rather than what it is, and the same pin wants either answer at different times (see the
+/// `Pin Mode → Minimize` submenu).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PinMinimizeTo {
+    /// Collapse into the round bubble left on the desktop where the minimize button was.
+    Bubble,
+    /// Take the window off the screen and leave the app in the taskbar until it is brought back.
+    Taskbar,
+}
+
+impl PinMinimizeTo {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bubble => "bubble",
+            Self::Taskbar => "taskbar",
+        }
+    }
+
+    /// The way a `config.ini` value names, or `None` for one that names no place to go.
+    pub(super) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "bubble" | "to bubble" | "balloon" => Some(Self::Bubble),
+            "taskbar" | "to taskbar" | "bar" => Some(Self::Taskbar),
+            _ => None,
+        }
+    }
+}
+
+/// What a pinned window's minimize leaves unless the configuration says otherwise: the round
+/// bubble on the desktop, which is what this app has always done and is the answer that keeps
+/// the app out of the taskbar altogether.
+pub const DEFAULT_PIN_MINIMIZE_TO: PinMinimizeTo = PinMinimizeTo::Bubble;
