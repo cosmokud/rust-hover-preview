@@ -680,6 +680,18 @@ pub(super) fn stop_pinned_player() {
             kill_player_process(existing);
         }
     }
+    // The handle's kill leaves VIDEO_PID standing for the leftover checks to confirm, and
+    // nothing else asks while a pin is up — the stray sweep stands down for a pin's whole
+    // life. So a swap onto a native video would leave the ffplay it just killed re-raised
+    // over the native picture by the tick and the monitor thread until the pin came down.
+    // Sweep it here the way every ffplay start does, and park what the sweep cannot yet
+    // confirm where the tick's own settle retries it to confirmation (see
+    // `kill_stray_video_process` and `retire_orphaned_player`).
+    kill_stray_video_process();
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if pid != 0 {
+        retire_orphaned_player(pid);
+    }
 }
 
 /// How the wait for a swap's first frame stands: whether the video is on screen now, whether the

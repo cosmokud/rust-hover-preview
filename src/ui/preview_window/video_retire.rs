@@ -449,9 +449,19 @@ pub(super) fn settle_pinned_transport() {
         return;
     }
 
-    let pinned = pin_state();
-    let pin = pinned.as_ref().and_then(|pinned| pinned.pin());
-    let played = pin.and_then(|pin| pin_playhead(&pin.transport).or(pin.transport.paused_at));
+    // Read in one look and let the lock go before the reconcile below
+    // re-locks: the reconcile writes through `update_pin_transport`, which
+    // takes the pin's lock itself, and a guard held across it is a thread
+    // waiting on a lock it owns (see `pin_media_is_alive` for the rule).
+    let played = {
+        let Some(pinned) = pin_state() else {
+            return;
+        };
+        let Some(pin) = pinned.pin() else {
+            return;
+        };
+        pin_playhead(&pin.transport).or(pin.transport.paused_at)
+    };
     let Some(played) = played else {
         // Nothing was ever claimed and nothing is running: a bar with nothing behind it, which is
         // the state a pin that is only just starting is in and is not a reconciliation to make.
