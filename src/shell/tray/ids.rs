@@ -52,6 +52,16 @@ pub(super) const ID_TRAY_PIN_PAUSE_VIDEO: u16 = 1019;
 /// two ids and not a list.
 pub(super) const ID_TRAY_PIN_NAV_ALL: u16 = 1014;
 pub(super) const ID_TRAY_PIN_NAV_CATEGORY: u16 = 1015;
+/// The two rows of the `Pin Mode → Minimize` submenu: where a pin the minimize button put away
+/// goes — the round bubble left on the desktop, or the app's own button in the taskbar.
+///
+/// They are a question of two answers rather than a range, and they do not sit beside each other
+/// on the number line: 1013 is the one id the `Background → HTML` half leaves before the walk's
+/// pair at 1014/1015, and 1022 is the one the `Placement` pair leaves before the image backdrop's
+/// range at 1023. Neither is inside a range a click is read against, which is what keeps a click
+/// on one from being answered as a row of a submenu of another's.
+pub(super) const ID_TRAY_PIN_MINIMIZE_BUBBLE: u16 = 1013;
+pub(super) const ID_TRAY_PIN_MINIMIZE_TASKBAR: u16 = 1022;
 pub(super) const ID_TRAY_TRIGGER_DISABLE: u16 = 1005; // Hold the trigger key to stop previews
 pub(super) const ID_TRAY_TRIGGER_ENABLE: u16 = 1006; // Hold the trigger key to allow previews
 pub(super) const ID_TRAY_TRIGGER_ENABLED: u16 = 1068; // Whether the trigger key is watched at all

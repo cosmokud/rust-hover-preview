@@ -18,8 +18,8 @@ use super::defaults::{
 };
 use super::setting_types::{
     sanitize_afk_timer_secs, sanitize_dds_background, sanitize_html_background, AudioSeek,
-    AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinNavFileTypes, PreviewScale, TextTheme,
-    TransparentBackground, TriggerKeyMode, VideoEngine,
+    AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewScale,
+    TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine,
 };
 
 impl AppConfig {
@@ -72,6 +72,11 @@ impl AppConfig {
             Some(self.pin_enabled.to_string()),
         );
         ini.set(CONFIG_SECTION, "pin_key", Some(self.pin_key.clone()));
+        ini.set(
+            CONFIG_SECTION,
+            "pin_minimize_to",
+            Some(self.pin_minimize_to.as_str().to_string()),
+        );
         ini.set(
             CONFIG_SECTION,
             "pin_pause_video",
@@ -512,6 +517,14 @@ impl AppConfig {
             let value = value.trim();
             if !value.is_empty() {
                 self.pin_key = value.to_string();
+            }
+        }
+        // Where a pin put away by its own minimize goes — the round bubble on the desktop, or
+        // the app's own button in the taskbar. A value that names neither is not one of them:
+        // the file is left at the answer a fresh one has, which is the bubble.
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_minimize_to") {
+            if let Some(target) = PinMinimizeTo::from_str(&value) {
+                self.pin_minimize_to = target;
             }
         }
         // Whether a pin collapsed into its bubble holds what is playing where it is, asked of

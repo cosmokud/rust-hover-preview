@@ -81,6 +81,7 @@ mod pin_menu;
 mod pin_model;
 mod pin_playback;
 mod pin_swap;
+mod pin_taskbar;
 mod pin_walk;
 mod pin_window;
 mod pixels;
@@ -102,13 +103,15 @@ use crate::app::engine_processes;
 use crate::config::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget,
     sanitize_general_disk_cache_mb, sanitize_image_cache_mb, sanitize_spinner_delay_ms,
-    sanitize_webp_playback_fps, AppConfig, AudioSeek, MarkdownMode, OfficeEngine, PreviewScale,
+    sanitize_webp_playback_fps, AppConfig, AudioSeek, MarkdownMode, OfficeEngine, PinMinimizeTo,
+    PreviewScale,
     PreviewType, TextTheme, TransparentBackground, VideoEngine, DEFAULT_ANIMATED_SCALE_PERCENT,
     DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SCALE_PERCENT, DEFAULT_AUDIO_SEEK, DEFAULT_DDS_BACKGROUND,
     DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE,
     DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_MODE_AUDIO_LOOP,
+    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_MINIMIZE_TO,
+    DEFAULT_PIN_MODE_AUDIO_LOOP,
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
     DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
@@ -314,6 +317,7 @@ use pin_menu::*;
 use pin_model::*;
 use pin_playback::*;
 use pin_swap::*;
+use pin_taskbar::*;
 use pin_walk::*;
 use pixels::*;
 use pointer::*;

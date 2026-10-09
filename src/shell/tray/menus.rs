@@ -23,7 +23,8 @@ use super::ids::{
     ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
     ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
-    ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN_PAUSE_AUDIO,
+    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_NAV_ALL,
+    ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN_PAUSE_AUDIO,
     ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_POSITION_BEST,
     ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE,
     ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML,
@@ -43,14 +44,15 @@ use super::submenus::{
     append_document_scale_menu, append_engine_idle_menu, append_labeled_item,
     append_office_engine_menu, append_pin_mode_audio_seek_menu, append_tick_menu,
     append_video_engine_menu, cache_size_label,
-    decode_budget_label, default_label, pin_nav_label, pin_update_label, remember_volume_label,
+    decode_budget_label, default_label, pin_minimize_label, pin_nav_label, pin_update_label,
+    remember_volume_label,
     system_menu_label, timing_delay_menu, update_available_label,
 };
 
 use crate::app::updates;
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
-    PinNavFileTypes, PreviewType, TextTheme, TriggerKeyMode, DEFAULT_ANIMATED_SCALE,
+    PinMinimizeTo, PinNavFileTypes, PreviewType, TextTheme, TriggerKeyMode, DEFAULT_ANIMATED_SCALE,
     DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AUDIO_VOLUME, DEFAULT_AVOID_MODE,
     DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND,
     DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE,
@@ -59,7 +61,7 @@ use crate::config::config::{
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB,
     DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_MODE_AUDIO_SEEK,
-    DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_PREVIEW_SCALE, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
@@ -121,6 +123,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let (
         pin_enabled,
         pin_key,
+        pin_minimize_to,
         pin_pause_audio,
         pin_pause_video,
         pin_update,
@@ -132,6 +135,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             (
                 c.pin_enabled,
                 c.pin_key.clone(),
+                c.pin_minimize_to,
                 c.pin_pause_audio,
                 c.pin_pause_video,
                 c.pin_update_enabled,
@@ -142,6 +146,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .unwrap_or((
             true,
             "space".to_string(),
+            DEFAULT_PIN_MINIMIZE_TO,
             DEFAULT_PIN_PAUSE_AUDIO,
             DEFAULT_PIN_PAUSE_VIDEO,
             DEFAULT_PIN_UPDATE_ENABLED,
@@ -209,25 +214,45 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Update Preview"),
     );
 
-    // The `Pause in Bubble` submenu: whether a pin collapsed into its bubble holds
-    // what it is playing where it is until the pin is put back up again. The two
-    // are switches of their own because a video and a sound are two different things
-    // to want quiet — a film a user wants to go on hearing while the bubble is up
-    // is not a reason to let a podcast play on, and the other way round — and both
-    // are on, since a bubble is a pin put away and what it was playing is not what
-    // the desktop was asked for. A sound is listed above a video.
-    let pause_menu = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        pause_menu,
+    // The `Minimize` submenu: where a pin the minimize button puts away goes, and what such a
+    // pin holds while it is away. The two places are one of two rather than a switch — a
+    // minimize leaves either the round bubble on the desktop or the app's own button in the
+    // taskbar, never both — so they carry a mark apiece and the setting picks between them (see
+    // `PinMinimizeTo`), and the bubble is the answer the app starts at.
+    //
+    // The `Pause` submenu hangs below them rather than on the pin's own row, because it is a
+    // question about the same away-state: a pin put away is not what the desktop was asked for,
+    // and the two below it are switches of their own because a video and a sound are two
+    // different things to want quiet — a film a user wants to go on hearing while a pin is away
+    // is not a reason to let a podcast play on, and the other way round. Both start on, the
+    // same because either is a pin put away. A video is listed above a sound.
+    let minimize_menu = CreatePopupMenu().unwrap();
+    let minimize_flag = |candidate: PinMinimizeTo| {
         MF_STRING
-            | if pin_pause_audio {
+            | if pin_minimize_to == candidate {
                 MF_CHECKED
             } else {
                 MF_UNCHECKED
-            },
-        ID_TRAY_PIN_PAUSE_AUDIO as usize,
-        w!("Audio"),
+            }
+    };
+    append_labeled_item(
+        minimize_menu,
+        minimize_flag(PinMinimizeTo::Bubble),
+        ID_TRAY_PIN_MINIMIZE_BUBBLE,
+        &pin_minimize_label(PinMinimizeTo::Bubble),
     );
+    append_labeled_item(
+        minimize_menu,
+        minimize_flag(PinMinimizeTo::Taskbar),
+        ID_TRAY_PIN_MINIMIZE_TASKBAR,
+        &pin_minimize_label(PinMinimizeTo::Taskbar),
+    );
+    // A separator between the two places and the two switches, because they are not the same
+    // kind of row: the two above say where the pin goes, the two below only what it does with
+    // what it is playing once it is there.
+    let _ = AppendMenuW(minimize_menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+    let pause_menu = CreatePopupMenu().unwrap();
     let _ = AppendMenuW(
         pause_menu,
         MF_STRING
@@ -240,10 +265,27 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Video"),
     );
     let _ = AppendMenuW(
-        pin_menu,
+        pause_menu,
+        MF_STRING
+            | if pin_pause_audio {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_PIN_PAUSE_AUDIO as usize,
+        w!("Audio"),
+    );
+    let _ = AppendMenuW(
+        minimize_menu,
         MF_STRING | MF_POPUP,
         pause_menu.0 as usize,
-        w!("Pause in Bubble"),
+        w!("Pause"),
+    );
+    let _ = AppendMenuW(
+        pin_menu,
+        MF_STRING | MF_POPUP,
+        minimize_menu.0 as usize,
+        w!("Minimize"),
     );
 
     // The `Navigation Files` submenu: what the pin's own previous/next

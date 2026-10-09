@@ -234,7 +234,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected.
     - A pinned video has a transport bar with a volume of its own, set on the window; it does not change **Volume → Video**.
     - **Maximize** fits the window to the screen.
-    - **Minimize** collapses it into a round bubble that can be dragged anywhere and clicked to bring the window back; a right-click on the bubble closes it.
+    - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a right-click on the bubble closes it), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
     - Clicking the window gives it the keyboard; then the arrow keys step it and `Escape` closes it.
     - The pin key itself only ever puts a pin up and brings back a bubble; it never hides one.
     - The key is named in the item and can be changed in `config.ini` (`pin_key`).
@@ -248,10 +248,14 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **On Hover** — Off by default.
       - On, the pointer's own hover is one of the ways a pin is told about a file, the way a Quick Look window follows a listing.
       - Greyed while **Follow Selection** is off.
-  - **Pause in Bubble** — What a window collapsed into its bubble does with what it was playing.
-    - Both on by default: the media engine is paused where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
-    - **Audio**
-    - **Video**
+  - **Minimize** — Where a window put away by its **Minimize** button goes, and what it does with what it was playing while it is away.
+    - **To Bubble** (Default) — The window collapses into the round bubble on the desktop, and this app never appears in the taskbar.
+    - **To Taskbar** — The window leaves the screen and the app appears in the taskbar as its own button, titled **Rust Preview**; clicking the button brings the pinned window back where it stood, and a right-click on the button closes the window.
+    - A window is away either way, so previews stay held back until it is brought back, whichever place the setting names.
+    - **Pause** — What a window put away holds where it is.
+      - Both on by default: the media engine is paused where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
+      - **Video**
+      - **Audio**
   - **Navigation Files** — What **Previous** and **Next** on the caption step through.
     - Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them.
     - The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front.
@@ -418,12 +422,15 @@ Example, trimmed:
 pin_enabled=true
 pin_key=space
 pin_nav_file_types=all
-pin_pause_audio=true
-pin_pause_video=true
 pin_update_enabled=true
 pin_update_on_hover=false
 preview_enabled=true
 run_at_startup=true
+
+; Minimize
+pin_minimize_to=bubble
+pin_pause_audio=true
+pin_pause_video=true
 
 ; Preview Types
 archive_preview_enabled=true
@@ -585,7 +592,8 @@ spinner_delay_ms=250
   - The walk is the folder the pin was taken up in and no subfolder of it, is in the order the Explorer listing is showing, wraps at both ends, and is held per folder, read on the first press rather than when the pin is taken up.
   - A file it reaches that the window cannot show is stepped over, and the walk is bounded by the folder: each other file is offered at most once, so a folder of nothing this build can read ends the walk instead of going round for ever.
   - A file written before this setting existed is read as `all`.
-- `pin_pause_video` / `pin_pause_audio`: whether a pin collapsed into its bubble holds what it was playing where it stands, and starts it again at the second it stopped at when the window comes back up. Both default `true`. They are two switches because a video and a sound are two different things to want quiet.
+- `pin_minimize_to`: where a pin put away by the window's own **Minimize** button goes. `bubble` (default) leaves the round bubble on the desktop and keeps this app out of the taskbar; `taskbar` takes the window off the screen and shows this app's own taskbar button (titled **Rust Preview**), which brings the pin back where it stood when clicked and closes it on a right-click. Read when the button is pressed, so a change reaches the next minimize; a file written before this setting existed is read as `bubble`.
+- `pin_pause_video` / `pin_pause_audio`: whether a pin put away into its bubble or the taskbar holds what it was playing where it stands, and starts it again at the second it stopped at when the window comes back up. Both default `true`. They are two switches because a video and a sound are two different things to want quiet.
 - `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.
 - `avoid_mode`: `filename` default, `filename_column`, `details`, or `off` — what the preview avoids.
 

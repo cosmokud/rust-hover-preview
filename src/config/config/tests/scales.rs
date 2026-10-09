@@ -897,6 +897,59 @@ fn the_pin_navigation_setting_survives_a_write_and_a_read() {
     );
 }
 
+/// Where a pin put away by its own minimize goes is a setting of its own, read from its own
+/// key: the round bubble left on the desktop, or the app's own button in the taskbar. A value
+/// that names neither place — or a file written before the setting existed — is read as the
+/// bubble, which is what this app has always done.
+#[test]
+fn reads_where_a_put_away_pin_goes_from_its_own_key() {
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "pin_minimize_to", Some("taskbar".to_string()));
+    assert_eq!(read_file(&mut ini).pin_minimize_to, PinMinimizeTo::Taskbar);
+
+    let mut unknown = Ini::new();
+    unknown.set(CONFIG_SECTION, "pin_minimize_to", Some("sideways".to_string()));
+    assert_eq!(
+        read_file(&mut unknown).pin_minimize_to,
+        DEFAULT_PIN_MINIMIZE_TO,
+        "a value the app cannot read is answered with where a fresh pin goes rather than guessed at"
+    );
+
+    let mut older = Ini::new();
+    older.set(CONFIG_SECTION, "pin_key", Some("space".to_string()));
+    assert_eq!(
+        read_file(&mut older).pin_minimize_to,
+        DEFAULT_PIN_MINIMIZE_TO,
+        "a file written before the setting existed minimizes the way a fresh one does"
+    );
+}
+
+/// The key is written under the name it is read under, so a hand-edited file is the file the
+/// app wrote.
+#[test]
+fn the_pin_minimize_setting_survives_a_write_and_a_read() {
+    let config = AppConfig {
+        pin_minimize_to: PinMinimizeTo::Taskbar,
+        ..AppConfig::default()
+    };
+
+    let mut written = Ini::new();
+    let _ = written.read(ordered_text(&config.to_ini()));
+    assert_eq!(
+        written.get(CONFIG_SECTION, "pin_minimize_to"),
+        Some("taskbar".to_string())
+    );
+
+    let mut read_back = Ini::new();
+    read_back
+        .read(ordered_text(&config.to_ini()))
+        .expect("a file this app wrote is one it can read");
+    assert_eq!(
+        read_file(&mut read_back).pin_minimize_to,
+        PinMinimizeTo::Taskbar
+    );
+}
+
 /// What a pin collapsed into its bubble does with what it is playing is two settings, each
 /// read from its own key: a video behind one and a sound behind the other, so a file that
 /// turns one off leaves the other where it was. Both hold what is playing unless the file

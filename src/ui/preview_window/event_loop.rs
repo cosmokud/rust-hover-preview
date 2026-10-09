@@ -68,6 +68,27 @@ pub fn run_preview_window() {
 
         RegisterClassExW(&bubble_class);
 
+        // And the class the taskbar stand-in is created from: a pin put away into the taskbar
+        // rather than into the bubble leaves this window behind, and it is the one surface of
+        // this app's that is meant to be in the taskbar — an icon and a title, nothing drawn,
+        // kept off the screen (see `pin_taskbar`).
+        let taskbar_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(pin_taskbar_proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: hinstance.into(),
+            hIcon: taskbar_icon(),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hbrBackground: Default::default(),
+            lpszMenuName: PCWSTR::null(),
+            lpszClassName: PIN_TASKBAR_CLASS,
+            hIconSm: taskbar_icon(),
+        };
+
+        RegisterClassExW(&taskbar_class);
+
         // Create the preview window
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
