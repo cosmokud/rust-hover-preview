@@ -284,6 +284,7 @@ mod pin_menu;
 mod pin_player_failure;
 mod pin_resize;
 mod pin_subtitle_reload;
+mod pin_swap_ffplay_native;
 mod pin_volume;
 mod placement;
 mod probes;
