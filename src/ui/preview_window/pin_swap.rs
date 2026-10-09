@@ -793,23 +793,11 @@ impl PinSwapHold {
     /// file's player is not consulted about a session that has nothing to do with it (see
     /// `video_player::failing_before_a_frame`).
     pub(super) fn settle(&mut self) -> Option<PinSwapWait> {
-        // TEMP-WEDGE: a take that never comes back is the wedge; an outcome
-        // is logged so the tail shows how the hold ended (or that it didn't).
-        let frame_in_hand =
-            wedge_timed("hold take_native_video_frame", 300, || {
-                self.file.media.take_native_video_frame()
-            });
+        let frame_in_hand = self.file.media.take_native_video_frame();
         let playing = video_player::is_playing();
         let failing = video_player::failing_before_a_frame().is_some();
 
-        let out = pin_swap_wait(frame_in_hand, playing, failing);
-        if let Some(wait) = out {
-            wedge_log(&format!(
-                "hold settle {} frame={frame_in_hand} playing={playing} failing={failing} -> {wait:?}",
-                self.file.path.display(),
-            ));
-        }
-        out
+        pin_swap_wait(frame_in_hand, playing, failing)
     }
 
     /// The file to install, for a wait that has come to either of its ends.
@@ -833,10 +821,6 @@ impl PinSwapHold {
 /// file may well be a film FFmpeg's player is drawing, and that player is not what this session
 /// is (see `stop_video_playback`).
 pub(super) fn abandon_pin_swap(hold: &mut Option<PinSwapHold>) {
-    // TEMP-WEDGE: see tick.rs.
-    if hold.is_some() {
-        wedge_log("hold abandoned by a newer pick");
-    }
     if let Some(mut held) = hold.take() {
         stop_video_playback(&mut held.file.media);
     }

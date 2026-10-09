@@ -248,10 +248,6 @@ pub(super) fn settle_bubble_playback(
     audio_started: &mut Option<Instant>,
     audio_start_offset: &mut f64,
 ) {
-    // TEMP-WEDGE: entry mark (see tick.rs).
-    if WEDGE_ARMED.load(Ordering::Acquire) {
-        wedge_log("> settle_bubble_playback");
-    }
     let (collapsed, parked) = {
         let Some(pinned) = pin_state() else {
             return;
