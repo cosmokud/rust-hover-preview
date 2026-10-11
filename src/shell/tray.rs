@@ -63,7 +63,7 @@ use ids::{
     ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE,
     ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE,
     ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
-    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME,
+    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_BASE, MPV_COMMANDS, ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME,
     ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
     ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_NAV_CATEGORY,
@@ -86,10 +86,12 @@ use ids::{
 use submenus::{
     audio_scale_at, audio_seek_label, avoid_label, background_at, background_label,
     bitmap_scale_label, dds_background_at, document_scale_at, document_scale_label,
-    engine_idle_at, engine_idle_label, html_background_at, pin_minimize_label,
+    engine_idle_at, engine_idle_label, html_background_at, is_mpv_row, mpv_menu_items, mpv_row_label,
+    pin_minimize_label,
     pin_mode_audio_seek_label,
     pin_nav_label, pin_update_label,
     remember_volume_label, system_menu_label, update_available_label, video_engine_label,
+    MPV_LABEL_BUDGET,
 };
 
 #[cfg(test)]

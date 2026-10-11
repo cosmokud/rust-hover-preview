@@ -627,6 +627,11 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
 
+    // The machine's own mpv is stood out so this test spawns no real player: with mpv installed
+    // the default engine would pick it (see `stand_mpv_in`).
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+
     let mut transport = PinTransport::default();
     transport.begun(3.0, true, false);
 
@@ -828,6 +833,8 @@ fn a_drag_parks_the_pictures_window_without_holding_the_film_twice() {
              in its place"
     );
 
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;

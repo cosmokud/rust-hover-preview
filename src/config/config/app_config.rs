@@ -9,7 +9,7 @@ use super::defaults::{
     DEFAULT_CHECK_FOR_UPDATES,
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME,
+    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_MPV_PATH, DEFAULT_NORMALIZE_VIDEO_VOLUME,
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
     DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
@@ -482,6 +482,14 @@ pub struct AppConfig {
     /// draws a small film here and hands a large one over where FFmpeg is installed — and the other
     /// three name an engine, or a rule between two, plainly. See `video_hw::resolve_video_engine`.
     pub video_engine: VideoEngine,
+    /// The `mpv.exe` a launch runs, which is what the tray's `Codecs → Videos → MPV` submenu picks
+    /// between when this machine has more than one.
+    ///
+    /// It is the only setting that holds a path — every other one is a value of this app's own —
+    /// and an empty one means the first install `codecs::mpv_installs` finds, which is what a
+    /// machine with one mpv reads it as. A path that has gone is not fatal either: the first
+    /// install is used instead and the submenu re-marks it (see `codecs::resolve_mpv`).
+    pub mpv_path: String,
     /// Whether an explicitly chosen engine that cannot play a given file falls through to the
     /// others, which is the `Fallback` switch at the top of the same submenu. It is read only
     /// where the choice names an engine rather than `Best`, since `Best` is a walk of the same
@@ -694,6 +702,7 @@ impl Default for AppConfig {
             general_disk_cache_mb: DEFAULT_GENERAL_DISK_CACHE_MB,
             office_engine: DEFAULT_OFFICE_ENGINE,
             video_engine: DEFAULT_VIDEO_ENGINE,
+            mpv_path: DEFAULT_MPV_PATH.to_string(),
             video_engine_fallback: DEFAULT_VIDEO_ENGINE_FALLBACK,
             video_subtitles: DEFAULT_VIDEO_SUBTITLES,
             office_engine_idle: EngineIdle::Seconds(DEFAULT_OFFICE_ENGINE_IDLE_SECS),

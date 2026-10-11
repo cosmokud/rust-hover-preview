@@ -17,7 +17,7 @@ use super::ids::{
     EngineIdleIds, AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
     BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES,
     ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE,
-    ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS,
+    ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_MPV_BASE,
     ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK,
     TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
 };
@@ -32,6 +32,7 @@ use crate::config::config::{
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
 use crate::CONFIG;
+use std::path::{Path, PathBuf};
 use windows::core::{w, PCWSTR};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, HMENU, MENU_ITEM_FLAGS, MF_BYCOMMAND,
@@ -1093,47 +1094,168 @@ pub(super) fn append_codecs_menu(menu: HMENU) {
 
 /// One group of the `Codecs` submenu, with a row per engine or codec in it.
 ///
-/// `base` is where this group's commands begin in the numbering above.
+/// `base` is where this group's commands begin in the numbering above. The row named `MPV` is
+/// the one that can open a submenu of its own (see `is_mpv_row` and `append_mpv_row`).
 fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>, base: u16) {
     let group = unsafe { CreatePopupMenu().unwrap() };
 
-    // The labels are kept for as long as the group is being filled out, for the reason the
-    // cache labels are: `AppendMenuW` is handed a pointer, so the wide strings have to
-    // outlive the call that lists them.
-    let labels: Vec<Vec<u16>> = rows
-        .iter()
-        .map(|row| {
-            codec_row_label(row)
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect()
-        })
-        .collect();
-
     for (index, row) in rows.iter().enumerate() {
-        // A row the machine has is inert, and so is a row it is missing that has nowhere to
-        // be got from: neither is given an id, so picking one closes the menu and does
-        // nothing else. The two are told apart by being grey where the second is — a row
-        // cannot be both normal-looking and unpickable, and the cross every missing row
-        // carries is what says which of them a row is.
-        let pickable = !row.available && row.link.is_some();
-
-        let flags = if pickable || row.available {
-            MF_STRING
+        if is_mpv_row(row) {
+            append_mpv_row(group, row, index as u16, base);
         } else {
-            MF_STRING | MF_GRAYED
-        };
-
-        let id = if pickable {
-            (base + index as u16) as usize
-        } else {
-            0
-        };
-
-        let _ = unsafe { AppendMenuW(group, flags, id, PCWSTR(labels[index].as_ptr())) };
+            append_codec_row(group, row, index as u16, base);
+        }
     }
 
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, group.0 as usize, label) };
+}
+
+/// One row of a codec group: a row the machine has is inert, and so is a row it is missing that
+/// has nowhere to be got from — neither is given an id, so picking one closes the menu and does
+/// nothing else. The two are told apart by being grey where the second is: a row cannot be both
+/// normal-looking and unpickable, and the cross every missing row carries is what says which of
+/// them a row is.
+fn append_codec_row(group: HMENU, row: &Row, index: u16, base: u16) {
+    let pickable = !row.available && row.link.is_some();
+
+    let flags = if pickable || row.available {
+        MF_STRING
+    } else {
+        MF_STRING | MF_GRAYED
+    };
+
+    let id = if pickable { base + index } else { 0 };
+
+    append_labeled_item(group, flags, id, &codec_row_label(row));
+}
+
+/// Whether a codec row is the one that opens the submenu of mpv installs: the row the tray names
+/// `MPV`, matched on the name rather than on the position it holds — the position is a fact of
+/// whatever the `Videos` list looks like today, the name is what the row is.
+pub(super) fn is_mpv_row(row: &Row) -> bool {
+    row.name == "MPV"
+}
+
+/// The `MPV` row of a codec group, found by its name rather than by where it is listed: where
+/// this machine has more than one install to pick between it opens a submenu of them, and with
+/// one, or none, it is the row it has always been (see `is_mpv_row`).
+///
+/// It is a *normal* popup rather than the inert greyed row an available codec gets, because a
+/// greyed popup cannot be opened — the row that offers a choice has to be pickable. The children
+/// carry the id range `ID_TRAY_MPV_BASE` hands out, and a click re-enumerates the installs in the
+/// same order rather than remembering the menu (see `set_mpv_path`).
+fn append_mpv_row(group: HMENU, row: &Row, index: u16, base: u16) {
+    let installs = codecs::mpv_installs();
+
+    if installs.len() < 2 {
+        append_codec_row(group, row, index, base);
+        return;
+    }
+
+    let chosen = CONFIG
+        .lock()
+        .map(|config| config.mpv_path.clone())
+        .unwrap_or_default();
+    let in_use = codecs::resolve_mpv(
+        (!chosen.trim().is_empty()).then_some(Path::new(&chosen)),
+        &installs,
+    );
+
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+
+    let items = mpv_menu_items(&installs, in_use.as_deref());
+
+    for (index, (label, _)) in items.iter().enumerate() {
+        append_labeled_item(menu, MF_STRING, ID_TRAY_MPV_BASE + index as u16, label);
+    }
+
+    // One install is in use and the others are not, so one item carries the radio mark — the
+    // same shape, and the same `CheckMenuRadioItem` call, as the `Engine → Video Engine` rows
+    // (see `append_video_engine_menu`). It clears the others, so a rebuild leaves no stale mark
+    // on an install that was in use before.
+    if let Some(index) = items.iter().position(|(_, marked)| *marked) {
+        let _ = unsafe {
+            CheckMenuRadioItem(
+                menu,
+                ID_TRAY_MPV_BASE as u32,
+                (ID_TRAY_MPV_BASE + items.len() as u16 - 1) as u32,
+                (ID_TRAY_MPV_BASE + index as u16) as u32,
+                MF_BYCOMMAND.0,
+            )
+        };
+    }
+
+    let label: Vec<u16> = codec_row_label(row)
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let _ = unsafe {
+        AppendMenuW(
+            group,
+            MF_STRING | MF_POPUP,
+            menu.0 as usize,
+            PCWSTR(label.as_ptr()),
+        )
+    };
+}
+
+/// What the `MPV` row's submenu lists: one item per install, in the order they were found, with
+/// the one in use marked — and nothing at all where there is no choice to make, which is what
+/// leaves the row the row it is today.
+///
+/// It is pure so the two-install answer is testable without depending on what this machine has
+/// installed; the one in use is `resolve_mpv`'s answer rather than a second reading of the
+/// setting.
+pub(super) fn mpv_menu_items(installs: &[PathBuf], in_use: Option<&Path>) -> Vec<(String, bool)> {
+    if installs.len() < 2 {
+        return Vec::new();
+    }
+
+    installs
+        .iter()
+        .map(|install| (mpv_row_label(install), Some(install.as_path()) == in_use))
+        .collect()
+}
+
+/// The most characters an `MPV` row's label may take, the house ellipsis and the separator after
+/// it included. A path that does not fit is shortened from the front, whole components kept from
+/// the end so no folder is cut in half (`…\SVP 4\mpv64\mpv.exe`).
+///
+/// The tray has no measuring helper — the pin caption's `longest_prefix_that_fits` measures
+/// against a DC — so this is a count of characters: upgrade to measuring if a menu label ever
+/// needs one.
+pub(super) const MPV_LABEL_BUDGET: usize = 21;
+
+/// What one install reads as in the `MPV` row's submenu: the path as it stands under the budget,
+/// and the tail of it after the house ellipsis past it.
+pub(super) fn mpv_row_label(path: &Path) -> String {
+    let shown = path.to_string_lossy();
+
+    if shown.chars().count() <= MPV_LABEL_BUDGET {
+        return shown.into_owned();
+    }
+
+    // The `…` and the separator after it take two of the budget; the rest is the tail.
+    let room = MPV_LABEL_BUDGET.saturating_sub(2);
+    let mut kept: Vec<&str> = Vec::new();
+    let mut width = 0;
+
+    for part in shown.split(['\\', '/']).rev() {
+        // One character more where the separator before a component has to be kept with it.
+        let cost = part.chars().count() + usize::from(!kept.is_empty());
+
+        if width + cost > room && !kept.is_empty() {
+            break;
+        }
+
+        width += cost;
+        kept.push(part);
+    }
+
+    let tail: Vec<&str> = kept.into_iter().rev().collect();
+
+    format!("\u{2026}\\{}", tail.join("\\"))
 }
 
 /// What one row of the `Codecs` submenu is written as: the mark that says whether it is
