@@ -1728,6 +1728,32 @@ fn a_box_change_moves_mpv_and_begins_nothing_again() {
     stand_mpv_in(Some(true));
     stand_ffplay_in(Some(false));
 
+    // The machine's own engine: a resize is its own call and nothing is begun again — the arm this
+    // pins alongside FFmpeg's player's relaunch. Put back to the film mpv draws below.
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            media.media_type = MediaType::NativeVideo;
+        }
+    }
+    clear_restart_count();
+    relayout_pinned_media(
+        &PathBuf::from("ws-k-chrome-nav.mkv"),
+        (100, 80, 420, 320),
+        96,
+        None,
+        PinRelayoutRoad::BoxChange,
+    );
+    assert_eq!(
+        restart_count(),
+        0,
+        "the engine is resized where it stands and begins nothing"
+    );
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            media.media_type = MediaType::Video;
+        }
+    }
+
     let content = (100, 80, 420, 320);
     stand_pin(Some(playing_pin(content, 30.0)));
     forget_pin_park_swap();

@@ -504,6 +504,23 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
         "mpv takes a level while it runs, so its settle begins nothing again"
     );
 
+    // The machine's own engine: the level is its own while it runs, so the knob is the write and
+    // nothing is begun again — the arm this pins alongside FFmpeg's player's relaunch.
+    stand_native_video_media();
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+    stand(70, 40);
+    set_pin_volume(70);
+    assert_eq!(
+        restart_count(),
+        0,
+        "the engine takes the level while it runs, so the knob begins nothing"
+    );
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "and the engine listens on no pipe for a level to be written to"
+    );
+
     mpv_ipc::forget_pipe(101);
     mpv_ipc::clear_noted();
     stand_mpv_in(None);
@@ -514,4 +531,15 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
         *media = previous_media;
     }
     clear_restart_count();
+}
+
+/// The media behind the pin, as the machine's own engine rather than a player of its own: the
+/// native arms of `set_pin_volume` and `settle_pin_volume` are read off the media's kind, so this
+/// is what a test about the other routes pins them with.
+fn stand_native_video_media() {
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            media.media_type = MediaType::NativeVideo;
+        }
+    }
 }

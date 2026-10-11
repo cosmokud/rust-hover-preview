@@ -807,6 +807,20 @@ fn stand_video_media() -> Option<MediaData> {
     previous
 }
 
+/// A video behind the pin on the machine's own engine rather than a player of its own: each shared
+/// call site reads the native route off the media's kind rather than off `video_route` (see
+/// `seek_pinned_playback`), and this is the arm a test about the other two routes pins down
+/// alongside them.
+fn stand_native_video_media() -> Option<MediaData> {
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::NativeVideo;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+    previous
+}
+
 /// A pin standing on `film` at a box, playing from the thirtieth second — what a hover leaves
 /// behind when it is pinned. No player is begun here; every question below is about the command
 /// the mpv route sends or the relaunch FFmpeg's player takes.
@@ -874,6 +888,25 @@ fn a_seek_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays() {
         }),
         Some(Some(90.0)),
         "with the bar's own clock rebased onto that second, since no player was begun at it"
+    );
+
+    // The machine's own engine: it is told where to go while it runs, so nothing is begun again
+    // either, and a held file's bar moves with the seek as it always has.
+    stand_native_video_media();
+    clear_restart_count();
+    let mut held = a_playing_pin(&film, content);
+    held.transport.held(30.0);
+    stand_pin(Some(held));
+    seek_pinned_playback(&film, content, 90.0);
+    assert_eq!(
+        restart_count(),
+        0,
+        "the engine is taken to the second while it runs, which is the arm this pins down"
+    );
+    assert_eq!(
+        pin_state().and_then(|state| state.pin().map(|pin| pin.transport.paused_at)),
+        Some(Some(90.0)),
+        "and a held file's bar is drawn at the second the engine was taken to"
     );
 
     mpv_ipc::forget_pipe(101);
@@ -945,6 +978,24 @@ fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume()
             format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
         ],
         "the hold and the release are mpv's own pause property"
+    );
+
+    // The machine's own engine: its pause is a state rather than a player ended and begun again,
+    // so nothing is begun here and no command is written down a pipe it is not listening on.
+    stand_native_video_media();
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+    stand_pin(Some(a_playing_pin(&film, content)));
+    let transport = pinned_playback_state().expect("a pin is up").2;
+    toggle_pinned_playback(&film, content, transport);
+    assert_eq!(
+        restart_count(),
+        0,
+        "the engine's own pause is a state, not a player begun again"
+    );
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "and the engine listens on no pipe for one to be written to"
     );
 
     mpv_ipc::forget_pipe(101);
@@ -1021,6 +1072,25 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
         mpv_ipc::noted_lines(),
         vec![format!("{}\n", r#"{"command":["seek",0.000,"absolute"],"async":true}"#)],
         "the wrap is a seek to the beginning, which is the only second a loop can restart at"
+    );
+
+    // The machine's own engine: a loop it cannot be told to give is a player begun again, the same
+    // answer FFmpeg's player gives and the one mpv alone was spared.
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(false));
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        *slot = None;
+    }
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+    VIDEO_PID.store(101, Ordering::SeqCst);
+    note_video_loop(101, &film, content, 0.0, Some(8.0));
+    a_pass_has_run();
+    assert!(video_loop_tick(true), "the tick takes the engine's film back");
+    assert_eq!(
+        restart_count(),
+        1,
+        "a loop nothing can be told takes a player begun again on the engine's route too"
     );
 
     if let Ok(mut slot) = VIDEO_LOOP.lock() {
