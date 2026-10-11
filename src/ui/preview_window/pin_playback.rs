@@ -188,7 +188,7 @@ pub(super) fn restart_pinned_player(
     let process = start_video_playback(
         path, content.0, content.1, width, height, seconds, volume, subtitle,
     );
-    let pid = process.as_ref().map(|child| child.id()).unwrap_or(0);
+    let pid = process.as_ref().map(|player| player.id()).unwrap_or(0);
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(media) = current.as_mut() {

@@ -771,6 +771,16 @@ fn a_switched_setting_stops_the_answer_found_for_the_one_before_it() {
 /// player that survives three seconds, which is a fact about the machine rather than about the
 /// code, and asserting it would mean leaving a real `ffplay` running on the machine that ran the
 /// tests — which is the fault being fixed, reproduced on purpose.
+///
+/// **What a probe answers is not asked here either, and for the same reason in the opposite
+/// direction.** A probe *is* a process, and a test run starts none (see `video_playback::spawn_player`),
+/// so the test build answers "no device survived" without asking anything — a working answer on a
+/// machine where nothing does (see `probe_hwaccel_device`). An assertion that a name FFmpeg does
+/// not know is refused used to stand here; it would now be asserting that constant, so it is gone
+/// rather than kept as a test that cannot fail. What that leaves uncovered is the *walk* — the
+/// first device that survives, or nothing — which wants the probe handed in as a closure the way
+/// `video_hw::resolve_video_engine` takes its answers, and is worth doing when the walk is next
+/// touched.
 #[test]
 fn a_device_is_named_only_when_a_probe_found_one_that_survives() {
     // The answer is read, never waited for: this runs on the preview thread, which is the one
@@ -782,14 +792,5 @@ fn a_device_is_named_only_when_a_probe_found_one_that_survives() {
         video_hw_accel_device(),
         "two launches of the same run must get the same answer, because the question is about \
              this machine's drivers and about one build of FFmpeg"
-    );
-
-    // A device the player refuses before it decodes anything is refused here too, and that is
-    // the whole contract of the probe: it is a list walked against the machine, not a name
-    // passed on faith.
-    assert!(
-        !probe_one_hwaccel("no-such-device"),
-        "a name FFmpeg does not know is refused before it decodes a frame, so the walk stops \
-             rather than naming something fatal"
     );
 }

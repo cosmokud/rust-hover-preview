@@ -3402,7 +3402,7 @@ pub fn run_preview_window() {
                                     None,
                                 );
                                 let pid =
-                                    video_process.as_ref().map(|child| child.id()).unwrap_or(0);
+                                    video_process.as_ref().map(|player| player.id()).unwrap_or(0);
 
                                 current_video_path = Some(path.clone());
                                 video_pos = (pos_x, pos_y, media_width, media_height);

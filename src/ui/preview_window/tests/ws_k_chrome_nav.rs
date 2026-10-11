@@ -1224,11 +1224,6 @@ fn a_take_up_relaunches_a_film_without_pressing_it() {
     let previous_media = stand_video_media();
     clear_restart_count();
 
-    // The machine's own mpv is stood out so this test spawns no real player: with mpv installed
-    // the default engine would pick it (see `stand_mpv_in`).
-    stand_ffplay_in(Some(true));
-    stand_mpv_in(Some(false));
-
     let content = (100, 80, 420, 320);
     stand_pin(Some(playing_pin(content, 30.0)));
     forget_pin_park_swap();
@@ -1290,11 +1285,6 @@ fn a_box_change_presses_the_film_and_relaunches_it_behind_the_cover() {
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
     clear_restart_count();
-
-    // The machine's own mpv is stood out so this test spawns no real player: with mpv installed
-    // the default engine would pick it (see `stand_mpv_in`).
-    stand_ffplay_in(Some(true));
-    stand_mpv_in(Some(false));
 
     let content = (100, 80, 420, 320);
     stand_pin(Some(playing_pin(content, 30.0)));

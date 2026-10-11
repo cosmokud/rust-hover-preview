@@ -431,10 +431,6 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
         .unwrap_or_else(|e| e.into_inner());
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_a_video(640, 360);
-    // The machine's own mpv is stood out so this test spawns no real player: with mpv installed
-    // the default engine would pick it (see `stand_mpv_in`).
-    stand_ffplay_in(Some(true));
-    stand_mpv_in(Some(false));
     clean_slate();
 
     // 1 — a pin up on a video, and a caption that answers.
@@ -530,8 +526,6 @@ fn a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap() {
         "which asks for its own command rather than another arm's"
     );
 
-    stand_mpv_in(None);
-    stand_ffplay_in(None);
     stand_pin(previous_pin);
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = previous_media;
@@ -590,10 +584,6 @@ fn a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_b
         .unwrap_or_else(|e| e.into_inner());
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_a_video(640, 360);
-    // The machine's own mpv is stood out so this test spawns no real player: with mpv installed
-    // the default engine would pick it (see `stand_mpv_in`).
-    stand_ffplay_in(Some(true));
-    stand_mpv_in(Some(false));
     clean_slate();
 
     take_up_a_video_pin();
@@ -708,8 +698,6 @@ fn a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_b
         "which asked for the media at the box the hand settled on"
     );
 
-    stand_mpv_in(None);
-    stand_ffplay_in(None);
     stand_pin(previous_pin);
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = previous_media;
