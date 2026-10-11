@@ -12,7 +12,8 @@ use super::app_config::AppConfig;
 use super::defaults::{
     parse_text_font_scale, sanitize_decode_budget_gb, sanitize_document_cache_mb,
     sanitize_general_disk_cache_mb, sanitize_hdr_exposure, sanitize_image_cache_mb,
-    sanitize_image_disk_cache_mb, sanitize_spinner_delay_ms, sanitize_text_font_scale_percent,
+    sanitize_image_disk_cache_mb, sanitize_mpv_path, sanitize_spinner_delay_ms,
+    sanitize_text_font_scale_percent,
     sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms, sanitize_ttc_face,
     sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
 };
@@ -365,6 +366,12 @@ impl AppConfig {
             CONFIG_SECTION,
             "video_engine_fallback",
             Some(self.video_engine_fallback.to_string()),
+        );
+        // The one setting that holds a path: written as it stands, trimmed on the way back in.
+        ini.set(
+            CONFIG_SECTION,
+            "mpv_path",
+            Some(self.mpv_path.clone()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -897,6 +904,11 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_engine_fallback") {
             self.video_engine_fallback = value;
+        }
+        // A value that cannot be read — a key that is gone, or one that is not text — is nobody's
+        // pick, which is the empty path the setting starts at (see `DEFAULT_MPV_PATH`).
+        if let Some(value) = ini.get(CONFIG_SECTION, "mpv_path") {
+            self.mpv_path = sanitize_mpv_path(&value);
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_subtitles") {
             self.video_subtitles = value;

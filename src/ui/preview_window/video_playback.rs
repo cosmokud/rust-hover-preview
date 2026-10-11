@@ -319,8 +319,15 @@ fn start_mpv_video_playback(
 ) -> Option<Child> {
     // The switches are read here, at the launch, for the reason the ffplay route reads its own
     // here: a film already playing was started with the answer that stood then and is kept
-    // playing with it (see `video_hw_accel_wanted`, `subtitles_wanted`).
-    let child = engine_processes::hidden_command("mpv")
+    // playing with it (see `video_hw_accel_wanted`, `subtitles_wanted`). The picked mpv is read
+    // here for the same reason.
+    let chosen = CONFIG
+        .lock()
+        .map(|config| config.mpv_path.clone())
+        .unwrap_or_default();
+    let program = video_hw::mpv_program(&chosen, &codecs::mpv_installs())?;
+
+    let child = engine_processes::hidden_command(program)
         .args(video_launch::mpv_args(
             path,
             x,

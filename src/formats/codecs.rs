@@ -629,8 +629,7 @@ fn mpv_installs_in(
 /// not one of them — a portable copy, a build of their own — is still the one to run, and asking
 /// it to be in the list would silently drop their choice. The list is what it falls back to.
 ///
-/// Nothing reads it yet: it is the seam the tray's MPV submenu chooses through.
-#[allow(dead_code)]
+/// The tray's `MPV` row asks it which install to mark, and a launch asks it what to run.
 pub fn resolve_mpv(chosen: Option<&Path>, installs: &[PathBuf]) -> Option<PathBuf> {
     match chosen {
         Some(chosen) if chosen.is_file() => Some(chosen.to_path_buf()),

@@ -305,6 +305,13 @@ pub(super) const ID_TRAY_CHECK_UPDATES: u16 = 1522;
 /// the three groups is still inside it.
 pub(super) const ID_TRAY_CODEC_BASE: u16 = 1600;
 pub(super) const CODEC_COMMANDS: u16 = 64;
+/// The `Codecs → Videos → MPV` row's installs, where this machine has more than one to pick
+/// between: one command per install, in the order `codecs::mpv_installs` finds them, so a click
+/// re-enumerates the same list in the same order rather than remembering the menu (see
+/// `set_mpv_path`). It sits in the run the `Codecs` commands end at — past every id the app hands
+/// out — and is wider than any machine's install list is likely to be.
+pub(super) const ID_TRAY_MPV_BASE: u16 = 1664;
+pub(super) const MPV_COMMANDS: u16 = 8;
 /// The row above `Run at Startup`, which is in the menu only while a newer release is
 /// waiting: it puts the installer `updates` fetched on, and the app ends itself as the
 /// installer takes over rather than being the copy that has to be terminated.

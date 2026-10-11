@@ -165,6 +165,7 @@ fn a_file_the_app_wrote_is_one_it_reads_back_as_itself() {
         document_cache_mb: 1024,
         tick_ms: 47,
         trigger_key_affect_pin_mode: true,
+        mpv_path: r"an-install\mpv.exe".to_string(),
         ..Default::default()
     };
 
@@ -275,4 +276,50 @@ fn a_reset_marker_is_taken_once_and_removed() {
     assert_eq!(take_reset_markers(&folder), (false, true));
 
     let _ = fs::remove_dir_all(&folder);
+}
+
+/// The picked mpv is the one setting that holds a path: it is written as it stands and read back
+/// the same, and a value written with spaces around it is trimmed rather than kept. An empty one
+/// is nobody's pick, which means the first install found (see `resolve_mpv`).
+#[test]
+fn the_picked_mpv_path_round_trips_through_the_file() {
+    let config = AppConfig {
+        mpv_path: r"an-install\mpv.exe".to_string(),
+        ..Default::default()
+    };
+
+    let mut ini = Ini::new();
+    ini.read(ordered_text(&config.to_ini()))
+        .expect("a file this app wrote");
+
+    let mut read_back = AppConfig::default();
+    read_back.apply_ini(&ini);
+
+    assert_eq!(
+        read_back.mpv_path, config.mpv_path,
+        "the path the file holds is the path the app read"
+    );
+    assert!(
+        !read_back.differs(&ini),
+        "and it is a file there is nothing to write"
+    );
+
+    let mut ini = written_file();
+    ini.set(
+        CONFIG_SECTION,
+        "mpv_path",
+        Some(r"   an-install\mpv.exe   ".to_string()),
+    );
+
+    assert_eq!(
+        read_file(&mut ini).mpv_path,
+        r"an-install\mpv.exe",
+        "a value written with spaces around it is the path it names"
+    );
+
+    assert_eq!(
+        AppConfig::default().mpv_path,
+        DEFAULT_MPV_PATH,
+        "nothing picked is an empty path, which is the first install"
+    );
 }

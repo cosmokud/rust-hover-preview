@@ -1,4 +1,5 @@
 use super::*;
+use std::path::PathBuf;
 
 /// The order the submenu is built in is the order it is read in, and it is
 /// built top down: the engine that is never let go is the topmost item and the
@@ -1060,6 +1061,9 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
         (ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_IMAGE_CACHE_BASE),
         // The codec rows, wider than the list is long.
         (ID_TRAY_CODEC_BASE, ID_TRAY_CODEC_BASE + CODEC_COMMANDS),
+        // And the mpv installs the `Codecs → Videos → MPV` submenu lists, wider than any
+        // machine's install list is likely to be.
+        (ID_TRAY_MPV_BASE, ID_TRAY_MPV_BASE + MPV_COMMANDS),
         // The video-engine rows, a base plus one id per engine: the run is now as wide as the
         // slack before the config row at 1040, so the next engine added would land on it.
         (
@@ -1416,5 +1420,102 @@ fn the_video_engine_rows_are_ids_of_their_own() {
         VideoEngine::Hybrid.installed(),
         crate::formats::codecs::ffplay_available(),
         "and the hybrid needs `ffplay` for the half of it that hands a film over"
+    );
+}
+
+/// The `MPV` row's submenu lists one item per install, in the order the machine found them, with
+/// the one in use marked — and lists nothing at all where this machine has one mpv or none, which
+/// is what leaves the row the row it is today.
+#[test]
+fn the_mpv_submenu_lists_the_installs_with_the_one_in_use_marked() {
+    let first = PathBuf::from("program-files")
+        .join("MPV Player")
+        .join("mpv.exe");
+    let second = PathBuf::from("a-long-root")
+        .join("Program Files (x86)")
+        .join("SVP 4")
+        .join("mpv64")
+        .join("mpv.exe");
+
+    let installs = vec![first.clone(), second.clone()];
+
+    assert_eq!(
+        mpv_menu_items(&installs, Some(first.as_path())),
+        vec![
+            (mpv_row_label(&first), true),
+            (mpv_row_label(&second), false),
+        ],
+        "one item per install, in the order found, with the one in use marked"
+    );
+
+    // One install is no choice: the row is the row it is today.
+    assert!(mpv_menu_items(&installs[..1], Some(first.as_path())).is_empty());
+    assert!(mpv_menu_items(&[], None).is_empty());
+}
+
+/// Which row opens the `MPV` submenu: the row named `MPV`, wherever the `Videos` list puts it,
+/// not whichever row that list happens to open with — the position is a fact of the list today
+/// and the name is what the row is. Asserted over every group, so no other group's row opens it
+/// just by being the one it lists first.
+#[test]
+fn the_mpv_submenu_opens_from_the_row_named_mpv() {
+    let groups = [
+        crate::formats::codecs::video(),
+        crate::formats::codecs::audio(),
+        crate::formats::codecs::images(),
+        crate::formats::codecs::engines(),
+    ];
+
+    let opening: Vec<&str> = groups
+        .iter()
+        .flatten()
+        .filter(|row| is_mpv_row(row))
+        .map(|row| row.name)
+        .collect();
+
+    assert_eq!(
+        opening,
+        ["MPV"],
+        "only the row named `MPV` opens the submenu"
+    );
+    assert!(
+        !is_mpv_row(&crate::formats::codecs::audio()[0]),
+        "a row that is not named `MPV` does not open it, even from the top of its group"
+    );
+}
+
+/// An mpv path is shortened from the front past the budget, keeping the tail — the folder and the
+/// file's own name — under the house ellipsis; one under the budget is the path as it stands. The
+/// two installs a Windows machine has differ in their labels, which is what makes the submenu
+/// worth having.
+#[test]
+fn mpv_labels_keep_the_tail_and_shorten_from_the_front() {
+    let short = PathBuf::from("an-install").join("mpv.exe");
+
+    assert_eq!(
+        mpv_row_label(&short),
+        short.display().to_string(),
+        "a path under the budget is written as it is"
+    );
+
+    let long = PathBuf::from("a-long-root")
+        .join("Program Files (x86)")
+        .join("SVP 4")
+        .join("mpv64")
+        .join("mpv.exe");
+    let label = mpv_row_label(&long);
+
+    assert_eq!(
+        label, "\u{2026}\\SVP 4\\mpv64\\mpv.exe",
+        "the shortened label keeps the whole trailing components under the house ellipsis"
+    );
+    assert!(
+        label.chars().count() <= MPV_LABEL_BUDGET,
+        "the label is kept inside the budget: {label}"
+    );
+    assert_ne!(
+        mpv_row_label(&short),
+        label,
+        "the two installs' labels differ, which is what the submenu is for"
     );
 }

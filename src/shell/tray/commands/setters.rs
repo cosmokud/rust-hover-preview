@@ -38,6 +38,7 @@ use crate::config::config::{
 };
 use crate::engines::document_cache;
 use crate::engines::office_render;
+use crate::formats::codecs;
 use crate::ui::preview_window::{
     forget_video_geometry, refresh_preview, refresh_preview_types, trim_image_cache,
     trim_subtitle_cache,
@@ -307,6 +308,29 @@ pub(in super::super) fn set_video_engine(engine: VideoEngine) {
         config.save();
     }
     forget_video_geometry();
+}
+
+/// Which `mpv.exe` a launch runs, from `Codecs → Videos → MPV`, by the position its install was
+/// listed at.
+///
+/// The installs are asked of the machine again rather than remembered from the menu build, so an
+/// id means the same thing on both sides: the same list, in the same order, is what the menu
+/// listed (see `codecs::mpv_installs`). A position with no install behind it — the machine
+/// changed between the menu opening and the click — writes nothing.
+///
+/// Nothing on screen is rebuilt: the next launch reads the setting, and a film already playing
+/// belongs to the player that started it.
+pub(in super::super) fn set_mpv_path(index: u16) {
+    let installs = codecs::mpv_installs();
+
+    let Some(install) = installs.get(index as usize) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.mpv_path = install.to_string_lossy().into_owned();
+        config.save();
+    }
 }
 
 /// How long the browser engine is kept after the last document it drew — for a browser that

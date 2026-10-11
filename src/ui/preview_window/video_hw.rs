@@ -17,6 +17,18 @@ pub(super) fn video_hw_accel_wanted() -> bool {
         .unwrap_or(DEFAULT_VIDEO_HW_ACCEL)
 }
 
+/// The `mpv.exe` a launch runs: the path `mpv_path` names where it is still a file, and the first
+/// install this machine has otherwise — `None` only where there is neither.
+///
+/// `chosen` is the setting's own text, empty for "nobody has picked one", which means the same as
+/// the first install. The setting is read at the launch for the reason above: a film already
+/// playing was started with the path that stood then and is kept playing with it.
+pub(super) fn mpv_program(chosen: &str, installs: &[PathBuf]) -> Option<PathBuf> {
+    let chosen = (!chosen.trim().is_empty()).then_some(Path::new(chosen));
+
+    codecs::resolve_mpv(chosen, installs)
+}
+
 /// The device a video is decoded on, or nothing for a video decoded on a core.
 ///
 /// This is the `Video` toggle under `Performance → Hardware Acceleration` in the tray, read here

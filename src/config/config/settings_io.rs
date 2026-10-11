@@ -151,6 +151,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "afk_timer_seconds",
             "libreoffice_idle",
             "libreoffice_persistent",
+            "mpv_path",
             "office_engine",
             "office_engine_idle",
             "office_engine_persistent",

@@ -494,3 +494,37 @@ fn the_probe_runs_ffmpeg_for_every_choice_that_may_hand_the_film_over() {
         "a machine with no ffplay runs none of FFmpeg's passes"
     );
 }
+
+/// The path a launch runs comes through the same seam the router picks an engine at: the setting's
+/// own text where it names a file that is still there, and the first install where it is empty or
+/// has gone. Nothing is spawned here — this is the answer a launch is handed, not the launch.
+#[test]
+fn a_launch_resolves_the_picked_mpv_through_the_same_seam() {
+    let installs = vec![
+        PathBuf::from("first-install").join("mpv.exe"),
+        PathBuf::from("second-install").join("mpv.exe"),
+    ];
+
+    assert_eq!(
+        video_hw::mpv_program("", &installs),
+        Some(installs[0].clone()),
+        "an empty setting is the first install found"
+    );
+    assert_eq!(
+        video_hw::mpv_program("   ", &installs),
+        Some(installs[0].clone()),
+        "a setting that is only spaces is nobody's pick"
+    );
+    assert_eq!(
+        video_hw::mpv_program(r"a-pick-that-has-gone\mpv.exe", &installs),
+        Some(installs[0].clone()),
+        "a picked path that has gone falls back to the first install"
+    );
+
+    let picked = std::env::current_exe().expect("this test's own executable");
+    assert_eq!(
+        video_hw::mpv_program(&picked.to_string_lossy(), &installs),
+        Some(picked),
+        "a picked path that is still a file is what a launch runs"
+    );
+}
