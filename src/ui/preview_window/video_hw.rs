@@ -573,14 +573,24 @@ pub(super) fn video_route(path: &Path) -> VideoRoute {
         .map(|c| (c.video_engine, c.video_engine_fallback))
         .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK));
 
+    // The two players are asked through the pair a test can stand in or out (`ffplay_is_here`,
+    // `mpv_is_here`) rather than through `VideoEngine::installed`, so that the routes that differ
+    // only by which player is on the machine can be asked about at all: mpv is not installed on
+    // the machine this is written on, and neither arrangement it makes is reachable without one
+    // (see `stand_mpv_in`). The answers are the machine's own in a run.
+    let here = |engine: VideoEngine| match engine {
+        VideoEngine::Ffmpeg => ffplay_is_here(),
+        VideoEngine::Mpv => mpv_is_here(),
+        VideoEngine::Best | VideoEngine::Native | VideoEngine::Hybrid => engine.installed(),
+    };
+
     match resolve_video_engine(
         choice,
         fallback,
         cached_video_source_pixels(path),
-        |engine| engine.installed(),
+        here,
         |engine| match engine {
-            VideoEngine::Ffmpeg => codecs::ffplay_available(),
-            VideoEngine::Mpv => codecs::mpv_available(),
+            VideoEngine::Ffmpeg | VideoEngine::Mpv => here(engine),
             VideoEngine::Native => named_for_the_media_engine(path),
             VideoEngine::Best | VideoEngine::Hybrid => false,
         },

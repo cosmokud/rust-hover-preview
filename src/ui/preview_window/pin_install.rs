@@ -24,9 +24,10 @@ pub(super) static PIN_ARC_BASE: Lazy<Instant> = Lazy::new(Instant::now);
 ///
 /// What this is handed is the whole of a load's answer, already loaded (`pin_media_load`): what is
 /// left here is everything that has to be asked of this thread, which is the browser a document is
-/// handed to, the media engine a video is played through and FFmpeg's player a sound and a film
-/// are played by. A load that has run for `spinner_delay_ms` puts an arc in the middle of the
-/// pin's media while it runs, so a file whose read or decode is slow is a wait the pin is painted
+/// handed to, the media engine a video is played through, and the player a film or a sound is
+/// begun with — FFmpeg's player for a sound, and whichever engine the route named for a film (see
+/// `start_video_playback`). A load that has run for `spinner_delay_ms` puts an arc in the middle of
+/// the pin's media while it runs, so a file whose read or decode is slow is a wait the pin is painted
 /// for rather than a window frozen for as long as the disk takes (see `PinLoad` and
 /// `paint_pin_spinner`).
 ///
@@ -100,9 +101,9 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     //
     // **A file no player of this app's is coming for is not covered at all**: a picture paints
     // itself, so a cover here would only have to be taken down again over the picture that replaces
-    // the film (see `give_up_pinned_park`) — and neither is a film on a machine FFmpeg is not on,
-    // which is answered the same way for the same reason (see `pinned_player_is_coming`).
-    let player_coming = pinned_player_is_coming(file.media.media_type);
+    // the film (see `give_up_pinned_park`) — and neither is a film no engine on this machine will
+    // draw, which is answered the same way for the same reason (see `pinned_player_is_coming`).
+    let player_coming = pinned_player_is_coming(file.media.media_type, &file.path);
     cover_step_swap_for_video(player_coming);
     if file.media.media_type.is_native_video() {
         stop_pinned_player();
@@ -175,8 +176,8 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     }
 
     if player_coming {
-        // FFmpeg's player draws it in a window of its own, which the take-up puts in the pin's
-        // media band — and a player that would not start is the same answer an engine that will not
+        // FFmpeg's player or mpv draws it in a window of its own, which the take-up puts in the
+        // pin's media band — and a player that would not start is the same answer an engine that will not
         // play gets: there is nothing of the file to show, so the pin keeps the file it has. The
         // player of the file the pin was showing may have survived its own stop (a dropped handle,
         // a kill nobody confirmed), and one of those playing over the file that replaces it is what
@@ -259,10 +260,19 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 
 /// Whether a file of this kind is one a player of this app's is going to be put up for.
 ///
-/// **A video, and only where FFmpeg is on this machine.** FFmpeg's player draws it in a window of
-/// its own, so a file it would not play has no player at all — which is why every road that depends
-/// on the answer asks this rather than the kind on its own: the cover a step raises over the
-/// outgoing frame, the start a step makes, and the give-up a take-up owes a cover already standing.
+/// **A video, and only where the route names a player that is on this machine.** Both engines that
+/// draw such a film in a window of their own are answered for here — FFmpeg's player, and mpv where
+/// `Best` preferred it — and a file the route hands to neither has no player at all. It is why every
+/// road that depends on the answer asks this rather than the kind on its own: the cover a step raises
+/// over the outgoing frame, the start a step makes, and the give-up a take-up owes a cover already
+/// standing.
+///
+/// The route is asked rather than FFmpeg's install alone, which is the difference a machine whose
+/// only player is mpv makes: a film there is begun as mpv is begun, and answering a machine-wide
+/// "no FFmpeg" for it took the road a file no player can play takes — no cover, and a pin whose
+/// media is read as a player that is never coming (see `video_route`). The media engine's route is
+/// answered here too, and it is the one that has no player: its frames are drawn into this app's own
+/// surface and nothing is waited for.
 ///
 /// It is asked once per road rather than carried across the ticks between them, so the two readings
 /// that must agree are the two sides of one decision — the cover and the start — made together in
@@ -272,12 +282,16 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 /// never begun: nothing is behind the band to hand it back to, so the cover never comes down, and
 /// `pin_media_is_alive` reads its own record as a player still on its way (see `give_up_pinned_park`
 /// and `reconcile_swap_take_up`). The later tick therefore answers the give-up, not the cover.
-pub(super) fn pinned_player_is_coming(media_type: MediaType) -> bool {
-    media_type == MediaType::Video && ffplay_is_here()
+pub(super) fn pinned_player_is_coming(media_type: MediaType, path: &Path) -> bool {
+    media_type == MediaType::Video
+        && matches!(
+            video_route(path),
+            VideoRoute::Ffplay | VideoRoute::Mpv
+        )
 }
 
-/// Whether FFmpeg's player is on this machine, which is the half of [`pinned_player_is_coming`]
-/// that is about the machine rather than about the file.
+/// Whether FFmpeg's player is on this machine, the half of [`pinned_player_is_coming`] that is
+/// about the machine rather than about the file.
 ///
 /// It is asked through here rather than inline so that a test can stand an answer in for it, and it
 /// has to be: the arm this exists for is one a machine with no FFmpeg takes every time and a machine
@@ -291,6 +305,40 @@ pub(super) fn ffplay_is_here() -> bool {
 
     codecs::ffplay_available()
 }
+
+/// Whether mpv is on this machine, the other half of [`pinned_player_is_coming`] and the answer the
+/// route's own preference is read through.
+///
+/// It is asked through here rather than inline for the same reason FFmpeg's player is, and for a
+/// second one on top of it: mpv is not installed on the machine this is developed on, so without a
+/// slot to stand one in the route mpv makes could not be asked about at all (see `stand_mpv_in`).
+pub(super) fn mpv_is_here() -> bool {
+    #[cfg(test)]
+    if let Some(answer) = mpv_stand_in() {
+        return answer;
+    }
+
+    codecs::mpv_available()
+}
+
+/// Stand an answer for [`mpv_is_here`] in place of the machine's own, or give the machine's own
+/// answer back with `None` — the same one slot `stand_ffplay_in` keeps, put back the same way.
+#[cfg(test)]
+pub(super) fn stand_mpv_in(answer: Option<bool>) {
+    if let Ok(mut held) = MPV_STAND_IN.lock() {
+        *held = answer;
+    }
+}
+
+/// The answer [`mpv_is_here`] is given while a test stands one in, read under the slot's lock.
+#[cfg(test)]
+fn mpv_stand_in() -> Option<bool> {
+    MPV_STAND_IN.lock().ok().and_then(|held| *held)
+}
+
+/// The answer [`mpv_is_here`] is given while a test stands one in (see `stand_mpv_in`).
+#[cfg(test)]
+static MPV_STAND_IN: Mutex<Option<bool>> = Mutex::new(None);
 
 /// The answer [`ffplay_is_here`] is given while a test stands one in, read under the slot's lock.
 #[cfg(test)]
@@ -467,7 +515,7 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     // this is asked about is the one that is actually going to be begun — a film nothing will play
     // is given the cover up rather than handed it (see `reconcile_swap_take_up` and
     // `pinned_player_is_coming`).
-    reconcile_swap_take_up(pinned_player_is_coming(media.media_type));
+    reconcile_swap_take_up(pinned_player_is_coming(media.media_type, &path));
 
     // The pin is not waiting for a file any more, whatever the file it was waiting for turned
     // out to be: an arc left up over a window showing a video is a spinner for a question nobody
@@ -1075,10 +1123,10 @@ pub(super) fn relayout_pinned_media(
         .and_then(|media| media.as_ref().map(|media| media.media_type));
 
     match kind {
-        // FFmpeg's player draws in a window of its own and scales the picture to it, so the box
-        // that changed is a window that has to be moved — and, because the player rendered at
-        // whatever size it was begun at, one that has to be *begun again* to be rendered sharply
-        // at the size it has settled on.
+        // A player with a window of its own — FFmpeg's or mpv's — draws in it and scales the
+        // picture to it, so the box that changed is a window that has to be moved — and, because
+        // the player rendered at whatever size it was begun at, one that has to be *begun again*
+        // to be rendered sharply at the size it has settled on.
         //
         // The two happen at different times and that is the whole of the two-phase resize. While
         // the hand is still moving the edge, what is on screen is asked for on every pointer move

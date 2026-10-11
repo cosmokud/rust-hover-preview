@@ -130,6 +130,93 @@ fn stand_a_ready_copy(film: &Path) {
     );
 }
 
+/// A geometry answer for `film` carrying `count` subtitle streams and nothing else, as the probe
+/// would have left it: what `video_subtitles` reads the pin's next track out of.
+fn stand_subtitle_streams(film: &Path, count: usize) {
+    video_geometry_cache().insert(
+        VideoGeometryKey {
+            path: film.to_path_buf(),
+            version: file_version(film),
+        },
+        ProbedGeometry::Measured(VideoGeometry {
+            width: 1920,
+            height: 1080,
+            frame_width: 1920,
+            frame_height: 1080,
+            crop: None,
+            duration: Some(200.0),
+            subtitles: SubtitleStreams { count, first: 0 },
+            sidecar: None,
+            derived: None,
+            subtitle_codecs: Vec::new(),
+            attachment_codecs: Vec::new(),
+            subtitle_extraction_failed: false,
+        }),
+    );
+}
+
+/// The `T` key steps a film's own tracks on the route whose player can be told a track, and does
+/// nothing at all on the route whose player cannot — mpv found and chose its own tracks, so this
+/// app has no number to write down for it and no filter to relaunch it into (see
+/// `step_pinned_subtitle`).
+///
+/// Both routes are stood in rather than read off the machine: mpv is not installed on the machine
+/// this is developed on, and the answer the key gives there is the whole of what this is for.
+#[test]
+fn a_pinned_film_steps_its_subtitles_on_the_ffplay_route_and_not_on_the_mpv_one() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _setting = VideoSubtitlesSetting::stood_at(true);
+
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let film = PathBuf::from("pin-subtitle-step-film.mkv");
+    stand_subtitle_streams(&film, 2);
+    stand_pin(Some(a_pin_playing(&film, (100, 80, 420, 320))));
+    clear_restart_count();
+
+    // FFmpeg's player is told a track by being begun again with one, so the key is a relaunch.
+    stand_ffplay_in(Some(true));
+    step_pinned_subtitle();
+    assert_eq!(
+        restart_count(),
+        1,
+        "a film FFmpeg plays steps to the next track by a relaunch"
+    );
+    assert_eq!(
+        pinned_subtitle(),
+        Some(1),
+        "and the choice is written down, as it is for every relaunch this one survives"
+    );
+
+    // mpv chose its own tracks and is told nothing, so there is nothing here to step: the number
+    // would be written down and the player begun again with it, and nothing would change.
+    clear_restart_count();
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    step_pinned_subtitle();
+    assert_eq!(
+        restart_count(),
+        0,
+        "mpv found and draws its own tracks, so the key begins nothing"
+    );
+    assert_eq!(
+        pinned_subtitle(),
+        Some(1),
+        "and it does not claim a track it never chose"
+    );
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    restore_media(previous_media);
+    clear_restart_count();
+}
+
 /// A pin taken up on a player that was begun before the copy existed is begun again here, where
 /// the copy is ready by the time the pin is made — the corner the ready-message cannot reach
 /// because it has already been and gone (see `reload_adopted_subtitles`).

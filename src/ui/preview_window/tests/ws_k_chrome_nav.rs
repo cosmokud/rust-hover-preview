@@ -1118,26 +1118,39 @@ fn a_step_onto_a_film_no_player_can_play_raises_no_cover() {
     forget_pin_park_swap();
     forget_video_frame();
 
+    let film = Path::new("ws-k-chrome-nav-film.mkv");
+
     // The machine's own answer cannot be asked for here: the arm is the one a machine with
     // FFmpeg never takes, so both answers are stood in rather than one of them read off
     // whatever machine this is running on.
     stand_ffplay_in(Some(true));
     assert!(
-        pinned_player_is_coming(MediaType::Video),
+        pinned_player_is_coming(MediaType::Video, film),
         "a film on a machine with FFmpeg is a player coming"
     );
     stand_ffplay_in(Some(false));
     assert!(
-        !pinned_player_is_coming(MediaType::Video),
+        !pinned_player_is_coming(MediaType::Video, film),
         "and a film on a machine without one is not: there is no window to put it in"
     );
+
+    // And the same for mpv, which is the third player a film can be given: a machine whose only
+    // player is mpv is a machine with a window coming, whatever FFmpeg's absence on its own
+    // would have said (see `pinned_player_is_coming`).
+    stand_mpv_in(Some(true));
     assert!(
-        !pinned_player_is_coming(MediaType::StaticImage),
+        pinned_player_is_coming(MediaType::Video, film),
+        "a film on a machine with mpv is a player coming too, and mpv is the player Best prefers"
+    );
+    stand_mpv_in(None);
+
+    assert!(
+        !pinned_player_is_coming(MediaType::StaticImage, film),
         "nor is a file this app paints itself, which is the other half of the same answer"
     );
 
     assert!(
-        !cover_step_swap_for_video(pinned_player_is_coming(MediaType::Video)),
+        !cover_step_swap_for_video(pinned_player_is_coming(MediaType::Video, film)),
         "so the step covers nothing"
     );
     assert!(
@@ -1156,7 +1169,7 @@ fn a_step_onto_a_film_no_player_can_play_raises_no_cover() {
     // machine that has FFmpeg, because that is the machine a standing cover can only be left by.
     stand_ffplay_in(Some(true));
     assert!(
-        cover_step_swap_for_video(pinned_player_is_coming(MediaType::Video)),
+        cover_step_swap_for_video(pinned_player_is_coming(MediaType::Video, film)),
         "a cover stands over the outgoing film"
     );
     assert!(
@@ -1165,7 +1178,7 @@ fn a_step_onto_a_film_no_player_can_play_raises_no_cover() {
     );
 
     stand_ffplay_in(Some(false));
-    reconcile_swap_take_up(pinned_player_is_coming(MediaType::Video));
+    reconcile_swap_take_up(pinned_player_is_coming(MediaType::Video, film));
     assert!(
         !pin_player_is_parked(),
         "and it is given up where no player is coming: nothing is going to be handed this band"

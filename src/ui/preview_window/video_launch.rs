@@ -188,7 +188,18 @@ pub(super) fn mpv_args(
 
     args.push("--no-osc".to_string());
     args.push("--no-border".to_string());
-    args.push(format!("--geometry={width}x{height}+{x}+{y}"));
+    // The size, and a position only where mpv reads one as a position: a leading `-` in a geometry
+    // offset is a distance from the right or bottom edge rather than a coordinate, so a preview box
+    // on a monitor left of or above the primary one would be placed against the far edge of the
+    // primary display — and an unparseable `+-100` is worse than misplaced, since mpv can refuse
+    // the whole argument and exit without a window. Asked for alone, the size centres the window,
+    // and this app's own topmost re-assert places it at the preview box (see
+    // `ensure_video_window_topmost`).
+    args.push(if x < 0 || y < 0 {
+        format!("--geometry={width}x{height}")
+    } else {
+        format!("--geometry={width}x{height}+{x}+{y}")
+    });
     args.push("--gpu-api=d3d11".to_string());
 
     // mpv decodes on the card by its own safe list with its own fallback, so the switch is the
@@ -1481,6 +1492,67 @@ mod tests {
             ],
             "the second a pinned bar was dragged to is what the relaunch asks mpv for, at the same \
              precision the ffplay route writes it in"
+        );
+    }
+
+    /// A preview box on a monitor left of or above the primary one has a negative coordinate, and
+    /// a negative coordinate must not reach `--geometry`: mpv reads a leading `-` as an offset from
+    /// the right or bottom edge, so the film would be placed against the far edge of the primary
+    /// display — and `+-100` can fail the launch outright rather than place anything. The size is
+    /// passed alone and this app's own topmost re-assert puts the window at the box (see
+    /// `mpv_args`).
+    #[test]
+    fn an_mpv_video_on_a_monitor_left_of_the_primary_one_is_asked_for_its_size_alone() {
+        for (x, y, which) in [(-100, 20, "left of the primary"), (20, -100, "above it")] {
+            assert_eq!(
+                mpv_args(
+                    Path::new("a.mkv"),
+                    x,
+                    y,
+                    640,
+                    360,
+                    0.0,
+                    100,
+                    None,
+                    true,
+                    true,
+                    None,
+                ),
+                [
+                    "a.mkv",
+                    "--no-config",
+                    "--no-osc",
+                    "--no-border",
+                    "--geometry=640x360",
+                    "--gpu-api=d3d11",
+                    "--hwdec=auto",
+                    "--sub-auto=fuzzy",
+                    "--keep-open=yes",
+                    "--volume=100",
+                ],
+                "a box {which} has a negative coordinate, so the size is passed without a \
+                 position rather than with one mpv reads the other way round"
+            );
+        }
+
+        // And a position both of whose coordinates are non-negative is passed as it stands: there
+        // is nothing ambiguous about `+0+0`, which is a box at the primary display's own origin.
+        assert!(
+            mpv_args(
+                Path::new("a.mkv"),
+                0,
+                0,
+                640,
+                360,
+                0.0,
+                100,
+                None,
+                true,
+                true,
+                None,
+            )
+            .contains(&"--geometry=640x360+0+0".to_string()),
+            "a position both of whose coordinates are non-negative is passed as it stands"
         );
     }
 
