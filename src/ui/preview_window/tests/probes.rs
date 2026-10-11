@@ -1091,7 +1091,7 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
     // The list this app asserts on a player's window carries the bit, which is what makes the roads
     // below unable to be the road that loses it.
     assert!(
-        player_ex_style(0) & WS_EX_TRANSPARENT.0 as isize != 0,
+        player_ex_style_for(0, false) & WS_EX_TRANSPARENT.0 as isize != 0,
         "the style this app puts on a player's window is click-through among the rest"
     );
 
@@ -1152,6 +1152,193 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
     finish_pin_drag(hwnd, &window);
 
     unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// A pinned film mpv draws is the one answer the player is never raised over — and every other
+/// route keeps the answer it has always had.
+///
+/// The exception is the one band Windows hands to the pin rather than to the window behind it —
+/// an mpv film (see `film_band_is_hit_testable`) — because a player raised over the pin takes the
+/// press the pin is owed. FFmpeg's player keeps its hole, a hover must go on falling through, and
+/// a film parked for a gesture stays hidden. The media engine's route draws its band in this app's
+/// own window and begins no player, so there is no window of somebody else's in the band to place
+/// and the decision never reaches it (see
+/// `only_an_mpv_players_window_is_carried_under_the_pins_chrome`). This asserts the decision alone;
+/// the raisers that read it are asked in
+/// `a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pass`.
+#[test]
+fn a_pinned_film_mpv_draws_is_the_one_player_never_raised_over_the_pin() {
+    for (chrome_up, volume_open, what) in [
+        (false, false, "with nothing of the pin's own drawn over the band"),
+        (true, false, "with a strip of the pin's chrome up over it"),
+        (false, true, "with the volume popup open over it"),
+    ] {
+        assert_eq!(
+            player_order(MPV_IMAGE_NAME, true, chrome_up, volume_open, false),
+            PlayerOrder::Carry,
+            "an mpv pin's film is carried and never raised over the pin, {what}"
+        );
+    }
+
+    assert_eq!(
+        player_order(MPV_IMAGE_NAME, false, false, false, false),
+        PlayerOrder::Raise,
+        "the same film on a hover is raised over the hover as it always was: a hover must keep \
+         falling through to what is behind it"
+    );
+
+    assert_eq!(
+        player_order(FFPLAY_IMAGE_NAME, true, false, false, false),
+        PlayerOrder::Raise,
+        "an ffplay pin raises its player over the band as it always has"
+    );
+    for (chrome_up, volume_open) in [(true, false), (false, true)] {
+        assert_eq!(
+            player_order(FFPLAY_IMAGE_NAME, true, chrome_up, volume_open, false),
+            PlayerOrder::Leave,
+            "and is left exactly where it is while the pin's own chrome is drawn over the film"
+        );
+    }
+
+    assert_eq!(
+        player_order(FFPLAY_IMAGE_NAME, true, false, false, true),
+        PlayerOrder::Leave,
+        "and a film parked for a gesture is left alone: a raise here would show it back over the \
+         cover the park painted"
+    );
+}
+
+/// A carried player is asserted the styles **without** the topmost bit — and that is a second place
+/// the order is decided, not a detail of the raise.
+///
+/// A topmost window can never be carried under a topmost pin, so a style that keeps the bit puts the
+/// player back in front of the pin whatever the raise is held off from doing: the press on the
+/// picture is taken from the pin again, and the film is no longer seen through the pin's own band
+/// but standing in front of it. The raise half of this is guarded by
+/// `a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pass`; the style half
+/// is this test, and it is the half a raise-only guard leaves open.
+#[test]
+fn a_carried_players_window_is_never_asserted_topmost() {
+    let a_style_the_player_needs = 0x0004_0000isize;
+    let carried = player_ex_style_for(WS_EX_TOPMOST.0 as isize | a_style_the_player_needs, true);
+
+    assert_eq!(
+        carried & WS_EX_TOPMOST.0 as isize,
+        0,
+        "a carried player is asserted no topmost bit: the pin's band is the pixel a press has to \
+         land in, and a topmost player is a player in front of it"
+    );
+    assert_eq!(
+        carried & a_style_the_player_needs,
+        a_style_the_player_needs,
+        "and every style the player itself needs is kept"
+    );
+
+    assert_ne!(
+        player_ex_style_for(0, false) & WS_EX_TOPMOST.0 as isize,
+        0,
+        "while a player raised over the band keeps the bit as it always has"
+    );
+    assert_ne!(
+        player_ex_style_for(0, false) & WS_EX_TRANSPARENT.0 as isize,
+        0,
+        "and keeps the click-through style with it"
+    );
+}
+
+/// The film of a pinned mpv preview is never put above the pin, through every road that puts a
+/// player's window somewhere.
+///
+/// This is the point the user's press has to reach the pin through. The tick's re-assertion, the
+/// monitor's pass and a drag's move are the three roads that put a player's window somewhere, and
+/// each is asked here to have read the placement decision (see `player_order`): the answer it came
+/// to is recorded for a test's eye, because a test run has no screen to read a z-order off and the
+/// answer is the whole of what a raiser decides. A raise in any one of them is what this catches.
+#[test]
+fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pass() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let content = (100, 80, 420, 320);
+
+    // The mpv route under a pin whose chrome is down — the band and the film and nothing of the
+    // pin's own over it, which is the case the raise is not already held off by (see
+    // `pin_chrome_up`).
+    note_player_process(0, MPV_IMAGE_NAME);
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    let mut pin = overlay_pin(
+        content,
+        PinChrome {
+            caption: false,
+            bar: false,
+            until: None,
+        },
+    );
+    pin.path = PathBuf::from("a-film-the-pin-stands-above.mkv");
+    pin.transport.begun(30.0, true, false);
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+
+    // The tick's own re-assertion.
+    let _ = ensure_video_window_topmost(
+        content.0,
+        content.1,
+        content.2 - content.0,
+        content.3 - content.1,
+    );
+    assert_eq!(
+        last_player_order(),
+        Some(PlayerOrder::Carry),
+        "the tick's re-assertion carries a pinned mpv film rather than raising it over the pin"
+    );
+
+    // The monitor's pass, the one nobody can hold off from outside.
+    let hwnd = HWND(0x1000 as *mut _);
+    unsafe { apply_noactivate_to_hwnd(hwnd) };
+    assert_eq!(
+        last_player_order(),
+        Some(PlayerOrder::Carry),
+        "and the monitor's own pass, which no caller can hold off, leaves it under the pin too"
+    );
+
+    // A drag's move: the player is carried with the band and not raised over the pin.
+    let window = a_window_at(content);
+    begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+    send_pointer_to(content.0 + 10, content.1 + 10);
+    std::thread::sleep(Duration::from_millis(25));
+    unsafe { apply_pin_drag(hwnd) };
+    assert_eq!(
+        last_player_order(),
+        Some(PlayerOrder::Carry),
+        "and a drag's move carries the film with the band rather than raising it over the pin"
+    );
+    finish_pin_drag(hwnd, &window);
+
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
     stand_mpv_in(None);

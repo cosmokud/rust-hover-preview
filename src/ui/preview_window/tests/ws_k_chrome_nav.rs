@@ -1667,7 +1667,7 @@ fn a_maximize_remembers_its_box_and_a_restore_gives_it_back() {
 /// be a window property and not a flag.
 #[test]
 fn the_player_window_is_mouse_transparent() {
-    let style = player_ex_style(0);
+    let style = player_ex_style_for(0, false);
 
     assert_eq!(
         style & WS_EX_TRANSPARENT.0 as isize,
@@ -1699,12 +1699,12 @@ fn the_player_window_is_mouse_transparent() {
     // Idempotent, and everything the window was created with is kept: the monitor
     // thread asserts this list about five times a millisecond.
     assert_eq!(
-        player_ex_style(style),
+        player_ex_style_for(style, false),
         style,
         "re-asserting changes nothing"
     );
     assert_eq!(
-        player_ex_style(0x0004_0000isize) & 0x0004_0000isize,
+        player_ex_style_for(0x0004_0000isize, false) & 0x0004_0000isize,
         0x0004_0000isize,
         "and a style the player was created with is not dropped"
     );

@@ -148,12 +148,29 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
 /// come from `UpdateLayeredWindow`, and this one is SDL's, which paints and
 /// swaps its own surface. A video that stopped rendering would be a far worse
 /// answer than a click that falls through to the desktop.
-pub(super) fn player_ex_style(current: isize) -> isize {
-    current
+/// The extended styles a player's window carries, for the side of the pin it is put on.
+///
+/// **A carried player is asserted the same list without the topmost bit**, and that is not a detail
+/// of the raise: the style is the other place the order is decided, and the two would otherwise
+/// disagree. A topmost window can never be carried under a topmost pin, whatever the raise does —
+/// and the band of a pinned film mpv draws is the pin's own pixel for exactly this case, so the
+/// window a press on the picture has to reach is the pin's (see `player_order`,
+/// `film_band_is_hit_testable`).
+///
+/// It is one function for both raisers for the reason this list is one function at all: a list
+/// written out twice is a list whose two copies drift, and the tick's copy had already drifted into
+/// asserting the topmost bit on a window the monitor was deliberately holding down.
+pub(super) fn player_ex_style_for(current: isize, carried: bool) -> isize {
+    let asserted = current
         | WS_EX_NOACTIVATE.0 as isize
         | WS_EX_TOOLWINDOW.0 as isize
-        | WS_EX_TOPMOST.0 as isize
-        | WS_EX_TRANSPARENT.0 as isize
+        | WS_EX_TRANSPARENT.0 as isize;
+
+    if carried {
+        asserted & !(WS_EX_TOPMOST.0 as isize)
+    } else {
+        asserted | WS_EX_TOPMOST.0 as isize
+    }
 }
 
 /// Style and raise a player's known window.
@@ -161,9 +178,24 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // Store the video window HWND for cursor-over-preview detection
     VIDEO_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
 
-    // Add WS_EX_NOACTIVATE and WS_EX_TOPMOST to its extended style
+    // The decision this function is the raise half of, asked once so that the style it writes and
+    // the raise it holds off are the same answer (see `player_order`).
+    let order = player_order(
+        video_process_image(),
+        pinned(),
+        pin_chrome_up(),
+        pin_volume_open(),
+        pin_player_is_parked(),
+    );
+
+    // Add WS_EX_NOACTIVATE and WS_EX_TOPMOST to its extended style — or leave the topmost bit off,
+    // for a film carried under a pinned window's own band (see `player_ex_style_for`).
     let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, player_ex_style(current_style));
+    SetWindowLongPtrW(
+        hwnd,
+        GWL_EXSTYLE,
+        player_ex_style_for(current_style, order == PlayerOrder::Carry),
+    );
 
     // The style is put on whatever else is happening, and the *raise* is not. This is the one
     // place every raise of the player's window goes through — the monitor thread calls it about
@@ -191,7 +223,10 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // hundred milliseconds of a drag with the film back on screen and the compositor re-blitting it
     // at the pointer's rate: the stutter the park was written for, and a band painted flat under a
     // window that is standing in it (see `pin_player_is_parked`).
-    if pin_volume_open() || pin_chrome_up() || pin_player_is_parked() {
+    // **And it waits over a pinned film mpv draws, which is the one answer here the tick shares.**
+    // That film's band is the pin's own pixel, so the pin is the window a press on the picture has
+    // to reach, and a player raised over it takes the press from the pin (see `player_order`).
+    if order != PlayerOrder::Raise {
         return true;
     }
 
