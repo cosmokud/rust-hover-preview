@@ -2387,3 +2387,100 @@ fn a_seek_cover_ended_without_a_relaunch_is_handed_back() {
         *media = previous_media;
     }
 }
+
+/// The band of a film mpv draws has the pin's own pixel in it, and every other band a pinned window
+/// leaves for somebody else stays theirs.
+///
+/// A band left transparent is a band Windows hands to whatever stands behind the window, which is
+/// the whole of what a film a player of this app's is owed. mpv's film is the pin's own drag handle
+/// — the user asked for a hand on the picture to carry the window, the chrome and the film as one
+/// thing — so its band is the pin's. FFmpeg's player keeps the clicks it has always kept, and this
+/// fails if that answer changes.
+///
+/// The hover preview is not asked about here because it cannot reach this decision at all: it is
+/// painted by `render_layered_preview_at`, which has no band and no band fill in it, and this gate
+/// is read from one place — `render_pinned_preview_at`.
+#[test]
+fn only_a_film_mpv_draws_has_a_band_the_pin_wins_the_point_of() {
+    assert!(
+        film_band_is_hit_testable(MediaType::Video, MPV_IMAGE_NAME, false),
+        "a pin whose player is mpv is pressed on through its own film, which is the handle the \
+         user asked for"
+    );
+    assert!(
+        !film_band_is_hit_testable(MediaType::Video, FFPLAY_IMAGE_NAME, false),
+        "FFmpeg's player keeps the band it always had: a press there falls through the pin exactly \
+         as it did before mpv was a route, and nothing here may change that"
+    );
+
+    for (kind, what) in [
+        (
+            MediaType::NativeVideo,
+            "a video the media engine draws into this app's own band",
+        ),
+        (
+            MediaType::StaticImage,
+            "a picture, whose band is this window's pixels already",
+        ),
+        (
+            MediaType::EngineSvg,
+            "a document the browser engine draws in a window of its own",
+        ),
+        (
+            MediaType::EngineFont,
+            "a specimen the browser engine draws the same way",
+        ),
+    ] {
+        assert!(
+            !film_band_is_hit_testable(kind, MPV_IMAGE_NAME, false),
+            "{what} is left exactly as it was, whatever player was last begun"
+        );
+    }
+
+    assert!(
+        !film_band_is_hit_testable(MediaType::Video, MPV_IMAGE_NAME, true),
+        "and a band a park has painted flat is left alone: what stands in it is the parked film \
+         rather than a hole to be closed"
+    );
+}
+
+/// A band the pin wins the point of is one part in 255, over the band and nowhere else, and that
+/// part is a change no eye can see.
+///
+/// Both halves are the point. The coverage is the whole of what such a band is given, so a fill
+/// that reached one row past it would claim a pixel that is not the pin's — which is the click this
+/// may not steal — and a fill of nothing would claim none at all. And what one part in 255 is worth
+/// on screen is the app's own compositing of a premultiplied pixel over an opaque backdrop, at
+/// every backdrop a film can have behind it: at most one step of 255, and that one step only at the
+/// darkest end.
+#[test]
+fn a_band_the_pin_wins_is_one_part_in_255_and_only_over_the_band() {
+    let (width, height) = (8u32, 8u32);
+    let (origin_y, band_height) = (2u32, 3u32);
+    let mut out = vec![0u8; (width * height * 4) as usize];
+
+    fill_band_hit_testable(&mut out, width, origin_y, band_height);
+
+    for row in 0..height as usize {
+        let in_band = row >= origin_y as usize && row < (origin_y + band_height) as usize;
+        for column in 0..width as usize {
+            assert_eq!(
+                surface_pixel(&out, (width, height), row, column),
+                if in_band { &[1, 1, 1, 1] } else { &[0, 0, 0, 0] },
+                "row {row} column {column}: the band is the least a pixel can be, and every row \
+                 outside it is left exactly as the window painted it"
+            );
+        }
+    }
+
+    for backdrop in 0u32..=255 {
+        let mut pixel = [backdrop as u8, backdrop as u8, backdrop as u8, 255];
+        blend_pixel_over(&[1, 1, 1, 1], &mut pixel, backdrop, backdrop, backdrop);
+        assert!(
+            (pixel[0] as i32 - backdrop as i32).abs() <= 1,
+            "one part in 255 over a backdrop of {backdrop} leaves {}, which is more than the one \
+             step of 255 nothing can see",
+            pixel[0]
+        );
+    }
+}

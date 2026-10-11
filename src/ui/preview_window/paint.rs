@@ -138,6 +138,29 @@ pub(super) unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
     // resize bumps, so the region is one heartbeat behind the paint at worst.
 }
 
+/// Whether the band of a pinned window is a place Windows hands to the pin, or a hole it hands to
+/// whatever stands behind it.
+///
+/// A pin whose media is a film a player of its own draws is a pin whose band is not its pixels at
+/// all: the band is a hole onto that player's window, and a hole is click-through, because hit
+/// testing of a layered window is answered by the shape of its pixels. That is what FFmpeg's
+/// player is owed, and it is what a preview this app draws for itself costs nothing. **mpv is the
+/// one answer that is neither.** Its film is not parked for a gesture, so the window it draws in
+/// travels with the band rather than being left behind a strip of the pin's chrome, and the film
+/// is therefore the pin's own drag handle: a hand on the picture carries the window, the chrome
+/// and the film as one thing. A handle cannot be a hole, so the band is given the least coverage
+/// a pixel can have (see `fill_band_hit_testable`).
+///
+/// Which player is up is read off the recorded player image, which is the record the carry is
+/// read off too — a second way to know which player is up would be a second thing to keep in step
+/// with this one, and the two arms would be free to disagree about the same film (see
+/// `video_process_image`). The kind is read with it because a film a player draws is the only band
+/// that is a hole in the first place: every other kind's band is this app's own pixels already,
+/// and a band a park has painted flat is left alone, since what stands in it is the parked film.
+pub(super) fn film_band_is_hit_testable(media: MediaType, image: &str, parked: bool) -> bool {
+    !parked && matches!(media, MediaType::Video) && image == MPV_IMAGE_NAME
+}
+
 /// Paint a pinned window: the caption, the media in the band below it, and — for a kind that
 /// plays — the transport bar below that.
 ///
@@ -150,12 +173,14 @@ pub(super) unsafe fn render_layered_preview_at(hwnd: HWND, x: i32, y: i32) {
 ///
 /// Three kinds leave the band empty of this app's own pixels, because the thing really
 /// drawn there is a window of somebody else's: the two the browser engine draws, whose
-/// windows stand in the band, and a video FFmpeg's player plays, whose window stands in
-/// the whole of it — a pin whose chrome is drawn over its media is media the whole of the
-/// window down (see `pinned_band_rows`). What the band is then is nothing at all — alpha
-/// zero, which is what lets the window underneath be seen through it and, more to the
-/// point, be *clicked*: hit testing of a layered window is answered by the shape of its
-/// pixels, so a band of transparent ones is a band the player keeps for itself.
+/// windows stand in the band, and a video a player of this app's plays, whose window
+/// stands in the whole of it — a pin whose chrome is drawn over its media is media the
+/// whole of the window down (see `pinned_band_rows`). What the band is then is nothing at
+/// all — alpha zero, which is what lets the window underneath be seen through it and,
+/// more to the point, be *clicked*: hit testing of a layered window is answered by the
+/// shape of its pixels, so a band of transparent ones is a band the player keeps for
+/// itself. The one exception is a film mpv draws, whose band is the pin's own handle and
+/// is therefore painted the least a pixel can be (see `film_band_is_hit_testable`).
 pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     let Some(paint) = pinned_paint() else {
         return;
@@ -231,6 +256,15 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                             height: band_height,
                         },
                     );
+                } else if film_band_is_hit_testable(
+                    media.media_type,
+                    video_process_image(),
+                    paint.parked,
+                ) {
+                    // Nothing is composed into this band — the film is in a window under it — so
+                    // what is written here is only ever the pin's own claim on the pixel (see
+                    // `film_band_is_hit_testable`).
+                    fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
                 }
             }
         }
