@@ -58,6 +58,8 @@ fn restore(
     previous_pid: u32,
     previous_media: Option<MediaData>,
 ) {
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
     take_gesture_snapshot();
     forget_pin_park_swap();
     forget_video_frame();
@@ -880,6 +882,11 @@ fn resize_drag() -> PinDrag {
 /// come. `resizing` is what the cover was parked for, the way each press
 /// parks its own.
 fn stand_kill_road(content: ScreenRegion, from: f64, resizing: bool) {
+    // FFmpeg's route rather than the machine's: with mpv installed the default engine would
+    // pick mpv, and every end below is the relaunch FFmpeg's player takes by being begun again
+    // (see `stand_mpv_in`). The pair is put back by `restore`.
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
     stand_pin(Some(playing_pin(content, from)));
     forget_pin_park_swap();
     forget_video_frame();
