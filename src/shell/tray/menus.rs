@@ -53,7 +53,8 @@ use super::submenus::{
 use crate::app::updates;
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
-    PinMinimizeTo, PinNavFileTypes, PreviewType, TextTheme, TriggerKeyMode, DEFAULT_ANIMATED_SCALE,
+    PinMinimizeTo, PinNavFileTypes, PreviewType, TextTheme, TriggerKeyMode, VideoEngine,
+    DEFAULT_ANIMATED_SCALE,
     DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AUDIO_VOLUME, DEFAULT_AVOID_MODE,
     DEFAULT_CHECK_FOR_UPDATES,
     DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND,
@@ -69,7 +70,7 @@ use crate::config::config::{
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
     DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_SUBTITLES,
+    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_SUBTITLES,
     DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
     VOLUME_CHOICES,
 };
@@ -1121,6 +1122,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|config| config.video_subtitles)
         .unwrap_or(DEFAULT_VIDEO_SUBTITLES);
+    // And the engine that row is named for: the configured pick, since the tray is never handed a
+    // file to ask a route about, and the menu is built again on every open, so the pick read here
+    // is the pick in force (see `subtitles_label`).
+    let video_engine = CONFIG
+        .lock()
+        .map(|config| config.video_engine)
+        .unwrap_or(DEFAULT_VIDEO_ENGINE);
     // Asked again here for the reason the `Codecs` rows are asked again: a machine that has just
     // been given FFmpeg is answered from the machine rather than from the hover that cached it
     // (see `codecs::refresh`).
@@ -1164,12 +1172,14 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // The film's own row, at the top of the half: whether its own subtitle
     // tracks are probed for and copied out at all — a switch about a film's
     // picture rather than a level of the list under it, which is why it is a
-    // row of the `Video` half alone and not the sound's (see `video_subtitles`).
-    let _ = AppendMenuW(
+    // row of the `Video` half alone and not the sound's (see `video_subtitles`). What it is
+    // called is the engine's business rather than one cost for all three (see
+    // `subtitles_label`).
+    append_labeled_item(
         video_levels,
         MF_STRING | if video_subtitles { MF_CHECKED } else { MF_UNCHECKED },
-        ID_TRAY_VIDEO_SUBTITLES as usize,
-        w!("Subtitles (Expensive)"),
+        ID_TRAY_VIDEO_SUBTITLES,
+        &subtitles_label(video_engine, VideoEngine::Mpv.installed()),
     );
     append_switches(
         video_levels,
@@ -1730,4 +1740,25 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     )
     .ok();
     let _ = DestroyMenu(menu);
+}
+
+/// What the `Subtitles` row is called: `Subtitles (MPV)` where mpv is the engine that will play —
+/// the pick itself, or `Best` on a machine that has mpv to prefer — and the words the row has
+/// always carried for every other answer, because there the app is the one probing a film and
+/// copying a track out of it.
+///
+/// mpv shows a film's own tracks and the `.srt` beside it by itself, so under it the row is not
+/// allowed to claim work that is not done. Whether mpv is here is handed in rather than asked
+/// here, the way the route's own preference is handed its answers (see
+/// `video_hw::resolve_video_engine`), so that both answers are read on this machine's terms.
+///
+/// shortcut: the configured engine, not the file being hovered; upgrade if a per-file label is ever wanted
+pub(super) fn subtitles_label(engine: VideoEngine, mpv_installed: bool) -> String {
+    let mpv_plays = engine == VideoEngine::Mpv || (engine == VideoEngine::Best && mpv_installed);
+
+    if mpv_plays {
+        "Subtitles (MPV)".to_string()
+    } else {
+        "Subtitles (Expensive)".to_string()
+    }
 }
