@@ -212,7 +212,7 @@ fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on
     );
     assert_eq!(
         mpv_ipc::noted_lines(),
-        vec![r#"{"command":["cycle","sub"],"async":true}"#.to_string()],
+        vec![format!("{}\n", r#"{"command":["cycle","sub"],"async":true}"#)],
         "the step is mpv's own word for walking its tracks, written down the pipe it listens on"
     );
     assert_eq!(

@@ -97,7 +97,10 @@ fn deliver(name: &str, line: String) -> bool {
 pub(super) fn set_volume(pid: u32, level: u32) -> bool {
     write(
         pid,
-        format!(r#"{{"command":["set_property","volume",{level}],"async":true}}"#),
+        // mpv's JSON IPC reads a message up to its newline, and a line with none is a command it
+        // never sees — closing the pipe does not deliver it either — so the newline is part of
+        // the line rather than of the write (see `write`).
+        format!(r#"{{"command":["set_property","volume",{level}],"async":true}}"#) + "\n",
     )
 }
 
@@ -105,7 +108,7 @@ pub(super) fn set_volume(pid: u32, level: u32) -> bool {
 pub(super) fn seek_absolute(pid: u32, seconds: f64) -> bool {
     write(
         pid,
-        format!(r#"{{"command":["seek",{seconds:.3},"absolute"],"async":true}}"#),
+        format!(r#"{{"command":["seek",{seconds:.3},"absolute"],"async":true}}"#) + "\n",
     )
 }
 
@@ -113,13 +116,13 @@ pub(super) fn seek_absolute(pid: u32, seconds: f64) -> bool {
 pub(super) fn set_paused(pid: u32, paused: bool) -> bool {
     write(
         pid,
-        format!(r#"{{"command":["set_property","pause",{paused}],"async":true}}"#),
+        format!(r#"{{"command":["set_property","pause",{paused}],"async":true}}"#) + "\n",
     )
 }
 
 /// Walk mpv's own subtitle tracks, off and round again — mpv's own word for the `T` key's step.
 pub(super) fn cycle_subtitles(pid: u32) -> bool {
-    write(pid, r#"{"command":["cycle","sub"],"async":true}"#.to_string())
+    write(pid, r#"{"command":["cycle","sub"],"async":true}"#.to_string() + "\n")
 }
 
 /// The JSON lines this app would have written, in order, for a test build.
@@ -173,7 +176,10 @@ mod tests {
         );
         assert_eq!(
             noted_lines(),
-            vec![r#"{"command":["set_property","volume",40],"async":true}"#.to_string()],
+            vec![format!(
+                "{}\n",
+                r#"{"command":["set_property","volume",40],"async":true}"#
+            )],
             "the volume is set on the player's own property, and the line wants no answer"
         );
 
@@ -207,10 +213,10 @@ mod tests {
         assert_eq!(
             noted_lines(),
             vec![
-                r#"{"command":["seek",90.000,"absolute"],"async":true}"#.to_string(),
-                r#"{"command":["set_property","pause",true],"async":true}"#.to_string(),
-                r#"{"command":["set_property","pause",false],"async":true}"#.to_string(),
-                r#"{"command":["cycle","sub"],"async":true}"#.to_string(),
+                format!("{}\n", r#"{"command":["seek",90.000,"absolute"],"async":true}"#),
+                format!("{}\n", r#"{"command":["set_property","pause",true],"async":true}"#),
+                format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
+                format!("{}\n", r#"{"command":["cycle","sub"],"async":true}"#),
             ],
             "each line names the command and its argument, and every one is async"
         );

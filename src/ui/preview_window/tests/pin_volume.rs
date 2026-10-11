@@ -489,7 +489,7 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     set_pin_volume(70);
     assert_eq!(
         mpv_ipc::noted_lines(),
-        vec![r#"{"command":["set_property","volume",70],"async":true}"#.to_string()],
+        vec![format!("{}\n", r#"{"command":["set_property","volume",70],"async":true}"#)],
         "the level is set on mpv's own property as the knob moves, which is the whole point of \
          the route"
     );
