@@ -2042,6 +2042,12 @@ fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
     }
     VIDEO_PID.store(0, Ordering::SeqCst);
 
+    // FFmpeg's player's route rather than the machine's, because this is the park's own road: with
+    // mpv installed the default engine would pick it, and the mpv route parks nothing and holds
+    // nothing (see `mpv_ipc`). Put back before the restore below.
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+
     for (name, action) in [
         ("move", PinDragAction::Move),
         (
@@ -2078,6 +2084,8 @@ fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
     forget_video_frame();
     forget_resume_frame();
     forget_pin_park_swap();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;

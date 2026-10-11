@@ -1768,3 +1768,64 @@ fn a_box_change_moves_mpv_and_begins_nothing_again() {
 
     restore(previous_pin, previous_pid, previous_media);
 }
+
+/// A drag on the mpv route leaves the film playing: mpv is told everything while it runs, so its
+/// press neither freezes the transport nor puts the window away — where FFmpeg's player's press
+/// still takes the kill road. The ffplay half is what the gate is visible against (see
+/// `gesture_press_freeze` and `video_drag_hold_apply`).
+#[test]
+fn a_drag_holds_ffplays_film_and_leaves_the_mpv_one_playing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    let window = CapturingWindow::around(a_window_at(content));
+
+    // FFmpeg's player: the press takes the kill road — the transport is frozen at the second the
+    // hand found and a cover stands over the window the player is about to lose.
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_pin(Some(playing_pin(content, 30.0)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    take_gesture_snapshot();
+    begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
+    assert!(pin_is_dragging(), "the hand is carrying the window");
+    assert!(
+        gesture_snapshot_active(),
+        "FFmpeg's press freezes the film it is about to end"
+    );
+    assert!(
+        pin_player_is_parked(),
+        "and stands a cover over the window it is about to take down"
+    );
+    finish_pin_drag(HWND(0x1000 as *mut _), &window);
+
+    // mpv: the same press is a move. Nothing is frozen and nothing is put away, because the film
+    // is never stopped and keeps drawing in the window the drag is moving.
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    take_gesture_snapshot();
+    forget_pin_park_swap();
+    forget_video_frame();
+    stand_pin(Some(playing_pin(content, 30.0)));
+    begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
+    assert!(pin_is_dragging(), "the hand is carrying the window");
+    assert!(
+        !gesture_snapshot_active(),
+        "mpv's press freezes nothing: the film is not being ended"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "and nothing covers its window: mpv keeps drawing in the one it has"
+    );
+    finish_pin_drag(HWND(0x1000 as *mut _), &window);
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    restore(previous_pin, previous_pid, previous_media);
+}

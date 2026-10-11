@@ -203,7 +203,7 @@ pub(super) fn video_drag_hold_apply(dragging: bool) -> bool {
     //
     // It is read from a copy rather than from the pin: a lock held across the keys below would be a
     // lock held while this thread posts to another program's window.
-    let Some((_, _, transport, _)) = pinned_playback_state() else {
+    let Some((path, _, transport, _)) = pinned_playback_state() else {
         return false;
     };
 
@@ -218,6 +218,15 @@ pub(super) fn video_drag_hold_apply(dragging: bool) -> bool {
     // engine's window is not FFmpeg's and there is nothing to hold. The claim is already back where
     // it belongs by this point, which is the whole of what it was reconciled for.
     if current_media_type() != Some(MediaType::Video) {
+        return false;
+    }
+
+    // **mpv is left running through a gesture.** It is told everything it needs over its pipe
+    // while it plays and a drag or a resize only moves the window it is already drawing in (see
+    // `mpv_ipc`), so there is no pause key to post and no hold to write: a hold written here would
+    // leave the bar claiming a pause the film never took. The claim above is still reconciled, so
+    // nothing of a film this app held before survives into this one.
+    if video_route(&path) == VideoRoute::Mpv {
         return false;
     }
 
@@ -627,7 +636,15 @@ pub(super) fn begin_pin_drag(
             // nothing ever shows (see `MediaType::draws_in_a_window_of_its_own`). A move or a resize
             // of a media-engine video is the same window work as any other pin's, with nothing of
             // FFmpeg's in it.
-            if current_media_type().is_some_and(|kind| kind.draws_in_a_window_of_its_own()) {
+            // **mpv's window is left exactly where the film is drawing**, because the film is not
+            // being held for this gesture: parking it would hide a playing film behind a still and
+            // let it run on unwatched, so a drag or a resize is a move of the window it already has
+            // (see `video_drag_hold_apply` and `mpv_ipc`).
+            let mpv_is_drawing =
+                pinned_media_owner().is_some_and(|(path, _)| video_route(&path) == VideoRoute::Mpv);
+            if !mpv_is_drawing
+                && current_media_type().is_some_and(|kind| kind.draws_in_a_window_of_its_own())
+            {
                 park_pinned_player(
                     HWND(hwnd as *mut _),
                     (window_box.0, window_box.1),
