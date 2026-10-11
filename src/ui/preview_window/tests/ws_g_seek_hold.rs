@@ -403,6 +403,203 @@ fn a_seek_cover_with_nothing_in_flight_is_given_up_by_the_cover_bound() {
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
 }
 
+/// A video behind the pin, as the press road reads the kind off the slot.
+fn stand_video_media() -> Option<MediaData> {
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+    previous
+}
+
+/// A pin on a film with a live bar: the shape the transport bar's own press is asked
+/// about, with the strip standing in bands rather than over the picture so that the bar
+/// has rows of its own to be pressed in.
+fn a_banded_video_pin(film: &Path, content: ScreenRegion) -> PinnedPreview {
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = film.to_path_buf();
+    pin.transport_bar = true;
+    pin.transport_live = true;
+    pin.overlay = false;
+    pin.hides_chrome = false;
+    pin.caption = pinned_caption_height(96, Some(MediaType::Video));
+    pin.transport.begun(0.0, true, false);
+    pin.transport.duration = Some(200.0);
+    pin.volume.level = 40;
+    pin.volume.playing_at = 40;
+    pin
+}
+
+/// The second a scrub is aiming at, read out of the pin.
+fn the_seek_aim() -> Option<f64> {
+    pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.seeking))
+}
+
+/// The line mpv is taken to a second with, as this app writes it (see `mpv_ipc::seek_absolute`).
+fn the_seek_line(seconds: f64) -> String {
+    format!(
+        "{}\n",
+        format!(r#"{{"command":["seek",{seconds:.3},"absolute"],"async":true}}"#)
+    )
+}
+
+/// A seek on a pin whose player is mpv is a live seek and nothing else: the press tells the
+/// player nothing, and the film is left doing what it was doing.
+///
+/// **The key is counted rather than read off the film, because where it lands is nowhere a test
+/// can see** (see `ffplay_window::pause_posts`): there is no player's window here to post one
+/// through, so a key posted and a key never posted leave the same trace — and the trace the
+/// transport keeps is written only where that post is believed to have landed (see
+/// `seek_press_hold`). mpv reads the posted `p` as `cycle pause`, so the user's report is the key:
+/// a playing film is stopped by the press and a paused one is *started* by it, and both are what a
+/// seek must not be.
+#[test]
+fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state_it_found() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("mpv-seek-keeps-the-play-state.mkv");
+    stand_mpv_in(Some(true));
+    stand_ffplay_in(Some(false));
+    mpv_ipc::remember_pipe(101, "test-pipe");
+
+    // Both play states, because the key a seek press posts is a toggle: a playing film is stopped
+    // by it and a paused one is started by it, and neither is a seek.
+    for (was_paused, what) in [
+        (false, "a playing film"),
+        (true, "a film the user had paused"),
+    ] {
+        let mut pin = a_banded_video_pin(&film, content);
+        if was_paused {
+            pin.transport.held(30.0);
+        }
+        let found = (pin.transport.paused_at, pin.transport.drag_held);
+        stand_pin(Some(pin));
+        ffplay_window::clear_pause_posts();
+        mpv_ipc::clear_noted();
+        clear_restart_count();
+
+        // The press the hand makes, at the track the bar itself says is one: nothing here
+        // reproduces the bar's arithmetic.
+        let bar = pinned_transport_geometry().expect("a banded video pin carries a bar");
+        let (x, y) = (bar.width / 2, bar.top + bar.height / 2);
+        let window = RecordedPinWindow::new(0x1000);
+        assert!(
+            unsafe { pinned_transport_press(HWND(0x1000 as *mut _), x, y) },
+            "the track is the bar's to act on ({what})"
+        );
+        let aim = the_seek_aim().expect("an aimed second for the scrub to move");
+        assert_eq!(
+            ffplay_window::pause_posts(),
+            0,
+            "mpv is told nothing by a seek press: the pause key it would be posted is a toggle \
+             that stops {what} the moment the hand takes the bar, and the release posts no second \
+             key to start it again"
+        );
+
+        assert!(
+            unsafe { pinned_transport_release(HWND(0x1000 as *mut _), x, y, &window) },
+            "and the release is the bar's own ({what})"
+        );
+        assert_eq!(
+            mpv_ipc::noted_lines(),
+            vec![the_seek_line(aim)],
+            "the live seek is the whole of the seek: mpv is taken to the aimed second while it \
+             runs ({what})"
+        );
+        assert_eq!(
+            restart_count(),
+            0,
+            "and no player is ended and begun again for it ({what})"
+        );
+
+        let after = pin_state().and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                (
+                    pin.transport.paused_at,
+                    pin.transport.drag_held,
+                    pin.transport.seeking,
+                )
+            })
+        });
+        let (held_at, claim, aim_left) = after.expect("the pin is still up");
+        assert_eq!(
+            claim, found.1,
+            "the press leaves no claim on the film behind it: a hold this app believes it took is \
+             a hold the next film to be dragged is answered with ({what})"
+        );
+        assert_eq!(
+            aim_left, None,
+            "and the aim is spent by the release rather than left standing ({what})"
+        );
+        assert_eq!(
+            held_at.is_some(),
+            was_paused,
+            "the film is still doing what it was doing: {what}"
+        );
+        if was_paused {
+            assert_eq!(
+                held_at,
+                Some(aim),
+                "a film the user had paused is held at the second the seek landed on, or the bar \
+                 springs back to the second the pause began at"
+            );
+        } else {
+            assert_eq!(
+                held_at, None,
+                "and a film that was playing is playing, with nothing written down as held"
+            );
+        }
+    }
+
+    // FFmpeg's player on the same press: it can be told nothing, so a seek is a player ended and
+    // begun again at the aimed second, and it is left exactly as it was (see
+    // `seek_pinned_playback`).
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+    stand_pin(Some(a_banded_video_pin(&film, content)));
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    let bar = pinned_transport_geometry().expect("a banded video pin carries a bar");
+    let (x, y) = (bar.width / 2, bar.top + bar.height / 2);
+    let window = RecordedPinWindow::new(0x1000);
+    assert!(
+        unsafe { pinned_transport_press(HWND(0x1000 as *mut _), x, y) },
+        "FFmpeg's press is the bar's to act on"
+    );
+    assert!(
+        unsafe { pinned_transport_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "and so is its release"
+    );
+    assert_eq!(
+        restart_count(),
+        1,
+        "FFmpeg's player is still ended and begun again at the aimed second"
+    );
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "and nothing of that road reaches an mpv pipe: FFmpeg's player listens on none"
+    );
+
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
 /// A press with no second to seek to arms nothing: no cover over a player
 /// that is going nowhere, and no hold on a film the hand did not move.
 #[test]
