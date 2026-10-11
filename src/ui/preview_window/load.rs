@@ -672,16 +672,16 @@ pub(super) fn load_video_thumbnail(
     preview_scale: PreviewScale,
 ) -> Option<MediaData> {
     // Which engine plays this file is settled here, once, and everything below follows from it:
-    // the media engine Windows has draws it into this app's own window, and FFmpeg's player draws
-    // it in a window of its own (see `media_engine_plays`). The third answer is what this arm is
-    // — a file nothing on this machine will play has no preview at all, which is the whole of
+    // the media engine Windows has draws it into this app's own window, and FFmpeg's player or mpv
+    // draws it in a window of its own (see `media_engine_plays`). The third answer is what this arm
+    // is — a file nothing on this machine will play has no preview at all, which is the whole of
     // what a name only `[ffmpeg]` carries means on a machine with no FFmpeg, and what a name of
     // `[video]` means there once the engine has turned the file down. A box nothing would ever be
     // drawn into is not a preview, and the load that returned nothing is the branch that takes
     // the window down rather than one that fills it with a placeholder.
     let native = match video_route(path) {
         VideoRoute::MediaEngine => true,
-        VideoRoute::Ffplay => false,
+        VideoRoute::Ffplay | VideoRoute::Mpv => false,
         VideoRoute::NoPreview => return None,
     };
 

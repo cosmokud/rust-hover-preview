@@ -77,15 +77,18 @@ pub(super) const ID_TRAY_ENGINE_OFFICE_LIBRE: u16 = 1009;
 /// The `Engine → Video Engine` submenu: the `Fallback` toggle at the top, and one
 /// row per engine below it. The toggle is a switch and the engines are a radio group, so the
 /// toggle has an id of its own and the engines are a base plus the position each was listed at
-/// (see `VIDEO_ENGINE_CHOICES`). They sit in the slack the LibreOffice idle range leaves before
-/// the config row at 1040.
+/// (see `VIDEO_ENGINE_CHOICES`). They fill the slack the LibreOffice idle range leaves before the
+/// config row at 1040 exactly: 1035 through 1039, one id per engine, and the config row's own id
+/// next.
 pub(super) const ID_TRAY_VIDEO_ENGINE_FALLBACK: u16 = 1034;
 pub(super) const ID_TRAY_VIDEO_ENGINE_BASE: u16 = 1035;
 
-/// The engines the `Video` submenu lists, in the order it lists them, with `Best` at the top and
-/// the hybrid — `Native (FFmpeg above 3.2MP)` — below the two plain ones.
-pub(super) const VIDEO_ENGINE_CHOICES: [VideoEngine; 4] = [
+/// The engines the `Video` submenu lists, in the order it lists them: `Best` at the top, mpv
+/// below it since it is preferred to both of the others, and the hybrid —
+/// `Native (FFmpeg above 3.2MP)` — below the two plain ones.
+pub(super) const VIDEO_ENGINE_CHOICES: [VideoEngine; 5] = [
     VideoEngine::Best,
+    VideoEngine::Mpv,
     VideoEngine::Native,
     VideoEngine::Ffmpeg,
     VideoEngine::Hybrid,

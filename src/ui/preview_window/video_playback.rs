@@ -76,6 +76,34 @@ pub(super) fn start_video_playback(
 ) -> Option<Child> {
     let volume = volume.min(100);
 
+    // Which player this file is begun with, asked here rather than left to the caller because
+    // what a player is told is this function's whole business: the two routes' command lines have
+    // nothing in common but the file (see `video_route`).
+    let route = video_route(path);
+
+    // The soundtrack's own measured gain, where `Normalize` is on for videos and one has been
+    // measured. It is read here rather than below because both routes want it, and on the same
+    // terms: a film nothing has measured is played as the file holds it, and what measures it is a
+    // read on a thread of its own — the hover after this one is the one that hears it (see
+    // `spawn_gain_scan`). A muted film asks for nothing, so nothing is measured for one either.
+    let gain = if volume == 0 || !normalizing_video() {
+        None
+    } else {
+        match audio_track::gain(path) {
+            // A gain of one is a gain, not the absence of one: a soundtrack already standing at
+            // the target is played through the filter like every other measured file.
+            Some(gain) => Some(gain),
+            None => {
+                spawn_gain_scan(path);
+                None
+            }
+        }
+    };
+
+    if route == VideoRoute::Mpv {
+        return start_mpv_video_playback(path, x, y, width, height, start, volume, gain);
+    }
+
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = engine_processes::hidden_command("ffplay");
 
@@ -97,24 +125,7 @@ pub(super) fn start_video_playback(
     } else {
         // The level, with the soundtrack's own measured gain folded into it where `Normalize` is on
         // for videos and one has been measured: the two multiply, exactly as they do for a sound
-        // file (see `start_audio_player`). A film nothing has measured is played as the file holds
-        // it, and what measures it is a read on a thread of its own — the hover after this one is
-        // the one that hears it (see `spawn_gain_scan`).
-        let gain = if normalizing_video() {
-            match audio_track::gain(path) {
-                // A gain of one is a gain, not the absence of one: a soundtrack already standing
-                // at the target is played through the filter like every other measured file.
-                Some(gain) => Some(gain),
-                None => {
-                    spawn_gain_scan(path);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        // Convert percentage to ffplay volume filter (0-100 maps to 0.0-1.0)
+        // file (see `start_audio_player`).
         let volume_filter = match gain {
             Some(gain) => format!("volume={:.4}", volume as f64 / 100.0 * gain),
             None => format!("volume={:.2}", volume as f64 / 100.0),
@@ -267,43 +278,119 @@ pub(super) fn start_video_playback(
         None => child.spawn().ok(),
     };
 
-    // After spawning, try to set WS_EX_NOACTIVATE on the ffplay window
-    // to prevent it from stealing focus
+    // After spawning, try to set WS_EX_NOACTIVATE on the player's window
+    // to prevent it from stealing focus, and book the player in: its window is the monitor's, its
+    // name is what its id is verified as, and its loop — where the loop is this app's to give — is
+    // clocked from here (see `note_player_started`).
     if let Some(ref child_process) = child {
-        set_noactivate_for_process(child_process.id());
-
-        // The player is this app's own child, and it is taken charge of the way the
-        // engines are: one that is up when the app is killed, or crashes, is not left
-        // playing with nothing to close it — the job ends it there and then, and the
-        // record is what answers for the run that never got to end it. It is recorded
-        // as the player rather than as an engine, because what ends a player is its
-        // hover ending: a tier being let go of — a preview type switched off, a worker
-        // given up on — is not its to receive; see `engine_processes`.
-        engine_processes::record_player(VIDEO_PROCESS_IMAGE_NAME, child_process.id());
-
-        // A player that was seeked has to be given its loop from out here, because it was not
-        // given one at all — see `video_launch::loop_is_ours`. The clock it is measured against
-        // starts here, at the second the player was actually begun at, and not at the moment the
-        // process appeared: the header is read before the window is up, and a film of a few
-        // hundred megabytes spends a good part of a second in there.
-        //
-        // The box goes in beside the clock because the rewind is a relaunch and a relaunch has to
-        // be told where to put its window — the film is not drawn into a surface of this app's, so
-        // the replacement's window has to be placed rather than laid out (see `video_loop_action`).
-        if video_launch::loop_is_ours(seeked) {
-            note_video_loop(
-                child_process.id(),
-                path,
-                (x, y, x + width, y + height),
-                start,
-                video_duration(path),
-            );
-        } else {
-            forget_video_loop(child_process.id());
-        }
+        note_player_started(
+            player_image(VideoRoute::Ffplay),
+            path,
+            child_process,
+            (x, y, x + width, y + height),
+            start,
+            video_launch::loop_is_ours(seeked),
+        );
     }
 
     child
+}
+
+/// Begin an mpv video, in a window of its own over the preview box.
+///
+/// It is the ffplay launch's own shape — a player spawned and booked in, its window found by pid
+/// and styled, its process recorded — with the two things that are mpv's: what it is told (see
+/// `video_launch::mpv_args`, where every flag is argued for) and the fact that its loop is always
+/// this app's to give. mpv is launched with `--keep-open=yes`, so a film that reaches its end
+/// pauses there rather than exiting — and a player that exits is the only thing the tick can see
+/// a pass ending by, so nothing would ever begin the film again where the app left the loop to
+/// the player (see `video_loop_tick`). It is true of a hover as much as of a pin: the ffplay
+/// route's hover loops by FFmpeg's own `-loop 0`, and mpv's is begun again by the tick.
+#[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
+fn start_mpv_video_playback(
+    path: &Path,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    start: f64,
+    volume: u32,
+    gain: Option<f64>,
+) -> Option<Child> {
+    // The switches are read here, at the launch, for the reason the ffplay route reads its own
+    // here: a film already playing was started with the answer that stood then and is kept
+    // playing with it (see `video_hw_accel_wanted`, `subtitles_wanted`).
+    let child = engine_processes::hidden_command("mpv")
+        .args(video_launch::mpv_args(
+            path,
+            x,
+            y,
+            width,
+            height,
+            start,
+            volume,
+            gain,
+            video_hw_accel_wanted(),
+            subtitles_wanted(),
+            video_launch::mpv_input_conf(),
+        ))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    // **mpv picks its own tracks, so "was it asked for subtitles" is the honest answer here** —
+    // and it is the answer the take-up is asked for: a pin adopts a hover's player rather than
+    // beginning one of its own, and this list is what says whether the player it adopted is
+    // drawing what the user asked for (see `reload_adopted_subtitles`). On the ffplay route the
+    // same fact is whether a filter was named, because nothing else there can draw a subtitle.
+    note_player_subtitles(path, subtitles_wanted());
+
+    note_player_started(
+        MPV_IMAGE_NAME,
+        path,
+        &child,
+        (x, y, x + width, y + height),
+        start,
+        true,
+    );
+
+    Some(child)
+}
+
+/// Book in a player this app has just begun, whichever engine it is.
+///
+/// The four things are the same four for both players, which is why they are one function: the
+/// window is the monitor's to keep in step, the image name is written down beside the id so that
+/// what a sweep or a retire verifies before a kill is the player actually begun (see
+/// `note_player_process`), the process is recorded for the run that never gets to end it —
+/// recorded as the player rather than as an engine, because what ends a player is its hover
+/// ending, and a tier being let go of is not its to receive (see `engine_processes`) — and the
+/// loop is clocked from here, where the loop is this app's to give rather than the player's own.
+///
+/// The clock starts at the second the player was actually begun at and not at the moment the
+/// process appeared: the header is read before the window is up, and a film of a few hundred
+/// megabytes spends a good part of a second in there. The box goes in beside it because a rewind
+/// is a relaunch, and a relaunch has to be told where to put its window — the film is not drawn
+/// into a surface of this app's, so the replacement's window has to be placed rather than laid
+/// out (see `video_loop_action`).
+fn note_player_started(
+    image: &'static str,
+    path: &Path,
+    child: &Child,
+    content: ScreenRegion,
+    start: f64,
+    own_loop: bool,
+) {
+    set_noactivate_for_process(child.id(), image);
+    engine_processes::record_player(image, child.id());
+
+    if own_loop {
+        note_video_loop(child.id(), path, content, start, video_duration(path));
+    } else {
+        forget_video_loop(child.id());
+    }
 }
 
 /// A player that has been started and has not put its window up yet.

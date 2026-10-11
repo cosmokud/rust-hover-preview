@@ -602,11 +602,11 @@ fn only_the_first_of_two_video_streams_is_the_files_picture() {
 
 #[test]
 fn a_key_posted_to_ffplays_player_carries_the_scan_code_its_symbol_is_read_from() {
-    let lparam = ffplay_key_lparam(FFPLAY_PAUSE_KEY.1).0;
+    let lparam = ffplay_key_lparam(VIDEO_PAUSE_KEY.1).0;
 
     assert_eq!(
         lparam >> 16,
-        FFPLAY_PAUSE_KEY.1 as isize,
+        VIDEO_PAUSE_KEY.1 as isize,
         "the scan code is what the posted message has to carry: the player is an SDL program \
              and SDL reads a Win32 key message's scan code to work out which key it names, so a \
              message posted without one names no key at all and pauses nothing"

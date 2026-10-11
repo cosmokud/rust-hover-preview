@@ -781,7 +781,7 @@ pub(super) enum PinLevelSettling {
     ///
     /// Nothing is written for it here, and what is not written is the point: the claim of what the
     /// running player was begun at stays standing, which is what says a level is owed and what
-    /// makes that player refuse a pause key until it has been replaced (see `ffplay_key_pause`).
+    /// makes that player refuse a pause key until it has been replaced (see `video_key_pause`).
     OwedToTheNextPlayer,
     /// No player is behind the pin at all. Nothing is begun: the level is written down as the one
     /// playing, and the player that takes it is the one a later press begins at it.
@@ -841,7 +841,7 @@ pub(super) fn pin_level_settled_by(playing: bool, running: bool, held: bool) -> 
 /// because a replacement for a held film is a player that plays until the hold written beside it
 /// reaches it, and a knob is not worth handing a held film a burst of its own soundtrack for: the
 /// level is left owed to the player that begins when the file is let go of, which is what that
-/// player refuses a pause key until it has been replaced (see `ffplay_key_pause`). What is
+/// player refuses a pause key until it has been replaced (see `video_key_pause`). What is
 /// genuinely owed nothing is a pin whose player has gone, where the file is held because there is
 /// nothing holding it: the player that begins when the file is let go of is begun at the level this
 /// reads.
@@ -879,7 +879,7 @@ pub(super) fn settle_pin_volume() {
             PinLevelSettling::OwedToTheNextPlayer => {
                 // Nothing is done, and nothing is written: the claim of what the running player
                 // was begun at stays standing, which is the whole of what says the level is owed
-                // (see `PinVolume::playing_at` and `ffplay_key_pause`).
+                // (see `PinVolume::playing_at` and `video_key_pause`).
             }
             PinLevelSettling::Recorded => {
                 with_pin(|pin| pin.volume.playing_at = pin.volume.level);

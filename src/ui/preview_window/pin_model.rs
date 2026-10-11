@@ -515,7 +515,7 @@ pub(super) struct PinTransport {
     /// What is behind this field changed when a video FFmpeg plays became a video this app can
     /// hold: a pause used to be that player *ended*, with the second it had reached kept here
     /// for the player that took its place, and it is now a key sent to a player that keeps
-    /// running (see `ffplay_key_pause`). So `paused_at` no longer implies a dead process — the
+    /// running (see `video_key_pause`). So `paused_at` no longer implies a dead process — the
     /// process behind a held file is *alive and holding still* — and the second written here is
     /// read out of this app's own clock over the start below, which is the only position a
     /// player that reports nothing can be measured by.
@@ -524,7 +524,7 @@ pub(super) struct PinTransport {
     ///
     /// It is here for the one case where a hold is written down before it can be acted on: a
     /// relaunch of a held file begins a player that has no window for a moment, and a key cannot
-    /// be posted to a window that does not exist (see `ffplay_key_pause`). The hold is written
+    /// be posted to a window that does not exist (see `video_key_pause`). The hold is written
     /// anyway — the file *is* meant to be held — and this flag is what says the player has not
     /// been told yet, so the loop tells it the moment there is a window to tell it through (see
     /// `settle_pending_hold`). It is a field rather than a flag beside the pin because it is the
@@ -601,7 +601,7 @@ impl PinTransport {
     /// the player is still running, it is the one holding the second, and the clock underneath
     /// `started` is what the position is read from the moment the file is let go again — so a
     /// resume is a key sent to the player that is already there rather than a second player
-    /// begun from scratch (see `ffplay_key_pause`).
+    /// begun from scratch (see `video_key_pause`).
     ///
     /// Nothing is left owing, because the player has been told: this is what both the press of the
     /// pause button and the loop's delivery of a hold owed by a relaunch come through.
@@ -729,7 +729,7 @@ pub(super) fn pin_transport_kind(kind: Option<MediaType>) -> bool {
 /// drag — a read-out, because a button that does nothing is a promise the app cannot keep.
 ///
 /// Two things changed that, and neither of them is "the player got better". The player takes a
-/// pause as a key posted to its own window (see `ffplay_key_pause`), and the bar's button and
+/// pause as a key posted to its own window (see `video_key_pause`), and the bar's button and
 /// track both reach it now. So a bar that cannot be told anything would have to be some *third*
 /// kind's — and there is none, because a sound's card carries its own controls on its own row and
 /// everything else has no playback behind it at all.

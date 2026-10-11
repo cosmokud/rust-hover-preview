@@ -146,7 +146,7 @@ pub(super) fn video_drag_hold_claim(dragging: bool, ours: bool) -> bool {
 /// Begin or end the hold, answering whether a player was told.
 ///
 /// It is the pause key, and it is the same key the transport bar's own hold is (see
-/// `ffplay_key_pause`), posted to the same window: a player asked to hold does hold, and a player
+/// `video_key_pause`), posted to the same window: a player asked to hold does hold, and a player
 /// that is holding is still there to be let go of — which is what makes the end of the gesture a
 /// key rather than a relaunch. A relaunch would put the film back at the second the gesture began
 /// at, so a window dragged for a second and released would lose the second it was watching.
@@ -228,7 +228,7 @@ pub(super) fn video_drag_hold_apply(dragging: bool) -> bool {
         VideoDragHold::Leave => false,
 
         VideoDragHold::Hold => {
-            if !ffplay_key_pause() {
+            if !video_key_pause() {
                 return false;
             }
 
@@ -242,7 +242,7 @@ pub(super) fn video_drag_hold_apply(dragging: bool) -> bool {
         }
 
         VideoDragHold::Release => {
-            if !ffplay_key_pause() {
+            if !video_key_pause() {
                 return false;
             }
 

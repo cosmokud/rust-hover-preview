@@ -57,7 +57,7 @@
 
 use super::media_types::DerivedSubtitles;
 use super::subtitles_wanted;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The devices worth asking a video to decode on, in the order they are worth asking.
 ///
@@ -98,6 +98,148 @@ pub fn hw_accel_candidates(enabled: bool) -> &'static [&'static str] {
     } else {
         &[]
     }
+}
+
+/// The one binding an mpv video is given, which is the key this app already pauses a film with.
+///
+/// It is needed at all because of what mpv has *baked in*: `MBTN_LEFT_DBL` cycles fullscreen and
+/// the wheel moves the volume, and a hover overlay must have neither — while `p cycle pause` does
+/// have to be there, because the pin pauses an external player by posting that key (see
+/// `video_key_pause`). `--input-conf` alone does not remove the built-ins, so the file is paired
+/// with `--no-input-default-bindings` and the pair is dropped together where the file cannot be
+/// written: a player with a live mouse beats a player that cannot be paused.
+pub(super) const MPV_PAUSE_BINDING: &str = "p cycle pause\n";
+
+/// The binding file written for a run of the app, if it could be written, and nothing where it
+/// could not.
+///
+/// It is written once per run rather than once per launch — it is one line and nothing about it
+/// changes — and it goes where the app puts every file it derives, under the temp folder
+/// (`subtitle_files`' own two files are `general`, and the pages are `document`), which is the
+/// folder a run's leftovers are cleared from at the next start (see
+/// `document_cache::discard_leftovers`). A file left behind by a run that was killed is therefore
+/// not read by the next one: both flags are dropped with this answer, so a stale file is not used.
+static MPV_INPUT_CONF: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+pub(super) fn mpv_input_conf() -> Option<&'static Path> {
+    MPV_INPUT_CONF
+        .get_or_init(|| {
+            let file = crate::engines::document_cache::temp_folder().join(MPV_INPUT_CONF_NAME);
+            (write_input_conf(&file)).then_some(file)
+        })
+        .as_deref()
+}
+
+/// The name the binding file is written under.
+const MPV_INPUT_CONF_NAME: &str = "mpv-input.conf";
+
+/// Write the one binding out, answering whether it landed.
+///
+/// A write that cannot be made is not a failure worth announcing and not one worth stopping for:
+/// what it costs is the pair of input flags, and what stands instead is mpv's own bindings with a
+/// pause key that still works (see `MPV_PAUSE_BINDING`).
+fn write_input_conf(file: &Path) -> bool {
+    std::fs::write(file, MPV_PAUSE_BINDING).is_ok()
+}
+
+/// The arguments an mpv video is begun with, which is the command line the spec settles on
+/// (`--vo` and `--focus-on` deliberately not among them: mpv's default video output is the
+/// wanted answer on every build this decade, and a `--focus-on` is a hard start failure on a
+/// build old enough not to have it, while the app applies `WS_EX_NOACTIVATE` by pid straight
+/// after the launch anyway).
+///
+/// The switches are passed in rather than read here, because reading one at a hover's beginning
+/// reads it for the *next* hover: a film already playing was launched with the answer that stood
+/// then and is kept playing with it (see `video_hw_accel_wanted`).
+///
+/// **A muted film is given no audio rather than a level of zero**, which is the ffplay route's
+/// `-an` and saves the decoder the whole soundtrack; and **a film with no measured gain is given
+/// no filter at all**, because none has measured one yet and what measures it is a read on a
+/// thread of its own (see `spawn_gain_scan`).
+#[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
+pub(super) fn mpv_args(
+    path: &Path,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    start: f64,
+    volume: u32,
+    gain: Option<f64>,
+    hw_accel: bool,
+    subtitles: bool,
+    input_conf: Option<&Path>,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        // Read before the configuration and before any file the user has: the app's own command
+        // line is the whole of what an mpv video is launched with, so a user's `mpv.conf` cannot
+        // turn on an OSC or a mouse binding for a preview that is meant to have neither.
+        path.to_string_lossy().into_owned(),
+        "--no-config".to_string(),
+    ];
+
+    // The mouse: mpv's own bindings are what a hover overlay must not have, and they survive
+    // `--input-conf` on their own — see `MPV_PAUSE_BINDING`, which is where both flags are
+    // explained and where they are dropped together.
+    if let Some(input_conf) = input_conf {
+        args.push("--no-input-default-bindings".to_string());
+        args.push(format!("--input-conf={}", input_conf.to_string_lossy()));
+    }
+
+    args.push("--no-osc".to_string());
+    args.push("--no-border".to_string());
+    args.push(format!("--geometry={width}x{height}+{x}+{y}"));
+    args.push("--gpu-api=d3d11".to_string());
+
+    // mpv decodes on the card by its own safe list with its own fallback, so the switch is the
+    // whole of the answer here: the device the ffplay route has to measure is not a question mpv
+    // is asked (see `video_hw_accel_wanted`).
+    args.push(if hw_accel {
+        "--hwdec=auto".to_string()
+    } else {
+        "--hwdec=no".to_string()
+    });
+
+    // Subtitles are mpv's own to find and choose — its own tracks and the sidecars beside the
+    // film — so the `Subtitles` switch is answered by turning them off rather than by naming a
+    // track: with it off the film must show none, or the tray row is a lie for every user who has
+    // mpv. `--sub-auto=no` is what stops mpv loading the sidecars as tracks at all, and `--sid=no`
+    // is what stops it selecting one of the film's own.
+    if subtitles {
+        args.push("--sub-auto=fuzzy".to_string());
+    } else {
+        args.push("--sid=no".to_string());
+        args.push("--sub-auto=no".to_string());
+    }
+
+    // The film pauses on its last frame rather than exiting, which is what the app's own loop is
+    // for: nothing this app can observe would say a pass had ended otherwise, so the tick that
+    // measures the film off its own clock is what begins it again (see `video_loop_tick`).
+    args.push("--keep-open=yes".to_string());
+
+    // A player begun at the beginning is given no `--start` rather than `--start=0`, so that
+    // nothing is asked for that would be answered with the position it is already at.
+    if start > 0.0 {
+        args.push(format!("--start={start:.3}"));
+    }
+
+    if volume == 0 {
+        args.push("--aid=no".to_string());
+    } else {
+        args.push(format!("--volume={volume}"));
+
+        // The measured gain, as the same libavfilter `volume` filter the ffplay route applies it
+        // with — named through mpv's bridge to libavfilter, which is the documented spelling of a
+        // libavfilter graph: the bare `--af=volume=` reaches the same filter, but only through
+        // mpv's automatic bridge for a name it has no filter of its own for, and the manual says
+        // that bridge neither verifies its arguments nor answers for them (see `--vf`'s `lavfi`).
+        // A muted film is not normalised, since there is nothing to hear.
+        if let Some(gain) = gain {
+            args.push(format!("--af=lavfi=[volume={gain:.4}]"));
+        }
+    }
+
+    args
 }
 
 /// The extensions a sidecar subtitle file is looked for under, in the order they are tried.
@@ -1108,6 +1250,310 @@ mod tests {
             None,
             "a sidecar that is not there is not a sidecar, and nothing else is drawn while the \
              film's own copy is coming"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The whole command line an mpv video is begun with, asserted in one piece: an edit to any
+    /// flag in it is then a failing test rather than a surprise in a preview nobody on this
+    /// machine can run (there is no mpv here — see the report on this ticket).
+    #[test]
+    fn the_mpv_route_is_launched_with_the_command_line_the_spec_settles_on() {
+        assert_eq!(
+            mpv_args(
+                Path::new("films/episode.mkv"),
+                10,
+                20,
+                640,
+                360,
+                0.0,
+                80,
+                None,
+                true,
+                true,
+                Some(Path::new("scratch/mpv-input.conf")),
+            ),
+            [
+                "films/episode.mkv",
+                "--no-config",
+                "--no-input-default-bindings",
+                "--input-conf=scratch/mpv-input.conf",
+                "--no-osc",
+                "--no-border",
+                "--geometry=640x360+10+20",
+                "--gpu-api=d3d11",
+                "--hwdec=auto",
+                "--sub-auto=fuzzy",
+                "--keep-open=yes",
+                "--volume=80",
+            ],
+            "the film, then the configuration off, the mouse off, the chrome off, the box, the\
+             two Direct3D options and the level — `--vo` is deliberately not passed and no\
+             `--start` is asked for at the beginning of a file (see `mpv_args`)"
+        );
+    }
+
+    /// Subtitles are the tray's `Subtitles` row, and with it off the film is asked for none at all:
+    /// the row is answered by mpv as it is by the ffplay route, rather than left to a player that
+    /// would find and select the film's own track whatever the row says.
+    #[test]
+    fn an_mpv_video_is_shown_without_subtitles_where_the_row_is_off() {
+        assert_eq!(
+            mpv_args(
+                Path::new("a.mkv"),
+                0,
+                0,
+                8,
+                8,
+                0.0,
+                100,
+                None,
+                true,
+                false,
+                None,
+            ),
+            [
+                "a.mkv",
+                "--no-config",
+                "--no-osc",
+                "--no-border",
+                "--geometry=8x8+0+0",
+                "--gpu-api=d3d11",
+                "--hwdec=auto",
+                "--sid=no",
+                "--sub-auto=no",
+                "--keep-open=yes",
+                "--volume=100",
+            ],
+            "with the row off nothing is shown and nothing is looked for: `--sid=no` selects no \
+             track at all, embedded or beside the film, and `--sub-auto=no` keeps the sidecar \
+             beside the film from being read as one in the first place"
+        );
+    }
+
+    /// The switch under `Performance → Hardware Acceleration` is the whole of what mpv is told
+    /// about decoding, and its off position asks for a core.
+    #[test]
+    fn an_mpv_video_is_decoded_on_the_card_only_where_the_switch_says_so() {
+        assert_eq!(
+            mpv_args(
+                Path::new("a.mkv"),
+                0,
+                0,
+                8,
+                8,
+                0.0,
+                50,
+                None,
+                false,
+                true,
+                None,
+            ),
+            [
+                "a.mkv",
+                "--no-config",
+                "--no-osc",
+                "--no-border",
+                "--geometry=8x8+0+0",
+                "--gpu-api=d3d11",
+                "--hwdec=no",
+                "--sub-auto=fuzzy",
+                "--keep-open=yes",
+                "--volume=50",
+            ],
+            "the switch off is the whole of the answer: mpv is asked for no device at all rather \
+             than for one this app measured, and every other flag is the one the default launch \
+             carries"
+        );
+    }
+
+    /// A level of zero is a film with no audio rather than a film played at nothing, which is the
+    /// ffplay route's `-an` — and a film with nothing to hear is not normalised either.
+    #[test]
+    fn a_muted_mpv_video_is_given_no_audio_and_no_filter() {
+        assert_eq!(
+            mpv_args(
+                Path::new("a.mkv"),
+                0,
+                0,
+                8,
+                8,
+                0.0,
+                0,
+                Some(2.5),
+                true,
+                true,
+                None,
+            ),
+            [
+                "a.mkv",
+                "--no-config",
+                "--no-osc",
+                "--no-border",
+                "--geometry=8x8+0+0",
+                "--gpu-api=d3d11",
+                "--hwdec=auto",
+                "--sub-auto=fuzzy",
+                "--keep-open=yes",
+                "--aid=no",
+            ],
+            "a muted film is a film with its audio turned off, which saves the decoder the whole \
+             soundtrack, and a gain for a soundtrack nothing will play is a filter nothing asked \
+             for"
+        );
+    }
+
+    /// A measured gain with `Normalize` on reaches mpv as the same libavfilter `volume` filter the
+    /// ffplay route applies, through mpv's own bridge to libavfilter.
+    ///
+    /// **The bridge is not a preference, it is the spelling the manual gives.** The gain is
+    /// libavfilter's `volume` filter, and mpv reaches a libavfilter filter through its `lavfi`
+    /// bridge: `lavfi=[volume=…]` is what the manual's `--af` syntax asks for and what mpv's own
+    /// `--af=help` example prints for the audio bridge, where a bare `--af=volume=` reaches the
+    /// same filter only by the automatic bridge mpv falls back on for a name it has no filter of
+    /// its own for — one the manual says neither verifies arguments nor supports help output, so
+    /// the graph is named rather than left to the fallback (checked against mpv's manual and
+    /// `filters/f_lavfi.c` — see the report on this ticket).
+    #[test]
+    fn a_measured_gain_reaches_mpv_as_the_libavfilter_volume_filter() {
+        assert_eq!(
+            mpv_args(
+                Path::new("a.mkv"),
+                0,
+                0,
+                8,
+                8,
+                0.0,
+                100,
+                Some(2.5),
+                true,
+                true,
+                None,
+            ),
+            [
+                "a.mkv",
+                "--no-config",
+                "--no-osc",
+                "--no-border",
+                "--geometry=8x8+0+0",
+                "--gpu-api=d3d11",
+                "--hwdec=auto",
+                "--sub-auto=fuzzy",
+                "--keep-open=yes",
+                "--volume=100",
+                "--af=lavfi=[volume=2.5000]",
+            ],
+            "the gain is the filter ffplay is given the same gain through, and `--volume=100` \
+             stands beside it as the level the two multiply with"
+        );
+    }
+
+    /// A film begun at a second is asked for that second, in the spelling the manual gives.
+    #[test]
+    fn an_mpv_video_begun_at_a_second_is_asked_for_that_second() {
+        assert_eq!(
+            mpv_args(
+                Path::new("a.mkv"),
+                0,
+                0,
+                8,
+                8,
+                12.5,
+                100,
+                None,
+                true,
+                true,
+                None,
+            ),
+            [
+                "a.mkv",
+                "--no-config",
+                "--no-osc",
+                "--no-border",
+                "--geometry=8x8+0+0",
+                "--gpu-api=d3d11",
+                "--hwdec=auto",
+                "--sub-auto=fuzzy",
+                "--keep-open=yes",
+                "--start=12.500",
+                "--volume=100",
+            ],
+            "the second a pinned bar was dragged to is what the relaunch asks mpv for, at the same \
+             precision the ffplay route writes it in"
+        );
+    }
+
+    /// The two input flags are dropped together where the binding file could not be written, so a
+    /// player is never given half of the arrangement.
+    ///
+    /// `--input-conf` alone does not remove mpv's baked-in mouse bindings, and
+    /// `--no-input-default-bindings` alone takes `p` away with them — so a launch holding one of
+    /// the two is either a hover with a live mouse or a film the pin cannot pause. Both flags or
+    /// neither is the whole of the answer.
+    #[test]
+    fn a_binding_file_that_could_not_be_written_drops_both_input_flags() {
+        assert_eq!(
+            mpv_args(
+                Path::new("a.mkv"),
+                0,
+                0,
+                8,
+                8,
+                0.0,
+                100,
+                None,
+                true,
+                true,
+                None,
+            ),
+            [
+                "a.mkv",
+                "--no-config",
+                "--no-osc",
+                "--no-border",
+                "--geometry=8x8+0+0",
+                "--gpu-api=d3d11",
+                "--hwdec=auto",
+                "--sub-auto=fuzzy",
+                "--keep-open=yes",
+                "--volume=100",
+            ],
+            "no file is no `--input-conf`, and mpv's own bindings stand rather than its bindings \
+             minus every key — the two flags are dropped together or not at all"
+        );
+    }
+
+    /// The binding file holds the one line that pauses the film, written where the app puts what
+    /// it derives — and a write that cannot be made answers so rather than pretending.
+    #[test]
+    fn the_binding_file_holds_the_one_binding_and_a_write_that_fails_says_so() {
+        let dir = std::env::temp_dir().join(format!("hl-mpv-conf-{}", std::process::id()));
+        let file = dir.join("nested").join("mpv-input.conf");
+
+        assert!(
+            !write_input_conf(&file),
+            "a file in a folder that is not there is a write that failed, and what that costs is \
+             the pair of input flags rather than a player that will not start"
+        );
+
+        std::fs::create_dir_all(file.parent().expect("the folder the file is written into"))
+            .expect("the scratch folder for this test is creatable");
+
+        assert!(
+            write_input_conf(&file),
+            "and a write that lands says so, which is what the two flags are asked for"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("the binding file is readable"),
+            MPV_PAUSE_BINDING,
+            "the file's whole content is the one binding"
+        );
+        assert_eq!(
+            MPV_PAUSE_BINDING,
+            "p cycle pause\n",
+            "the key is the one the pin posts and mpv's own binding is the one that answers it \
+             (see `VIDEO_PAUSE_KEY`)"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

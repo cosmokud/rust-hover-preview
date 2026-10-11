@@ -585,6 +585,13 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // the engine was a setting (see `VideoEngine::Hybrid`). An explicit native choice with the
     // fallback on runs them for a film the engine will not take, which is the one it hands on, so
     // the player that gets it is given a geometry rather than a bare window.
+    //
+    // **mpv is the case between the two: it wants the header and neither of FFmpeg's passes.**
+    // mpv draws the picture uncropped and finds its own sidecars, so `collect_video_crop_candidates`
+    // decodes frames and `sidecar_for` walks the folder for answers mpv never reads — while the
+    // header leg it does need carries the box's width and height and the length the loop and the
+    // pin read, and names the subtitle streams in that same pass. So the header runs and the other
+    // two legs do not.
     let native = {
         let (choice, fallback) = CONFIG
             .lock()
@@ -594,6 +601,17 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             named_for_the_media_engine(path)
         })
     };
+
+    // The mpv route is asked of the rule that owns it rather than restated here. Its install is
+    // not the whole of the answer — `Best` reaches mpv, an explicit `Mpv` is the engine alone, and
+    // the fall-through of every other choice deliberately does not reach it — so a second
+    // statement of the rule here would be a copy that drifts (see `resolve_video_engine`).
+    //
+    // It is safe to ask from here: `video_route` locks the configuration itself and no lock of
+    // this one is held across the call above, and it never comes back through this probe — it
+    // reads the geometry cache, the install and the media engine's own per-file answer, and asks
+    // neither FFprobe nor the detector (see `video_route`).
+    let mpv = video_route(path) == VideoRoute::Mpv;
 
     // What the media engine answers with: a shape, and nothing else. No duration, because the
     // engine does not know one until the file is playing (see `pin_duration`), and no subtitle
@@ -613,6 +631,8 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
 
     let (header, candidates, sidecar) = if native {
         (engine_header(), Default::default(), None)
+    } else if mpv {
+        (probe_video_header(path), Default::default(), None)
     } else {
         std::thread::scope(|scope| {
             let header = scope.spawn(|| probe_video_header(path));
@@ -753,10 +773,15 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // What this probe leaves for that launch is the answer itself: the small files a pass before
     // it left, the sidecar beside the film, and the codec names the pass's own command is built
     // from, all held together in the geometry entry below.
-    let derived = if native || !subtitles_wanted() {
+    let derived = if native || mpv || !subtitles_wanted() {
         // A player that shows no subtitles has nothing to draw from a copied track, so the folder
         // is not read for one either (see `subtitle_files` and `video_player`); the switch off is
         // that same answer for the whole of the file, and `resolve` holds it too.
+        //
+        // **mpv is the second player that reads nothing this app writes**: it draws the film's
+        // own tracks and the sidecars beside it by itself, so a copy of a track is a file nothing
+        // will open — and the launch does not ask for one on that route either (see
+        // `start_video_playback`, which is where the ask is placed).
         None
     } else {
         subtitle_files::resolve(path, &subtitle_codecs)

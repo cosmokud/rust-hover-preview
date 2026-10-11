@@ -788,7 +788,8 @@ pub(super) fn append_video_engine_menu(parent: HMENU) {
 
     for (index, engine) in VIDEO_ENGINE_CHOICES.iter().enumerate() {
         // A row is greyed for an engine this machine has not got: `Best` and `Native` are always
-        // here, and both FFmpeg-based choices need `ffplay` (see `VideoEngine::installed`).
+        // here, the FFmpeg-based choices need `ffplay`, and mpv needs `mpv.exe` (see
+        // `VideoEngine::installed`).
         let unavailable = !engine.installed();
 
         append_labeled_item(
@@ -818,6 +819,7 @@ pub(super) fn append_video_engine_menu(parent: HMENU) {
 pub(super) fn video_engine_label(engine: VideoEngine) -> String {
     let label = match engine {
         VideoEngine::Best => "Best",
+        VideoEngine::Mpv => "MPV",
         VideoEngine::Native => "Native",
         VideoEngine::Ffmpeg => "FFmpeg",
         VideoEngine::Hybrid => "Native (FFmpeg above 3.2MP)",

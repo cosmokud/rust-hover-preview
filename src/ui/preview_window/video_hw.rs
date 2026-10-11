@@ -3,6 +3,20 @@
 
 use super::*;
 
+/// Whether a video is decoded on the graphics card at all: the `Video` toggle under
+/// `Performance → Hardware Acceleration` in the tray, read as the switch it is.
+///
+/// It is the whole of what mpv is told about decoding — its `--hwdec=auto` is mpv's own safe list
+/// with mpv's own software fallback, so the device the ffplay route has to measure is not a
+/// question for it (see `video_launch::mpv_args`) — and it is read at the launch for the reason
+/// below: a setting read at a hover's beginning is read for the *next* hover.
+pub(super) fn video_hw_accel_wanted() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.video_hw_accel)
+        .unwrap_or(DEFAULT_VIDEO_HW_ACCEL)
+}
+
 /// The device a video is decoded on, or nothing for a video decoded on a core.
 ///
 /// This is the `Video` toggle under `Performance → Hardware Acceleration` in the tray, read here
@@ -426,14 +440,17 @@ pub(super) fn video_loop_tick(playing: bool) -> bool {
     }
 }
 
-/// Who plays a video on this machine, which is one of three answers rather than a pair of
-/// preferences: the media engine Windows has, FFmpeg's `ffplay`, or nothing at all.
+/// Who plays a video on this machine, which is one of four answers rather than a set of
+/// preferences: the media engine Windows has, FFmpeg's `ffplay`, mpv, or nothing at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum VideoRoute {
     /// The media engine Windows has, drawing into this app's own window.
     MediaEngine,
     /// FFmpeg's `ffplay`, in a window of its own.
     Ffplay,
+    /// mpv, in a window of its own: mpv's own window filling the preview box, the shape
+    /// `Ffplay` gives ffplay's.
+    Mpv,
     /// No player: nothing installed here will take the file, so there is no preview of it. This
     /// is the answer `[ffmpeg]` has always meant on a machine without FFmpeg, and it is an answer
     /// rather than a failure — a file nothing plays is a file with no preview, not a broken one.
@@ -441,9 +458,11 @@ pub(super) enum VideoRoute {
 }
 
 /// The engines a video may be played by, most preferred first: the order `Best` walks and the
-/// order an explicit choice falls through. One list, so a third engine is a variant and a row
-/// and no branch here (see `VideoEngine`).
-pub(super) const VIDEO_ENGINES: [VideoEngine; 2] = [VideoEngine::Ffmpeg, VideoEngine::Native];
+/// order an explicit choice falls through. mpv is at the top — `Best` prefers it wherever the
+/// machine has it — and the two under it are the pair the size rule chooses between, which is
+/// why `Hybrid` names neither of them through this list (see `VideoEngine`).
+pub(super) const VIDEO_ENGINES: [VideoEngine; 3] =
+    [VideoEngine::Mpv, VideoEngine::Ffmpeg, VideoEngine::Native];
 
 /// The name-only half of whether the media engine can play `path`: the file's name is one the
 /// `[video]` list carries (see `video_formats::claims_video_name`).
@@ -469,12 +488,16 @@ pub(super) fn named_for_the_media_engine(path: &Path) -> bool {
 /// file's (`can_play`), and `pixels` is the file's resolution where the probe read one — so the
 /// whole rule is one function the tests can hand stub answers to.
 ///
-/// `Best` and `Hybrid` are one order between them, and it is the file's own: the media engine for a
-/// film at or below `VIDEO_FFMPEG_ABOVE_PIXELS`, and FFmpeg's player for a bigger one — and for a
-/// film nobody measured, where the player more forgiving than the probe is a better answer than a
-/// box nothing would be drawn into (see `probe_video_geometry`). A chosen engine is itself alone
-/// with the fallback off, and itself followed by the rest of `VIDEO_ENGINES` with it on; a choice
-/// the machine cannot supply at all is ignored as `Best`.
+/// `Best` prefers mpv wherever the machine has it, whatever the file weighs and whether it could be
+/// measured at all; a machine without it answers the file's own rule — the media engine for a film
+/// at or below `VIDEO_FFMPEG_ABOVE_PIXELS`, and FFmpeg's player for a bigger one or for a film
+/// nobody measured, where the player more forgiving than the probe is a better answer than a box
+/// nothing would be drawn into (see `probe_video_geometry`). `Hybrid` is that size rule stated
+/// plainly and nothing else, so mpv is not part of it. A chosen engine is itself alone with the
+/// fallback off, and with it on is followed by the others it may fall through to: the pair it always
+/// walked, so an explicit `Native` or `Ffmpeg` lands on the other of the two and never on mpv,
+/// while a chosen `Mpv` falls through to both. A choice the machine cannot supply at all is ignored
+/// as `Best`.
 pub(super) fn resolve_video_engine(
     choice: VideoEngine,
     fallback: bool,
@@ -491,11 +514,17 @@ pub(super) fn resolve_video_engine(
     };
 
     let mut candidates: Vec<VideoEngine> = match choice {
+        // `Best` prefers mpv outright where the machine has it: every film, whatever it weighs and
+        // whether it could be measured at all. A machine without it has nothing to prefer about
+        // it, and the rule below answers as it always has.
+        VideoEngine::Best if installed(VideoEngine::Mpv) => VIDEO_ENGINES.to_vec(),
         VideoEngine::Best | VideoEngine::Hybrid => {
             // A film nobody measured is handed over where FFmpeg's player is here: `ffprobe` could
             // not read it, and a player more forgiving than the probe is a better answer than a box
             // nothing would be drawn into (see `probe_video_geometry`). The order's own filter
-            // leaves the media engine where there is no player to hand it to.
+            // leaves the media engine where there is no player to hand it to. It is a rule between
+            // the media engine and FFmpeg's player, so mpv is not in it even where the machine has
+            // one.
             let handed_over = pixels.map_or(true, |pixels| pixels > VIDEO_FFMPEG_ABOVE_PIXELS);
             let prefer = if handed_over {
                 VideoEngine::Ffmpeg
@@ -503,12 +532,23 @@ pub(super) fn resolve_video_engine(
                 VideoEngine::Native
             };
             let mut list = vec![prefer];
-            list.extend(VIDEO_ENGINES.iter().copied().filter(|e| *e != prefer));
+            list.extend(
+                VIDEO_ENGINES
+                    .iter()
+                    .copied()
+                    .filter(|engine| *engine != prefer && *engine != VideoEngine::Mpv),
+            );
             list
         }
         chosen if fallback => {
             let mut list = vec![chosen];
-            list.extend(VIDEO_ENGINES.iter().copied().filter(|e| *e != chosen));
+            // An explicit choice keeps the meaning it had before mpv existed: its fall-through is
+            // the pair it always walked, so an explicit `Native` or `Ffmpeg` lands on the other of
+            // the two and never on mpv. A chosen `Mpv` is the exception — it falls through to both
+            // the others, the way `Best` reaches past it.
+            list.extend(VIDEO_ENGINES.iter().copied().filter(|engine| {
+                *engine != chosen && (chosen == VideoEngine::Mpv || *engine != VideoEngine::Mpv)
+            }));
             list
         }
         chosen => vec![chosen],
@@ -540,26 +580,29 @@ pub(super) fn video_route(path: &Path) -> VideoRoute {
         |engine| engine.installed(),
         |engine| match engine {
             VideoEngine::Ffmpeg => codecs::ffplay_available(),
+            VideoEngine::Mpv => codecs::mpv_available(),
             VideoEngine::Native => named_for_the_media_engine(path),
             VideoEngine::Best | VideoEngine::Hybrid => false,
         },
     ) {
         Some(VideoEngine::Ffmpeg) => VideoRoute::Ffplay,
+        Some(VideoEngine::Mpv) => VideoRoute::Mpv,
         Some(VideoEngine::Native) => VideoRoute::MediaEngine,
         _ => VideoRoute::NoPreview,
     }
 }
 
-/// Whether the media engine Windows has plays this file, which is the one of the two players a
-/// layout, a load and a pin each ask about before they do anything else for a video.
+/// Whether the media engine Windows has plays this file, which is one of the players a layout, a
+/// load and a pin each ask about before they do anything else for a video.
 ///
 /// It is one answer and not a chain, and everything about a video follows from it — whether the
 /// frames are drawn by this app or by a player, whether a pin of one is resized and maximized or
 /// only moved, and whether its transport bar is a control or a read-out (see `pin_frame` and
 /// `pin_transport_kind`). It is also where the engine is asked about a file at all: where the
 /// route settles on FFmpeg's player — a film above the hybrid's threshold, or every film when the
-/// choice names FFmpeg's player — nothing opens the file, so `video_player::plays` and its
-/// per-file memo are reached only for a file the route gives the media engine.
+/// choice names FFmpeg's player — or on mpv, which the install alone settles, nothing opens the
+/// file, so `video_player::plays` and its per-file memo are reached only for a file the route gives
+/// the media engine.
 ///
 /// The write-back is what makes the question affordable where it is asked: the probe opens the
 /// file and builds a decoder chain for it, so the answer is held, and a hover that asks twice —
