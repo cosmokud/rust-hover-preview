@@ -155,15 +155,14 @@ fn stand_subtitle_streams(film: &Path, count: usize) {
     );
 }
 
-/// The `T` key steps a film's own tracks on the route whose player can be told a track, and does
-/// nothing at all on the route whose player cannot — mpv found and chose its own tracks, so this
-/// app has no number to write down for it and no filter to relaunch it into (see
-/// `step_pinned_subtitle`).
+/// The `T` key steps a film's tracks both ways there are: FFmpeg's player is told a track by being
+/// begun again with one, and mpv is told `cycle sub` down the pipe it listens on (see
+/// `step_pinned_subtitle` and `mpv_ipc`).
 ///
-/// Both routes are stood in rather than read off the machine: mpv is not installed on the machine
-/// this is developed on, and the answer the key gives there is the whole of what this is for.
+/// Both routes are stood in rather than read off the machine: with mpv installed the default
+/// engine would pick it, and each half of this is the answer one route gives.
 #[test]
-fn a_pinned_film_steps_its_subtitles_on_the_ffplay_route_and_not_on_the_mpv_one() {
+fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on_mpv() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -195,23 +194,35 @@ fn a_pinned_film_steps_its_subtitles_on_the_ffplay_route_and_not_on_the_mpv_one(
         "and the choice is written down, as it is for every relaunch this one survives"
     );
 
-    // mpv chose its own tracks and is told nothing, so there is nothing here to step: the number
-    // would be written down and the player begun again with it, and nothing would change.
+    // mpv draws its own tracks and reports nothing back, so there is no number here to write
+    // down: the step is `cycle sub` down the pipe the player listens on, and nothing is begun.
     clear_restart_count();
+    mpv_ipc::clear_noted();
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
+    // The FFmpeg half above began a player, which wrote its own pid down: this half is about the
+    // player this app was holding before that.
+    VIDEO_PID.store(101, Ordering::SeqCst);
+    mpv_ipc::remember_pipe(101, "test-pipe");
     step_pinned_subtitle();
     assert_eq!(
         restart_count(),
         0,
-        "mpv found and draws its own tracks, so the key begins nothing"
+        "mpv draws its own tracks, so the key begins nothing"
+    );
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![r#"{"command":["cycle","sub"],"async":true}"#.to_string()],
+        "the step is mpv's own word for walking its tracks, written down the pipe it listens on"
     );
     assert_eq!(
         pinned_subtitle(),
         Some(1),
-        "and it does not claim a track it never chose"
+        "and it does not claim a track it never chose: mpv is the one that chose"
     );
 
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_pin(previous_pin);

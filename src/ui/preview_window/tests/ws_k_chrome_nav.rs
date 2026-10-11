@@ -1709,3 +1709,62 @@ fn the_player_window_is_mouse_transparent() {
         "and a style the player was created with is not dropped"
     );
 }
+
+/// A box change on the mpv route is a move and not a relaunch: mpv rescales itself in the window
+/// it already has, so nothing is parked, killed or begun again (see `relayout_pinned_media`).
+///
+/// The two roads a take-up and a resize walk are asserted together, because both read the same
+/// player: the film on screen is moved into the new box and plays on through it.
+#[test]
+fn a_box_change_moves_mpv_and_begins_nothing_again() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    // mpv rather than the machine's default, which `stand_video_media` stands on FFmpeg's player.
+    stand_mpv_in(Some(true));
+    stand_ffplay_in(Some(false));
+
+    let content = (100, 80, 420, 320);
+    stand_pin(Some(playing_pin(content, 30.0)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    clear_restart_count();
+
+    relayout_pinned_media(
+        &PathBuf::from("ws-k-chrome-nav.mkv"),
+        content,
+        96,
+        None,
+        PinRelayoutRoad::BoxChange,
+    );
+    assert_eq!(
+        restart_count(),
+        0,
+        "mpv rescales itself, so a resize is a move and begins nothing again"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "and no cover stands over it: nothing was killed for one to stand over"
+    );
+
+    // The take-up road answers the same way, for the same player.
+    relayout_pinned_media(
+        &PathBuf::from("ws-k-chrome-nav.mkv"),
+        content,
+        96,
+        None,
+        PinRelayoutRoad::TakeUp,
+    );
+    assert_eq!(
+        restart_count(),
+        0,
+        "a take-up moves the window that is already showing the film and begins nothing"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
