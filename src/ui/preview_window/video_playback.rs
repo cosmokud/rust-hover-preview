@@ -757,6 +757,24 @@ pub(super) fn player_order(
     order
 }
 
+/// The placement flags an order is carried out with.
+///
+/// **`SWP_NOZORDER` is the whole of the difference between a film moved under the pin and a film
+/// raised over it**: `SetWindowPos` ignores its insert-after argument only when that flag is among
+/// them, so a placement that carries the window *and* forgets the flag is a raise with extra steps,
+/// and it is the one word this whole answer rests on (see `player_order`,
+/// `player_ex_style_for`). It is a function so that a test can read it: a screen is the only other
+/// place the order of two windows can be seen, and the suite has none.
+pub(super) fn player_place_flags(
+    order: PlayerOrder,
+) -> windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS {
+    let mut flags = SWP_NOACTIVATE | SWP_SHOWWINDOW;
+    if order == PlayerOrder::Carry {
+        flags |= SWP_NOZORDER;
+    }
+    flags
+}
+
 /// Put the ffplay window where it belongs and on top of everything, re-discovering and re-asserting
 /// its style by pid so that a window ffplay recreated is styled again rather than inherited.
 ///
@@ -836,13 +854,9 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
         }
 
-        // The one flag that tells a carried window from a placed one: without it the placement
-        // is a raise as well, and the film would go over the chrome it was just carried under
-        // (see the arm above).
-        let mut flags = SWP_NOACTIVATE | SWP_SHOWWINDOW;
-        if carrying {
-            flags |= SWP_NOZORDER;
-        }
+        // The flags that carry out the order — the carry's own word is `SWP_NOZORDER`, which is
+        // what leaves the order alone (see `player_place_flags`).
+        let flags = player_place_flags(order);
 
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, flags);
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);

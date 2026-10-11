@@ -1216,6 +1216,25 @@ fn a_pinned_film_mpv_draws_is_the_one_player_never_raised_over_the_pin() {
     );
 }
 
+/// A carried placement leaves the order alone, and the flag that does it is the whole difference
+/// between a film moved under the pin and a film raised over it.
+///
+/// `SetWindowPos` ignores its insert-after argument only when `SWP_NOZORDER` is among the flags, so
+/// a placement that carries the window and forgets the flag is a raise with extra steps — the same
+/// bug the tick and the monitor were just taught not to make, one line further down (see
+/// `player_place_flags`). A screen is the only other place this can be seen.
+#[test]
+fn a_carried_placement_leaves_the_z_order_alone() {
+    assert!(
+        player_place_flags(PlayerOrder::Carry).contains(SWP_NOZORDER),
+        "a carried window is moved where the band is and not raised over it"
+    );
+    assert!(
+        !player_place_flags(PlayerOrder::Raise).contains(SWP_NOZORDER),
+        "while a raised one asks for the order it has always asked for"
+    );
+}
+
 /// A carried player is asserted the styles **without** the topmost bit — and that is a second place
 /// the order is decided, not a detail of the raise.
 ///
