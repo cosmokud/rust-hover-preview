@@ -501,6 +501,11 @@ pub(super) fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, second
                 update_pin_transport(|transport| {
                     transport.sought(seconds);
                     transport.started = Some((Instant::now(), seconds));
+                    // The gesture's claim is taken back here rather than left to the swap: the
+                    // press on this road posts no key and so claims nothing (see
+                    // `seek_press_hold`), and a claim standing after a gesture is one the *next*
+                    // film to be dragged is answered with (see `PinTransport::drag_held`).
+                    transport.drag_held = false;
                 });
             } else {
                 restart_pinned_player(path, content, seconds, pinned_is_held());
@@ -1774,9 +1779,19 @@ pub(super) fn seek_press_arms(seeking: Option<f64>) -> bool {
 /// Scrub steps never come through here — the drag only moves the aim — so one
 /// press is one key for the whole gesture.
 pub(super) fn seek_press_hold() {
-    let Some((_, _, transport, _)) = pinned_playback_state() else {
+    let Some((path, _, transport, _)) = pinned_playback_state() else {
         return;
     };
+
+    // **A seek press tells an mpv player nothing, and it is the same refusal the drag makes.** The
+    // key this would post is a *toggle*, and mpv reads it as one: a seek on a playing film would
+    // stop it, and a seek on a film the user had paused would start it — neither of which is what
+    // moving the playhead means. mpv needs no key to be held for a seek at all: it is taken to the
+    // second while it runs and keeps its own play state (see `seek_pinned_playback` and
+    // `video_drag_hold_apply`, whose mpv gate this is).
+    if video_route(&path) == VideoRoute::Mpv {
+        return;
+    }
 
     if video_drag_hold_decision(true, pin_is_playing(&transport), transport.drag_held)
         != VideoDragHold::Hold
