@@ -812,7 +812,7 @@ pub fn run_preview_window() {
             if let Some(start) = video_start.take() {
                 let window_up = VIDEO_HWND.load(Ordering::SeqCst) != 0
                     && VIDEO_PID.load(Ordering::SeqCst) == start.pid;
-                let alive = is_ffplay_pid_alive(start.pid);
+                let alive = is_player_pid_alive(start.pid);
 
                 // The hover this player was started for may have moved on before its
                 // window was there. The player is still this app's — nobody else holds
@@ -3250,10 +3250,11 @@ pub fn run_preview_window() {
                     //
                     // The two roads are the two they always were: the engine's frames come back
                     // through the ordinary load and are drawn by this app's own window — which is
-                    // what a pin of one is resized, maximized and dragged by — while FFmpeg's
-                    // player is a window of its own, which is the branch below. A video neither of
-                    // them will take is answered by that load with no media at all, rather than by
-                    // a third branch here (see `load_video_thumbnail`).
+                    // what a pin of one is resized, maximized and dragged by — while a player in a
+                    // window of its own is the branch below, which is both of the players this app
+                    // can run: FFmpeg's and mpv's (see `video_route`). A video neither of them
+                    // will take is answered by that load with no media at all, rather than by a
+                    // third branch here (see `load_video_thumbnail`).
                     if show_video_probe || show_measure_probe {
                         // The hover is waiting on a probe: nothing of the file can be
                         // laid out or loaded until there is a shape or a box to lay it out with,
@@ -3338,7 +3339,9 @@ pub fn run_preview_window() {
                             video_probe = Some((path.clone(), gen));
                             spawn_video_probe(path, gen);
                         }
-                    } else if show_is_video && video_route(&path) == VideoRoute::Ffplay {
+                    } else if show_is_video
+                        && matches!(video_route(&path), VideoRoute::Ffplay | VideoRoute::Mpv)
+                    {
                         // Cancel any in-flight image load before switching to video.
                         current_generation += 1;
                         pending_load = None;

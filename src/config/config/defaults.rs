@@ -307,9 +307,10 @@ pub const MAX_HDR_EXPOSURE: f32 = 10.0;
 /// format, with the render engine beside it as the fallback for a family this machine has
 /// no application for.
 pub const DEFAULT_OFFICE_ENGINE: OfficeEngine = OfficeEngine::MicrosoftOffice;
-/// Which engine plays a video unless the configuration says otherwise: the best this machine has,
-/// which is `VideoEngine::Hybrid` where FFmpeg is installed — the media engine for a small film
-/// and FFmpeg's player for a large one — and the media engine where it is not.
+/// Which engine plays a video unless the configuration says otherwise: the best this machine has.
+/// That is mpv wherever it is installed; where it is not, it is `VideoEngine::Hybrid` — the media
+/// engine for a small film and FFmpeg's player for a large one — and the media engine alone on a
+/// machine without FFmpeg.
 pub const DEFAULT_VIDEO_ENGINE: VideoEngine = VideoEngine::Best;
 /// Whether an explicitly chosen engine that cannot play a file falls through to the others:
 /// on, so a film no media-engine decoder reaches is still played rather than shown as nothing.

@@ -41,7 +41,7 @@ use super::*;
 pub(super) struct VideoRetirement {
     /// The player being replaced, verified still to be `ffplay.exe` before it is ended however
     /// long ago it was begun — a handle this old is a process id that has since been reused
-    /// (see `terminate_ffplay_pid`).
+    /// (see `terminate_player_pid`).
     pub(super) retiring: u32,
     /// The player begun in its place, whose window arriving is what ends it.
     pub(super) replacement: u32,
@@ -219,7 +219,7 @@ pub(super) enum RetireEnd {
 /// Whether a retired player is gone or still there, from whether it was alive to be asked.
 ///
 /// It is the same two answers `kill_stray_video_process` gives, and for the same reason: ending a
-/// player is a *request* (see `terminate_ffplay_pid`), and this is the one place that asks for one
+/// player is a *request* (see `terminate_player_pid`), and this is the one place that asks for one
 /// this app has already stopped holding — the `Child` went when the player was parked (see
 /// `restart_pinned_player`) and `VIDEO_PID` names the replacement by now, so nothing else in the
 /// preview would ever ask it again. Which is what makes the second answer mean anything: an
@@ -245,8 +245,8 @@ pub(super) fn retire_end(alive: bool) -> RetireEnd {
 /// leaves one dead pid behind in the record and in the state file it is written into, for the rest
 /// of the run.
 pub(super) fn end_retired_player(pid: u32) -> RetireEnd {
-    terminate_ffplay_pid(pid);
-    let end = retire_end(is_ffplay_pid_alive(pid));
+    terminate_player_pid(pid);
+    let end = retire_end(is_player_pid_alive(pid));
     if end == RetireEnd::Gone {
         // The player is confirmed gone, so the record of it goes with it rather than being left
         // for the next run to look for.
@@ -274,9 +274,9 @@ pub(super) fn kill_superseded_player(pid: u32) -> bool {
         return true;
     }
 
-    terminate_ffplay_pid(pid);
+    terminate_player_pid(pid);
 
-    if is_ffplay_pid_alive(pid) {
+    if is_player_pid_alive(pid) {
         return false;
     }
 
@@ -407,7 +407,7 @@ pub(super) fn settle_video_retirement() {
     if !pinned()
         || retire_ready(
             arrival,
-            is_ffplay_pid_alive(pending.replacement),
+            is_player_pid_alive(pending.replacement),
             pending.started.elapsed(),
         )
     {
@@ -606,7 +606,7 @@ pub(super) fn loop_ended_pinned_player() -> bool {
 ///
 /// It is the other half of carrying a hold through a relaunch, and it exists because a relaunch
 /// cannot finish the job itself: the player it begins has no window for a moment, and a hold this
-/// app could already deliver is a key posted to that player's own window (see `ffplay_key_pause`).
+/// app could already deliver is a key posted to that player's own window (see `video_key_pause`).
 /// So the relaunch writes the hold down as owed — the file *is* meant to be held, and a bar that
 /// forgot that would draw a play button over a paused film — and this is what delivers it on the
 /// tick that finds the window up, which is the first tick after the one that began it.
@@ -636,7 +636,7 @@ pub(super) fn settle_pending_hold() {
     // Nothing is done until there is a window to post a key to, which is the whole of the wait:
     // a key posted into nothing is dropped, and the press that put the hold here would be
     // answered by a fallback that begins a *third* player (see `toggle_pinned_playback`).
-    if ffplay_key_pause() {
+    if video_key_pause() {
         let at = transport_clock(&transport).unwrap_or(0.0);
         update_pin_transport(|state| state.held(at));
     }

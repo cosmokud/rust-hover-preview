@@ -533,12 +533,12 @@ pub(super) fn toggle_pinned_playback(
                 // of: what this press does is stop the hold from ever being sent.
                 update_pin_transport(|state| state.released(transport.paused_at.unwrap_or(0.0)));
             } else if playing {
-                if ffplay_key_pause() {
+                if video_key_pause() {
                     update_pin_transport(|state| state.held(playhead));
                 } else {
                     hold_pinned_player_without_a_key(playhead);
                 }
-            } else if ffplay_key_pause() {
+            } else if video_key_pause() {
                 update_pin_transport(|state| state.released(transport.paused_at.unwrap_or(0.0)));
             } else {
                 // A player begun to resume a file is not one to be told to hold, or the press
@@ -1726,7 +1726,7 @@ pub(super) fn seek_press_hold() {
         return;
     }
 
-    if ffplay_key_pause() {
+    if video_key_pause() {
         seek_press_hold_apply(pin_playhead(&transport).unwrap_or(0.0));
     }
 }

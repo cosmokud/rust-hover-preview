@@ -4,10 +4,10 @@
 //! format is played by, and the picture codecs an image format is opened with — are
 //! asked once a process and kept below, because what they answer is what the machine
 //! *is*: a codec extension installed while the app is running shows up at the next
-//! restart, the way every other machine-answer does. The two answers asked again are
-//! FFmpeg's own (see [`refresh`]), because a machine that has just been given FFmpeg
-//! is one that should start using it at the next opening of the menu rather than at
-//! the next restart. And the question of whether a document's own application is
+//! restart, the way every other machine-answer does. The answers asked again are the
+//! players' own (see [`refresh`]), because a machine that has just been given one is
+//! one that should start using it at the next opening of the menu rather than at the
+//! next restart. And the question of whether a document's own application is
 //! installed is asked per hover as well: it is what decides where an Office document's
 //! page comes from, whether from Office or from the render engine beside it (see
 //! `office_formats::app_installed`). It is a registry read like every other probe
@@ -56,6 +56,11 @@ const FFPLAY_NAME: &str = "ffplay.exe";
 /// the install the player comes from is the install the meter comes from (see
 /// `normalize_available`).
 const FFMPEG_NAME: &str = "ffmpeg.exe";
+
+/// The player mpv is recognized by, and the whole of what is looked for: mpv is an install of
+/// its own rather than a part of FFmpeg's, so nothing else of its own is asked the way `ffplay`
+/// asks for the whole of FFmpeg's (see `find_mpv`).
+const MPV_NAME: &str = "mpv.exe";
 
 /// The WinRT class the Windows PDF engine is activated through. What is asked of it is
 /// whether it is registered at all, which is what the system itself answers activation
@@ -121,6 +126,15 @@ pub struct Row {
 /// given. Those four are the Microsoft Store's free video extensions, one package each.
 pub fn video() -> Vec<Row> {
     vec![
+        // The third player a video can be played by, listed above FFmpeg's because it is the one
+        // `Best` prefers where it is installed (see `video_hw::VIDEO_ENGINES`). It is an install
+        // of its own rather than a part of FFmpeg's, and there is no page this app names for it,
+        // so a machine without it is a row with nothing to open.
+        Row {
+            name: "MPV",
+            available: mpv_available(),
+            link: None,
+        },
         Row {
             name: "FFmpeg (ffplay)",
             available: ffplay_available(),
@@ -364,14 +378,18 @@ pub fn engines() -> Vec<Row> {
 
 /// Ask again, which is what the tray's menu build does before it lists the answers.
 ///
-/// The answers that are cleared are FFmpeg's own — the player a video is played by, and the
-/// meter and the player a sound's loudness is measured and applied with — because they are
-/// asked on every video hover and every sound hover, and a hover must not go looking through
-/// the `PATH` for them: opening the menu is what lets a machine that has just been given
-/// FFmpeg start using it, rather than a restart. Every other probe is answered from the
-/// answers the process keeps (see `ProbedCodec`), or read from the registry as it is asked.
+/// The answers that are cleared are the players' own — FFmpeg's player and the meter and the
+/// player a sound's loudness is measured and applied with, and mpv — because they are asked on
+/// every video hover and every sound hover, and a hover must not go looking through the `PATH`
+/// for them: opening the menu is what lets a machine that has just been given one of them use
+/// it, rather than a restart. Every other probe is answered from the answers the process keeps
+/// (see `ProbedCodec`), or read from the registry as it is asked.
 pub fn refresh() {
     if let Ok(mut cached) = FFPLAY.lock() {
+        *cached = None;
+    }
+
+    if let Ok(mut cached) = MPV.lock() {
         *cached = None;
     }
 
@@ -396,6 +414,28 @@ pub fn ffplay_available() -> bool {
     let answer = find_ffplay().is_some();
 
     if let Ok(mut cached) = FFPLAY.lock() {
+        *cached = Some(answer);
+    }
+
+    answer
+}
+
+/// Whether `mpv.exe` is on this machine, and so whether a video preview is played by mpv rather
+/// than by the engine Windows has.
+///
+/// The answer is kept between hovers the way FFmpeg's player's is, and for the same reason: it
+/// is asked for every video a pointer lands on, and the `PATH` is a list of directories rather
+/// than a question. [`refresh`] is what asks it again.
+pub fn mpv_available() -> bool {
+    if let Ok(cached) = MPV.lock() {
+        if let Some(answer) = *cached {
+            return answer;
+        }
+    }
+
+    let answer = find_mpv().is_some();
+
+    if let Ok(mut cached) = MPV.lock() {
         *cached = Some(answer);
     }
 
@@ -502,6 +542,15 @@ fn initialize_apartment() {
 /// question about a program, and the `PATH` already holds the answer.
 fn find_ffplay() -> Option<PathBuf> {
     find_program(FFPLAY_NAME)
+}
+
+/// Where `mpv.exe` is, asked the way `Command::new("mpv")` asks it: the folder this app runs
+/// from first, then every folder on the `PATH`.
+///
+/// Spawning the player to ask whether it exists would be a program started to answer a
+/// question about a program, and the `PATH` already holds the answer.
+fn find_mpv() -> Option<PathBuf> {
+    find_program(MPV_NAME)
 }
 
 /// Where a program of FFmpeg's is, by the name it is installed under: the same two places
@@ -775,6 +824,9 @@ static MEDIA_FOUNDATION: OnceLock<bool> = OnceLock::new();
 
 /// Whether FFmpeg is installed, kept between hovers and cleared by [`refresh`].
 static FFPLAY: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether mpv is installed, kept between hovers and cleared by [`refresh`].
+static MPV: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
 
 /// Whether both of FFmpeg's programs a sound's loudness needs are here — the meter that measures it
 /// and the player that applies it — kept the way the player's own answer is and cleared by the

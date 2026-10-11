@@ -838,8 +838,11 @@ pub(super) fn start_audio_player(
     // ends it when the app does, and the record answers for a run that never got to end it. It
     // is recorded as the player rather than as an engine, because what ends it is its hover
     // ending.
-    engine_processes::record_player(VIDEO_PROCESS_IMAGE_NAME, child.id());
-    VIDEO_PID.store(child.id(), Ordering::SeqCst);
+    engine_processes::record_player(FFPLAY_IMAGE_NAME, child.id());
+    // A sound's player is found by the id in `VIDEO_PID` and swept by the checks that kill a
+    // stray one, so the name that id is verified as is written with it. It is FFmpeg's either
+    // way: the audio route has no other player.
+    note_player_process(child.id(), FFPLAY_IMAGE_NAME);
     VIDEO_HWND.store(0, Ordering::SeqCst);
 
     Some(child)

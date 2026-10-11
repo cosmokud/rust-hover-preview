@@ -3,14 +3,59 @@
 
 use super::*;
 
-// Expected executable name of the playback process spawned below, used to
-// verify a recorded PID still belongs to that process before killing it.
-pub(super) const VIDEO_PROCESS_IMAGE_NAME: &str = "ffplay.exe";
+// Expected executable names of the players a video or a sound is spawned as, used to verify a
+// recorded PID still belongs to that process before killing it.
+pub(super) const FFPLAY_IMAGE_NAME: &str = "ffplay.exe";
+pub(super) const MPV_IMAGE_NAME: &str = "mpv.exe";
 
-// Track the ffplay video window HWND for cursor-over-preview detection
+// Track the player's window HWND for cursor-over-preview detection
 pub(super) static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
-// Track the ffplay process ID to re-find the window if needed
+// Track the player's process ID to re-find the window if needed
 pub(super) static VIDEO_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Which program the id in `VIDEO_PID` is the id of, written with that id and read before
+/// anything is killed by it.
+///
+/// **A kill by id alone is a kill of whatever the system has since handed that id to**, which is
+/// why every one of them verifies the image name first (see `process_image_matches`), and what is
+/// verified against therefore has to be the player that was actually begun rather than the one
+/// this app began before mpv existed: a machine with mpv plays videos through mpv, and an mpv id
+/// checked as `ffplay.exe` is a stray this app would never sweep and a player it would never
+/// retire. The audio route's player is FFmpeg's and keeps the name it has always had.
+static VIDEO_PROCESS_IMAGE: Lazy<Mutex<&'static str>> = Lazy::new(|| Mutex::new(FFPLAY_IMAGE_NAME));
+
+/// Write down the player this app has just begun: its process, and the program that process runs.
+///
+/// The two are written together because they are one fact (see `VIDEO_PROCESS_IMAGE`), and this is
+/// the one place either is written for a player — the audio route writes its own ffplay id through
+/// here too, since a sound's player is swept by the same checks as a film's.
+pub(super) fn note_player_process(pid: u32, image: &'static str) {
+    VIDEO_PID.store(pid, Ordering::SeqCst);
+
+    if let Ok(mut held) = VIDEO_PROCESS_IMAGE.lock() {
+        *held = image;
+    }
+}
+
+/// The image name the id in `VIDEO_PID` may be verified as, which is the player this app last
+/// begun (see `note_player_process`).
+fn video_process_image() -> &'static str {
+    VIDEO_PROCESS_IMAGE
+        .lock()
+        .map(|held| *held)
+        .unwrap_or(FFPLAY_IMAGE_NAME)
+}
+
+/// The image name the player of a route is begun, recorded and verified under.
+///
+/// Every route that begins a player at all is answered here rather than left to a fallback arm, so
+/// that a fourth engine has to be answered for rather than quietly inheriting FFmpeg's name.
+pub(super) fn player_image(route: VideoRoute) -> &'static str {
+    match route {
+        VideoRoute::Mpv => MPV_IMAGE_NAME,
+        VideoRoute::Ffplay | VideoRoute::MediaEngine | VideoRoute::NoPreview => FFPLAY_IMAGE_NAME,
+    }
+}
 // Guard to ensure we only run a single style-monitor thread.
 pub(super) static NOACTIVATE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 // Flag set when the system resumes from sleep, so the main loop can reset state.
@@ -20,7 +65,7 @@ pub(super) static RESUME_FROM_SLEEP: AtomicBool = AtomicBool::new(false);
 // is put back by the loop, which is the side that holds the hover it came from.
 pub(super) static DISPLAY_RESET: AtomicBool = AtomicBool::new(false);
 
-/// Data passed to the EnumWindows callback to find ffplay window
+/// Data passed to the EnumWindows callback to find a player's window
 pub(super) struct EnumWindowsData {
     pub(super) target_pid: u32,
     pub(super) found_hwnd: HWND,
@@ -63,7 +108,7 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
         return windows::Win32::Foundation::BOOL(1);
     }
 
-    // Keep the largest candidate; this is typically the real ffplay output window.
+    // Keep the largest candidate; this is typically the player's real output window.
     if area > data.best_area {
         data.best_area = area;
         data.found_hwnd = hwnd;
@@ -106,7 +151,7 @@ pub(super) fn player_ex_style(current: isize) -> isize {
         | WS_EX_TRANSPARENT.0 as isize
 }
 
-/// Style and raise a known ffplay window.
+/// Style and raise a player's known window.
 pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // Store the video window HWND for cursor-over-preview detection
     VIDEO_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
@@ -303,8 +348,8 @@ pub(super) fn wake_noactivate_monitor() {
     let _ = unsafe { SetEvent(noactivate_wake_handle()) };
 }
 
-pub(super) fn set_noactivate_for_process(pid: u32) {
-    VIDEO_PID.store(pid, Ordering::SeqCst);
+pub(super) fn set_noactivate_for_process(pid: u32, image: &'static str) {
+    note_player_process(pid, image);
 
     // First, do a few immediate synchronous checks with very tight timing
     // This minimizes the window where focus can be stolen
@@ -341,7 +386,8 @@ pub(super) fn set_noactivate_for_process(pid: u32) {
 /// up to a key symbol; a scan code of zero is not a key, so the symbol it arrives as is not
 /// `p`, and a player switching on the symbol it was given does nothing at all for a message
 /// whose scan code is missing. Reading the argument as "the message needs its scan code" is
-/// what the zero was missing, and no flag in the code says so.
+/// what the zero was missing, and no flag in the code says so. mpv is posted the same message and
+/// reads its key the same way, so the one shape serves both.
 ///
 /// The one bit deliberately *not* set is bit 30, which is Windows' own "this is an auto-repeat"
 /// and which SDL reads as a repeat and drops: a posted pause that repeated would toggle, toggle
@@ -351,8 +397,12 @@ pub(super) fn ffplay_key_lparam(scan: u32) -> LPARAM {
     LPARAM((scan as isize) << 16 | 1)
 }
 
-/// A key FFmpeg's player is toggled with, and the scan code it is named by.
-pub(super) const FFPLAY_PAUSE_KEY: (u32, u32) = (b'P' as u32, 0x19);
+/// A key the player is toggled with, and the scan code it is named by.
+///
+/// One key code for both players this app can be running, because both of them read it as `p`:
+/// FFmpeg's player has `p` compiled in as its pause key, and the binding file an mpv video is
+/// launched with holds `p cycle pause` (see `video_launch::MPV_PAUSE_BINDING`).
+pub(super) const VIDEO_PAUSE_KEY: (u32, u32) = (b'P' as u32, 0x19);
 
 /// The window belonging to `pid`, if the player this app believes is playing has a window of its
 /// own up — which is not the same question as whether a player is running: a process opens its
@@ -444,8 +494,11 @@ pub(super) fn pinned_level_is_owed_to_the_next_player() -> bool {
     })
 }
 
-/// Whether a player's window is there to be told something, which is not the same question as
-/// whether a player is running (see `video_window_for`).
+/// Put the pause key on the player's own message queue, answering whether it was delivered.
+///
+/// It is one code path for both players because it is one key: FFmpeg's player reads a posted `P`
+/// as its own `p`, and the binding file an mpv video is launched with holds `p cycle pause` (see
+/// `VIDEO_PAUSE_KEY`).
 ///
 /// Nothing is asked of the player about what it is doing — it reports nothing, which is the
 /// whole reason `PinTransport` keeps what this app has asserted rather than what a player has
@@ -458,7 +511,7 @@ pub(super) fn pinned_level_is_owed_to_the_next_player() -> bool {
 /// from cannot be let go of with a key, because the level cannot be given to it afterwards (see
 /// `level_is_owed_to_the_next_player`). A hold still owed to a player is the other case, and it is
 /// answered here rather than refused — the key is what it is waiting for.
-pub(super) fn ffplay_key_pause() -> bool {
+pub(super) fn video_key_pause() -> bool {
     if pinned_level_is_owed_to_the_next_player() {
         return false;
     }
@@ -471,7 +524,7 @@ pub(super) fn ffplay_key_pause() -> bool {
     // is playing, so both messages below reach the player the caller means. Posting is the whole
     // of what is asked of it, and the two answers are the whole of what is known in return.
     unsafe {
-        let (vk, scan) = FFPLAY_PAUSE_KEY;
+        let (vk, scan) = VIDEO_PAUSE_KEY;
         let lparam = ffplay_key_lparam(scan);
         // The release is as much a part of the press as the press is: a key the player has been
         // sent down and never sent up is a key it will not report again until it is sent up,
@@ -537,21 +590,21 @@ pub(super) unsafe fn process_image_matches(handle: HANDLE, expected_name: &str) 
         .is_some_and(|name| name.eq_ignore_ascii_case(std::ffi::OsStr::new(expected_name)))
 }
 
-/// True when `pid` still refers to a live ffplay process.
-pub(super) fn is_ffplay_pid_alive(pid: u32) -> bool {
+/// True when `pid` still refers to a live player of the kind this app last began.
+pub(super) fn is_player_pid_alive(pid: u32) -> bool {
     unsafe {
         let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
             return false;
         };
-        let matches = process_image_matches(handle, VIDEO_PROCESS_IMAGE_NAME);
+        let matches = process_image_matches(handle, video_process_image());
         let _ = CloseHandle(handle);
         matches
     }
 }
 
-/// Terminate `pid` when it is still the ffplay process we spawned. Non-blocking:
-/// it only requests the termination, it never waits for the process to exit.
-pub(super) fn terminate_ffplay_pid(pid: u32) {
+/// Terminate `pid` when it is still the player we spawned. Non-blocking: it only
+/// requests the termination, it never waits for the process to exit.
+pub(super) fn terminate_player_pid(pid: u32) {
     unsafe {
         let Ok(handle) = OpenProcess(
             PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
@@ -560,7 +613,7 @@ pub(super) fn terminate_ffplay_pid(pid: u32) {
         ) else {
             return;
         };
-        if process_image_matches(handle, VIDEO_PROCESS_IMAGE_NAME) {
+        if process_image_matches(handle, video_process_image()) {
             let _ = TerminateProcess(handle, 1);
         }
         let _ = CloseHandle(handle);
@@ -612,27 +665,29 @@ pub(super) fn clear_video_process_state(pid: u32) {
     }
 }
 
-/// Kill the last spawned ffplay process when it is still alive.
+/// Kill the last spawned player process when it is still alive, whichever engine it is.
 ///
 /// A process can outlive its `Child` handle: a kill may not take effect, or the
 /// handle may be dropped before the process is confirmed gone. Without this a
-/// surviving ffplay keeps its window on screen and the next hover would spawn a
+/// surviving player keeps its window on screen and the next hover would spawn a
 /// second one next to it. The PID is only cleared once the process is confirmed
-/// gone, so a later call retries instead of losing track of it.
+/// gone, so a later call retries instead of losing track of it — and the player is
+/// verified by the image name it was begun under, so an mpv stray is ended as mpv
+/// and never as ffplay (see `note_player_process`).
 pub fn kill_stray_video_process() {
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     if pid == 0 {
         return;
     }
 
-    if !is_ffplay_pid_alive(pid) {
+    if !is_player_pid_alive(pid) {
         clear_video_process_state(pid);
         return;
     }
 
-    terminate_ffplay_pid(pid);
+    terminate_player_pid(pid);
 
-    if !is_ffplay_pid_alive(pid) {
+    if !is_player_pid_alive(pid) {
         clear_video_process_state(pid);
     }
 }

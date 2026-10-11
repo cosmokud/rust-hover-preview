@@ -219,14 +219,18 @@ impl OfficeEngine {
 
 /// Which engine plays a video, as the tray's `Engine -> Select Engine -> Video` lists it.
 ///
-/// `Best` is the machine's own answer and the default, and it is `Hybrid` where FFmpeg is
-/// installed and `Native` where it is not (see `video_hw::resolve_video_engine`). The other three
-/// name one engine each, or — `Hybrid` — a rule between two of them, whatever the machine would
-/// have preferred.
+/// `Best` is the machine's own answer and the default: mpv wherever it is installed, and
+/// otherwise `Hybrid` where FFmpeg is and `Native` where it is not (see
+/// `video_hw::resolve_video_engine`). The other four name one engine each — mpv, a player of its
+/// own; the media engine Windows has; FFmpeg's `ffplay` — or, `Hybrid`, a rule between two of
+/// them, whatever the machine would have preferred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VideoEngine {
     /// The best engine this machine has for the file.
     Best,
+    /// mpv, in a window of its own: a player of its own rather than a part of FFmpeg's, preferred
+    /// to both of the others wherever it is installed.
+    Mpv,
     /// The media engine Windows has, drawn into this window's own frame.
     Native,
     /// FFmpeg's `ffplay`, in a window of its own.
@@ -243,6 +247,7 @@ impl VideoEngine {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Best => "best",
+            Self::Mpv => "mpv",
             Self::Native => "native",
             Self::Ffmpeg => "ffmpeg",
             Self::Hybrid => "hybrid",
@@ -252,11 +257,13 @@ impl VideoEngine {
     /// Whether this machine has the engine this choice names, which is what a tray row is greyed on
     /// and what a choice is put back to `Best` for at a start. `Best` is always here — it is the
     /// app's own answer rather than a named player — and `Native` is the engine Windows ships;
-    /// both `Ffmpeg` and `Hybrid` need `ffplay` (see `video_hw::resolve_video_engine`).
+    /// `Ffmpeg` and `Hybrid` need `ffplay`, and `Mpv` needs `mpv` (see
+    /// `video_hw::resolve_video_engine`).
     pub(crate) fn installed(self) -> bool {
         match self {
             Self::Best | Self::Native => true,
             Self::Ffmpeg | Self::Hybrid => codecs::ffplay_available(),
+            Self::Mpv => codecs::mpv_available(),
         }
     }
 
@@ -265,6 +272,7 @@ impl VideoEngine {
     pub(crate) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "best" | "auto" | "default" => Some(Self::Best),
+            "mpv" => Some(Self::Mpv),
             "native" | "media_engine" | "media engine" | "media" | "windows" => Some(Self::Native),
             "ffmpeg" | "ffplay" | "ff" => Some(Self::Ffmpeg),
             "hybrid" | "native_ffmpeg" | "native_above" | "native then ffmpeg" => {

@@ -74,7 +74,7 @@ pub(super) fn vector_dimensions(path: &Path) -> Option<(u32, u32)> {
 /// in, and the layout that follows the probe's own replay reads the size here instead
 /// (see `video_probe_due`). What the probe answered when it does answer is one of two
 /// things, and the file's own lack of an answer is neither: a shape is the shape, and a
-/// file with nothing to measure is placed at the 16:9 box FFmpeg's player is handed a
+/// file with nothing to measure is placed at the 16:9 box a player is handed a
 /// file it could not measure at — while a file the media engine would not open is answered
 /// with no size at all, which is how the layout drops it rather than putting up a box
 /// nothing would be drawn into. That is the only case the engine's answer is read for here,
@@ -83,7 +83,7 @@ pub(super) fn video_box(path: &Path) -> Option<(u32, u32)> {
     match cached_video_geometry(path) {
         Some(ProbedGeometry::Measured(geometry)) => Some((geometry.width, geometry.height)),
         Some(ProbedGeometry::Unmeasurable) => match video_route(path) {
-            VideoRoute::Ffplay => Some((1920, 1080)),
+            VideoRoute::Ffplay | VideoRoute::Mpv => Some((1920, 1080)),
             // No player will take the file: the engine has turned it down on a machine where
             // it was the only player there is, or the name is one only the `[ffmpeg]` list
             // carries on such a machine. That is a file with no preview at all, and the layout

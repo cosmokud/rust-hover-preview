@@ -1060,6 +1060,12 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
         (ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_IMAGE_CACHE_BASE),
         // The codec rows, wider than the list is long.
         (ID_TRAY_CODEC_BASE, ID_TRAY_CODEC_BASE + CODEC_COMMANDS),
+        // The video-engine rows, a base plus one id per engine: the run is now as wide as the
+        // slack before the config row at 1040, so the next engine added would land on it.
+        (
+            ID_TRAY_VIDEO_ENGINE_BASE,
+            ID_TRAY_VIDEO_ENGINE_BASE + VIDEO_ENGINE_CHOICES.len() as u16,
+        ),
     ];
     // The font sizes, each the one id its size carries.
     others.extend(FONT_SIZE_CHOICES.map(|(_, id)| (id, id + 1)));
@@ -1343,6 +1349,7 @@ fn the_video_engine_rows_are_ids_of_their_own() {
         VIDEO_ENGINE_CHOICES.map(video_engine_label),
         [
             "Best (Default)".to_string(),
+            "MPV".to_string(),
             "Native".to_string(),
             "FFmpeg".to_string(),
             "Native (FFmpeg above 3.2MP)".to_string(),
@@ -1389,10 +1396,16 @@ fn the_video_engine_rows_are_ids_of_their_own() {
     );
 
     // The rows that are greyed are the ones naming a player this machine has not got: the two the
-    // app and Windows supply are always here, and both FFmpeg-based choices need `ffplay`.
+    // app and Windows supply are always here, the FFmpeg-based choices need `ffplay`, and mpv
+    // needs `mpv.exe`.
     assert!(
         VideoEngine::Best.installed() && VideoEngine::Native.installed(),
         "the app's own answer and the engine Windows ships are never greyed"
+    );
+    assert_eq!(
+        VideoEngine::Mpv.installed(),
+        crate::formats::codecs::mpv_available(),
+        "mpv's row is offered exactly where `mpv` is installed"
     );
     assert_eq!(
         VideoEngine::Ffmpeg.installed(),
