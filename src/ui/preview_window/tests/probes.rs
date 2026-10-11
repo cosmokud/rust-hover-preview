@@ -710,3 +710,143 @@ fn audio_probe() {
         }
     }
 }
+
+/// The player's window, stood in for the one mpv would be drawing in: a real window of this
+/// app's own, because the box a player's window is carried to is only ever asked of the
+/// machine — `ensure_pinned_sibling_box` moves a window this app does not own and keeps no
+/// record of the box it asked for anywhere a test can read.
+///
+/// A `STATIC` popup of the machine's own class, so nothing has to be registered; it is never
+/// shown by the stand-in itself, and the placement that is being watched is the only thing that
+/// can put it on screen.
+unsafe fn stand_a_player_window(box_: ScreenRegion) -> HWND {
+    use windows::core::w;
+
+    CreateWindowExW(
+        WS_EX_TOOLWINDOW,
+        w!("STATIC"),
+        w!(""),
+        WS_POPUP,
+        box_.0,
+        box_.1,
+        (box_.2 - box_.0).max(1),
+        (box_.3 - box_.1).max(1),
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("a stand-in window for the player")
+}
+
+/// Where a window stands on the screen right now, read back off the machine — the very box
+/// `ensure_video_window_topmost` asks for with its one `SetWindowPos`.
+fn window_box_on_screen(hwnd: HWND) -> ScreenRegion {
+    let (left, top, width, height) = window_origin(hwnd).expect("a window standing somewhere");
+    (left, top, left + width, top + height)
+}
+
+/// A hand carrying an mpv'd pin by its chrome: the player's own window goes with the band on
+/// every step, because nothing else stands in the band for it — mpv is left drawing, nothing is
+/// parked, and the band over it is a hole.
+///
+/// **What it proves.** `apply_pin_drag` moves the pin and then asks `ensure_pinned_sibling_box`
+/// to put whatever stands in the media band at the band's new box; for a film mpv is drawing,
+/// that window *is* the picture, and a step that does not carry it leaves the band's hole over
+/// bare desktop — the video goes, the desktop shows behind it, and it comes back when the drag
+/// ends. The player's window is stood in by a real window of this app's own, and its box is read
+/// back off the machine, because the place a player's window is put at is asked of the machine
+/// and nothing else in this view keeps it. `VIDEO_PID` is left zero so the style monitor is not
+/// asked to find a window of a player's process and cannot take the stand-in's handle away (see
+/// `try_apply_noactivate_style`).
+///
+/// **Why ignored.** It moves the real pointer and stands up a window: it is a look at a machine,
+/// which is not something a plain `cargo test` may do — that run must spawn no player and touch
+/// no desktop. Ignored, so the plain run stays green and this is driven by hand:
+///
+/// `cargo test --lib -- --ignored --nocapture a_dragged_mpv_pin_carries_its_players_window_on_every_move_step`
+///
+/// **What a red result discriminates.** It is red if the player's window is left behind while the
+/// band moves, which is the first hypothesis: `ensure_video_window_topmost` refusing every
+/// placement while the pin's chrome is up, with no arm that keeps a window mpv is drawing moving
+/// with the band. It is green under the hide-the-player hypotheses — a park, or an `SW_HIDE` the
+/// mpv gate missed — because a window that is hidden still carries the box this asserts.
+#[test]
+#[ignore = "moves the real pointer and stands a window up for the player's"]
+fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let content = (100, 80, 420, 320);
+
+    // The player's window, the one thing here that can be asked where the film is.
+    let player = unsafe { stand_a_player_window(content) };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+
+    // The mpv route, chrome up: the press leaves the film playing and its window the one the
+    // drag moves — nothing is parked, which is what puts the band's hole over the desktop.
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = PathBuf::from("a-pin-whose-player-is-mpv.mkv");
+    pin.transport.begun(30.0, true, false);
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+
+    let hwnd = HWND(0x1000 as *mut _);
+    let window = a_window_at(content);
+    begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+
+    assert!(
+        pin_chrome_up(),
+        "the caption the hand is on is up over the band"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "and mpv's window is the one the drag has to carry"
+    );
+
+    for step in 1..=3 {
+        let (dx, dy) = (step * 20, step * 10);
+        send_pointer_to(content.0 + dx, content.1 + dy);
+        std::thread::sleep(Duration::from_millis(25));
+        unsafe { apply_pin_drag(hwnd) };
+
+        let band = pinned_content().expect("a pin with a media band");
+        let carried = window_box_on_screen(player);
+        assert_eq!(
+            carried, band,
+            "move {step}: the player's window is not where the band is — the film has been left \
+             behind, and the band's hole is the desktop showing through"
+        );
+    }
+
+    finish_pin_drag(hwnd, &window);
+
+    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
