@@ -126,7 +126,9 @@ ffprobe -version
 
 ### Optional: Enable Video Preview with mpv
 
-mpv is a third player beside the two above. Where it is installed, **Best** plays *every* video through mpv — whatever the file's size, and whether or not it could be measured — decoding on the graphics card by default and drawing the film's own subtitle tracks and the `.srt` files beside it itself, with no subtitle copy extracted by the app. Where it is not installed the app behaves exactly as it does today, and a machine without mpv reads `video_engine=mpv` as `best`. `mpv.exe` needs to be in your `PATH`.
+mpv is a third player beside the two above. Where it is installed, **Best** plays *every* video through mpv — whatever the file's size, and whether or not it could be measured — decoding on the graphics card by default and drawing its own subtitles: the track the film itself marks as its default, and any `.srt` file beside it, so the app extracts no subtitle copy for it. (A film whose own track is not marked default, as FFmpeg's muxer writes them, shows none — mpv follows the file, and that is deliberate.) Where it is not installed the app behaves exactly as it does today, and a machine without mpv reads `video_engine=mpv` as `best`.
+
+`mpv.exe` is looked for beside the app, in your `PATH`, and in the two folders its installers use — `MPV Player` under Program Files, and SVP 4's own `mpv64`. Where more than one is found, **Codecs → Videos → MPV** lists them and lets you pick which one plays.
 
 mpv ships no installer of its own, so every Windows build is a third-party one — [mpv's own installation page](https://mpv.io/installation/) says so as it lists them.
 
@@ -422,6 +424,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
 - **Codecs** — What this machine has: Videos, Audio, Images, Engines.
   - A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
+  - **Videos → MPV** opens a submenu of every mpv this machine has where there is more than one — the standalone install and SVP's own, say — each named by its path, with the one in use marked. Picking one is remembered as `mpv_path`.
 - **System (vX.Y.Z)**
   - **Check for Updates** — Whether the app asks GitHub for a newer release on its own, at startup and when the menu is opened. On by default; at most once every six hours. Where one is found, the **Update Available** row appears above this submenu on the menu's next opening; where none is, nothing happens. Turning it on asks at once.
   - **Run at Startup** — Add or remove the Windows startup entry.
@@ -598,6 +601,7 @@ spinner_delay_ms=250
   - **Best** is the machine's own answer — mpv where it is installed, and otherwise `hybrid` where FFmpeg is installed (the media engine draws a film at or under 3.2 megapixels, FFmpeg's player takes a larger one or one it could not measure) and `native` where neither is.
   - `mpv` names mpv alone, `native` names the media engine alone, `ffmpeg` names `ffplay` alone, and `hybrid` states that size rule plainly.
   - A choice this machine cannot supply is read as `best`.
+- `mpv_path`: which `mpv.exe` plays, written by **Codecs → Videos → MPV** where the machine has more than one. Empty, the default, means the first one found — beside the app, then the `PATH`, then `MPV Player` under Program Files, then SVP's `mpv64`. The only setting that holds a path.
 - `video_engine_fallback`: `true` (default) lets a chosen engine that cannot play a given file fall through to the engines it may — a chosen `mpv` to both of the others, `native` and `ffmpeg` to each other — and `false` makes the engine you chose stand alone. Read only where `video_engine` names an engine; **Best** is its own walk either way.
 - `libreoffice_idle` / `office_engine_idle`: seconds the engine is kept after its last page, or `indefinitely`. Default `600`; `0` launches it per document.
 - `afk_timer_seconds`: seconds with no Explorer window before a non-persistent engine is released. Default `60`, max one day. `0` releases immediately.
