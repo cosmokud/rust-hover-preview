@@ -863,7 +863,7 @@ fn a_seek_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays() {
     assert_eq!(restart_count(), 0, "mpv is taken to the second while it runs");
     assert_eq!(
         mpv_ipc::noted_lines(),
-        vec![r#"{"command":["seek",90.000,"absolute"],"async":true}"#.to_string()],
+        vec![format!("{}\n", r#"{"command":["seek",90.000,"absolute"],"async":true}"#)],
         "and the line names the second the bar was let go at"
     );
     assert_eq!(
@@ -941,8 +941,8 @@ fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume()
     assert_eq!(
         mpv_ipc::noted_lines(),
         vec![
-            r#"{"command":["set_property","pause",true],"async":true}"#.to_string(),
-            r#"{"command":["set_property","pause",false],"async":true}"#.to_string(),
+            format!("{}\n", r#"{"command":["set_property","pause",true],"async":true}"#),
+            format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
         ],
         "the hold and the release are mpv's own pause property"
     );
@@ -1019,7 +1019,7 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     );
     assert_eq!(
         mpv_ipc::noted_lines(),
-        vec![r#"{"command":["seek",0.000,"absolute"],"async":true}"#.to_string()],
+        vec![format!("{}\n", r#"{"command":["seek",0.000,"absolute"],"async":true}"#)],
         "the wrap is a seek to the beginning, which is the only second a loop can restart at"
     );
 
