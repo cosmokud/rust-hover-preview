@@ -756,15 +756,18 @@ fn window_box_on_screen(hwnd: HWND) -> ScreenRegion {
 /// bare desktop — the video goes, the desktop shows behind it, and it comes back when the drag
 /// ends. The player's window is stood in by a real window of this app's own, and its box is read
 /// back off the machine, because the place a player's window is put at is asked of the machine
-/// and nothing else in this view keeps it. `VIDEO_PID` is left zero so the style monitor is not
-/// asked to find a window of a player's process and cannot take the stand-in's handle away (see
-/// `try_apply_noactivate_style`).
+/// and nothing else in this view keeps it. The record of which player's window that is says mpv,
+/// which is the arm the carry is read off, and `VIDEO_PID` is left zero with it so the style
+/// monitor is not asked to find a window of a player's process and cannot take the stand-in's
+/// handle away (see `note_player_process`, `try_apply_noactivate_style`).
 ///
-/// **Why ignored.** It moves the real pointer and stands up a window: it is a look at a machine,
-/// which is not something a plain `cargo test` may do — that run must spawn no player and touch
-/// no desktop. Ignored, so the plain run stays green and this is driven by hand:
+/// **Why it is a plain test.** It spawns no player and takes no player's window: the box it
+/// carries is a stand-in window of this app's own, and which player that window belongs to is
+/// stood in, so the whole of the loop is arithmetic, a pointer move and one `SetWindowPos` per
+/// step. What it does touch is the machine's own pointer, because a drag is measured from where
+/// the cursor is (`send_pointer_to`), which is why it takes the pointer's own lock:
 ///
-/// `cargo test --lib -- --ignored --nocapture a_dragged_mpv_pin_carries_its_players_window_on_every_move_step`
+/// `cargo test --lib a_dragged_mpv_pin_carries_its_players_window_on_every_move_step`
 ///
 /// **What a red result discriminates.** It is red if the player's window is left behind while the
 /// band moves, which is the first hypothesis: `ensure_video_window_topmost` refusing every
@@ -772,7 +775,6 @@ fn window_box_on_screen(hwnd: HWND) -> ScreenRegion {
 /// with the band. It is green under the hide-the-player hypotheses — a park, or an `SW_HIDE` the
 /// mpv gate missed — because a window that is hidden still carries the box this asserts.
 #[test]
-#[ignore = "moves the real pointer and stands a window up for the player's"]
 fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
@@ -783,6 +785,7 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
 
     let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
     let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_image = video_process_image();
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
@@ -791,6 +794,10 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
     // The player's window, the one thing here that can be asked where the film is.
     let player = unsafe { stand_a_player_window(content) };
     VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+
+    // And whose window it is, as the carry reads it: this app writes the player down as it begins
+    // one, and nothing here begins one (see `note_player_process`).
+    note_player_process(0, MPV_IMAGE_NAME);
 
     // The mpv route, chrome up: the press leaves the film playing and its window the one the
     // drag moves — nothing is parked, which is what puts the band's hole over the desktop.
@@ -827,6 +834,14 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
         let (dx, dy) = (step * 20, step * 10);
         send_pointer_to(content.0 + dx, content.1 + dy);
         std::thread::sleep(Duration::from_millis(25));
+
+        // The stand-in is re-asserted here rather than left standing across the pair, because the
+        // record of a player's window is the whole process's and not this test's: the monitor
+        // thread that follows `VIDEO_PID` forgets the window it names the moment it sees a player
+        // end, and in a run of the whole suite the player it sees end is another test's (see
+        // `ensure_noactivate_monitor`).
+        VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+
         unsafe { apply_pin_drag(hwnd) };
 
         let band = pinned_content().expect("a pin with a media band");
@@ -842,11 +857,85 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
 
     unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
-    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
     stand_mpv_in(None);
     stand_ffplay_in(None);
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
     }
+}
+
+/// Only a window mpv is drawing is carried with a dragged pin: every other answer the placement
+/// can give is the one it gave before.
+///
+/// **Why it is asked of the placement rather than of a drag.** The carry is one condition —
+/// whether the recorded player's window is mpv's (`video_process_image`) — and the answers it is
+/// not are the ones the refusal is for. FFmpeg's window is the film a park hides and a strip of
+/// the pin's chrome stands over, so it is refused; and a band with no window of a player's in it,
+/// which is every preview this app draws itself, has nothing to carry at all. A drag for each
+/// would be the same arithmetic three times, so the drag the mpv arm gets is the one above and
+/// the rest are pinned here.
+///
+/// Both windows are stand-ins of this app's own (`stand_a_player_window`) and `VIDEO_PID` is left
+/// zero, so no player's process is looked for and nothing of this machine's is styled.
+#[test]
+fn only_an_mpv_players_window_is_carried_under_the_pins_chrome() {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let moved = (200, 180, 520, 420);
+
+    // The pin the placement is asked about: a strip of its chrome is up over the band, which is
+    // the whole of the refusal the carry is an exception to.
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+
+    let mpv_player = unsafe { stand_a_player_window(content) };
+    let ffplay_player = unsafe { stand_a_player_window(content) };
+
+    VIDEO_HWND.store(mpv_player.0 as isize, Ordering::SeqCst);
+    note_player_process(0, MPV_IMAGE_NAME);
+    ensure_pinned_sibling_box(moved);
+    assert_eq!(
+        window_box_on_screen(mpv_player),
+        moved,
+        "a film mpv is drawing is the band's picture, so its window travels with the band"
+    );
+
+    VIDEO_HWND.store(ffplay_player.0 as isize, Ordering::SeqCst);
+    note_player_process(0, FFPLAY_IMAGE_NAME);
+    ensure_pinned_sibling_box(moved);
+    assert_eq!(
+        window_box_on_screen(ffplay_player),
+        content,
+        "FFmpeg's window is refused where the band has moved to: a drag hides it, and the pin's \
+         chrome covers the band it was standing in"
+    );
+
+    // And the carry has nothing to carry where there is no window of a player's in the band at
+    // all, which is every preview this app draws into its own window — the media engine's route,
+    // where a pin's band is this app's own pixels rather than a hole onto somebody else's.
+    VIDEO_HWND.store(0, Ordering::SeqCst);
+    note_player_process(0, MPV_IMAGE_NAME);
+    assert!(
+        !ensure_video_window_topmost(moved.0, moved.1, moved.2 - moved.0, moved.3 - moved.1),
+        "the mpv arm finds no window of a player's to carry, so it places nothing either"
+    );
+
+    unsafe {
+        DestroyWindow(mpv_player).expect("the stand-in window let go of");
+        DestroyWindow(ffplay_player).expect("the stand-in window let go of");
+    }
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
+    stand_pin(previous_pin);
 }

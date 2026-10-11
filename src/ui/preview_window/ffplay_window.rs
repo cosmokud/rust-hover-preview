@@ -39,7 +39,12 @@ pub(super) fn note_player_process(pid: u32, image: &'static str) {
 
 /// The image name the id in `VIDEO_PID` may be verified as, which is the player this app last
 /// begun (see `note_player_process`).
-fn video_process_image() -> &'static str {
+///
+/// It answers a second question as well — whether the window in a pinned band is mpv's, which is
+/// the one window that travels with the band rather than being left behind a strip of the pin's
+/// chrome (see `ensure_video_window_topmost`) — and it answers it here because a second record of
+/// which player is on screen would be a second thing to keep in step with this one.
+pub(super) fn video_process_image() -> &'static str {
     VIDEO_PROCESS_IMAGE
         .lock()
         .map(|held| *held)
