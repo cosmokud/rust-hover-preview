@@ -494,6 +494,30 @@ pub(super) fn pinned_level_is_owed_to_the_next_player() -> bool {
     })
 }
 
+/// How many pause keys this app has posted, counted where a test can read it.
+///
+/// The key lands on another process's message queue and a test run has none of those: the player a
+/// test stands in is a number no process holds (see `spawn_player`), `video_window_for` answers
+/// nothing for it, and the post below is never reached — so a key that is posted and a key that is
+/// not look exactly alike from the transport, which is the only trace a test has. That is not
+/// enough for the one decision the key stands behind: whether a gesture tells the player to hold
+/// at all (see `video_drag_hold_apply`). What is counted is the telling rather than the delivery,
+/// and it is a test's alone — the release binary carries no part of it.
+#[cfg(test)]
+static PAUSE_POSTS: AtomicU64 = AtomicU64::new(0);
+
+/// The pause keys posted so far (see `PAUSE_POSTS`).
+#[cfg(test)]
+pub(super) fn pause_posts() -> u64 {
+    PAUSE_POSTS.load(Ordering::Acquire)
+}
+
+/// Forget the pause keys posted so far, so each test counts its own.
+#[cfg(test)]
+pub(super) fn clear_pause_posts() {
+    PAUSE_POSTS.store(0, Ordering::SeqCst);
+}
+
 /// Put the pause key on the player's own message queue, answering whether it was delivered.
 ///
 /// It is one code path for both players because it is one key: FFmpeg's player reads a posted `P`
@@ -515,6 +539,12 @@ pub(super) fn video_key_pause() -> bool {
     if pinned_level_is_owed_to_the_next_player() {
         return false;
     }
+
+    // Counted where the app commits to telling the player rather than where the key lands, because
+    // it lands nowhere a test can see: there is no player's window here to post one through (see
+    // `PAUSE_POSTS`).
+    #[cfg(test)]
+    PAUSE_POSTS.fetch_add(1, Ordering::Relaxed);
 
     let Some(hwnd) = video_window_for(VIDEO_PID.load(Ordering::SeqCst)) else {
         return false;

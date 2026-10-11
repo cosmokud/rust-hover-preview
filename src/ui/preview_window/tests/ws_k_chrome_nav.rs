@@ -1855,3 +1855,54 @@ fn a_drag_holds_ffplays_film_and_leaves_the_mpv_one_playing() {
     stand_ffplay_in(None);
     restore(previous_pin, previous_pid, previous_media);
 }
+
+/// A drag tells FFmpeg's player to hold and tells an mpv player nothing at all — the gate that keeps
+/// a dragged mpv film drawing, seen in the one act the transport cannot show.
+///
+/// The drag test above reads this out of the transport, and the transport cannot tell the two routes
+/// apart: the freeze and the cover it observes are refused *before* any hold is taken, and the key
+/// itself lands on another process's message queue, which a test run has none of (see
+/// `video_window_for`) — so a key that was posted and a key that was never posted leave the same
+/// trace. What is asserted here is the telling itself, counted where the key is posted (see
+/// `ffplay_window::pause_posts`). Deleting the mpv gate in `video_drag_hold_apply` makes the second
+/// half post a key, which is a dragged mpv film stopped by the window it is being moved in.
+#[test]
+fn a_drag_posts_ffplays_pause_key_and_sends_an_mpv_player_nothing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+
+    // FFmpeg's player: the hold a gesture asks for is the pause key posted to its own window, and
+    // it is the only thing this app can tell a running player of its (see `video_key_pause`).
+    stand_pin(Some(playing_pin(content, 30.0)));
+    ffplay_window::clear_pause_posts();
+    video_drag_hold_apply(true);
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        1,
+        "a drag over a film FFmpeg plays is one pause key, which is both the hold the transport \
+         records and the whole of what the film is told"
+    );
+
+    // mpv: the same gesture tells its player nothing, because mpv is told while it runs over its own
+    // pipe and a drag only moves the window it is already drawing in.
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    stand_pin(Some(playing_pin(content, 30.0)));
+    ffplay_window::clear_pause_posts();
+    video_drag_hold_apply(true);
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        0,
+        "mpv's player is left playing through a drag: a pause key posted here stops the film the \
+         hand is moving the window of, and the release that ends the gesture posts no second key \
+         to start it again"
+    );
+
+    restore(previous_pin, previous_pid, previous_media);
+}
