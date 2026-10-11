@@ -489,12 +489,15 @@ pub(super) fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, second
         // FFmpeg's player is the same statement as telling the player it is to be begun at that
         // second held (see `PinTransport::begun` and `settle_pending_hold`).
         Some(MediaType::Video) => {
-            if video_route(path) == VideoRoute::Mpv {
+            if video_route(path) == VideoRoute::Mpv
+                && mpv_ipc::seek_absolute(VIDEO_PID.load(Ordering::SeqCst), seconds)
+            {
                 // mpv is taken to the second while it runs: the player stays and the bar's own
                 // clock is rebased onto where it was taken rather than a player begun at that
-                // second. A held file stays held, because mpv's own seek keeps its pause (see
+                // second. A held file stays held, because mpv's own seek keeps its pause, and the
+                // rebase happens only where the command reached the player: a seek that did not
+                // is the relaunch below, or the bar would claim a second mpv never went to (see
                 // `mpv_ipc`).
-                mpv_ipc::seek_absolute(VIDEO_PID.load(Ordering::SeqCst), seconds);
                 update_pin_transport(|transport| {
                     transport.sought(seconds);
                     transport.started = Some((Instant::now(), seconds));
@@ -638,9 +641,12 @@ pub(super) fn step_pinned_subtitle() {
     // **mpv picks and draws its own tracks, and `cycle sub` is its own word for walking them.**
     // There is no number here for this app to write down — nothing reports back which track mpv
     // chose — but the pipe it listens on is the whole of what the step needs, so the step is a
-    // command rather than a player begun again (see `mpv_ipc`).
-    if video_route(&path) == VideoRoute::Mpv {
-        mpv_ipc::cycle_subtitles(VIDEO_PID.load(Ordering::SeqCst));
+    // command rather than a player begun again. A command that did not reach the player leaves the
+    // step to the road below, which is how FFmpeg's player's track has always been walked (see
+    // `mpv_ipc`).
+    if video_route(&path) == VideoRoute::Mpv
+        && mpv_ipc::cycle_subtitles(VIDEO_PID.load(Ordering::SeqCst))
+    {
         return;
     }
 

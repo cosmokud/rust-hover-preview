@@ -689,15 +689,22 @@ pub(super) fn set_pin_volume(level: u32) {
         _ => false,
     };
     if immediate {
-        if current_media_type() == Some(MediaType::Video) {
+        let told = if current_media_type() == Some(MediaType::Video) {
             // mpv is told the level as the knob moves, which is the whole of what the mpv route is
             // for here: FFmpeg's player would have to be ended and begun again at it instead (see
             // `settle_pin_volume`).
-            mpv_ipc::set_volume(VIDEO_PID.load(Ordering::SeqCst), level);
+            mpv_ipc::set_volume(VIDEO_PID.load(Ordering::SeqCst), level)
         } else {
             video_player::set_volume(level);
+            true
+        };
+        // The claim of what the player is playing at moves only where the player was actually
+        // told: writing it for a command that never reached one would leave the bar claiming a
+        // level the film never took, and the player that begins next owed nothing (see
+        // `settle_pin_volume`).
+        if told {
+            with_pin(|pin| pin.volume.playing_at = level);
         }
-        with_pin(|pin| pin.volume.playing_at = level);
     }
 
     remember_pin_volume(level);
@@ -884,9 +891,14 @@ pub(super) fn settle_pin_volume() {
             video_player::set_volume(volume.level);
             with_pin(|pin| pin.volume.playing_at = pin.volume.level);
         }
-        Some(MediaType::Video) if video_route(&path) == VideoRoute::Mpv => {
+        Some(MediaType::Video)
+            if video_route(&path) == VideoRoute::Mpv
+                && mpv_ipc::set_volume(VIDEO_PID.load(Ordering::SeqCst), volume.level) =>
+        {
             // mpv was told the level as the knob moved (see `set_pin_volume`), so there is no player
-            // to replace here: the claim is written and the film plays on.
+            // to replace here: the command is re-asserted and the claim moves only where it reached
+            // the player. One that did not falls to the arm below, which is the relaunch FFmpeg's
+            // player has always taken (see `pin_level_settled_by`).
             with_pin(|pin| pin.volume.playing_at = pin.volume.level);
         }
         Some(MediaType::Video) => match pin_level_settled_by(
