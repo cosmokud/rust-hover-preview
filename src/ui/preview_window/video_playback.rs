@@ -666,8 +666,103 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
     VIDEO_HWND.store(0, Ordering::SeqCst);
 }
 
+/// What is to be done with a player's window, in the one word both of the places that put one
+/// somewhere read.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum PlayerOrder {
+    /// Put the window at its box and raise it above everything: the film is the picture, and
+    /// nothing of this app's is standing over it.
+    Raise,
+    /// Put the window at its box and leave the order where it is: the pin's window is the one on
+    /// top, and the band the film stands in is the pin's own pixel (see
+    /// `film_band_is_hit_testable`).
+    Carry,
+    /// Leave the window exactly as it stands: a strip of the pin's chrome or its volume popup is
+    /// drawn where the film is, or the film is parked for the length of a gesture.
+    Leave,
+}
+
+/// The placement decision the last call to `player_order` on this thread came to.
+///
+/// A test run has no screen to read a z-order off, and the answer a raiser acts on is the whole of
+/// what it can be asked here — so this is the record a test reads to know that every raiser asked
+/// the question at all (see `last_player_order`). It is the thread's own because the suite runs in
+/// parallel and a raiser on another test's thread must not answer for this one's. The release
+/// binary carries no part of it.
+#[cfg(test)]
+thread_local! {
+    static LAST_PLAYER_ORDER: std::cell::Cell<Option<PlayerOrder>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The placement decision the last call to `player_order` on this thread came to (see
+/// `LAST_PLAYER_ORDER`).
+#[cfg(test)]
+pub(super) fn last_player_order() -> Option<PlayerOrder> {
+    LAST_PLAYER_ORDER.with(|order| order.get())
+}
+
+/// Write down the decision `player_order` came to, for this thread's test eye alone (see
+/// `LAST_PLAYER_ORDER`).
+#[cfg(test)]
+fn note_player_order(order: PlayerOrder) {
+    LAST_PLAYER_ORDER.with(|held| held.set(Some(order)));
+}
+
+/// What is to be done with the player's window, from the facts both of the places that put one
+/// somewhere can read.
+///
+/// **A pinned film mpv draws is the one answer the player is never raised over.** Its band is the
+/// pin's own pixel rather than a hole onto the player's window, so a press on the film has to reach
+/// the pin — which it cannot while the player is the window the point belongs to. The film is
+/// therefore carried with the band and never put in front of it, where every other answer is the
+/// one it has always been: a hover must go on falling through, and FFmpeg's player keeps the band
+/// it has always kept. Which player is up is read off `video_process_image` — the same record the
+/// carry itself is read off — rather than off the media, which is a fact about the file on screen
+/// and not about whose window stands in its band.
+///
+/// The raise is held off for the same reasons it always was: a strip of the pin's chrome or the
+/// volume popup is drawn where the film is, and a film parked for a gesture is deliberately not on
+/// screen. `parked` is asked here for the monitor, which nobody can hold off from outside; the
+/// placement road is the one road that must put a parked window back, so it asks this with no park
+/// (see `unpark_player_window`).
+///
+/// The media engine's route never reaches the carry at all: its band is painted into this app's own
+/// window and it begins no player, so there is no window of somebody else's in the band for either
+/// raiser to place and both find none (see
+/// `only_an_mpv_players_window_is_carried_under_the_pins_chrome`).
+pub(super) fn player_order(
+    image: &str,
+    pinned: bool,
+    chrome_up: bool,
+    volume_open: bool,
+    parked: bool,
+) -> PlayerOrder {
+    // The pin's own film first, because it is the pin's own pixel the press has to land in and
+    // that is not the chrome's to refuse; a park is still refused, since a parked film is not on
+    // screen to be carried.
+    let order = if parked {
+        PlayerOrder::Leave
+    } else if pinned && image == MPV_IMAGE_NAME {
+        PlayerOrder::Carry
+    } else if chrome_up || volume_open {
+        PlayerOrder::Leave
+    } else {
+        PlayerOrder::Raise
+    };
+
+    #[cfg(test)]
+    note_player_order(order);
+
+    order
+}
+
 /// Put the ffplay window where it belongs and on top of everything, re-discovering and re-asserting
 /// its style by pid so that a window ffplay recreated is styled again rather than inherited.
+///
+/// **A pinned film mpv draws is carried here rather than raised**, which is the one answer
+/// `player_order` gives that is not the raise: the pin's window is the one the point in the band
+/// belongs to, so the player is put where the band is and left where it stands behind it.
 ///
 /// **This is the one place a player's window is raised, and the volume popup and the pin's
 /// chrome are guarded here rather than by their callers.** That is the whole of the
@@ -691,23 +786,25 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
 /// the same flag (see `pin_player_is_parked`); the monitor thread's own raise, which nobody can hold
 /// off from outside, is guarded where it is raised (see `apply_noactivate_to_hwnd`).
 pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
-    // For as long as a volume popup is open, or any strip of the pin's chrome is showing, the
-    // player is not raised: the pin's window is the one on top, and nothing is asked of the
-    // order on the way out — the next tick of the caller asks for the player again once the
-    // popup is closed and the last strip has gone (see `pin_volume_open`, `pin_chrome_up`).
+    // What is to be done with the window, from the one answer both of the places that put it
+    // somewhere read: a film mpv is drawing under a pin is carried rather than raised, and a raise
+    // the pin's own chrome or popup has held off is nothing this road places (see `player_order`).
     //
-    // **A player mpv is drawing is the one carried through that rather than left behind**,
-    // because its window *is* the film: a pinned band is a hole onto it, so a window left at the
-    // box a drag began from is the desktop showing through the hole (see `video_process_image`).
-    // What is withheld from it is the raise and not the place — the move below is given
-    // `SWP_NOZORDER` for this arm, which leaves the pin's chrome exactly where it was, over the
-    // film. FFmpeg's window is refused as it always was: a drag hides it, and the chrome covers
-    // the band it stood in either way.
-    let held = pin_volume_open() || pin_chrome_up();
-    let carrying = held && video_process_image() == MPV_IMAGE_NAME;
-    if held && !carrying {
+    // The park is deliberately not asked of it here: this is the road that must put a parked
+    // window back (see `unpark_player_window`), so the park is the callers' refusal and the
+    // monitor's rather than this one's (see the note over the function).
+    let order = player_order(
+        video_process_image(),
+        pinned(),
+        pin_chrome_up(),
+        pin_volume_open(),
+        false,
+    );
+    if order == PlayerOrder::Leave {
         return false;
     }
+
+    let carrying = order == PlayerOrder::Carry;
 
     // Re-discover/re-apply style by PID each time to survive ffplay window recreation
     // and keep topmost state resilient over time.
@@ -730,12 +827,11 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
             return false;
         }
 
-        // Re-assert desired style bits in case ffplay modified them
+        // Re-assert desired style bits in case ffplay modified them — through the one list, so a
+        // window carried under the pin's own band is not asserted a topmost bit here while the
+        // monitor leaves it off (see `player_ex_style_for`, `player_order`).
         let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let new_style = current_style
-            | WS_EX_NOACTIVATE.0 as isize
-            | WS_EX_TOOLWINDOW.0 as isize
-            | WS_EX_TOPMOST.0 as isize;
+        let new_style = player_ex_style_for(current_style, carrying);
         if new_style != current_style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
         }
