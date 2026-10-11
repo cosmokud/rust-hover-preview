@@ -439,10 +439,7 @@ fn the_seek_aim() -> Option<f64> {
 
 /// The line mpv is taken to a second with, as this app writes it (see `mpv_ipc::seek_absolute`).
 fn the_seek_line(seconds: f64) -> String {
-    format!(
-        "{}\n",
-        format!(r#"{{"command":["seek",{seconds:.3},"absolute"],"async":true}}"#)
-    )
+    format!(r#"{{"command":["seek",{seconds:.3},"absolute"],"async":true}}"#) + "\n"
 }
 
 /// A seek on a pin whose player is mpv is a live seek and nothing else: the press tells the

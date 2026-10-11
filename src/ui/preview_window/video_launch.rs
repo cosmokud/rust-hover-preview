@@ -189,6 +189,13 @@ pub(super) fn mpv_args(
 
     args.push("--no-osc".to_string());
     args.push("--no-border".to_string());
+    // **And its window is not mpv's to drag, whatever happens to be over it.** mpv moves its own
+    // window with the left button by default, and this app carries the pin — so a press that ever
+    // reached mpv's window is a film dragged out of the hand and put back by the tick, the magnet
+    // the film's own borders were reported as. The pin's window is the drag handle for every film
+    // this app shows (see `pinned_press`), and it takes the press there because its band is the
+    // pin's own pixel — which is a fact about where the two windows stand. This refusal is not.
+    args.push("--window-dragging=no".to_string());
     // The size, and a position only where mpv reads one as a position: a leading `-` in a geometry
     // offset is a distance from the right or bottom edge rather than a coordinate, so a preview box
     // on a monitor left of or above the primary one would be placed against the far edge of the
@@ -1305,6 +1312,7 @@ mod tests {
                 "--input-conf=scratch/mpv-input.conf",
                 "--no-osc",
                 "--no-border",
+                "--window-dragging=no",
                 "--geometry=640x360+10+20",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1316,6 +1324,43 @@ mod tests {
             "the film, then the configuration off, the mouse off, the chrome off, the box, the\
              two Direct3D options and the level — `--vo` is deliberately not passed and no\
              `--start` is asked for at the beginning of a file (see `mpv_args`)"
+        );
+    }
+
+    /// **The one flag the drag story rests on without anything else**: mpv is launched told not to
+    /// move its own window.
+    ///
+    /// `--window-dragging` defaults to yes, and a player that moves its own window while this app
+    /// carries the pin is two things writing one position — which is the film being pulled out of
+    /// the hand and put back every tick. Whatever keeps a press off mpv's window (the pin's own
+    /// band, its chrome, the click-through style) is a fact about where that window happens to be,
+    /// and the refusal here is not.
+    ///
+    /// It is asserted apart from the whole-list test because it has to hold with the input flags
+    /// *dropped* as well: those two go together where the generated binding file cannot be written,
+    /// and this one is not part of that pair.
+    #[test]
+    fn an_mpv_player_is_launched_told_not_to_drag_its_own_window() {
+        let args = mpv_args(
+            Path::new("a.mkv"),
+            0,
+            0,
+            8,
+            8,
+            0.0,
+            100,
+            None,
+            true,
+            true,
+            None,
+            IPC,
+        );
+        assert!(
+            args.iter().any(|arg| arg == "--window-dragging=no"),
+            "mpv drags its own window with the left button by default, so a launch that leaves it \
+             at mpv's default leaves a second writer of the position this app is carrying: the \
+             film would be moved by the hand and put back by the app every tick, which is the \
+             magnet the left and right borders were reported as; the launch was {args:?}"
         );
     }
 
@@ -1344,6 +1389,7 @@ mod tests {
                 "--no-config",
                 "--no-osc",
                 "--no-border",
+                "--window-dragging=no",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1383,6 +1429,7 @@ mod tests {
                 "--no-config",
                 "--no-osc",
                 "--no-border",
+                "--window-dragging=no",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=no",
@@ -1421,6 +1468,7 @@ mod tests {
                 "--no-config",
                 "--no-osc",
                 "--no-border",
+                "--window-dragging=no",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1468,6 +1516,7 @@ mod tests {
                 "--no-config",
                 "--no-osc",
                 "--no-border",
+                "--window-dragging=no",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1505,6 +1554,7 @@ mod tests {
                 "--no-config",
                 "--no-osc",
                 "--no-border",
+                "--window-dragging=no",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1548,6 +1598,7 @@ mod tests {
                     "--no-config",
                     "--no-osc",
                     "--no-border",
+                    "--window-dragging=no",
                     "--geometry=640x360",
                     "--gpu-api=d3d11",
                     "--hwdec=auto",
@@ -1612,6 +1663,7 @@ mod tests {
                 "--no-config",
                 "--no-osc",
                 "--no-border",
+                "--window-dragging=no",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",

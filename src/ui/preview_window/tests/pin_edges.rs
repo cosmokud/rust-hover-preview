@@ -715,3 +715,161 @@ fn a_press_on_the_engines_window_begins_the_drag_its_place_means() {
     assert!(matches!(card(100, 300), PinDragAction::Move));
     assert!(matches!(card(400, 300), PinDragAction::Move));
 }
+
+/// A hand on the left border and a hand on the right border each take the edge it holds where the
+/// hand put it, on the road a real press begins, and neither ever moves the edge it is not holding.
+///
+/// **The stroke is the one `begin_pin_drag` records and `apply_pin_drag` applies**: the box the
+/// window stood at, the place the pointer was, the edge under the hand, and where the pointer is
+/// now. Only the two things a test cannot have are stood in — a pin window whose box the machine
+/// would report, and a pointer that has moved — and the box that comes out is read off the pin,
+/// which is the box the window is placed at.
+///
+/// **The left border is the one an anchor can be wrong about.** Its box is built from the right
+/// edge (`left = content.2 - width`), so a width the room, the shape or the smallest box a hand can
+/// take hold of cuts short is a left edge that is not where the hand is — while a right-edge stroke
+/// keeps `content.0` and could not show it at all. So both are asked, at the same delta and at the
+/// two clamps, and the answer is the same one on each: the edge under the hand lands under the
+/// hand, and the opposite edge has not moved. A border that comes back anywhere else is the
+/// "magnet" the resized window was reported as.
+#[test]
+fn a_left_border_and_a_right_border_stroke_each_land_the_edge_where_the_hand_put_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+
+    // The room the app reads for a box: the work area of the display the box's middle stands on,
+    // with nothing taken off it for a pin whose chrome is drawn over its media.
+    let room = work_area_at(100, 100);
+    let start = (
+        room.left + 400,
+        room.top + 300,
+        room.left + 800,
+        room.top + 600,
+    );
+    let floor = logical_px(96, PIN_MIN_MEDIA_PIXELS).max(8);
+
+    // What the hand asks of each border, and what each border keeps: the edge under the hand moves
+    // by the stroke, and the opposite edge stays exactly where it was. The last one is a clamp with
+    // a nameable number in it — the room's own edge, which is where a box can be pulled out to and
+    // no further.
+    let cases: [(&str, PinResize, i32, i32, i32); 5] = [
+        ("left border pulled out", edge(true, false, false, false), -200, start.2, start.0 - 200),
+        ("right border pulled out", edge(false, false, true, false), 200, start.0, start.2 + 200),
+        ("left border pulled in", edge(true, false, false, false), 100, start.2, start.0 + 100),
+        ("right border pulled in", edge(false, false, true, false), -100, start.0, start.2 - 100),
+        ("left border past the room", edge(true, false, false, false), -10_000, start.2, room.left),
+    ];
+
+    for (what, edge_, dx, kept, moved) in cases {
+        stand_a_pin_at(start);
+        let after = a_border_stroke(edge_, dx);
+        assert_eq!(
+            if edge_.left { after.0 } else { after.2 },
+            moved,
+            "{what}: the edge under the hand is not where the hand put it"
+        );
+        assert_eq!(
+            if edge_.left { after.2 } else { after.0 },
+            kept,
+            "{what}: the edge the hand is not holding moved, which is the whole of what a resize \
+             may not do"
+        );
+    }
+
+    // The other clamp, which has no number worth writing down: the smallest box a hand can take
+    // hold of is the shape's — a 4:3 box may not be smaller than a certain *height*, and its width
+    // follows from that — so what is asserted is the anchor and the stop, not the arithmetic.
+    for (what, edge_, dx, kept) in [
+        (
+            "left border past the smallest box",
+            edge(true, false, false, false),
+            10_000,
+            start.2,
+        ),
+        (
+            "right border past the smallest box",
+            edge(false, false, true, false),
+            -10_000,
+            start.0,
+        ),
+    ] {
+        stand_a_pin_at(start);
+        let after = a_border_stroke(edge_, dx);
+        assert_eq!(
+            if edge_.left { after.2 } else { after.0 },
+            kept,
+            "{what}: the edge the hand is not holding moved, which is what a clamped stroke does \
+             when the box is built from the edge opposite the hand"
+        );
+        assert!(
+            (after.2 - after.0) >= floor && (after.3 - after.1) >= floor,
+            "{what}: the box stopped smaller than the smallest one a hand can take hold of"
+        );
+    }
+
+    // And the two borders of the same delta leave the same box, mirrored: neither is answered by
+    // arithmetic of its own.
+    let left = {
+        stand_a_pin_at(start);
+        a_border_stroke(edge(true, false, false, false), -200)
+    };
+    let right = {
+        stand_a_pin_at(start);
+        a_border_stroke(edge(false, false, true, false), 200)
+    };
+    assert_eq!(
+        (left.2 - left.0, left.3 - left.1),
+        (right.2 - right.0, right.3 - right.1),
+        "the same stroke on the other border grows the box to the same size"
+    );
+    assert_eq!(
+        start.2 - left.0,
+        start.2 - start.0 + 200,
+        "the left border grew the box out to the side the hand pulled it, by the stroke"
+    );
+    assert_eq!(
+        right.2 - start.0,
+        start.2 - start.0 + 200,
+        "and the right border grew it out by the same stroke the other way"
+    );
+
+    stand_pin(previous_pin);
+}
+
+/// A pin on a film at a box, with the live bar and the shape a video is taken up with.
+fn stand_a_pin_at(content: ScreenRegion) {
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = PathBuf::from("a-border-stroke.mkv");
+    pin.transport_bar = true;
+    pin.transport_live = true;
+    pin.transport.begun(30.0, true, false);
+    stand_pin(Some(pin));
+}
+
+/// The box a border stroke leaves, on the road the press began: the drag a hand would have
+/// recorded, measured from where the pointer is now back to where the stroke began.
+fn a_border_stroke(edge_: PinResize, dx: i32) -> ScreenRegion {
+    let at = cursor_screen_point().expect("the pointer is somewhere on the desktop");
+    let window = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .expect("a pin up");
+
+    with_pin(|pin| {
+        pin.dragging = Some(PinDrag {
+            from: (at.0 - dx, at.1),
+            window,
+            action: PinDragAction::Resize(edge_),
+            delivered: true,
+            carried: (i32::MIN, i32::MIN),
+        });
+    });
+    unsafe { apply_pin_drag(HWND(0x1000 as *mut _)) };
+
+    let after = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .expect("a pin up");
+    with_pin(|pin| pin.dragging = None);
+    after
+}
