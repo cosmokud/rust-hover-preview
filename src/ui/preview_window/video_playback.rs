@@ -691,12 +691,21 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
 /// the same flag (see `pin_player_is_parked`); the monitor thread's own raise, which nobody can hold
 /// off from outside, is guarded where it is raised (see `apply_noactivate_to_hwnd`).
 pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
-    // For as long as a volume popup is open, or any strip of the pin's chrome is showing,
-    // the player is left where it is, and the pin's window is the one on top. Nothing is
-    // asked of the order on the way out — the next tick of the caller asks for the player
-    // again once the popup is closed and the last strip has gone (see `pin_volume_open`,
-    // `pin_chrome_up`).
-    if pin_volume_open() || pin_chrome_up() {
+    // For as long as a volume popup is open, or any strip of the pin's chrome is showing, the
+    // player is not raised: the pin's window is the one on top, and nothing is asked of the
+    // order on the way out — the next tick of the caller asks for the player again once the
+    // popup is closed and the last strip has gone (see `pin_volume_open`, `pin_chrome_up`).
+    //
+    // **A player mpv is drawing is the one carried through that rather than left behind**,
+    // because its window *is* the film: a pinned band is a hole onto it, so a window left at the
+    // box a drag began from is the desktop showing through the hole (see `video_process_image`).
+    // What is withheld from it is the raise and not the place — the move below is given
+    // `SWP_NOZORDER` for this arm, which leaves the pin's chrome exactly where it was, over the
+    // film. FFmpeg's window is refused as it always was: a drag hides it, and the chrome covers
+    // the band it stood in either way.
+    let held = pin_volume_open() || pin_chrome_up();
+    let carrying = held && video_process_image() == MPV_IMAGE_NAME;
+    if held && !carrying {
         return false;
     }
 
@@ -731,15 +740,15 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
         }
 
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            x,
-            y,
-            width,
-            height,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
+        // The one flag that tells a carried window from a placed one: without it the placement
+        // is a raise as well, and the film would go over the chrome it was just carried under
+        // (see the arm above).
+        let mut flags = SWP_NOACTIVATE | SWP_SHOWWINDOW;
+        if carrying {
+            flags |= SWP_NOZORDER;
+        }
+
+        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, flags);
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     }
 
