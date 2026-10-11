@@ -582,7 +582,9 @@ pub(super) fn hold_pinned_player_without_a_key(playhead: f64) {
 /// track in a file whose header has not been read is a `-sst` the player may refuse outright,
 /// which is a player that exits (see `video_subtitles`). The engine's own videos are refused too:
 /// it shows no subtitles at all, in frame-server mode or any other (see `video_player`), so there
-/// is nothing on screen for a track to change.
+/// is nothing on screen for a track to change. And a film mpv is drawing is refused for the
+/// reason the whole route exists: mpv found and chose its own tracks, and no track of this app's
+/// is set for it at all (see `video_route`).
 pub(super) fn step_pinned_subtitle() {
     if current_media_type() != Some(MediaType::Video) {
         return;
@@ -591,6 +593,17 @@ pub(super) fn step_pinned_subtitle() {
     let Some((path, content, transport, _)) = pinned_playback_state() else {
         return;
     };
+
+    // **mpv picks and draws its own tracks, so there is no track here for this key to step.** The
+    // number would be written down and the player begun again with it — and nothing on screen would
+    // change, because neither the relaunch nor the launch names a track to mpv at all (see
+    // `video_launch::mpv_args`) — which is a picker claiming a choice it never made. Doing nothing
+    // is the honest answer, and it is doing nothing rather than a greyed control because the pin's
+    // chrome has no subtitle row to grey: this key is the only place the choice is offered (see
+    // `pinned_key_command`).
+    if video_route(&path) == VideoRoute::Mpv {
+        return;
+    }
 
     let Some(next) = next_subtitle(transport.subtitle, video_subtitles(&path).count) else {
         return;

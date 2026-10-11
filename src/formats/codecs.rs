@@ -92,6 +92,10 @@ const DECODER_ENUM_FLAGS: MFT_ENUM_FLAG = MFT_ENUM_FLAG(
 /// The `apps.microsoft.com` ones are the Store's own pages and are opened as pages: what a row
 /// hands over is a link, and what answers it is the browser the user already has.
 const FFMPEG_PAGE: &str = "https://ffmpeg.org/download.html";
+/// mpv's own installation page, which is what the README names for it too. mpv publishes no
+/// installer of its own — every Windows build on that page is an unofficial third-party one, as
+/// the page says — so this is the page that lists them rather than a download of mpv's own.
+const MPV_PAGE: &str = "https://mpv.io/installation/";
 const MPEG2_PAGE: &str = "https://apps.microsoft.com/detail/9N95Q1ZZPMH4";
 const HEVC_PAGE: &str = "https://apps.microsoft.com/detail/9N4WGH0Z6VHQ";
 const VP9_PAGE: &str = "https://apps.microsoft.com/detail/9N4D0MSMP0PT";
@@ -128,12 +132,13 @@ pub fn video() -> Vec<Row> {
     vec![
         // The third player a video can be played by, listed above FFmpeg's because it is the one
         // `Best` prefers where it is installed (see `video_hw::VIDEO_ENGINES`). It is an install
-        // of its own rather than a part of FFmpeg's, and there is no page this app names for it,
-        // so a machine without it is a row with nothing to open.
+        // of its own rather than a part of FFmpeg's, and the page it names is mpv's own
+        // installation page — the place the Windows builds are listed, since mpv ships no
+        // installer itself (see `MPV_PAGE`).
         Row {
             name: "MPV",
             available: mpv_available(),
-            link: None,
+            link: Some(MPV_PAGE),
         },
         Row {
             name: "FFmpeg (ffplay)",

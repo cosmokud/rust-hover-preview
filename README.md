@@ -124,6 +124,30 @@ ffplay -version
 ffprobe -version
 ```
 
+### Optional: Enable Video Preview with mpv
+
+mpv is a third player beside the two above. Where it is installed, **Best** plays *every* video through mpv — whatever the file's size, and whether or not it could be measured — decoding on the graphics card by default and drawing the film's own subtitle tracks and the `.srt` files beside it itself, with no subtitle copy extracted by the app. Where it is not installed the app behaves exactly as it does today, and a machine without mpv reads `video_engine=mpv` as `best`. `mpv.exe` needs to be in your `PATH`.
+
+mpv ships no installer of its own, so every Windows build is a third-party one — [mpv's own installation page](https://mpv.io/installation/) says so as it lists them.
+
+**Option A: winget**
+
+```powershell
+winget install --id shinchiro.mpv -e
+```
+
+**Option B: manual**
+
+1. Download a Windows build from [https://mpv.io/installation/](https://mpv.io/installation/)
+2. Extract it, for example to `C:\mpv`
+3. Add `C:\mpv` to your user `PATH`
+
+Verify either way:
+
+```powershell
+mpv --version
+```
+
 ### Optional: Enable More Video Codecs (Windows Codecs)
 
 The media engine decodes H.264, MPEG-4, and WMV out of the box; each codec below is a separate free extension from the Microsoft Store, and none of them is needed while FFmpeg is installed.
@@ -374,12 +398,13 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - A second Explorer window keeps engines warm.
     - Each **`… TTL`** submenu has a **Persistent** toggle at the top.
   - **Video Engine** — Which engine plays a video.
-    - **Best** (`default`) — The machine's own answer: the media engine for a film at or under 3.2 megapixels, FFmpeg's player for a larger one or one it could not measure.
+    - **Best** (`default`) — The machine's own answer: mpv for every video where it is installed, and otherwise the media engine for a film at or under 3.2 megapixels and FFmpeg's player for a larger one or one it could not measure.
+    - **MPV** — mpv alone.
     - **Native** — The media engine alone.
     - **FFmpeg** — `ffplay` alone.
     - **Native (FFmpeg above 3.2MP)** — That size rule stated plainly.
-    - A **Fallback** switch at the top (`default` on) lets a chosen engine that cannot play a given file fall through to the other; off, the engine you chose stands alone.
-    - **FFmpeg** and **Native (FFmpeg above 3.2MP)** are greyed out where `ffplay` is not installed.
+    - A **Fallback** switch at the top (`default` on) lets a chosen engine that cannot play a given file fall through to the engines it may: **MPV** reaches both of the others, while **Native** and **FFmpeg** still only reach each other. Off, the engine you chose stands alone.
+    - **MPV** is greyed out where `mpv` is not installed; **FFmpeg** and **Native (FFmpeg above 3.2MP)** where `ffplay` is not.
   - **Office Engine** — Which engine draws Office documents.
     - **Microsoft Office** (`default`) — Uses the format's own app and falls back to LibreOffice.
     - **LibreOffice** — Draws every Office document.
@@ -569,11 +594,11 @@ spinner_delay_ms=250
   - One delay covers all preview types, and a pinned window being shown another file with it.
   - A pin that has to wait shows a spinner of its own in the middle of itself, drawn over the file it is still showing rather than in place of it, and the window is never hidden while it waits.
 - `office_engine`: `microsoft_office` default, falls back to LibreOffice when needed; or `libreoffice`, which always uses LibreOffice. If LibreOffice is missing, it falls back and the tray row is greyed out.
-- `video_engine`: which engine plays a video: `best` (default), `native`, `ffmpeg`, or `hybrid`.
-  - **Best** is the machine's own answer — `hybrid` where FFmpeg is installed (the media engine draws a film at or under 3.2 megapixels, FFmpeg's player takes a larger one or one it could not measure) and `native` where it is not.
-  - `native` names the media engine alone, `ffmpeg` names `ffplay` alone, and `hybrid` states that size rule plainly.
+- `video_engine`: which engine plays a video: `best` (default), `mpv`, `native`, `ffmpeg`, or `hybrid`.
+  - **Best** is the machine's own answer — mpv where it is installed, and otherwise `hybrid` where FFmpeg is installed (the media engine draws a film at or under 3.2 megapixels, FFmpeg's player takes a larger one or one it could not measure) and `native` where neither is.
+  - `mpv` names mpv alone, `native` names the media engine alone, `ffmpeg` names `ffplay` alone, and `hybrid` states that size rule plainly.
   - A choice this machine cannot supply is read as `best`.
-- `video_engine_fallback`: `true` (default) lets a chosen engine that cannot play a given file fall through to the other; `false` makes the engine you chose stand alone. Read only where `video_engine` names an engine — **Best** walks both either way.
+- `video_engine_fallback`: `true` (default) lets a chosen engine that cannot play a given file fall through to the engines it may — a chosen `mpv` to both of the others, `native` and `ffmpeg` to each other — and `false` makes the engine you chose stand alone. Read only where `video_engine` names an engine; **Best** is its own walk either way.
 - `libreoffice_idle` / `office_engine_idle`: seconds the engine is kept after its last page, or `indefinitely`. Default `600`; `0` launches it per document.
 - `afk_timer_seconds`: seconds with no Explorer window before a non-persistent engine is released. Default `60`, max one day. `0` releases immediately.
 - `office_engine_persistent`, `libreoffice_persistent`, `webview_persistent`: `true` keeps that engine always, bounded only by its `…_idle` time. `false` default keeps it while Explorer is reachable, bounded by `afk_timer_seconds`.
