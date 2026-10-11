@@ -50,11 +50,6 @@ fn a_pin_showing_the_film_restarts_its_player_when_the_copied_subtitles_are_read
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
 
-    // The machine's own mpv is stood out so this test spawns no real player: with mpv installed
-    // the default engine would pick it (see `stand_mpv_in`).
-    stand_ffplay_in(Some(true));
-    stand_mpv_in(Some(false));
-
     let film = PathBuf::from("pin-subtitle-reload-film.mkv");
     stand_pin(Some(a_pin_playing(&film, (100, 80, 420, 320))));
     clear_restart_count();
@@ -99,8 +94,6 @@ fn a_pin_showing_the_film_restarts_its_player_when_the_copied_subtitles_are_read
     );
     assert_eq!(restart_count(), 1, "and nothing is begun with none up");
 
-    stand_mpv_in(None);
-    stand_ffplay_in(None);
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     restore_media(previous_media);
@@ -244,11 +237,6 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
 
-    // The machine's own mpv is stood out so this test spawns no real player: with mpv installed
-    // the default engine would pick it (see `stand_mpv_in`).
-    stand_ffplay_in(Some(true));
-    stand_mpv_in(Some(false));
-
     let film = PathBuf::from("pin-subtitle-reload-adopted.mkv");
     stand_a_ready_copy(&film);
     stand_pin(Some(a_pin_playing(&film, (100, 80, 420, 320))));
@@ -289,8 +277,6 @@ fn an_adopted_pin_is_restarted_when_the_copy_it_predates_is_already_ready() {
     );
     assert_eq!(restart_count(), 1, "and nothing is begun");
 
-    stand_mpv_in(None);
-    stand_ffplay_in(None);
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     restore_media(previous_media);

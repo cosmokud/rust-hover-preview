@@ -53,6 +53,85 @@ pub(super) fn player_draws_subtitles(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// The player a preview holds: the process this app began, or — under test — the id one would
+/// have been given.
+///
+/// The two are one type so that every caller treats them alike, which is what a seam at the
+/// launch has to leave alone: the id is what the bookkeeping names the player by (see
+/// `note_player_started`), and the handle is what ends it. A test run must begin nothing, so what
+/// the seam hands back in place of a process is the noting of one (see `spawn_player`).
+///
+/// **A noted id can never end a real process, and that is what makes one safe to keep.** Nothing
+/// is ever killed by an id alone: `terminate_player_pid` verifies the id still runs the image name
+/// it was recorded under before it touches anything (`process_image_matches`), and a Windows
+/// process id is always a multiple of four — so an odd stand-in is refused twice over.
+pub(super) enum PlayerProcess {
+    /// The player this app began.
+    #[cfg_attr(test, allow(dead_code))] // The test seam notes a player instead of beginning one.
+    Started(Child),
+    /// The player a test noted in place of beginning one.
+    #[cfg(test)]
+    Noted(u32),
+}
+
+impl PlayerProcess {
+    /// The id the player is booked in and ended under.
+    pub(super) fn id(&self) -> u32 {
+        match self {
+            Self::Started(child) => child.id(),
+            #[cfg(test)]
+            Self::Noted(pid) => *pid,
+        }
+    }
+
+    /// Whether the player has ended, asked of a real handle and of a note alike: a noted player
+    /// is not a process and never ends, which is what a caller waiting on one expects.
+    pub(super) fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        match self {
+            Self::Started(child) => child.try_wait(),
+            #[cfg(test)]
+            Self::Noted(_) => Ok(None),
+        }
+    }
+
+    /// End the player, where there is one to end.
+    pub(super) fn kill(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Started(child) => child.kill(),
+            #[cfg(test)]
+            Self::Noted(_) => Ok(()),
+        }
+    }
+}
+
+/// Begin the player a launch built its command for, or — under test — note that one would have
+/// been begun and begin nothing.
+///
+/// The one place the two builds differ, and it is a compile-time branch rather than a runtime
+/// check: the release build spawns, and the test build hands back an id no process holds, so the
+/// release binary carries no part of the test arm. What the noting leaves out is the process and
+/// nothing else — the launch books the player in through `note_player_started` all the same.
+#[cfg(not(test))]
+pub(super) fn spawn_player(command: &mut std::process::Command) -> Option<PlayerProcess> {
+    command.spawn().ok().map(PlayerProcess::Started)
+}
+
+/// The test build's launch: note a player instead of beginning one (see `spawn_player`).
+#[cfg(test)]
+pub(super) fn spawn_player(_command: &mut std::process::Command) -> Option<PlayerProcess> {
+    Some(PlayerProcess::Noted(next_noted_pid()))
+}
+
+/// The id a noted player carries, one apart from the last.
+///
+/// An odd number, which no Windows process id ever is — they are multiples of four — so a noted
+/// id names no real process even before the image-name check refuses it (see `PlayerProcess`).
+#[cfg(test)]
+fn next_noted_pid() -> u32 {
+    static NEXT: AtomicU32 = AtomicU32::new(u32::MAX);
+    NEXT.fetch_sub(2, Ordering::Relaxed)
+}
+
 /// Start ffplay for video preview, at the level `volume` names and with the film's own measured
 /// loudness folded into it where `Normalize` is on for videos (see `normalizing_video`).
 ///
@@ -73,7 +152,7 @@ pub(super) fn start_video_playback(
     start: f64,
     volume: u32,
     subtitle: Option<usize>,
-) -> Option<Child> {
+) -> Option<PlayerProcess> {
     let volume = volume.min(100);
 
     // Which player this file is begun with, asked here rather than left to the caller because
@@ -274,19 +353,19 @@ pub(super) fn start_video_playback(
     // chain). A player begun at the beginning is given no `-ss` rather than `-ss 0`, so that
     // nothing is asked for that would be answered with the position it is already at.
     let child = match (start > 0.0).then(|| format!("{start:.3}")) {
-        Some(second) => child.args(["-ss", &second]).spawn().ok(),
-        None => child.spawn().ok(),
+        Some(second) => spawn_player(child.args(["-ss", &second])),
+        None => spawn_player(child),
     };
 
     // After spawning, try to set WS_EX_NOACTIVATE on the player's window
     // to prevent it from stealing focus, and book the player in: its window is the monitor's, its
     // name is what its id is verified as, and its loop — where the loop is this app's to give — is
     // clocked from here (see `note_player_started`).
-    if let Some(ref child_process) = child {
+    if let Some(ref player) = child {
         note_player_started(
             player_image(VideoRoute::Ffplay),
             path,
-            child_process,
+            player,
             (x, y, x + width, y + height),
             start,
             video_launch::loop_is_ours(seeked),
@@ -316,7 +395,7 @@ fn start_mpv_video_playback(
     start: f64,
     volume: u32,
     gain: Option<f64>,
-) -> Option<Child> {
+) -> Option<PlayerProcess> {
     // The switches are read here, at the launch, for the reason the ffplay route reads its own
     // here: a film already playing was started with the answer that stood then and is kept
     // playing with it (see `video_hw_accel_wanted`, `subtitles_wanted`). The picked mpv is read
@@ -327,7 +406,8 @@ fn start_mpv_video_playback(
         .unwrap_or_default();
     let program = video_hw::mpv_program(&chosen, &codecs::mpv_installs())?;
 
-    let child = engine_processes::hidden_command(program)
+    let mut command = engine_processes::hidden_command(program);
+    command
         .args(video_launch::mpv_args(
             path,
             x,
@@ -343,9 +423,8 @@ fn start_mpv_video_playback(
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    let child = spawn_player(&mut command)?;
 
     // **mpv picks its own tracks, so "was it asked for subtitles" is the honest answer here** —
     // and it is the answer the take-up is asked for: a pin adopts a hover's player rather than
@@ -385,18 +464,19 @@ fn start_mpv_video_playback(
 fn note_player_started(
     image: &'static str,
     path: &Path,
-    child: &Child,
+    player: &PlayerProcess,
     content: ScreenRegion,
     start: f64,
     own_loop: bool,
 ) {
-    set_noactivate_for_process(child.id(), image);
-    engine_processes::record_player(image, child.id());
+    let pid = player.id();
+    set_noactivate_for_process(pid, image);
+    engine_processes::record_player(image, pid);
 
     if own_loop {
-        note_video_loop(child.id(), path, content, start, video_duration(path));
+        note_video_loop(pid, path, content, start, video_duration(path));
     } else {
-        forget_video_loop(child.id());
+        forget_video_loop(pid);
     }
 }
 

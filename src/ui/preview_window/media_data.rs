@@ -68,7 +68,7 @@ pub(super) struct MediaData {
     /// Cancellation token for background decode work.
     pub(super) stream_cancel: Option<Arc<AtomicBool>>,
     // For video playback using ffplay
-    pub(super) video_process: Option<Child>,
+    pub(super) video_process: Option<PlayerProcess>,
     pub(super) loading_start: Option<Instant>,
     /// Where a text preview is scrolled to, when it scrolls at all.
     pub(super) text_state: Option<TextPreviewState>,

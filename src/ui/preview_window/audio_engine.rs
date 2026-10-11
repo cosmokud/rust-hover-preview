@@ -799,7 +799,7 @@ pub(super) fn start_audio_player(
     volume: u32,
     start: f64,
     gain: Option<f64>,
-) -> Option<Child> {
+) -> Option<PlayerProcess> {
     let mut command = engine_processes::hidden_command("ffplay");
     command.args(["-nodisp", "-autoexit", "-loglevel", "quiet"]);
 
@@ -826,13 +826,13 @@ pub(super) fn start_audio_player(
         command.args(["-loop", "0"]);
     }
 
-    let child = command
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let child = spawn_player(
+        command
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )?;
 
     // The player is this app's own child, taken charge of the way every other one is: the job
     // ends it when the app does, and the record answers for a run that never got to end it. It

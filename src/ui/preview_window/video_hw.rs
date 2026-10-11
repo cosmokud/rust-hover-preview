@@ -212,6 +212,7 @@ pub(super) fn probe_hwaccel_device(enabled: bool) -> Option<&'static str> {
 /// killed rather than waited on, because this runs on the probe thread and the app has no reason to
 /// hold a thread open for a process it has already learned all it needed; the kill is confirmed by
 /// image name and is not ours to confirm by waiting (see `engine_processes::terminate_verified`).
+#[cfg(not(test))]
 pub(super) fn probe_one_hwaccel(device: &str) -> bool {
     let Ok(mut child) = engine_processes::hidden_command("ffplay")
         .args([
@@ -272,6 +273,16 @@ pub(super) fn probe_one_hwaccel(device: &str) -> bool {
     }
 
     outcome
+}
+
+/// The test build's probe: begin nothing, and answer as a machine whose probe found no device does.
+///
+/// A test run must start no process (see `video_playback::spawn_player`), and naming no device is a
+/// working answer on a machine where nothing survives (`probe_hwaccel_device` says so): the walk
+/// stops at the same place, and the preview is decoded on a core.
+#[cfg(test)]
+pub(super) fn probe_one_hwaccel(_device: &str) -> bool {
+    false
 }
 
 /// A player this app has to loop itself: which one it is, what it is playing, the second it was
