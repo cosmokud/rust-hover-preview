@@ -11,7 +11,12 @@ use super::*;
 
 /// A video behind the pin, as the take-up reads the kind off the slot, with a player that is
 /// not running: the state `pin_media_failed_before_a_frame` is about.
+///
+/// FFmpeg's player's route rather than the machine's, because the press below takes the kill road
+/// — the one road the mpv route answers with a command and no player ended at all (see `mpv_ipc`).
 fn stand_a_video(width: u32, height: u32) -> Option<MediaData> {
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
     let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let mut media = create_loading_media(width, height);
     media.media_type = MediaType::Video;
@@ -76,4 +81,6 @@ fn a_kill_roads_own_player_is_not_a_failed_file() {
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = previous_media;
     }
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
 }

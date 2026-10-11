@@ -449,6 +449,19 @@ pub(super) fn video_loop_tick(playing: bool) -> bool {
             content,
             seconds,
         } => {
+            // **mpv takes the wrap as a command rather than as a relaunch.** The film goes back to
+            // the second the rewind names down the pipe the player already listens on, so the
+            // process is the one that has been playing all along and no window comes down for it
+            // (see `mpv_ipc`). The clock is rebased onto that second rather than taken out, so the
+            // pass that follows is measured from where it actually began.
+            if video_route(&path) == VideoRoute::Mpv
+                && mpv_ipc::seek_absolute(loop_.pid, seconds)
+            {
+                loop_.from = seconds;
+                loop_.at = Instant::now();
+                return true;
+            }
+
             *slot = None;
             drop(slot);
 

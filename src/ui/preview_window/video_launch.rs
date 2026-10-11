@@ -169,6 +169,7 @@ pub(super) fn mpv_args(
     hw_accel: bool,
     subtitles: bool,
     input_conf: Option<&Path>,
+    ipc: &str,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         // Read before the configuration and before any file the user has: the app's own command
@@ -249,6 +250,12 @@ pub(super) fn mpv_args(
             args.push(format!("--af=lavfi=[volume={gain:.4}]"));
         }
     }
+
+    // The pipe this player is told things on while it runs, which is the whole of what makes the
+    // mpv route not FFmpeg's: a volume, a seek, a pause and a track step are written down it rather
+    // than paid for with a player ended and begun again (see `mpv_ipc`). The name is unique to this
+    // launch, so two previews can never be told things on one pipe.
+    args.push(format!(r#"--input-ipc-server=\\.\pipe\{ipc}"#));
 
     args
 }
@@ -578,6 +585,11 @@ mod tests {
     use super::*;
     use super::super::subtitle_files::VideoSubtitlesSetting;
     use std::path::PathBuf;
+
+    /// The pipe name every `mpv_args` call below is handed, and the flag that name becomes — the
+    /// one flag the mpv route has that FFmpeg's player has never been given.
+    const IPC: &str = "test-pipe";
+    const IPC_ARG: &str = r"--input-ipc-server=\\.\pipe\test-pipe";
 
     /// A setting that is on asks for the devices worth trying, and one that is off asks for none.
     #[test]
@@ -1284,6 +1296,7 @@ mod tests {
                 true,
                 true,
                 Some(Path::new("scratch/mpv-input.conf")),
+                IPC,
             ),
             [
                 "films/episode.mkv",
@@ -1298,6 +1311,7 @@ mod tests {
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
                 "--volume=80",
+                IPC_ARG,
             ],
             "the film, then the configuration off, the mouse off, the chrome off, the box, the\
              two Direct3D options and the level — `--vo` is deliberately not passed and no\
@@ -1323,6 +1337,7 @@ mod tests {
                 true,
                 false,
                 None,
+                IPC,
             ),
             [
                 "a.mkv",
@@ -1336,6 +1351,7 @@ mod tests {
                 "--sub-auto=no",
                 "--keep-open=yes",
                 "--volume=100",
+                IPC_ARG,
             ],
             "with the row off nothing is shown and nothing is looked for: `--sid=no` selects no \
              track at all, embedded or beside the film, and `--sub-auto=no` keeps the sidecar \
@@ -1360,6 +1376,7 @@ mod tests {
                 false,
                 true,
                 None,
+                IPC,
             ),
             [
                 "a.mkv",
@@ -1372,6 +1389,7 @@ mod tests {
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
                 "--volume=50",
+                IPC_ARG,
             ],
             "the switch off is the whole of the answer: mpv is asked for no device at all rather \
              than for one this app measured, and every other flag is the one the default launch \
@@ -1396,6 +1414,7 @@ mod tests {
                 true,
                 true,
                 None,
+                IPC,
             ),
             [
                 "a.mkv",
@@ -1408,6 +1427,7 @@ mod tests {
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
                 "--aid=no",
+                IPC_ARG,
             ],
             "a muted film is a film with its audio turned off, which saves the decoder the whole \
              soundtrack, and a gain for a soundtrack nothing will play is a filter nothing asked \
@@ -1441,6 +1461,7 @@ mod tests {
                 true,
                 true,
                 None,
+                IPC,
             ),
             [
                 "a.mkv",
@@ -1454,6 +1475,7 @@ mod tests {
                 "--keep-open=yes",
                 "--volume=100",
                 "--af=lavfi=[volume=2.5000]",
+                IPC_ARG,
             ],
             "the gain is the filter ffplay is given the same gain through, and `--volume=100` \
              stands beside it as the level the two multiply with"
@@ -1476,6 +1498,7 @@ mod tests {
                 true,
                 true,
                 None,
+                IPC,
             ),
             [
                 "a.mkv",
@@ -1489,6 +1512,7 @@ mod tests {
                 "--keep-open=yes",
                 "--start=12.500",
                 "--volume=100",
+                IPC_ARG,
             ],
             "the second a pinned bar was dragged to is what the relaunch asks mpv for, at the same \
              precision the ffplay route writes it in"
@@ -1517,6 +1541,7 @@ mod tests {
                     true,
                     true,
                     None,
+                    IPC,
                 ),
                 [
                     "a.mkv",
@@ -1529,6 +1554,7 @@ mod tests {
                     "--sub-auto=fuzzy",
                     "--keep-open=yes",
                     "--volume=100",
+                    IPC_ARG,
                 ],
                 "a box {which} has a negative coordinate, so the size is passed without a \
                  position rather than with one mpv reads the other way round"
@@ -1550,6 +1576,7 @@ mod tests {
                 true,
                 true,
                 None,
+                IPC,
             )
             .contains(&"--geometry=640x360+0+0".to_string()),
             "a position both of whose coordinates are non-negative is passed as it stands"
@@ -1578,6 +1605,7 @@ mod tests {
                 true,
                 true,
                 None,
+                IPC,
             ),
             [
                 "a.mkv",
@@ -1590,6 +1618,7 @@ mod tests {
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
                 "--volume=100",
+                IPC_ARG,
             ],
             "no file is no `--input-conf`, and mpv's own bindings stand rather than its bindings \
              minus every key — the two flags are dropped together or not at all"

@@ -406,6 +406,11 @@ fn start_mpv_video_playback(
         .unwrap_or_default();
     let program = video_hw::mpv_program(&chosen, &codecs::mpv_installs())?;
 
+    // The pipe this player is told things on while it runs, named before the process exists and
+    // remembered against it once it does, so that a kill drops the name with the player (see
+    // `mpv_ipc`).
+    let ipc = mpv_ipc::next_pipe_name();
+
     let mut command = engine_processes::hidden_command(program);
     command
         .args(video_launch::mpv_args(
@@ -420,11 +425,13 @@ fn start_mpv_video_playback(
             video_hw_accel_wanted(),
             subtitles_wanted(),
             video_launch::mpv_input_conf(),
+            &ipc,
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let child = spawn_player(&mut command)?;
+    mpv_ipc::remember_pipe(child.id(), &ipc);
 
     // **mpv picks its own tracks, so "was it asked for subtitles" is the honest answer here** —
     // and it is the answer the take-up is asked for: a pin adopts a hover's player rather than
@@ -645,6 +652,9 @@ pub(super) fn stop_video_playback(media: &mut MediaData) {
 /// session is the preview thread's alone (see `stop_video_playback` and `hide_preview`).
 pub(super) fn kill_player_process(media: &mut MediaData) {
     if let Some(ref mut process) = media.video_process {
+        // The pipe a player was told things on goes with the player: nothing is left behind for a
+        // command to reach once the process is ended (see `mpv_ipc`).
+        mpv_ipc::forget_pipe(process.id());
         // Kill only, never wait: a process stuck in kernel I/O would block the
         // caller (possibly the Explorer hook thread) indefinitely. The leftover
         // process checks confirm death and clear VIDEO_PID.

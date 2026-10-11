@@ -685,10 +685,18 @@ pub(super) fn set_pin_volume(level: u32) {
     let immediate = match current_media_type() {
         Some(MediaType::NativeVideo) => true,
         Some(MediaType::Audio) => audio_preview_level_is_owed_to_the_engine(),
+        Some(MediaType::Video) => mpv_takes_a_level_as_it_moves(),
         _ => false,
     };
     if immediate {
-        video_player::set_volume(level);
+        if current_media_type() == Some(MediaType::Video) {
+            // mpv is told the level as the knob moves, which is the whole of what the mpv route is
+            // for here: FFmpeg's player would have to be ended and begun again at it instead (see
+            // `settle_pin_volume`).
+            mpv_ipc::set_volume(VIDEO_PID.load(Ordering::SeqCst), level);
+        } else {
+            video_player::set_volume(level);
+        }
         with_pin(|pin| pin.volume.playing_at = level);
     }
 
@@ -699,6 +707,15 @@ pub(super) fn set_pin_volume(level: u32) {
     // it. A video's level is drawn in the strip, which the repaint does reach (see
     // `pin_audio_hover_refresh`).
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+}
+
+/// Whether the film on screen is mpv's, the one player here that takes a level while it runs.
+///
+/// It is asked of the route rather than of a player's liveness: a level turned with no player up is
+/// written down for the player that begins next either way, and it is the route that says whether
+/// that player can be told a level live at all (see `set_pin_volume` and `mpv_ipc`).
+fn mpv_takes_a_level_as_it_moves() -> bool {
+    pinned_media_owner().is_some_and(|(path, _)| video_route(&path) == VideoRoute::Mpv)
 }
 
 /// Write a pin's level into the configuration where the setting beside it says the level is
@@ -865,6 +882,11 @@ pub(super) fn settle_pin_volume() {
     match current_media_type() {
         Some(MediaType::NativeVideo) => {
             video_player::set_volume(volume.level);
+            with_pin(|pin| pin.volume.playing_at = pin.volume.level);
+        }
+        Some(MediaType::Video) if video_route(&path) == VideoRoute::Mpv => {
+            // mpv was told the level as the knob moved (see `set_pin_volume`), so there is no player
+            // to replace here: the claim is written and the film plays on.
             with_pin(|pin| pin.volume.playing_at = pin.volume.level);
         }
         Some(MediaType::Video) => match pin_level_settled_by(
