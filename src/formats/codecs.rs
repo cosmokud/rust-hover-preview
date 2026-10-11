@@ -23,6 +23,7 @@
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use windows::core::{IUnknown, Interface, GUID};
@@ -59,7 +60,7 @@ const FFMPEG_NAME: &str = "ffmpeg.exe";
 
 /// The player mpv is recognized by, and the whole of what is looked for: mpv is an install of
 /// its own rather than a part of FFmpeg's, so nothing else of its own is asked the way `ffplay`
-/// asks for the whole of FFmpeg's (see `find_mpv`).
+/// asks for the whole of FFmpeg's (see `mpv_installs`).
 const MPV_NAME: &str = "mpv.exe";
 
 /// The WinRT class the Windows PDF engine is activated through. What is asked of it is
@@ -425,12 +426,12 @@ pub fn ffplay_available() -> bool {
     answer
 }
 
-/// Whether `mpv.exe` is on this machine, and so whether a video preview is played by mpv rather
-/// than by the engine Windows has.
+/// Whether `mpv.exe` is anywhere this machine and this app know to look, and so whether a video
+/// preview is played by mpv rather than by the engine Windows has.
 ///
 /// The answer is kept between hovers the way FFmpeg's player's is, and for the same reason: it
-/// is asked for every video a pointer lands on, and the `PATH` is a list of directories rather
-/// than a question. [`refresh`] is what asks it again.
+/// is asked for every video a pointer lands on, and the places it is asked about are a list of
+/// directories rather than a question. [`refresh`] is what asks it again.
 pub fn mpv_available() -> bool {
     if let Ok(cached) = MPV.lock() {
         if let Some(answer) = *cached {
@@ -438,7 +439,7 @@ pub fn mpv_available() -> bool {
         }
     }
 
-    let answer = find_mpv().is_some();
+    let answer = !mpv_installs().is_empty();
 
     if let Ok(mut cached) = MPV.lock() {
         *cached = Some(answer);
@@ -549,13 +550,92 @@ fn find_ffplay() -> Option<PathBuf> {
     find_program(FFPLAY_NAME)
 }
 
-/// Where `mpv.exe` is, asked the way `Command::new("mpv")` asks it: the folder this app runs
-/// from first, then every folder on the `PATH`.
+/// Every `mpv.exe` this machine has where this app knows to look, in the order it is looked for.
 ///
-/// Spawning the player to ask whether it exists would be a program started to answer a
-/// question about a program, and the `PATH` already holds the answer.
-fn find_mpv() -> Option<PathBuf> {
-    find_program(MPV_NAME)
+/// The installers put `mpv.exe` where neither `Command::new` nor a `PATH` lookup finds it: winget
+/// writes `%ProgramFiles%\MPV Player` and SVP 4 ships its own under `%ProgramFiles(x86)%`, so the
+/// two folders are looked in after the two places that already worked. Both roots come from the
+/// environment rather than from a literal drive, and nothing is walked, read from the registry,
+/// or spawned: the installers put the player at a known depth, and starting a program to ask
+/// whether a program exists would answer the question with a program (see `find_program`).
+pub fn mpv_installs() -> Vec<PathBuf> {
+    let own_folder = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let path = std::env::var_os("PATH");
+    let program_files = std::env::var_os("ProgramFiles");
+    let program_files_x86 = std::env::var_os("ProgramFiles(x86)");
+
+    mpv_installs_in(
+        mpv_folders(
+            own_folder.as_deref(),
+            path.as_deref(),
+            program_files.as_deref(),
+            program_files_x86.as_deref(),
+        ),
+        Path::is_file,
+    )
+}
+
+/// The folders [`mpv_installs`] looks in, in the order it looks: beside the app first, then every
+/// folder on the `PATH`, then the two folders the installers write to.
+///
+/// Beside the app and the `PATH` keep the order `find_program` already used, so a machine where
+/// mpv was already found keeps running the same file. The two install folders are the only ones
+/// named after an install rather than after a search path, and even they are joined onto
+/// whatever their environment root holds.
+fn mpv_folders(
+    own_folder: Option<&Path>,
+    path: Option<&OsStr>,
+    program_files: Option<&OsStr>,
+    program_files_x86: Option<&OsStr>,
+) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = Vec::new();
+
+    if let Some(own_folder) = own_folder {
+        folders.push(own_folder.to_path_buf());
+    }
+    if let Some(path) = path {
+        folders.extend(std::env::split_paths(path));
+    }
+
+    if let Some(root) = program_files {
+        folders.push(Path::new(root).join(r"MPV Player"));
+    }
+    if let Some(root) = program_files_x86 {
+        folders.push(Path::new(root).join(r"SVP 4\mpv64"));
+    }
+
+    folders
+}
+
+/// The installs among a list of folders: each folder's `mpv.exe`, and only where that is really a
+/// file. A folder that names a player it does not hold is not an install.
+fn mpv_installs_in(
+    folders: impl IntoIterator<Item = PathBuf>,
+    exists: impl Fn(&Path) -> bool,
+) -> Vec<PathBuf> {
+    folders
+        .into_iter()
+        .map(|folder| folder.join(MPV_NAME))
+        .filter(|program| exists(program))
+        .collect()
+}
+
+/// Which `mpv.exe` to run: the chosen one while it is usable, and the first install otherwise.
+///
+/// "Usable" is "still a file" rather than "still one of the installs", because the choice is a
+/// path the user set and the installs are only this app's defaults: an mpv they point at that is
+/// not one of them — a portable copy, a build of their own — is still the one to run, and asking
+/// it to be in the list would silently drop their choice. The list is what it falls back to.
+///
+/// Nothing reads it yet: it is the seam the tray's MPV submenu chooses through.
+#[allow(dead_code)]
+pub fn resolve_mpv(chosen: Option<&Path>, installs: &[PathBuf]) -> Option<PathBuf> {
+    match chosen {
+        Some(chosen) if chosen.is_file() => Some(chosen.to_path_buf()),
+        _ => installs.first().cloned(),
+    }
 }
 
 /// Where a program of FFmpeg's is, by the name it is installed under: the same two places
@@ -873,5 +953,131 @@ fn probed_codec(key: &ProbedCodec) -> Option<bool> {
 fn remember_probed_codec(key: ProbedCodec, answer: bool) {
     if let Ok(mut probes) = PROBED_CODECS.lock() {
         probes.insert(key, answer);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The order is the promise: beside the app, then every folder on the `PATH`, then the two
+    /// install folders — each contributing exactly its own `mpv.exe`. Beside the app and the
+    /// `PATH` come first so a machine where mpv was already found runs the same file.
+    #[test]
+    fn the_candidates_are_beside_the_app_then_the_path_then_the_installs() {
+        let candidates = mpv_installs_in(
+            mpv_folders(
+                Some(Path::new("beside-the-app")),
+                Some(OsStr::new(r"first-path-folder;second-path-folder")),
+                Some(OsStr::new("stand-in-program-files")),
+                Some(OsStr::new("stand-in-program-files-x86")),
+            ),
+            |_| true,
+        );
+
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("beside-the-app").join(MPV_NAME),
+                PathBuf::from("first-path-folder").join(MPV_NAME),
+                PathBuf::from("second-path-folder").join(MPV_NAME),
+                PathBuf::from("stand-in-program-files")
+                    .join(r"MPV Player")
+                    .join(MPV_NAME),
+                PathBuf::from("stand-in-program-files-x86")
+                    .join(r"SVP 4\mpv64")
+                    .join(MPV_NAME),
+            ],
+            "the candidates are built in the promised order"
+        );
+    }
+
+    /// The install folders follow whichever roots the environment gives, with only the install's
+    /// own folder joined on: a machine whose `Program Files` is somewhere unusual is found too.
+    #[test]
+    fn the_install_folders_follow_the_environment_they_are_given() {
+        let folders = mpv_folders(
+            None,
+            None,
+            Some(OsStr::new("a-root")),
+            Some(OsStr::new("b-root")),
+        );
+
+        assert_eq!(
+            folders,
+            vec![
+                PathBuf::from("a-root").join(r"MPV Player"),
+                PathBuf::from("b-root").join(r"SVP 4\mpv64"),
+            ],
+            "the install's own folder is joined onto the environment's root"
+        );
+    }
+
+    /// Whichever folder a candidate comes from, only the ones really holding `mpv.exe` are
+    /// installs: the question is asked of each candidate, and a folder that names a player it does
+    /// not hold is left out.
+    #[test]
+    fn only_folders_that_really_hold_mpv_are_installs() {
+        let folders = [
+            PathBuf::from("empty"),
+            PathBuf::from("has-mpv"),
+            PathBuf::from("also-empty"),
+        ];
+
+        let installs =
+            mpv_installs_in(folders, |program| program.parent() == Some(Path::new("has-mpv")));
+
+        assert_eq!(
+            installs,
+            vec![PathBuf::from("has-mpv").join(MPV_NAME)],
+            "only the folder that holds mpv counts"
+        );
+    }
+
+    /// The choice is kept while the file it names is still there, whether or not it is one of this
+    /// app's installs: the user's path is the one to run. This test's own executable stands in for
+    /// a chosen mpv so the answer does not depend on mpv being on the machine.
+    #[test]
+    fn a_chosen_that_is_still_a_file_is_the_one_used() {
+        let chosen = std::env::current_exe().expect("this test's own executable");
+        let installs = vec![PathBuf::from("an-install")];
+
+        assert_eq!(
+            resolve_mpv(Some(&chosen), &installs),
+            Some(chosen),
+            "a chosen path that is still a file wins over the installs"
+        );
+    }
+
+    /// A chosen path that has gone is not fatal: the first install in the order is used instead.
+    #[test]
+    fn a_chosen_that_is_gone_falls_back_to_the_first_install() {
+        let chosen = std::env::temp_dir().join(format!(
+            "rust-hover-preview-mpv-that-is-gone-{}",
+            std::process::id()
+        ));
+        let installs = vec![PathBuf::from("first"), PathBuf::from("second")];
+
+        assert!(!chosen.is_file(), "the chosen path is one that is not there");
+        assert_eq!(
+            resolve_mpv(Some(&chosen), &installs),
+            Some(PathBuf::from("first")),
+            "the first install is used where the chosen path has gone"
+        );
+    }
+
+    /// With nothing chosen the first install is used, and with nothing installed there is nothing
+    /// to run — whether or not a path was chosen.
+    #[test]
+    fn no_choice_uses_the_first_install_and_no_installs_use_nothing() {
+        let installs = vec![PathBuf::from("first"), PathBuf::from("second")];
+
+        assert_eq!(resolve_mpv(None, &installs), Some(PathBuf::from("first")));
+        assert_eq!(resolve_mpv(None, &[]), None);
+        assert_eq!(
+            resolve_mpv(Some(Path::new("a-path-that-is-not-there")), &[]),
+            None,
+            "a chosen path that has gone with nothing installed is nothing to run"
+        );
     }
 }

@@ -179,6 +179,9 @@ fn a_pinned_film_steps_its_subtitles_on_the_ffplay_route_and_not_on_the_mpv_one(
     clear_restart_count();
 
     // FFmpeg's player is told a track by being begun again with one, so the key is a relaunch.
+    // mpv is stood out first, because with mpv installed the default engine would pick it and the
+    // key would answer the mpv route before this test asked about the FFmpeg one (see `stand_mpv_in`).
+    stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
     step_pinned_subtitle();
     assert_eq!(

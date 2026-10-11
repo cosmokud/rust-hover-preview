@@ -558,6 +558,12 @@ fn a_drag_after_a_file_step_strands_no_cover_and_no_park() {
     let previous_pin = take_pin_for_a_test();
     let previous_media = stand_video_media();
 
+    // FFmpeg's route rather than the machine's: with mpv installed the default engine would pick
+    // it, and this cover and the relaunch behind it are the two readings FFmpeg's player answers
+    // (see `stand_mpv_in`). Put back before the restore below.
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+
     let content = (100, 80, 420, 320);
     stand_pin(Some(wide_banded_video_pin(content, 30.0)));
     forget_pin_park_swap();
@@ -656,6 +662,8 @@ fn a_drag_after_a_file_step_strands_no_cover_and_no_park() {
         "so the walk still moves a file along"
     );
 
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
     restore(previous_pin, previous_pid, previous_media);
 }
 
@@ -1122,7 +1130,9 @@ fn a_step_onto_a_film_no_player_can_play_raises_no_cover() {
 
     // The machine's own answer cannot be asked for here: the arm is the one a machine with
     // FFmpeg never takes, so both answers are stood in rather than one of them read off
-    // whatever machine this is running on.
+    // whatever machine this is running on. mpv is stood out for the same reason: with mpv
+    // installed the default engine would pick it and answer a different way (see `stand_mpv_in`).
+    stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
     assert!(
         pinned_player_is_coming(MediaType::Video, film),
@@ -1142,7 +1152,7 @@ fn a_step_onto_a_film_no_player_can_play_raises_no_cover() {
         pinned_player_is_coming(MediaType::Video, film),
         "a film on a machine with mpv is a player coming too, and mpv is the player Best prefers"
     );
-    stand_mpv_in(None);
+    stand_mpv_in(Some(false));
 
     assert!(
         !pinned_player_is_coming(MediaType::StaticImage, film),
@@ -1195,6 +1205,7 @@ fn a_step_onto_a_film_no_player_can_play_raises_no_cover() {
     );
 
     stand_ffplay_in(None);
+    stand_mpv_in(None);
     restore(previous_pin, previous_pid, previous_media);
 }
 
