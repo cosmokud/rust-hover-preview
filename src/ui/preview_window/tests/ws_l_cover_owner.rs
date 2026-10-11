@@ -66,7 +66,13 @@ fn wide_banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
 }
 
 /// A video behind the pin, as a covered press finds it.
+/// A video behind the pin, on FFmpeg's player's route rather than the machine's: with mpv
+/// installed the default engine would pick mpv, and every test here is about the cover FFmpeg's
+/// player's kill road raises — the mpv route moves the window it has and begins nothing again (see
+/// `mpv_ipc`). `restore` puts the stands back.
 fn stand_video_media() -> Option<MediaData> {
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
     let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
@@ -87,6 +93,8 @@ fn restore(
     previous_pid: u32,
     previous_media: Option<MediaData>,
 ) {
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
     take_gesture_snapshot();
     forget_pin_park_swap();
     forget_video_frame();

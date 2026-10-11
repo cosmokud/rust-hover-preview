@@ -1190,6 +1190,12 @@ pub(super) fn relayout_pinned_media(
                 Some(_) if covered => {
                     relaunch_gesture_end_at(content, None);
                 }
+                Some((path, _)) if video_route(&path) == VideoRoute::Mpv => {
+                    // **mpv rescales itself when its window is given a new box**, and the tick
+                    // re-asserts that box every two hundred milliseconds (see
+                    // `ensure_video_window_topmost`), so a resize is a move and not a relaunch:
+                    // nothing is begun again and the film plays on through the settle.
+                }
                 Some((path, _)) => {
                     // And with no press behind it the hold is the pin's own: what the transport says
                     // the film is doing now, which for a take-up is the transport that take-up built

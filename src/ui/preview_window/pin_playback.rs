@@ -185,6 +185,11 @@ pub(super) fn restart_pinned_player(
         }
     }
 
+    // The player being parked keeps nothing back: the pipe a command would go down is the
+    // replacement's once one is named, and the parked player's name is not reusable (see
+    // `mpv_ipc`).
+    mpv_ipc::forget_pipe(replaced);
+
     let process = start_video_playback(
         path, content.0, content.1, width, height, seconds, volume, subtitle,
     );
@@ -337,9 +342,18 @@ pub(super) fn gesture_press_freeze() -> bool {
         return false;
     }
 
-    let Some((_, content, transport, volume)) = pinned_playback_state() else {
+    let Some((path, content, transport, volume)) = pinned_playback_state() else {
         return false;
     };
+
+    // mpv is told what to do while it runs, so nothing here ends its player: a volume, a seek and
+    // a resize are commands written down its pipe rather than a player killed and begun again (see
+    // `mpv_ipc`). The kill road below — a snapshot, a killed player and one relaunch at the end —
+    // is FFmpeg's player's alone, whose player reports nothing and can be told nothing.
+    if video_route(&path) == VideoRoute::Mpv {
+        return false;
+    }
+
     let Some(seconds) = pin_playhead(&transport) else {
         return false;
     };
@@ -474,7 +488,21 @@ pub(super) fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, second
         // down, so a seek taken while it is held has to move that second with it — which for
         // FFmpeg's player is the same statement as telling the player it is to be begun at that
         // second held (see `PinTransport::begun` and `settle_pending_hold`).
-        Some(MediaType::Video) => restart_pinned_player(path, content, seconds, pinned_is_held()),
+        Some(MediaType::Video) => {
+            if video_route(path) == VideoRoute::Mpv {
+                // mpv is taken to the second while it runs: the player stays and the bar's own
+                // clock is rebased onto where it was taken rather than a player begun at that
+                // second. A held file stays held, because mpv's own seek keeps its pause (see
+                // `mpv_ipc`).
+                mpv_ipc::seek_absolute(VIDEO_PID.load(Ordering::SeqCst), seconds);
+                update_pin_transport(|transport| {
+                    transport.sought(seconds);
+                    transport.started = Some((Instant::now(), seconds));
+                });
+            } else {
+                restart_pinned_player(path, content, seconds, pinned_is_held());
+            }
+        }
         _ => {}
     }
 }
@@ -528,17 +556,29 @@ pub(super) fn toggle_pinned_playback(
             });
         }
         Some(MediaType::Video) => {
+            // mpv is told to hold and to go over its own pipe; FFmpeg's player is posted a key to
+            // its own window. Both leave a player that keeps running and reports nothing, so both
+            // are a hold rather than a relaunch (see `mpv_ipc` and `video_key_pause`).
+            let mpv = video_route(path) == VideoRoute::Mpv;
+            let hold_the_player = |paused: bool| {
+                if mpv {
+                    mpv_ipc::set_paused(VIDEO_PID.load(Ordering::SeqCst), paused)
+                } else {
+                    video_key_pause()
+                }
+            };
+
             if transport.pending_hold {
                 // The player is playing and no key has reached it, so there is nothing to let go
                 // of: what this press does is stop the hold from ever being sent.
                 update_pin_transport(|state| state.released(transport.paused_at.unwrap_or(0.0)));
             } else if playing {
-                if video_key_pause() {
+                if hold_the_player(true) {
                     update_pin_transport(|state| state.held(playhead));
                 } else {
                     hold_pinned_player_without_a_key(playhead);
                 }
-            } else if video_key_pause() {
+            } else if hold_the_player(false) {
                 update_pin_transport(|state| state.released(transport.paused_at.unwrap_or(0.0)));
             } else {
                 // A player begun to resume a file is not one to be told to hold, or the press
@@ -601,7 +641,12 @@ pub(super) fn step_pinned_subtitle() {
     // is the honest answer, and it is doing nothing rather than a greyed control because the pin's
     // chrome has no subtitle row to grey: this key is the only place the choice is offered (see
     // `pinned_key_command`).
+    // **mpv picks and draws its own tracks, and `cycle sub` is its own word for walking them.**
+    // There is no number here for this app to write down — nothing reports back which track mpv
+    // chose — but the pipe it listens on is the whole of what the step needs, so the step is a
+    // command rather than a player begun again (see `mpv_ipc`).
     if video_route(&path) == VideoRoute::Mpv {
+        mpv_ipc::cycle_subtitles(VIDEO_PID.load(Ordering::SeqCst));
         return;
     }
 

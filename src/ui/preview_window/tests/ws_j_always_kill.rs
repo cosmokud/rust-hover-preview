@@ -37,7 +37,13 @@ fn paused_pin(content: ScreenRegion, at: f64) -> PinnedPreview {
 
 /// A video behind the pin, as the press finds it: the kind the kill road
 /// is about. Taken away and handed back by each test that stands one.
+/// A video behind the pin, on FFmpeg's player's route rather than the machine's: with mpv
+/// installed the default engine would pick mpv, and every test in this file is about the kill road
+/// FFmpeg's player takes — the mpv route answers the same press with a command written down its
+/// pipe and no player ended at all (see `mpv_ipc`). `restore` puts the stands back.
 fn stand_video_media() -> Option<MediaData> {
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
     let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::Video;
