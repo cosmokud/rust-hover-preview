@@ -106,6 +106,25 @@ pub(super) struct MediaData {
 /// same hole at lower contrast, and because the point of the band while a drag lasts is to stop
 /// being a picture at all.
 pub(super) fn fill_band_opaque(out: &mut [u8], width: u32, origin_y: u32, height: u32) {
+    fill_band(out, width, origin_y, height, [0, 0, 0, 255]);
+}
+
+/// Paint a band of a layered window the least a pixel can be and still be this window's.
+///
+/// A transparent band is a band Windows hands to whatever stands behind the window, which is the
+/// whole point of one where a player of this app's draws the film and the one thing that may not
+/// be true of a band whose film the pin is carried by (see `film_band_is_hit_testable`). Closing
+/// the hole costs the smallest coverage there is — one part in 255, premultiplied, which is a
+/// white of one part in 255 — and that is a change no eye can see: what a compositor puts on
+/// screen for a pixel of this band is `backdrop * 254/255 + 1`, which is the backdrop itself a
+/// step away from the darkest end of it and never further than that one step.
+pub(super) fn fill_band_hit_testable(out: &mut [u8], width: u32, origin_y: u32, height: u32) {
+    fill_band(out, width, origin_y, height, [1, 1, 1, 1]);
+}
+
+/// Paint the rows a band covers with one flat pixel in the premultiplied BGRA a layered window is
+/// read from, leaving every row outside the band exactly as it was.
+fn fill_band(out: &mut [u8], width: u32, origin_y: u32, height: u32, flat: [u8; 4]) {
     let stride = width as usize * 4;
     if stride == 0 {
         return;
@@ -119,7 +138,7 @@ pub(super) fn fill_band_opaque(out: &mut [u8], width: u32, origin_y: u32, height
             return;
         };
         for pixel in pixels.chunks_exact_mut(4) {
-            pixel.copy_from_slice(&[0, 0, 0, 255]);
+            pixel.copy_from_slice(&flat);
         }
     }
 }

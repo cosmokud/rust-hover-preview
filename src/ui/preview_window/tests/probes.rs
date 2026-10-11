@@ -939,3 +939,225 @@ fn only_an_mpv_players_window_is_carried_under_the_pins_chrome() {
     note_player_process(previous_pid, previous_image);
     stand_pin(previous_pin);
 }
+
+/// Whether a window carries the extended style that makes a press on it fall through to whatever is
+/// behind it, read back off the machine rather than remembered from what was asked for.
+fn is_click_through(hwnd: HWND) -> bool {
+    unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT.0 as isize != 0 }
+}
+
+/// A press on the film of a pin whose player is mpv is a move of the pin, from the pin's own box.
+///
+/// This is the far end of the band such a pin now wins the point of: what a press that arrives
+/// there becomes. It is the road every other pin's body already takes — a media press is the pin's
+/// by `pinned_content_is_the_pins`, and the caption, the buttons, the edges and the corners are
+/// asked about first and win where they are drawn — so the film is a handle rather than a gesture
+/// of its own. Nothing is parked and nothing is held, because mpv's window *is* the film and is
+/// carried rather than put away (see `gesture_press_freeze`).
+#[test]
+fn a_press_on_the_film_of_an_mpv_pin_moves_the_pin_from_its_own_box() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let content = (100, 80, 420, 320);
+
+    // The mpv route with a pin's own file: the press leaves the film playing and the drag is a move
+    // of the window it already has (see `stand_mpv_in`).
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = PathBuf::from("a-film-mpv-draws.mkv");
+    let caption = pin.caption;
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    // This app writes the player down as it begins one, and nothing here begins one (see
+    // `note_player_process`).
+    note_player_process(0, MPV_IMAGE_NAME);
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+
+    // A point inside the picture rather than on the strip above it: the caption is a handle of its
+    // own, and the press this test is about is the one the band now lets through.
+    let (x, y) = (content.0 + 10, content.1 + caption + 10);
+    let hwnd = HWND(0x1000 as *mut _);
+    assert!(
+        unsafe { pinned_press(hwnd, x, y) },
+        "a press on the picture is the pin's to act on, and mpv's film is the picture"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.pressed)),
+        None,
+        "and it is the picture's own road rather than the caption's: a press below the strip arms \
+         no button, whatever is drawn there"
+    );
+
+    // The road that press takes, begun from a box a test can name: `pinned_press` answers a press
+    // through `Win32PinWindow`, which reads the machine for the real pointer and the real window,
+    // so what the drag reports is asked here instead.
+    let window = a_window_at(content);
+    begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+
+    let drag = pin_state()
+        .and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging))
+        .expect("the press began the pin's own drag");
+    assert!(
+        matches!(drag.action, PinDragAction::Move),
+        "and what it began is a move of the window: no resume, no click-to-pause, nothing else"
+    );
+    assert_eq!(
+        drag.window, content,
+        "from the box the pin is standing at, which is the box the drag reports and the box the \
+         window and the film are carried from"
+    );
+    assert_eq!(
+        pinned_content(),
+        Some(content),
+        "and the band the press landed in is that same box"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "mpv is left drawing: a gesture writes commands down its pipe rather than ending its player"
+    );
+
+    finish_pin_drag(hwnd, &window);
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// The window a player draws in keeps the style that makes a press fall through it, through every
+/// road this app takes to that window.
+///
+/// That bit is what lets a press on the film past the player and into the pin (see
+/// `film_band_is_hit_testable`), and four roads write that window's extended style: the monitor's
+/// re-assert, a tick, a drag's own step and a re-assert again. Each is asked here to keep what it
+/// found rather than to re-decide it — none of them may take the bit away, and the player is
+/// created without it, which is what makes the four assertions mean anything.
+#[test]
+fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re_assert() {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");
+
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let content = (100, 80, 420, 320);
+    let player = unsafe { stand_a_player_window(content) };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+    note_player_process(0, MPV_IMAGE_NAME);
+
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = PathBuf::from("a-film-whose-window-is-clicked-through.mkv");
+    stand_pin(Some(pin));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+
+    // The list this app asserts on a player's window carries the bit, which is what makes the roads
+    // below unable to be the road that loses it.
+    assert!(
+        player_ex_style(0) & WS_EX_TRANSPARENT.0 as isize != 0,
+        "the style this app puts on a player's window is click-through among the rest"
+    );
+
+    // As a player creates its window, and this app is the only thing that ever puts the bit on.
+    unsafe { SetWindowLongPtrW(player, GWL_EXSTYLE, WS_EX_TOOLWINDOW.0 as isize) };
+    assert!(
+        !is_click_through(player),
+        "a player's window is created without the bit, so what is asserted below is put there by \
+         this app and not by the machine"
+    );
+
+    // The monitor's own road.
+    unsafe { apply_noactivate_to_hwnd(player) };
+    assert!(
+        is_click_through(player),
+        "the monitor's re-assert is what puts the click-through style on"
+    );
+
+    // A tick.
+    ensure_video_window_topmost(
+        content.0,
+        content.1,
+        content.2 - content.0,
+        content.3 - content.1,
+    );
+    assert!(
+        is_click_through(player),
+        "a tick re-asserts the three bits it knows about and leaves the rest of the style alone"
+    );
+
+    // A drag, and one step of it.
+    let hwnd = HWND(0x1000 as *mut _);
+    let window = a_window_at(content);
+    begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
+    assert!(pin_is_dragging(), "the hand is carrying the window");
+    send_pointer_to(content.0 + 20, content.1 + 10);
+    std::thread::sleep(Duration::from_millis(25));
+
+    // The stand-in is re-asserted here rather than left standing across the pair, because the
+    // record of a player's window is the whole process's and not this test's (see
+    // `ensure_noactivate_monitor`).
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+
+    unsafe { apply_pin_drag(hwnd) };
+    assert!(
+        is_click_through(player),
+        "and a drag's step carries the player's window without taking its click-through away, \
+         which is what the band's press has to reach the pin through"
+    );
+
+    // And a re-assert over what the drag left.
+    unsafe { apply_noactivate_to_hwnd(player) };
+    assert!(
+        is_click_through(player),
+        "a re-assert over a style this app last wrote keeps it"
+    );
+
+    finish_pin_drag(hwnd, &window);
+
+    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
