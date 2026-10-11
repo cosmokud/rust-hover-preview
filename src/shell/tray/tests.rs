@@ -1423,6 +1423,45 @@ fn the_video_engine_rows_are_ids_of_their_own() {
     );
 }
 
+/// The `Subtitles` row is named for the engine that will play: mpv shows a film's own tracks and
+/// the sidecar beside it itself, so a pick that reaches mpv does not carry one cost for all three
+/// routes. The pick is the configured one rather than the file being hovered — the tray is never
+/// handed a file — so the row reads the same under mpv whatever a hover would have played.
+#[test]
+fn the_subtitles_row_is_named_for_the_engine_that_plays() {
+    assert_eq!(
+        [
+            (VideoEngine::Mpv, false),
+            (VideoEngine::Mpv, true),
+            (VideoEngine::Best, true),
+        ]
+        .map(|(engine, mpv)| menus::subtitles_label(engine, mpv)),
+        [
+            "Subtitles (MPV)".to_string(),
+            "Subtitles (MPV)".to_string(),
+            "Subtitles (MPV)".to_string(),
+        ],
+        "the pick that reaches mpv is the row that names it"
+    );
+
+    assert_eq!(
+        [
+            (VideoEngine::Best, false),
+            (VideoEngine::Ffmpeg, true),
+            (VideoEngine::Native, true),
+            (VideoEngine::Hybrid, true),
+        ]
+        .map(|(engine, mpv)| menus::subtitles_label(engine, mpv)),
+        [
+            "Subtitles (Expensive)".to_string(),
+            "Subtitles (Expensive)".to_string(),
+            "Subtitles (Expensive)".to_string(),
+            "Subtitles (Expensive)".to_string(),
+        ],
+        "every other answer keeps the words the row has always carried"
+    );
+}
+
 /// The `MPV` row's submenu lists one item per install, in the order the machine found them, with
 /// the one in use marked — and lists nothing at all where this machine has one mpv or none, which
 /// is what leaves the row the row it is today.
