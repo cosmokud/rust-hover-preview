@@ -419,3 +419,99 @@ fn a_remembered_level_is_written_even_where_the_configuration_already_holds_it()
         "a page has no level to remember"
     );
 }
+
+/// A level moved on a pinned film: mpv is told it while it runs, and FFmpeg's player is begun
+/// again at it — the gate this ticket turns on, asserted on both routes.
+///
+/// FFmpeg's player takes a level only by being started at one, so the settle is a player replaced;
+/// mpv takes one as it plays, so the knob itself is the write and the settle begins nothing (see
+/// `set_pin_volume` and `settle_pin_volume`). The `Remember` rows are stood off so that a test
+/// never writes the configuration file a level would be remembered into.
+#[test]
+fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_again() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let mut levels = PinLevels::set(100, 50);
+    levels.remembering(false, false);
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+
+    let content = (100, 100, 420, 340);
+    let film = PathBuf::from("pin-live-volume-film.mkv");
+    let stand = |level: u32, playing_at: u32| {
+        let mut pin = overlay_pin(content, PinChrome::always());
+        pin.path = film.clone();
+        pin.transport.begun(30.0, true, false);
+        pin.transport.duration = Some(200.0);
+        pin.volume.level = level;
+        pin.volume.playing_at = playing_at;
+        stand_pin(Some(pin));
+    };
+
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+
+    // FFmpeg's player takes a level only by being begun again at one.
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand(70, 40);
+    set_pin_volume(70);
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "FFmpeg's player has no pipe, so nothing is written to one"
+    );
+    settle_pin_volume();
+    assert_eq!(
+        restart_count(),
+        1,
+        "a level moved on FFmpeg's player is a player begun again at the level, as it always was"
+    );
+
+    // mpv is told the level while it runs, and neither the knob nor the settle begins anything.
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    // The ffplay half above began a player, which wrote its own pid down: this half is about the
+    // player this app was holding before that.
+    VIDEO_PID.store(101, Ordering::SeqCst);
+    mpv_ipc::remember_pipe(101, "test-pipe");
+    stand(70, 40);
+    set_pin_volume(70);
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![r#"{"command":["set_property","volume",70],"async":true}"#.to_string()],
+        "the level is set on mpv's own property as the knob moves, which is the whole point of \
+         the route"
+    );
+    assert_eq!(restart_count(), 0, "and the knob begins nothing");
+
+    // The settle the knob's release makes is a no-op on mpv even where the claim is stale.
+    stand(70, 40);
+    settle_pin_volume();
+    assert_eq!(
+        restart_count(),
+        0,
+        "mpv takes a level while it runs, so its settle begins nothing again"
+    );
+
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}

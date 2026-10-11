@@ -794,3 +794,246 @@ fn a_device_is_named_only_when_a_probe_found_one_that_survives() {
              this machine's drivers and about one build of FFmpeg"
     );
 }
+
+/// A video behind the pin, as the call sites below read it: the kind this app plays with a player
+/// of its own, with the route stood in per test.
+fn stand_video_media() -> Option<MediaData> {
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+    previous
+}
+
+/// A pin standing on `film` at a box, playing from the thirtieth second — what a hover leaves
+/// behind when it is pinned. No player is begun here; every question below is about the command
+/// the mpv route sends or the relaunch FFmpeg's player takes.
+fn a_playing_pin(film: &Path, content: ScreenRegion) -> PinnedPreview {
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.path = film.to_path_buf();
+    pin.transport.begun(30.0, true, false);
+    pin.transport.duration = Some(200.0);
+    pin.transport.subtitle = Some(0);
+    pin.volume.level = 40;
+    pin.volume.playing_at = 40;
+    pin
+}
+
+/// A seek on a pinned film: mpv is taken to the second while it runs, and FFmpeg's player is ended
+/// and begun again there — the gate this ticket turns on, asserted on both routes.
+#[test]
+fn a_seek_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("live-seek-film.mkv");
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+
+    // FFmpeg's player is told nothing while it runs, so the seek is a player begun again at the
+    // second the bar was let go at.
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_pin(Some(a_playing_pin(&film, content)));
+    seek_pinned_playback(&film, content, 90.0);
+    assert_eq!(
+        restart_count(),
+        1,
+        "a second asked of FFmpeg's player is a player ended and begun again at it"
+    );
+
+    // mpv is taken to the second down the pipe it listens on, and the process does not change.
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    // The ffplay half above began a player, which wrote its own pid down: this half is about the
+    // player this app was holding before that.
+    VIDEO_PID.store(101, Ordering::SeqCst);
+    mpv_ipc::remember_pipe(101, "test-pipe");
+    stand_pin(Some(a_playing_pin(&film, content)));
+    seek_pinned_playback(&film, content, 90.0);
+    assert_eq!(restart_count(), 0, "mpv is taken to the second while it runs");
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![r#"{"command":["seek",90.000,"absolute"],"async":true}"#.to_string()],
+        "and the line names the second the bar was let go at"
+    );
+    assert_eq!(
+        pin_state().and_then(|state| {
+            state
+                .pin()
+                .map(|pin| pin.transport.started.map(|(_, from)| from))
+        }),
+        Some(Some(90.0)),
+        "with the bar's own clock rebased onto that second, since no player was begun at it"
+    );
+
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
+/// A pause and a resume on a pinned film: mpv is told to hold and to go, and a held FFmpeg film
+/// whose player has no window to be posted a key to is begun again (see `toggle_pinned_playback`).
+#[test]
+fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("live-pause-film.mkv");
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+
+    // FFmpeg's player: a resume with no window to post a key to is a player begun again.
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    let mut held = a_playing_pin(&film, content);
+    held.transport.held(30.0);
+    held.transport.started = None;
+    stand_pin(Some(held));
+    let transport = pinned_playback_state().expect("a pin is up").2;
+    toggle_pinned_playback(&film, content, transport);
+    assert_eq!(
+        restart_count(),
+        1,
+        "a resume with no window to post a key to is a player begun again"
+    );
+
+    // mpv: the hold and the release are two commands, and the process does not change.
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    // The ffplay half above began a player, which wrote its own pid down: this half is about the
+    // player this app was holding before that.
+    VIDEO_PID.store(101, Ordering::SeqCst);
+    mpv_ipc::remember_pipe(101, "test-pipe");
+    stand_pin(Some(a_playing_pin(&film, content)));
+    let transport = pinned_playback_state().expect("a pin is up").2;
+    toggle_pinned_playback(&film, content, transport);
+    let transport = pinned_playback_state().expect("a pin is up").2;
+    toggle_pinned_playback(&film, content, transport);
+    assert_eq!(
+        restart_count(),
+        0,
+        "mpv is told to hold and to go: nothing is begun"
+    );
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![
+            r#"{"command":["set_property","pause",true],"async":true}"#.to_string(),
+            r#"{"command":["set_property","pause",false],"async":true}"#.to_string(),
+        ],
+        "the hold and the release are mpv's own pause property"
+    );
+
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
+/// A wrap of a film this app is looping: mpv is sent back to the second down its pipe, and
+/// FFmpeg's film is begun again at it (see `video_loop_tick`).
+#[test]
+fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (0, 0, 320, 240);
+    let film = PathBuf::from("live-loop-film.mkv");
+    stand_pin(Some(a_playing_pin(&film, content)));
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+
+    // The record is moved back as if the pass had run its length: a wrap is due on the next tick.
+    let a_pass_has_run = || {
+        if let Ok(mut slot) = VIDEO_LOOP.lock() {
+            if let Some(loop_) = slot.as_mut() {
+                loop_.at = Instant::now() - Duration::from_secs(9);
+            }
+        }
+    };
+
+    // FFmpeg's player: the rewind is a player begun again at the beginning.
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    note_video_loop(101, &film, content, 0.0, Some(8.0));
+    a_pass_has_run();
+    assert!(video_loop_tick(true), "the tick takes the film back");
+    assert_eq!(
+        restart_count(),
+        1,
+        "a loop FFmpeg's player cannot be told takes a player begun again"
+    );
+
+    // mpv: the same wrap is a command, and the process stays.
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        *slot = None;
+    }
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    // The ffplay half above began a player, which wrote its own pid down: this half is about the
+    // player this app was holding before that.
+    VIDEO_PID.store(101, Ordering::SeqCst);
+    mpv_ipc::remember_pipe(101, "test-pipe");
+    note_video_loop(101, &film, content, 0.0, Some(8.0));
+    a_pass_has_run();
+    assert!(video_loop_tick(true), "the tick sends the film back");
+    assert_eq!(
+        restart_count(),
+        0,
+        "mpv is told to go back rather than begun again"
+    );
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![r#"{"command":["seek",0.000,"absolute"],"async":true}"#.to_string()],
+        "the wrap is a seek to the beginning, which is the only second a loop can restart at"
+    );
+
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        *slot = None;
+    }
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
