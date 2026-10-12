@@ -674,9 +674,34 @@ pub(super) unsafe fn hide_pinned_windows() {
         let _ = ShowWindow(HWND(video as *mut _), SW_HIDE);
     }
 
+    // The cached handle alone is not the player: it is stale where the window was recreated and
+    // zero where it was never found, and mpv may hold more than one window — so every visible
+    // window of the player's process goes too, or a collapse leaves a chrome-less film on screen.
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if pid != 0 {
+        let _ = EnumWindows(
+            Some(hide_player_windows_callback),
+            LPARAM(pid as isize),
+        );
+    }
+
     if webview_preview::is_showing() {
         webview_preview::hide();
     }
+}
+
+/// Hide every visible window belonging to `pid`: what `hide_pinned_windows` enumerates with.
+unsafe extern "system" fn hide_player_windows_callback(
+    hwnd: HWND,
+    lparam: LPARAM,
+) -> windows::Win32::Foundation::BOOL {
+    let pid = lparam.0 as u32;
+    let mut window_pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
+    if window_pid == pid && IsWindowVisible(hwnd).as_bool() {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+    windows::Win32::Foundation::BOOL(1)
 }
 
 /// Take the round bubble down, if one is up.

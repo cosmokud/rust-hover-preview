@@ -209,8 +209,10 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // looking at — the caption and the transport bar the pin draws into the band over the media
     // (see the note above and `pin_overlay_chrome`). mpv's film holds its own band while they are
     // up (`--ontop`, see `mpv_args`), the pin's own raise carries the press, and a band that has
-    // moved is placed without a raise (see `ensure_pinned_sibling_box`).
-    if order == PlayerOrder::Leave {
+    // moved is placed without a raise (see `ensure_pinned_sibling_box`). A collapsed pin holds off
+    // every film alike: its band went with the window, so a raise here is a chrome-less film back
+    // over Explorer beside the bubble (see `hide_pinned_windows`).
+    if order == PlayerOrder::Leave || pin_is_collapsed() {
         return true;
     }
 

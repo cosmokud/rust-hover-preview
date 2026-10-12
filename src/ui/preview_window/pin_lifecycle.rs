@@ -990,7 +990,7 @@ pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
 /// park holds is the window's *absence*, and there is nothing about being out of date to say the
 /// absence can be ended (see `pin_player_is_parked`).
 pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
-    if pin_player_is_parked() {
+    if pin_player_is_parked() || pin_is_collapsed() {
         return;
     }
 
