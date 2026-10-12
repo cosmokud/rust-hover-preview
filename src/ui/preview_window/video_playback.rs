@@ -877,6 +877,14 @@ pub(super) unsafe fn place_player_window(
 /// should not be on screen — a drag's own pointer moves and the tick's re-assertion — and they read
 /// the same flag (see `pin_player_is_parked`); the monitor thread's own raise, which nobody can hold
 /// off from outside, is guarded where it is raised (see `apply_noactivate_to_hwnd`).
+///
+/// **What a hold-off refuses is the raise, and never the band.** A player's window that is not on
+/// screen is owed the band whatever is up over it — the band's rows are this app's own transparent
+/// pixels, painted for that window to show through (see `film_band_is_hit_testable`), so one left
+/// hidden is a hole with the desktop standing in it, which is what a park leaves behind and what the
+/// swap out of a park fills *before* the cover comes down (see `unpark_pinned_player`). A window
+/// that is not being drawn is not carried over a strip the pin is showing by being put back
+/// (see `put_a_player_that_is_not_on_screen_back`).
 pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
     // What is to be done with the window, from the one answer both of the places that put one
     // somewhere read: everything held off — the pin's own chrome or popup — is nothing this road
@@ -893,6 +901,10 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         false,
     );
     if order == PlayerOrder::Leave {
+        // The raise is what is held off and the band is still owed (see the note over this
+        // function): a window that is not on screen goes back where it stands in the band, with no
+        // raise for anything to be put back over.
+        put_a_player_that_is_not_on_screen_back(x, y, width, height);
         return false;
     }
 
@@ -935,6 +947,51 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     }
 
     true
+}
+
+/// Put a player's window back in the band it is owed where it is not on screen, without the raise
+/// the hold-off refuses and without touching the order either window stands in.
+///
+/// **The half of a hold-off that cannot mean a hole.** What a strip of the pin's chrome and an open
+/// volume popup hold this road off from is the *raise*: a raise is what carries the film over the
+/// strip the pin paints into the band (see `player_order`, `pin_overlay_chrome`). A window that is
+/// not on screen is the other thing entirely, and the band is painted for it rather than over it —
+/// this app's own transparent rows, which are the desktop when nothing of the player's is drawing in
+/// them (see `film_band_is_hit_testable`).
+///
+/// **Which is the state a park leaves, and the reason the park is not asked about here.** The window
+/// goes back up before the flag that hides it comes down, so that no frame falls between a band that
+/// is a hole and the window that fills it (see `unpark_pinned_player`, `settle_pinned_park_onto`); a
+/// road that asked the flag would refuse the very place the swap is made of. Every other caller asks
+/// the park itself and never reaches this with a parked window (see `event_loop`'s tick,
+/// `show_current_replacement`, `ensure_pinned_sibling_box`).
+///
+/// The place is `SWP_NOZORDER`, which is what keeps the film under the pin that is standing over it:
+/// the order is left exactly where it is, there is no raise here, and so there is nothing to put back
+/// over anything (see `place_player_window`, and `ensure_pinned_sibling_box`, which carries a film
+/// that travels with the band the same way for the same reason).
+fn put_a_player_that_is_not_on_screen_back(x: i32, y: i32, width: i32, height: i32) {
+    let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
+    if hwnd_val == 0 {
+        return;
+    }
+
+    unsafe {
+        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+        if !IsWindow(hwnd).as_bool() || IsWindowVisible(hwnd).as_bool() {
+            return;
+        }
+
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            x,
+            y,
+            width.max(1),
+            height.max(1),
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+        );
+    }
 }
 
 /// Whether the player's window is standing over the pin right now.
