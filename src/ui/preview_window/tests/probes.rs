@@ -871,13 +871,14 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
 /// Only a window mpv is drawing is moved with a dragged pin where the pin's chrome is up: every
 /// other answer the placement can give is the one it gave before.
 ///
-/// **Why it is asked of the placement rather than of a drag.** The exception `player_order` makes is
+/// **Why it is asked of the placement rather than of a drag.** The move `ensure_pinned_sibling_box` makes is
 /// one condition — whether the recorded player's window is mpv's (`video_process_image`) — and the
 /// answers it is not are the ones the hold-off is for. FFmpeg's window is the film a park hides and
 /// a strip of the pin's chrome stands over, so it is left where it is; and a band with no window of
-/// a player's in it, which is every preview this app draws itself, has nothing to place at all. A
-/// drag for each would be the same arithmetic three times, so the drag the mpv arm gets is the one
-/// above and the rest are pinned here.
+/// a player's in it, which is every preview this app draws itself, has nothing to place at all. The
+/// move travels without a raise, so the pin stays over the film it was standing over and no frame
+/// puts the film over the chrome. A drag for each would be the same arithmetic three times, so the
+/// drag the mpv arm gets is the one above and the rest are pinned here.
 ///
 /// Both windows are stand-ins of this app's own (`stand_a_player_window`) and `VIDEO_PID` is left
 /// zero, so no player's process is looked for and nothing of this machine's is styled.
@@ -1168,43 +1169,44 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
     }
 }
 
-/// A pinned film mpv draws is raised over the pin like every other film — and the *place* is the
-/// exception the band needs.
+/// A pinned film mpv draws is raised like every other film — and held off like every other film.
 ///
 /// **The band a film mpv draws stands in is the pin's own pixel** (see `film_band_is_hit_testable`),
 /// so what a press on the picture lands in is the pin, whatever band the player's window is in — the
-/// player's window being click-through besides (see `player_ex_style_for`). A player left in the
-/// ordinary band is therefore not a pin that keeps the press: it is a film Explorer covers the
-/// moment the user clicks into it, with the band over it going on taking the press. The raise is
-/// asked for on every road, and the pin is put back over the raised film in the same breath (see
-/// `place_player_window`).
+/// player's window being click-through besides (see `player_ex_style_for`). A player left anywhere
+/// but the topmost band is therefore not a pin that keeps the press: it is a film Explorer covers
+/// the moment the user clicks into it, with the band over it going on taking the press. The raise
+/// is asked for on every road while nothing of the pin's own is drawn over the band, and the pin
+/// is put back over the raised film in the same breath (see `place_player_window`).
 ///
-/// **The two hold-offs stay for FFmpeg's own player, whose band *is* its window**: a strip of the
-/// pin's chrome and the volume popup are drawn where the film is, so a raise there puts the film
-/// over what the user is looking at. For the film mpv draws they are answered by the pin's own
-/// raise instead, and what the same exception buys is the *place*: a window left behind a band that
-/// has moved is the desktop showing through the hole (see
-/// `only_an_mpv_players_window_is_placed_with_the_pins_chrome_up`). A park is refused for every
-/// window there is, and the media engine's route draws its band in this app's own window and begins
-/// no player, so the decision never reaches it. This asserts the decision alone; the raisers that
-/// read it are asked in
+/// **A strip of the pin's chrome and the volume popup hold the raise off for mpv's film as they do
+/// for FFmpeg's**: a raise there puts the film over what the user is looking at, then the pin back
+/// over it — a two-step reorder that blinks the chrome. What keeps the film visible under them
+/// instead is mpv's own window holding its band (`--ontop`), and what keeps the press the pin's is
+/// the pin's own raise; what a band that has moved still owes is the *place*, which travels without
+/// a raise (see `only_an_mpv_players_window_is_placed_with_the_pins_chrome_up`). A park is refused
+/// for every window there is, and the media engine's route draws its band in this app's own window
+/// and begins no player, so the decision never reaches it. This asserts the decision alone; the
+/// raisers that read it are asked in
 /// `a_pinned_mpv_film_is_placed_by_a_tick_a_drag_and_a_monitor_pass`.
 #[test]
 fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
+    assert_eq!(
+        player_order(MPV_IMAGE_NAME, true, false, false, false),
+        PlayerOrder::Raise,
+        "an mpv pin's film is raised with nothing of the pin's own drawn over the band: the pin \
+         is put back over it right after"
+    );
     for (chrome_up, volume_open, what) in [
-        (
-            false,
-            false,
-            "with nothing of the pin's own drawn over the band",
-        ),
         (true, false, "with a strip of the pin's chrome up over it"),
         (false, true, "with the volume popup open over it"),
     ] {
         assert_eq!(
             player_order(MPV_IMAGE_NAME, true, chrome_up, volume_open, false),
-            PlayerOrder::Raise,
-            "an mpv pin's film is raised — and so placed — {what}: the pin is put back over it \
-             right after, which is where that pin's chrome and popup are drawn"
+            PlayerOrder::Leave,
+            "an mpv pin's film is left exactly where it is {what}: a raise would put the film \
+             over the chrome and blink it, while mpv's own window holds the band and the pin's \
+             own raise carries the press"
         );
     }
 
@@ -1278,13 +1280,16 @@ fn a_players_window_is_asserted_topmost() {
 }
 
 /// The film of a pinned mpv preview is placed where the band is, and put under the pin, through
-/// every road that puts a player's window somewhere.
+/// the roads that put a player's window somewhere.
 ///
-/// The tick's re-assertion, the monitor's pass and a drag's move are the three roads that put a
-/// player's window somewhere, and each is asked here to have read the placement decision (see
-/// `player_order`): the answer it came to is recorded for a test's eye, because a test run has no
-/// screen to read a z-order off and the answer is the whole of what a raiser decides before it
-/// places. A `Leave` in any one of them is what this catches — a film left where it stands is a film
+/// The tick's re-assertion and the monitor's pass are the two roads that raise a player's window
+/// somewhere, and each is asked here to have read the placement decision (see `player_order`): the
+/// answer it came to is recorded for a test's eye, because a test run has no screen to read a
+/// z-order off and the answer is the whole of what a raiser decides before it places. A drag's move
+/// carries the film without reading it — the band's new box with the order left alone (see
+/// `ensure_pinned_sibling_box`) — so what this asks of the drag is the carry the sibling test pins
+/// down, and the decision it asserts is the one the tick and the monitor came to. A `Leave` in any
+/// one of them is what this catches — a film left where it stands is a film
 /// under Explorer the moment the user clicks into it, while the band painted over it goes on taking
 /// the press — and what the answer does with the placement is
 /// `a_pinned_players_placement_puts_the_pin_back_over_it`.
@@ -1412,10 +1417,17 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
 
     let _ = take_pin_re_raises();
 
-    // A pinned film mpv draws, with a strip of the pin's chrome up: raised, and the pin put back
-    // over the film in the same placement — which is where that strip is drawn.
+    // A pinned film mpv draws, with nothing of the pin's own up: raised, and the pin put back
+    // over the film in the same placement — which is where the pin's chrome is drawn.
     note_player_process(0, MPV_IMAGE_NAME);
-    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    stand_pin(Some(overlay_pin(
+        content,
+        PinChrome {
+            caption: false,
+            bar: false,
+            until: None,
+        },
+    )));
     assert!(
         ensure_video_window_topmost(
             content.0,
@@ -1423,7 +1435,7 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
             content.2 - content.0,
             content.3 - content.1,
         ),
-        "the band the player's window stands in is placed, chrome up or not"
+        "the band the player's window stands in is placed while nothing of the pin's own is up"
     );
     assert_eq!(
         take_pin_re_raises(),
@@ -1446,8 +1458,8 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
         "a hover's player is raised and nothing is put over it: there is no pin standing there"
     );
 
-    // And an answer that places nothing is followed by nothing: FFmpeg's own window with a strip of
-    // the pin's chrome up is held off before the placement (see `player_order`).
+    // And an answer that places nothing is followed by nothing: either player's window with a
+    // strip of the pin's chrome up is held off before the placement (see `player_order`).
     note_player_process(0, FFPLAY_IMAGE_NAME);
     stand_pin(Some(overlay_pin(content, PinChrome::always())));
     assert!(
@@ -1464,6 +1476,27 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
         take_pin_re_raises(),
         0,
         "and nothing was placed, so nothing was put back over anything"
+    );
+
+    // mpv's film with the same strip up is held off the same way: the chrome would blink under a
+    // raise, mpv's own window holds the band, and the pin's own raise carries the press — while a
+    // band that has moved is placed without a raise (see `ensure_pinned_sibling_box`).
+    note_player_process(0, MPV_IMAGE_NAME);
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    assert!(
+        !ensure_video_window_topmost(
+            content.0,
+            content.1,
+            content.2 - content.0,
+            content.3 - content.1,
+        ),
+        "a strip of the pin's chrome holds mpv's film off too: a raise would put the film over \
+         the chrome for a frame, and the place a moved band owes travels without one"
+    );
+    assert_eq!(
+        take_pin_re_raises(),
+        0,
+        "and nothing was placed, so nothing was put back over anything either"
     );
 
     unsafe { DestroyWindow(player).expect("the stand-in window let go of") };

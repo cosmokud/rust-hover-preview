@@ -205,12 +205,11 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     //
     // **What is held off here is the `Leave` answer and nothing else.** Those are the park, a strip
     // of the pin's chrome and an open volume popup (see `pin_player_is_parked`, `pin_chrome_up`,
-    // `pin_volume_open`), and for FFmpeg's own route the band *is* this window, so a raise over
-    // either of the last two puts the film over what the user is looking at (see the note above).
-    // A film mpv draws is raised through them rather than held by them: its window is the one mpv
-    // holds up itself (`--ontop`, see `mpv_args`), and the placement puts the pin back over the
-    // film it raises, which is where that pin's chrome and popup are drawn (see
-    // `place_player_window`).
+    // `pin_volume_open`): a raise over either of the last two puts the film over what the user is
+    // looking at — the caption and the transport bar the pin draws into the band over the media
+    // (see the note above and `pin_overlay_chrome`). mpv's film holds its own band while they are
+    // up (`--ontop`, see `mpv_args`), the pin's own raise carries the press, and a band that has
+    // moved is placed without a raise (see `ensure_pinned_sibling_box`).
     if order == PlayerOrder::Leave {
         return true;
     }

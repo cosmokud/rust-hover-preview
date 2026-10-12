@@ -974,6 +974,14 @@ pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
 
 /// Put a window of somebody else's — the player's — where a pinned window's media band is.
 ///
+/// **A film mpv draws travels with the band without ever changing the order.** Its window is
+/// topmost by itself (`--ontop`), and the pin stands over it; moving both with the order left
+/// alone keeps it that way — a raise of the film first puts it over the pin's own chrome for a
+/// frame, which is the blink, and a raise of the pin after it is a second reorder per pointer
+/// move, which is the drag's slowness. So the film is moved without a raise and the pin is not
+/// re-raised here at all (see `player_order`, whose hold-offs stand for mpv's film as they do
+/// for FFmpeg's).
+///
 /// **A band whose player is parked is left alone, which is what this is for rather than an
 /// afterthought of it.** The park is a hide on the drag's first pointer message, and a raise here
 /// is a show as well as a place (see `ensure_video_window_topmost`): a resize drag puts the player
@@ -983,6 +991,31 @@ pub(super) fn pin_audio_window_buttons(pin: &PinnedPreview, y: i32) -> bool {
 /// absence can be ended (see `pin_player_is_parked`).
 pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
     if pin_player_is_parked() {
+        return;
+    }
+
+    if video_process_image() == MPV_IMAGE_NAME {
+        let hwnd_val = VIDEO_HWND.load(Ordering::SeqCst);
+        if hwnd_val == 0 {
+            return;
+        }
+        let hwnd = HWND(hwnd_val as *mut _);
+        unsafe {
+            if !IsWindow(hwnd).as_bool() {
+                return;
+            }
+            // Moved without a raise: `SWP_NOZORDER` leaves the order alone, so the pin stays
+            // over the film it was standing over and no frame puts the film over the chrome.
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                content.0,
+                content.1,
+                (content.2 - content.0).max(1),
+                (content.3 - content.1).max(1),
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+            );
+        }
         return;
     }
 
