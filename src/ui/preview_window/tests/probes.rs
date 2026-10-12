@@ -916,6 +916,13 @@ fn only_an_mpv_players_window_is_placed_with_the_pins_chrome_up() {
 
     VIDEO_HWND.store(ffplay_player.0 as isize, Ordering::SeqCst);
     note_player_process(0, FFPLAY_IMAGE_NAME);
+    // On screen, the way the film this stands for is, and that is the whole of what the answer
+    // below is about: what the hold-off refuses FFmpeg's window is the *place*, while a window that
+    // is not on screen is owed one wherever the chrome is (see
+    // `put_a_player_that_is_not_on_screen_back`).
+    unsafe {
+        let _ = ShowWindow(ffplay_player, SW_SHOWNOACTIVATE);
+    }
     ensure_pinned_sibling_box(moved);
     assert_eq!(
         window_box_on_screen(ffplay_player),
@@ -938,6 +945,85 @@ fn only_an_mpv_players_window_is_placed_with_the_pins_chrome_up() {
         DestroyWindow(mpv_player).expect("the stand-in window let go of");
         DestroyWindow(ffplay_player).expect("the stand-in window let go of");
     }
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
+    stand_pin(previous_pin);
+}
+
+/// The band a hold-off still owes: a player's window that is not on screen goes back into it, with
+/// the raise held off and with a window that is already standing there left exactly where it stands.
+///
+/// **This is the state a park leaves behind, and the swap out of one is made of this place** (see
+/// `put_a_player_that_is_not_on_screen_back`): a seek parks the film and hides its window, the cover
+/// comes down and the band under it is this app's own transparent rows — a place that only raised a
+/// window would leave the desktop standing in the band, which is what a pinned film does now while a
+/// strip of its chrome is up and the pointer is on it, that being where a seek starts.
+///
+/// The window is a stand-in of this app's own (`stand_a_player_window`), which is never shown by
+/// itself: what is asked here is whether the placement shows it, and at which box.
+///
+/// `cargo test --lib a_players_window_that_is_not_on_screen_is_put_back_in_the_band`
+#[test]
+fn a_players_window_that_is_not_on_screen_is_put_back_in_the_band() {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let band = (200, 180, 520, 420);
+
+    // The pin the placement is asked about: a strip of its chrome is up over the band, which is the
+    // hold-off this window is owed the band through.
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    let _ = take_pin_re_raises();
+
+    let player = unsafe { stand_a_player_window(content) };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+    note_player_process(0, FFPLAY_IMAGE_NAME);
+
+    assert!(
+        !ensure_video_window_topmost(band.0, band.1, band.2 - band.0, band.3 - band.1),
+        "the hold-off is the raise, so nothing was raised over the strip the pin is showing"
+    );
+    assert!(
+        unsafe { IsWindowVisible(player).as_bool() },
+        "and the window is on screen: the band's own rows are transparent, so a window left hidden \
+         in them is the desktop behind the pin"
+    );
+    assert_eq!(
+        window_box_on_screen(player),
+        band,
+        "put at the box the band is in, which is the place the swap out of a park owes"
+    );
+    assert_eq!(
+        take_pin_re_raises(),
+        0,
+        "and nothing was put back over a raise that was never made"
+    );
+
+    // A window that is standing there already is left exactly where it stands: what the hold-off
+    // refuses for a film on screen is the place as well as the raise, which is what the chrome being
+    // up over the band means.
+    let _ = ensure_video_window_topmost(
+        content.0,
+        content.1,
+        content.2 - content.0,
+        content.3 - content.1,
+    );
+    assert_eq!(
+        window_box_on_screen(player),
+        band,
+        "a window that is on screen is not moved by a hold-off"
+    );
+
+    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
     stand_pin(previous_pin);
