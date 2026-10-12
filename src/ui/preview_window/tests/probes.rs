@@ -1504,3 +1504,114 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
     note_player_process(previous_pid, previous_image);
     stand_pin(previous_pin);
 }
+
+/// The answer the chrome block's raise is asked against: whether the player's window is standing
+/// over the pin, which is a fact of the machine's z-order rather than of this app's bookkeeping —
+/// and one that changes without this app doing anything, because the film stands itself back up on
+/// its own band (see `player_stands_over_the_pin`, `mpv_args`).
+///
+/// **Two windows of this app's own are what the answer is read off.** Both raisers put the film
+/// *under* the pin and leave it there, so the state that has the chrome covered is one no placement
+/// road reaches; it is put in here with the one thing that does reach it, a raise of the film, and
+/// the two answers are asked against each other. What a red result discriminates: a walk that goes
+/// the wrong way down the z-order answers `true` for the order both raisers put in, which is a raise
+/// of the pin per tick instead of none — the churn the hold-offs are for — and the other way round
+/// it answers `false` for a film that is over the chrome, which is the chrome left under the film
+/// until the pointer asks for a strip of it again.
+///
+/// `cargo test --lib the_player_stands_over_the_pin_only_while_it_is_raised_over_it`
+#[test]
+fn the_player_stands_over_the_pin_only_while_it_is_raised_over_it() {
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, ShowWindow, SW_HIDE};
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+
+    let content = (100, 80, 420, 320);
+    let pin = unsafe { stand_a_player_window(content) };
+    let player = unsafe { stand_a_player_window(content) };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+
+    // A raise, asked of the machine the way `place_player_window` asks it: top of the band for a
+    // window that is already in it, its own box, and on screen — a window that was never shown is
+    // not one that covers anything, which is the stand-in's own answer further down.
+    unsafe fn raise(hwnd: HWND, content: ScreenRegion) {
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            content.0,
+            content.1,
+            content.2 - content.0,
+            content.3 - content.1,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
+
+    // A window put in the topmost band at all, which one `HWND_TOPMOST` does not do: the first
+    // raise puts a window that is not yet topmost at the *foot* of that band, and the raise after
+    // it is the ordering raise both raisers make (see `place_player_window`). Both of the app's two
+    // windows are in the band from their first placement on, so this is the state each of the
+    // stand-ins is put in before anything is asked about their order.
+    unsafe fn make_topmost(hwnd: HWND, content: ScreenRegion) {
+        raise(hwnd, content);
+        raise(hwnd, content);
+    }
+
+    // The order both raisers put in: the film placed, and the pin put back over it.
+    unsafe {
+        make_topmost(player, content);
+        make_topmost(pin, content);
+    }
+    assert!(
+        !unsafe { player_stands_over_the_pin(pin) },
+        "a film under the pin is the order every placement leaves standing, and a raise of the pin \
+         for it is a raise the chrome already has"
+    );
+
+    // And the film standing itself back up over the pin, which is what mpv's own band does from the
+    // first frame it draws: the pin owes a raise for as long as a strip of its chrome is up, which
+    // is the raise the chrome block makes.
+    unsafe { raise(player, content) };
+    assert!(
+        unsafe { player_stands_over_the_pin(pin) },
+        "a film raised over the pin is the one that covers the caption and the transport bar the \
+         pin draws into the band over it"
+    );
+
+    // The pin put back over the film: the film is under it again, and there is nothing to raise
+    // for until the film stands itself up again.
+    unsafe { raise(pin, content) };
+    assert!(
+        !unsafe { player_stands_over_the_pin(pin) },
+        "the pin's own raise is what puts it back over the film, and the answer is the order that \
+         raise left standing"
+    );
+
+    // A parked film is not on screen, and a window that is not on screen covers nothing — the
+    // answer a drag's own moves owe while the window is hidden (see `pin_player_is_parked`).
+    unsafe {
+        raise(player, content);
+        let _ = ShowWindow(player, SW_HIDE);
+    }
+    assert!(
+        !unsafe { player_stands_over_the_pin(pin) },
+        "a hidden film stands over nothing, whatever its place in the band"
+    );
+
+    // And a band with no player's window in it at all: a hover, or the media engine painting this
+    // app's own rows.
+    VIDEO_HWND.store(0, Ordering::SeqCst);
+    assert!(
+        !unsafe { player_stands_over_the_pin(pin) },
+        "no player's window is nobody standing over the pin"
+    );
+
+    unsafe {
+        let _ = DestroyWindow(player);
+        let _ = DestroyWindow(pin);
+    }
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+}

@@ -936,3 +936,45 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
 
     true
 }
+
+/// Whether the player's window is standing over the pin right now.
+///
+/// **The one thing about those two windows' order that this app cannot keep for itself.** Both are
+/// topmost, so which of the two stands in front is which of them was raised last (see
+/// `place_player_window`) — and the film is not raised by this app alone: mpv holds its own band
+/// and stands itself back up on it (see `mpv_args`), which leaves the film over the pin, and with
+/// it over the caption and the transport bar the pin draws into that band (see
+/// `pin_overlay_chrome`). Everything this app holds off while a strip of that chrome is up (see
+/// `player_order`) is what keeps *this app* from putting the film there; nothing keeps the player
+/// from putting itself there.
+///
+/// The walk goes up from the pin and stops at the first window that is not topmost, which is where
+/// the band both of them are in ends, so what it costs is the length of that band and not of the
+/// desktop. A player's window that is not on screen covers nothing, which is the answer a parked
+/// film owes (see `unpark_player_window`), and a band with no player's window in it at all — a
+/// hover, or the media engine painting this app's own rows — is nobody standing over anything.
+pub(super) unsafe fn player_stands_over_the_pin(pin: HWND) -> bool {
+    let player = HWND(VIDEO_HWND.load(Ordering::SeqCst) as *mut std::ffi::c_void);
+    if player.is_invalid() || !IsWindowVisible(player).as_bool() {
+        return false;
+    }
+
+    let mut above = GetWindow(pin, GW_HWNDPREV).unwrap_or_default();
+
+    while !above.is_invalid() {
+        if above == player {
+            return true;
+        }
+
+        // What stands over the pin stands over it from inside the topmost band, and the band
+        // ends at the first window that is not of it: a window above that one is not over the
+        // pin, whatever it is.
+        if GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TOPMOST.0 as isize == 0 {
+            return false;
+        }
+
+        above = GetWindow(above, GW_HWNDPREV).unwrap_or_default();
+    }
+
+    false
+}
