@@ -604,10 +604,7 @@ pub(super) fn resolve_video_engine(
 /// which is what keeps a film only FFmpeg's list carries from being opened by an engine that has
 /// nothing to do with it.
 pub(super) fn video_route(path: &Path) -> VideoRoute {
-    let (choice, fallback) = CONFIG
-        .lock()
-        .map(|c| (c.video_engine, c.video_engine_fallback))
-        .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK));
+    let (choice, fallback) = engine_choice();
 
     // The two players are asked through the pair a test can stand in or out (`ffplay_is_here`,
     // `mpv_is_here`) rather than through `VideoEngine::installed`, so that the routes that differ
@@ -637,6 +634,48 @@ pub(super) fn video_route(path: &Path) -> VideoRoute {
         _ => VideoRoute::NoPreview,
     }
 }
+
+/// The configured engine choice a route is read off: the setting's own in a run, and whatever a
+/// test stands in its place under one.
+///
+/// It is asked through here rather than inline for the same reason the machine's answers are
+/// (`ffplay_is_here`, `mpv_is_here`): `video_route` falls an engine the machine has not got back
+/// to the machine's choice, and a test that stands the installs in still inherits whichever
+/// engine that run's `config.ini` names — an explicit `Native`, `Ffmpeg` or `Hybrid` walks a
+/// fall-through that never reaches mpv, so an mpv arm standing its installs in would answer a
+/// route with the config file's rather than the road's (see `stand_video_engine_in`).
+fn engine_choice() -> (VideoEngine, bool) {
+    #[cfg(test)]
+    if let Some(stood) = video_engine_choice_stand_in() {
+        return stood;
+    }
+
+    CONFIG
+        .lock()
+        .map(|c| (c.video_engine, c.video_engine_fallback))
+        .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK))
+}
+
+/// Stand a configured engine choice in place of the file's, or give the file's answer back with
+/// `None` — one slot for the whole process, so it is put back by the tests that set it rather
+/// than left to whichever test the runner reaches next, the same rule the install slots keep
+/// (see `stand_mpv_in`, `stand_ffplay_in`).
+#[cfg(test)]
+pub(super) fn stand_video_engine_in(choice: Option<(VideoEngine, bool)>) {
+    if let Ok(mut held) = VIDEO_ENGINE_STAND_IN.lock() {
+        *held = choice;
+    }
+}
+
+/// The choice [`video_route`] reads while a test stands one in (see `stand_video_engine_in`).
+#[cfg(test)]
+fn video_engine_choice_stand_in() -> Option<(VideoEngine, bool)> {
+    VIDEO_ENGINE_STAND_IN.lock().ok().and_then(|held| *held)
+}
+
+/// The choice [`video_route`] reads while a test stands one in (see `stand_video_engine_in`).
+#[cfg(test)]
+static VIDEO_ENGINE_STAND_IN: Mutex<Option<(VideoEngine, bool)>> = Mutex::new(None);
 
 /// Whether the media engine Windows has plays this file, which is one of the players a layout, a
 /// load and a pin each ask about before they do anything else for a video.

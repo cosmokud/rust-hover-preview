@@ -2046,6 +2046,8 @@ fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
     // mpv installed the default engine would pick it, and the mpv route parks nothing and holds
     // nothing (see `mpv_ipc`). Put back before the restore below.
     stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     stand_mpv_in(Some(false));
 
     for (name, action) in [
@@ -2086,6 +2088,8 @@ fn a_gestures_hold_is_taken_before_the_park_it_belongs_to() {
     forget_pin_park_swap();
     stand_mpv_in(None);
     stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_video_engine_in(None);
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;

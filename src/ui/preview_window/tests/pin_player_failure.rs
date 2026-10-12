@@ -16,6 +16,8 @@ use super::*;
 /// — the one road the mpv route answers with a command and no player ended at all (see `mpv_ipc`).
 fn stand_a_video(width: u32, height: u32) -> Option<MediaData> {
     stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     stand_mpv_in(Some(false));
     let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let mut media = create_loading_media(width, height);
@@ -83,4 +85,6 @@ fn a_kill_roads_own_player_is_not_a_failed_file() {
     }
     stand_mpv_in(None);
     stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_video_engine_in(None);
 }

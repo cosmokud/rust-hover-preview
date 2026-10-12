@@ -464,6 +464,8 @@ fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state
     let content = (100, 80, 420, 320);
     let film = PathBuf::from("mpv-seek-keeps-the-play-state.mkv");
     stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     stand_ffplay_in(Some(false));
     mpv_ipc::remember_pipe(101, "test-pipe");
 
@@ -564,6 +566,8 @@ fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state
     stand_pin(Some(a_banded_video_pin(&film, content)));
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     let bar = pinned_transport_geometry().expect("a banded video pin carries a bar");
     let (x, y) = (bar.width / 2, bar.top + bar.height / 2);
     let window = RecordedPinWindow::new(0x1000);
@@ -590,6 +594,8 @@ fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state
     clear_restart_count();
     stand_mpv_in(None);
     stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_video_engine_in(None);
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {

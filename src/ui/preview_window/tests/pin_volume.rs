@@ -463,6 +463,7 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     // FFmpeg's player takes a level only by being begun again at one.
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     stand(70, 40);
     set_pin_volume(70);
     assert!(
@@ -481,6 +482,7 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     mpv_ipc::clear_noted();
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     // The ffplay half above began a player, which wrote its own pid down: this half is about the
     // player this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
@@ -525,6 +527,7 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     mpv_ipc::clear_noted();
     stand_mpv_in(None);
     stand_ffplay_in(None);
+    stand_video_engine_in(None);
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
