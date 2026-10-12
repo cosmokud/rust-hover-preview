@@ -745,15 +745,13 @@ fn note_pin_re_raise() {
 /// What is to be done with the player's window, from the facts both of the places that put one
 /// somewhere can read.
 ///
-/// **The answer is the raise for a film mpv draws under a pin, as it is for every other film.**
-/// mpv's window is topmost like FFmpeg's, and what keeps the pin's own band the pixel a press on
-/// the picture lands in is the raise of the pin that comes straight after every placement (see
-/// `place_player_window`, `film_band_is_hit_testable`). A film standing in the ordinary band is the
-/// fault this answer exists to not have: Explorer is raised over whatever stands there the moment
-/// the user clicks into it, and the band painted over the film goes on taking the press (see
-/// `film_band_is_hit_testable`). Which film a pin draws is read off `video_process_image` — the
-/// same record the placement is read off — rather than off the media, which is a fact about the
-/// file on screen and not about whose window stands in its band.
+/// **The answer is the raise for every film, mpv's included.** mpv's window is topmost like
+/// FFmpeg's, and a film standing anywhere else is the fault this answer exists to not have:
+/// Explorer is raised over whatever stands in the ordinary band the moment the user clicks into
+/// it, while the band painted for the film goes on taking the press (see `film_band_is_hit_testable`).
+/// Which film a pin draws is read off `video_process_image` — the same record the placement is
+/// read off — rather than off the media, which is a fact about the file on screen and not about
+/// whose window stands in its band.
 ///
 /// The raise is held off for the same reasons it always was: a strip of the pin's chrome or the
 /// volume popup is drawn where the film is, and a film parked for a gesture is deliberately not on
@@ -761,41 +759,34 @@ fn note_pin_re_raise() {
 /// placement road is the one road that must put a parked window back, so it asks this with no park
 /// (see `unpark_player_window`).
 ///
-/// **A pin's own film is the one window those two hold-offs are not applied to**, because the raise
-/// they withhold is not what keeps the film visible under the chrome: it is mpv's own window that
-/// holds the band from the first frame it draws (see `--ontop` in `mpv_args`), and the pin is put
-/// back over the film in the same breath as the placement. On FFmpeg's route the band *is* the
-/// player's window and there is nothing to put back, so the hold-off stands as it always has.
-/// What the exception buys besides the chrome is the *place*: a window left behind a band that has
-/// moved is the desktop showing through the hole (see
-/// `only_an_mpv_players_window_is_placed_with_the_pins_chrome_up`).
+/// **The two hold-offs stand for mpv's film as they do for FFmpeg's.** A raise put over the pin
+/// covers the caption and the transport bar the pin draws into the band over the media (see
+/// `pin_overlay_chrome`), then the pin is put back over the film — a two-step reorder per tick,
+/// per monitor pass and per drag move, which is the blink the chrome was seen doing. What keeps
+/// the film visible under the chrome instead is mpv's own window holding its band from the first
+/// frame it draws (see `--ontop` in `mpv_args`), and what keeps the press the pin's is the pin's
+/// own raise, which the chrome block and the volume arm already do (see `event_loop`). What the
+/// film still owes a band that has moved is the *place*, and that travels without a raise (see
+/// `ensure_pinned_sibling_box`).
 ///
 /// The media engine's route never reaches a placement at all: its band is painted into this app's
 /// own window and it begins no player, so there is no window of somebody else's in the band for
 /// either raiser to place and both find none (see
 /// `only_an_mpv_players_window_is_placed_with_the_pins_chrome_up`).
 pub(super) fn player_order(
-    image: &str,
-    pinned: bool,
+    _image: &str,
+    _pinned: bool,
     chrome_up: bool,
     volume_open: bool,
     parked: bool,
 ) -> PlayerOrder {
-    // A park is refused for every window there is: a parked film is not on screen to be raised.
-    // A strip of the pin's chrome or the volume popup is refused for every window but a pinned
-    // film mpv draws: on that route the band is the pin's own pixel, so the pin keeps the press
-    // whatever band the player's window is in (see `film_band_is_hit_testable`), and a raise
-    // there is a *place* a band that has moved needs as well (see the note above). On FFmpeg's
-    // route the band *is* the player's window, so a raise there would bury what the user is
-    // looking at.
-    let order = if parked {
+    // A park, a strip of the pin's chrome and the volume popup are all refused for every window
+    // there is: a parked film is not on screen to be raised, and on either route a raise over the
+    // chrome or the popup puts the film over what the user is looking at. mpv's film holds its
+    // own band (`--ontop`) while the pin's own raise carries the press, and a band that has moved
+    // is placed without a raise (see the note above and `ensure_pinned_sibling_box`).
+    let order = if parked || chrome_up || volume_open {
         PlayerOrder::Leave
-    } else if chrome_up || volume_open {
-        if pinned && image == MPV_IMAGE_NAME {
-            PlayerOrder::Raise
-        } else {
-            PlayerOrder::Leave
-        }
     } else {
         PlayerOrder::Raise
     };
