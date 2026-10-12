@@ -571,17 +571,15 @@ pub(super) fn pin_key_restores_bubble(collapsed: bool, explorer_focused: bool) -
 /// to keep alive across the call and nothing it can invalidate underneath it. The file itself belongs to
 /// whichever program the Shell starts, and this side has no handle on it to release.
 pub(super) unsafe fn open_path_with_default_app(path: &Path, hwnd: HWND) {
-    shell_open_on(hwnd, w!("open"), path);
+    shell_open_on(hwnd, path);
 }
 
-/// Ask the Shell to act on a file on the monitor the pin is standing on, through `ShellExecuteExW`
+/// Ask the Shell to open a file on the monitor the pin is standing on, through `ShellExecuteExW`
 /// with the pin's own window as the parent and its monitor as `SEE_MASK_HMONITOR`.
 ///
-/// One road for both hand-off buttons: the default program and the `openas` picker are both verbs
-/// the Shell performs, so both take the same parent and the same monitor hint. `SEE_MASK_ASYNCOK`
-/// is what keeps this from blocking the window procedure it is pressed on: the pin's end is asked for
-/// as this returns, and a call that waited would hold the loop that ends it behind the program it
-/// starts — including behind the picker, which is a dialog the user may keep up a while.
+/// `SEE_MASK_ASYNCOK` is what keeps this from blocking the window procedure it is pressed on:
+/// the pin's end is asked for as this returns, and a call that waited would hold the loop that
+/// ends it behind the program it starts.
 ///
 /// The answer is read and deliberately not asserted on, and not acted on either: a format with
 /// nothing filed against it is the user's machine rather than a fault in this one, and a check that
@@ -595,7 +593,7 @@ pub(super) unsafe fn open_path_with_default_app(path: &Path, hwnd: HWND) {
 /// the window handle is the live preview window the press was released on; the monitor is a number
 /// read off that window and never dereferenced. Nothing is kept past the call and nothing borrowed
 /// outlives it.
-unsafe fn shell_open_on(hwnd: HWND, verb: PCWSTR, path: &Path) {
+unsafe fn shell_open_on(hwnd: HWND, path: &Path) {
     let file: Vec<u16> = std::ffi::OsStr::new(&plain_path(path))
         .encode_wide()
         .chain(std::iter::once(0))
@@ -607,7 +605,7 @@ unsafe fn shell_open_on(hwnd: HWND, verb: PCWSTR, path: &Path) {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_HMONITOR | SEE_MASK_ASYNCOK,
         hwnd,
-        lpVerb: verb,
+        lpVerb: w!("open"),
         lpFile: PCWSTR(file.as_ptr()),
         nShow: SW_SHOWNORMAL.0,
         Anonymous: SHELLEXECUTEINFOW_0 {
@@ -631,15 +629,20 @@ unsafe fn shell_open_on(hwnd: HWND, verb: PCWSTR, path: &Path) {
 /// in their own language, with their own accessibility, and it is the dialog they have already
 /// seen a thousand times from Explorer's own context menu.
 ///
-/// It is raised through the Shell's own `openas` verb on the pin's own window, which is the route
-/// that still offers the list: the obvious alternative, `SHOpenWithDialog`, cannot be used, since
-/// Windows 11 22H2 that entry point opens nothing at all and says so, telling the caller to go and
-/// change the default in Settings instead of offering the list. A button whose only job is to offer
-/// the list cannot be built on an entry point that has stopped offering it, so this is the
-/// other way in and not a preference between two that both work. Going through the Shell is also
-/// what puts the list where the pin is: the pin's window goes in as the parent and its monitor as
-/// the hint, so the list stands on the pin's display and the program picked from it starts there
-/// too (see `shell_open_on`).
+/// It is raised by handing `shell32`'s `OpenAs_RunDLL` export the file, which is the route
+/// Explorer's own "Open with" item takes and the one a caller without a COM apartment can
+/// still reach. It is *not* the Shell's own `openas` verb: performed through `ShellExecuteExW`
+/// that verb answers files with an association but comes back with "no app associated" on a
+/// file that has one, the way a plain `open` answers both. The obvious alternative,
+/// `SHOpenWithDialog`, cannot be used either: since Windows 11 22H2 that entry point opens
+/// nothing at all and says so, telling the caller to go and change the default in Settings
+/// instead of offering the list. A button whose only job is to offer the list cannot be built
+/// on an entry point that has stopped offering it, so this is the other way in and not a
+/// preference between two that both work.
+///
+/// The list is then carried onto the pin's display: once it is up it is this app's window to
+/// find — a top-level window of the system's `OpenWith.exe` — and it is moved to the pin's
+/// box before the pin comes down from over it (see `carry_open_with_to`).
 ///
 /// The pin is not up while this is: the caller asks for its end as the dialog is put up, so
 /// that the list is not behind a topmost window of the file it is listing ways to open, and
@@ -652,11 +655,238 @@ unsafe fn shell_open_on(hwnd: HWND, verb: PCWSTR, path: &Path) {
 /// the other way is the whole of it: a cancelled dialog costs the user a hover to get the
 /// pin back.
 ///
+/// Show the Shell's own "How do you want to open this?" dialog for a file: the list of
+/// programs installed on this machine that could open it, which is the only way into a second
+/// program when the default is the wrong one. The button beside this one can only ever reach
+/// the program the Shell has already chosen.
+///
 /// # Safety
 ///
-/// The window handle is the live preview window the press was released on, which is what parents
-/// the list to the pin's display; the file belongs to whichever program the user goes on to pick,
-/// and this side has no handle on it to release (see `shell_open_on`).
-pub(super) unsafe fn show_open_with_dialog(path: &Path, hwnd: HWND) {
-    shell_open_on(hwnd, w!("openas"), path);
+/// Nothing here is a borrowed pointer: the command line is a `String` this function owns,
+/// handed to the standard library as one argument, and no handle is involved at all. The
+/// file belongs to whichever program the user goes on to pick, and this side has no handle
+/// on it to release.
+pub(super) fn show_open_with_dialog(path: &Path) {
+    // The one argument `rundll32` is given, in the spelling it wants.
+    //
+    // `rundll32` does not read its command line as a list of arguments. It takes everything up
+    // to the first space as the "<library>,<entry>" pair, and then hands the function the whole
+    // of the rest of the line as one opaque tail — whatever is in it, verbatim, quotes and all.
+    // So the tail is passed with `raw_arg`, which puts it on the wire exactly as written and
+    // skips the quoting `arg` would otherwise add to any argument holding a space.
+    //
+    // Two spellings that look reasonable both put a filename into that tail that cannot exist,
+    // and neither fails loudly — `rundll32` simply exits at once, and a button that does that
+    // is a button that does nothing. Passing the path as a second argument reaches the tail as
+    // `"C:\...\my file.md"`, quotes included, because the library was already split off before
+    // the path was reached; and quoting it inside a single argument nests a second pair in the
+    // same place. Either way the Shell is handed a name with quote characters in it, finds no
+    // such file, and shows nothing. The path goes in bare, and `plain_path` above is what
+    // guarantees the only space in the tail is the one separating the entry point from it.
+    let tail = format!("shell32.dll,OpenAs_RunDLL {}", plain_path(path));
+
+    let mut command = engine_processes::hidden_command("rundll32.exe");
+    command.raw_arg(&tail);
+
+    // The child is dropped on the floor rather than kept: nothing here is waiting on it and
+    // nothing comes after it, since the pin this was raised from is on its way down. Waiting
+    // for it would be waiting on this thread's message loop from inside itself.
+    let _ = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
+/// The image name of the process the list runs as, which is what the carry below looks for: the
+/// dialog is drawn by the system's `OpenWith.exe` rather than by the `rundll32` that raises it
+/// (see `show_open_with_dialog`).
+pub(super) const OPEN_WITH_IMAGE: &str = "OpenWith.exe";
+
+/// How long the carry waits for the list to put its window up, which bounds a wait on a window
+/// this app does not own: the dialog usually arrives in well under a second, and a list that has
+/// not appeared by then is a launch that failed rather than one still starting (see
+/// `show_open_with_dialog`).
+pub(super) const OPEN_WITH_WAIT: Duration = Duration::from_secs(10);
+
+/// How often the carry looks for the list's window while it waits for it.
+pub(super) const OPEN_WITH_POLL: Duration = Duration::from_millis(25);
+
+/// Carry the "How do you want to open this?" list onto the display the pin is standing on.
+///
+/// The dialog opens wherever the system puts it — on this build the primary display's centre —
+/// so once it is up it is moved to the pin's box, which is the display the hand pressed on.
+/// `at` is the pin's own screen box, read by the caller holding the release, because the pin
+/// comes down as the dialog goes up and there is no window left to measure afterwards.
+///
+/// Only a window that has not been moved yet is touched: one the user has already carried
+/// somewhere is theirs, and a second press reaching for it again — the pin is gone by then, so
+/// `at` is wherever the pointer is — must not yank it back. Which is what the centre says: a
+/// list the system has just put up is still sitting where it opened, and a list the user has
+/// touched is not. A press with no window up yet waits for it; a press whose window never
+/// comes is a launch that failed, and there is nothing to carry.
+pub(super) fn carry_open_with_to(at: ScreenRegion, before: &[u32]) {
+    let deadline = Instant::now() + OPEN_WITH_WAIT;
+
+    while Instant::now() < deadline {
+        if carry_open_with_once(at, before) {
+            return;
+        }
+        std::thread::sleep(OPEN_WITH_POLL);
+    }
+}
+
+/// One look for the list's window, answering whether there is nothing left to wait for: carried,
+/// or gone rather than still coming.
+///
+/// A window that is not there yet is not an answer — the dialog arrives on its own process's
+/// clock, so the caller waits and looks again — while a window that was there and has since
+/// gone is: the user picked, or cancelled, faster than the carry got to it, and there is nothing
+/// left to move.
+///
+/// `before` holds the dialog processes that were already up when this press was made, so a
+/// dialog left over from an earlier press is not mistaken for this one's: only a process this
+/// press raised — one not in the list — is this press's to carry.
+fn carry_open_with_once(at: ScreenRegion, before: &[u32]) -> bool {
+    let mut seen = false;
+
+    for pid in engine_processes::processes_named(OPEN_WITH_IMAGE) {
+        if before.contains(&pid) {
+            continue;
+        }
+        seen = true;
+        if carry_open_with_windows(pid, at) {
+            return true;
+        }
+    }
+
+    // Nothing of this press's up yet is a reason to keep waiting; nothing up at all after
+    // something was is the dialog gone again — picked or cancelled — and not still coming.
+    seen
+}
+
+/// Move the list windows of `pid` that are still sitting where the system put them onto the
+/// pin's box, answering whether any of them was carried.
+///
+/// A window is only moved while its centre is still on the primary display: that is where the
+/// system centres the dialog, so a window whose middle is there is one nobody has touched yet,
+/// and a window the user has carried elsewhere is left alone (see `carry_open_with_to`). The
+/// move keeps the window's own size and z-order and never activates it — the pin is coming
+/// down and the dialog is the hand's next stop, but stealing the keyboard to say so would
+/// take it from wherever the user has since put it.
+fn carry_open_with_windows(pid: u32, at: ScreenRegion) -> bool {
+    let found = open_with_windows(pid);
+    let mut carried = false;
+
+    for hwnd in found {
+        let mut rect = RECT::default();
+        // Safety: the handle was just enumerated as a live window of the dialog's own process,
+        // and only its box is read; a window gone since is refused rather than acted on.
+        if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+            continue;
+        }
+        if rect.right <= rect.left || rect.bottom <= rect.top {
+            continue;
+        }
+        let middle = (
+            rect.left.saturating_add(rect.right) / 2,
+            rect.top.saturating_add(rect.bottom) / 2,
+        );
+        if !on_primary_display(middle.0, middle.1) {
+            continue;
+        }
+
+        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+        let (left, top) = open_with_spot(at, (width, height));
+        // Safety: the handle is the dialog's own live window and only its position is
+        // touched — size, order and activation all left as they are (see above).
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                HWND(std::ptr::null_mut()),
+                left,
+                top,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        carried = true;
+    }
+
+    carried
+}
+
+/// Where the list goes on the pin's display: centred on the pin's own box, clamped onto the
+/// display the pin is standing on so a pin half off a display's edge still leaves a list that
+/// is wholly on it.
+fn open_with_spot(at: ScreenRegion, size: (i32, i32)) -> (i32, i32) {
+    let middle = ((at.0.saturating_add(at.2)) / 2, (at.1.saturating_add(at.3)) / 2);
+    open_with_spot_in(work_area_at(middle.0, middle.1), middle, size)
+}
+
+/// The arithmetic of `open_with_spot` over an explicit room, which is what the test below holds:
+/// the middle centred and then clamped, so a box smaller than the room is centred and a box
+/// the room cannot hold at full size is pushed wholly onto it rather than hung off its edge.
+pub(super) fn open_with_spot_in(bounds: ScreenBounds, middle: (i32, i32), size: (i32, i32)) -> (i32, i32) {
+    let left = middle.0.saturating_sub(size.0 / 2).clamp(bounds.left, bounds.right.saturating_sub(size.0).max(bounds.left));
+    let top = middle.1.saturating_sub(size.1 / 2).clamp(bounds.top, bounds.bottom.saturating_sub(size.1).max(bounds.top));
+    (left, top)
+}
+
+/// Whether a point is on the primary display, whose room is the fallback `primary` names: the
+/// system centres the list there, so a list whose middle answers yes is one nobody has moved
+/// yet (see `carry_open_with_windows`).
+fn on_primary_display(x: i32, y: i32) -> bool {
+    centre_on_display((x, y), DESKTOPS.primary())
+}
+
+/// Whether a point is inside a display's room, which is what `on_primary_display` asks of the
+/// primary one — and what the test below holds without a screen attached.
+pub(super) fn centre_on_display(point: (i32, i32), bounds: ScreenBounds) -> bool {
+    point.0 >= bounds.left && point.0 < bounds.right && point.1 >= bounds.top && point.1 < bounds.bottom
+}
+
+/// The live top-level windows of `pid`: visible, with a box, and owned by nobody — the dialog
+/// rather than one of its own popups.
+///
+/// # Safety
+///
+/// The handles are enumerated off the live desktop and only read; a window gone since is refused
+/// by the calls made on it rather than acted on.
+fn open_with_windows(pid: u32) -> Vec<HWND> {
+    struct Found {
+        pid: u32,
+        windows: Vec<HWND>,
+    }
+
+    unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let found = &mut *(lparam.0 as *mut Found);
+        let mut owner_pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut owner_pid));
+        if owner_pid != found.pid {
+            return BOOL(1);
+        }
+        if !IsWindowVisible(hwnd).as_bool() {
+            return BOOL(1);
+        }
+        if GetWindow(hwnd, GW_OWNER).map(|owner| !owner.is_invalid()).unwrap_or(false) {
+            return BOOL(1);
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err()
+            || rect.right <= rect.left
+            || rect.bottom <= rect.top
+        {
+            return BOOL(1);
+        }
+        found.windows.push(hwnd);
+        BOOL(1)
+    }
+
+    let mut found = Found { pid, windows: Vec::new() };
+    unsafe {
+        let _ = EnumWindows(Some(callback), LPARAM(&mut found as *mut Found as isize));
+    }
+    found.windows
 }

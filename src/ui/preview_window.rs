@@ -175,6 +175,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Output, Stdio};
 use std::ptr;
@@ -184,7 +185,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, GlobalFree, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
+    CloseHandle, GlobalFree, BOOL, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
     WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
