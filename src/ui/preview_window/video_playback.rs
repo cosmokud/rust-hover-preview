@@ -411,14 +411,24 @@ fn start_mpv_video_playback(
     // `mpv_ipc`).
     let ipc = mpv_ipc::next_pipe_name();
 
+    // **The box is named on the scale of the display mpv's window is created on, which is the
+    // primary's** — that is the size Windows scales to the display the film is moved to, and
+    // naming it there is the whole of what makes the window the box rather than twice it (see
+    // `video_launch::mpv_box_size`, where the measurement behind this is written out). `(0, 0)` is
+    // the primary display's own corner, and the primary is the display a player's window is created
+    // on whatever box the film is watched in. The box itself is what is written down below and what
+    // the tick asserts: only the player's geometry is in the other scale.
+    let (asked_width, asked_height) =
+        video_launch::mpv_box_size(width, height, dpi_at(x, y), dpi_at(0, 0));
+
     let mut command = engine_processes::hidden_command(program);
     command
         .args(video_launch::mpv_args(
             path,
             x,
             y,
-            width,
-            height,
+            asked_width,
+            asked_height,
             start,
             volume,
             gain,

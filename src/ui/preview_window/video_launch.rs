@@ -263,6 +263,55 @@ pub(super) fn mpv_args(
     args
 }
 
+/// The size a film's box is asked for, so that the window the film is drawn in is that box.
+///
+/// **A window is asked for on the primary display's scale, and Windows rescales it to the display
+/// it is moved to — so the size mpv is told is not the size the window ends up.** mpv creates its
+/// window at `CW_USEDEFAULT`, which is the primary whatever display the film is watched on, and
+/// applies the geometry exactly there; a window crossing to a display of another scale then gets
+/// `WM_DPICHANGED` from Windows with a suggested rectangle that keeps the window's *logical* size,
+/// and mpv's handler takes that rectangle as it stands (`w32->windowrc = *rc;` under
+/// `case WM_DPICHANGED` in `video/out/w32_common.c` — it does not put the geometry back, and no
+/// option of that version makes it). The window therefore comes out at the size asked for times
+/// the display's scale over the primary's, which is the film at 200% of the preview box.
+///
+/// Measured on mpv 0.41.0 with the primary display 3440x1440 at 96 DPI and a second one 3840x2160
+/// at 192 DPI at (3440,-2160), reading `GetWindowRect` every millisecond from a per-monitor-v2
+/// process with the pointer on the second display: `--geometry=2864x1611+4416+-2160` is *visible*
+/// at 5728x3222 and stays there — twice the box, wider than the display, and the wrong size is the
+/// one shown, never a frame of the right one — and `--geometry=480x270+4160+-1755` is visible at
+/// 960x540. Asked for on the primary's scale the window is the box from the first frame it is
+/// visible: 1432x805 opens at 2864x1610, 240x135 at 480x270 exactly, and the same box on the
+/// primary display opens at the box unchanged. The three flags that look like they should matter —
+/// `--hidpi-window-scale=yes`, `--force-window-position=yes`, `--auto-window-resize=no` — each
+/// leave it doubled (one run each), and `--screen=1` moves the offsets onto that display's origin
+/// without touching the scale.
+///
+/// shortcut: the divisor is the ratio of the two displays' DPIs and nothing finer, so a box whose
+/// size does not halve evenly lands a pixel out until the tick asserts the box (see
+/// `ensure_video_window_topmost`); a display drawn at the primary's scale — the primary itself
+/// among them — is asked for its box as it stands, which is every box on a machine of one scale;
+/// and this rests on mpv's window being created on the primary display, which is the one thing
+/// here that is mpv's to change. Upgrade when mpv re-applies the geometry after a DPI change, or
+/// when Windows stops suggesting a rescaled rectangle.
+pub(super) fn mpv_box_size(
+    width: i32,
+    height: i32,
+    display_dpi: u32,
+    primary_dpi: u32,
+) -> (i32, i32) {
+    if display_dpi == primary_dpi {
+        return (width, height);
+    }
+
+    let on_the_primarys_scale = f64::from(primary_dpi) / f64::from(display_dpi);
+
+    (
+        (f64::from(width) * on_the_primarys_scale).round().max(1.0) as i32,
+        (f64::from(height) * on_the_primarys_scale).round().max(1.0) as i32,
+    )
+}
+
 /// The extensions a sidecar subtitle file is looked for under, in the order they are tried.
 ///
 /// SubRip first because it is what a sidecar is nearly always, and `.ass`/`.ssa` after it because
@@ -1633,6 +1682,85 @@ mod tests {
             .contains(&"--geometry=640x360+0+0".to_string()),
             "a box at the primary display's own origin is passed as it stands"
         );
+    }
+
+    /// **The size a film's box is asked for on a display whose scale is not the primary's**, which
+    /// is the regression test for the window that came up at twice the box and was put right a
+    /// second later by the tick — the fault a hover on the second display shows and a hover on the
+    /// primary one cannot.
+    ///
+    /// The measurement the division rests on is written out over `mpv_box_size`. What is pinned
+    /// here is the answer this machine's second display gives it together with the command line
+    /// that answer reaches mpv as, because a size asked for wrongly is a command line right up to
+    /// the preview — and there is no preview on a machine of one scale that can fail.
+    ///
+    /// **The trace the answer rests on is not and cannot be a test**: it reads `GetWindowRect` off
+    /// a player's window on a second display, so a suite holding it would need that display, a
+    /// player window on it and a pointer there, and what it measured would be this machine's two
+    /// displays rather than the code. The window itself was read, and the readings are in the note
+    /// over `mpv_box_size` and in the report on this ticket.
+    #[test]
+    fn a_box_on_a_scaled_display_is_asked_for_on_the_scale_of_the_display_the_window_is_born_on() {
+        // The fit a hover of a 3840x2160 room gives beside the pointer on a display drawn at 200%,
+        // beside a 96 DPI primary: the box is what the layout placed, and mpv is told that box on
+        // the primary's scale, which is the size Windows doubles on its way to the second display.
+        let (asked_w, asked_h) = mpv_box_size(2864, 1611, 192, 96);
+        assert_eq!(
+            (asked_w, asked_h),
+            (1432, 806),
+            "the window comes out at the size asked for times the display's scale over the \
+             primary's, so the box is asked for at that share of itself"
+        );
+        assert_eq!(
+            mpv_args(
+                Path::new("a.mkv"),
+                4416,
+                -2160,
+                asked_w,
+                asked_h,
+                0.0,
+                100,
+                None,
+                true,
+                true,
+                None,
+                IPC,
+            ),
+            [
+                "a.mkv",
+                "--no-config",
+                "--no-osc",
+                "--no-border",
+                "--window-dragging=no",
+                "--geometry=1432x806+4416+-2160",
+                "--gpu-api=d3d11",
+                "--hwdec=auto",
+                "--sub-auto=fuzzy",
+                "--keep-open=yes",
+                "--volume=100",
+                IPC_ARG,
+            ],
+            "the box the layout placed is 2864x1611 and the box mpv is given for it is that size \
+             on the primary's scale; the position is the box's own, because Windows keeps a \
+             window's top-left corner where a DPI change finds it (measured)"
+        );
+
+        // Every box on a machine of one scale, and every box on a display drawn at the primary's
+        // scale, is asked for exactly as it stands — which is the whole of the common case, and it
+        // cannot be made worse by this: two displays at 100% are two displays at one scale.
+        assert_eq!(mpv_box_size(1720, 967, 96, 96), (1720, 967));
+        assert_eq!(mpv_box_size(480, 270, 144, 144), (480, 270));
+
+        // A display scaled *below* the primary's is the same division the other way, because the
+        // window would come out smaller than the box there rather than larger.
+        assert_eq!(mpv_box_size(960, 540, 96, 192), (1920, 1080));
+
+        // And a box that does not halve evenly is a pixel out rather than a window twice the size:
+        // 967 is the fit this machine's second display gives a 3840x2160 room and it is odd, which
+        // is the trade `mpv_box_size`'s note names — the tick asserts the box itself a moment
+        // later (see `ensure_video_window_topmost`).
+        assert_eq!(mpv_box_size(1720, 967, 192, 96), (860, 484));
+        assert_eq!(mpv_box_size(480, 270, 192, 96), (240, 135));
     }
 
     /// The two input flags are dropped together where the binding file could not be written, so a
