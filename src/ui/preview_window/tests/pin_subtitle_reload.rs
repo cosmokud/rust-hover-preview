@@ -182,6 +182,7 @@ fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on
     // key would answer the mpv route before this test asked about the FFmpeg one (see `stand_mpv_in`).
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     step_pinned_subtitle();
     assert_eq!(
         restart_count(),
@@ -200,6 +201,7 @@ fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on
     mpv_ipc::clear_noted();
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     // The FFmpeg half above began a player, which wrote its own pid down: this half is about the
     // player this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
@@ -225,6 +227,7 @@ fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on
     mpv_ipc::clear_noted();
     stand_mpv_in(None);
     stand_ffplay_in(None);
+    stand_video_engine_in(None);
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     restore_media(previous_media);

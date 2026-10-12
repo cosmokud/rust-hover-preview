@@ -855,6 +855,7 @@ fn a_seek_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays() {
     // second the bar was let go at.
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     stand_pin(Some(a_playing_pin(&film, content)));
     seek_pinned_playback(&film, content, 90.0);
     assert_eq!(
@@ -868,6 +869,7 @@ fn a_seek_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays() {
     mpv_ipc::clear_noted();
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     // The ffplay half above began a player, which wrote its own pid down: this half is about the
     // player this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
@@ -913,6 +915,7 @@ fn a_seek_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays() {
     mpv_ipc::clear_noted();
     stand_mpv_in(None);
     stand_ffplay_in(None);
+    stand_video_engine_in(None);
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -940,6 +943,7 @@ fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume()
     // FFmpeg's player: a resume with no window to post a key to is a player begun again.
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     let mut held = a_playing_pin(&film, content);
     held.transport.held(30.0);
     held.transport.started = None;
@@ -957,6 +961,7 @@ fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume()
     mpv_ipc::clear_noted();
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     // The ffplay half above began a player, which wrote its own pid down: this half is about the
     // player this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
@@ -1002,6 +1007,7 @@ fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume()
     mpv_ipc::clear_noted();
     stand_mpv_in(None);
     stand_ffplay_in(None);
+    stand_video_engine_in(None);
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
@@ -1039,6 +1045,7 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     // FFmpeg's player: the rewind is a player begun again at the beginning.
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     note_video_loop(101, &film, content, 0.0, Some(8.0));
     a_pass_has_run();
     assert!(video_loop_tick(true), "the tick takes the film back");
@@ -1056,6 +1063,7 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     mpv_ipc::clear_noted();
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     // The ffplay half above began a player, which wrote its own pid down: this half is about the
     // player this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
@@ -1100,6 +1108,7 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     mpv_ipc::clear_noted();
     stand_mpv_in(None);
     stand_ffplay_in(None);
+    stand_video_engine_in(None);
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {

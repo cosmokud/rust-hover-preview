@@ -128,8 +128,8 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
 /// from a thread of its own, about five times a millisecond for as long as a film
 /// plays, and a list written out twice is a list whose two copies drift: the
 /// second one silently drops whatever the first has learned (see
-/// `ensure_video_window_topmost`, which re-asserts only the three it also knows
-/// about and so preserves these rather than re-deciding them).
+/// `ensure_video_window_topmost`, which asserts the same list from the tick's own
+/// road rather than one of its own).
 ///
 /// **`WS_EX_TRANSPARENT` is what makes a click on the band reach nothing of the
 /// player's own.** A video pin's band is alpha zero by design, so that the window
@@ -148,29 +148,12 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
 /// come from `UpdateLayeredWindow`, and this one is SDL's, which paints and
 /// swaps its own surface. A video that stopped rendering would be a far worse
 /// answer than a click that falls through to the desktop.
-/// The extended styles a player's window carries, for the side of the pin it is put on.
-///
-/// **A carried player is asserted the same list without the topmost bit**, and that is not a detail
-/// of the raise: the style is the other place the order is decided, and the two would otherwise
-/// disagree. A topmost window can never be carried under a topmost pin, whatever the raise does —
-/// and the band of a pinned film mpv draws is the pin's own pixel for exactly this case, so the
-/// window a press on the picture has to reach is the pin's (see `player_order`,
-/// `film_band_is_hit_testable`).
-///
-/// It is one function for both raisers for the reason this list is one function at all: a list
-/// written out twice is a list whose two copies drift, and the tick's copy had already drifted into
-/// asserting the topmost bit on a window the monitor was deliberately holding down.
-pub(super) fn player_ex_style_for(current: isize, carried: bool) -> isize {
-    let asserted = current
+pub(super) fn player_ex_style_for(current: isize) -> isize {
+    current
         | WS_EX_NOACTIVATE.0 as isize
         | WS_EX_TOOLWINDOW.0 as isize
-        | WS_EX_TRANSPARENT.0 as isize;
-
-    if carried {
-        asserted & !(WS_EX_TOPMOST.0 as isize)
-    } else {
-        asserted | WS_EX_TOPMOST.0 as isize
-    }
+        | WS_EX_TOPMOST.0 as isize
+        | WS_EX_TRANSPARENT.0 as isize
 }
 
 /// Style and raise a player's known window.
@@ -183,20 +166,15 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     let order = player_order(
         video_process_image(),
         pinned(),
-        pin_is_collapsed(),
         pin_chrome_up(),
         pin_volume_open(),
         pin_player_is_parked(),
     );
 
-    // Add WS_EX_NOACTIVATE and WS_EX_TOPMOST to its extended style — or leave the topmost bit off,
-    // for a film carried under a pinned window's own band (see `player_ex_style_for`).
+    // Add WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST and WS_EX_TRANSPARENT to its extended
+    // style (see `player_ex_style_for`).
     let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    SetWindowLongPtrW(
-        hwnd,
-        GWL_EXSTYLE,
-        player_ex_style_for(current_style, order == PlayerOrder::Carry),
-    );
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, player_ex_style_for(current_style));
 
     // The style is put on whatever else is happening, and the *raise* is not. This is the one
     // place every raise of the player's window goes through — the monitor thread calls it about
@@ -225,28 +203,22 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // at the pointer's rate: the stutter the park was written for, and a band painted flat under a
     // window that is standing in it (see `pin_player_is_parked`).
     //
-    // **What is held off here is the `Leave` answer and nothing else.** For FFmpeg's own route
-    // those guards are the ones above — a park, a strip of the pin's chrome, an open volume popup —
-    // because that route's band *is* this window, and raising it puts the film over whatever the
-    // pin's own window is drawing there (see `pin_chrome_up`, `pin_volume_open`). A pin collapsed
-    // into its bubble is held off for the film mpv draws and not for FFmpeg's, whose raise is what
-    // it has always had collapsed or not (see `player_order`). Everything else is
-    // raised, and the band it is raised into is the answer's own: topmost for a hover or FFmpeg's
-    // pin, the top of the ordinary band for the film mpv draws under a pin (see
-    // `player_insert_after`). A carried film raised to the top of the ordinary band cannot bury the
-    // pin's chrome or its volume popup, because both of those are drawn into the pin's own window,
-    // which is topmost and so still over the film — which is why the carry is not held off here,
-    // and why its answer must not be `HWND_TOPMOST` either: that would put the film over the pin and
-    // take the press on the picture with it (see `player_order`, `film_band_is_hit_testable`).
+    // **What is held off here is the `Leave` answer and nothing else.** Those are the park, a strip
+    // of the pin's chrome and an open volume popup (see `pin_player_is_parked`, `pin_chrome_up`,
+    // `pin_volume_open`), and for FFmpeg's own route the band *is* this window, so a raise over
+    // either of the last two puts the film over what the user is looking at (see the note above).
+    // A film mpv draws is raised through them rather than held by them: its window is the one mpv
+    // holds up itself (`--ontop`, see `mpv_args`), and the placement puts the pin back over the
+    // film it raises, which is where that pin's chrome and popup are drawn (see
+    // `place_player_window`).
     if order == PlayerOrder::Leave {
         return true;
     }
 
-    // Put the player's window in the band its order belongs in: topmost so it doesn't hide behind
-    // Explorer, and the top of the ordinary band for a carried film — after the demotion that takes
-    // it out of the topmost band, which a style write does not do — so it is over Explorer and
-    // still under the pin (see `player_place_window`).
-    player_place_window(
+    // Raise the window above everything so it doesn't hide behind Explorer — and put the pin back
+    // over it where one is up, so the pin's own chrome and the press on the picture stay on top
+    // (see `place_player_window`).
+    place_player_window(
         hwnd,
         order,
         (0, 0, 0, 0),

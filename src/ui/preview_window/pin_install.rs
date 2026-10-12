@@ -296,7 +296,9 @@ pub(super) fn pinned_player_is_coming(media_type: MediaType, path: &Path) -> boo
 /// It is asked through here rather than inline so that a test can stand an answer in for it, and it
 /// has to be: the arm this exists for is one a machine with no FFmpeg takes every time and a machine
 /// with one never takes at all, so nothing on a machine this is developed on can reach it (see
-/// `stand_ffplay_in`).
+/// `stand_ffplay_in`). Standing the installs in is the half of a hermetic route that is about the
+/// machine; a test whose arm also needs the configured choice stands that in beside it (see
+/// `stand_video_engine_in`).
 pub(super) fn ffplay_is_here() -> bool {
     #[cfg(test)]
     if let Some(answer) = ffplay_stand_in() {
@@ -312,6 +314,10 @@ pub(super) fn ffplay_is_here() -> bool {
 /// It is asked through here rather than inline for the same reason FFmpeg's player is, and for a
 /// second one on top of it: mpv is not installed on the machine this is developed on, so without a
 /// slot to stand one in the route mpv makes could not be asked about at all (see `stand_mpv_in`).
+/// Standing the installs in answers only what the machine has: the route is also asked of the
+/// configured choice, so a test whose arm needs mpv to win stands the choice in beside the
+/// installs, or it inherits whichever engine that run's `config.ini` names (see
+/// `stand_video_engine_in`).
 pub(super) fn mpv_is_here() -> bool {
     #[cfg(test)]
     if let Some(answer) = mpv_stand_in() {

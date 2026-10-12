@@ -680,13 +680,10 @@ pub(super) fn kill_player_process(media: &mut MediaData) {
 /// somewhere read.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum PlayerOrder {
-    /// Put the window at its box and raise it above everything: the film is the picture, and
-    /// nothing of this app's is standing over it.
+    /// Put the window at its box in the topmost band, and put the pin back over it where one is
+    /// up: the film is the picture, and the window that keeps the press on it is the pin's (see
+    /// `place_player_window`).
     Raise,
-    /// Put the window at its box, at the top of the ordinary band: above every ordinary window —
-    /// Explorer, and whatever else the user brings up — and still below the topmost pin, whose own
-    /// pixel the band the film stands in is (see `film_band_is_hit_testable`, `player_insert_after`).
-    Carry,
     /// Leave the window exactly as it stands: a strip of the pin's chrome or its volume popup is
     /// drawn where the film is, or the film is parked for the length of a gesture.
     Leave,
@@ -719,26 +716,44 @@ fn note_player_order(order: PlayerOrder) {
     LAST_PLAYER_ORDER.with(|held| held.set(Some(order)));
 }
 
+/// How many times a placement on this thread has put the pin back over the film it raised.
+///
+/// The other half of the same invariant, and the half `LAST_PLAYER_ORDER` cannot carry: the answer
+/// is one fact and what a placement does with it is two — a window raised, and the pin put back
+/// over it — so a test that read only the answer could not tell a raise that leaves the pin under
+/// the film from one that does not. It is read and cleared together, so what a test asks is what
+/// the placement it caused did rather than what an earlier one did (see `take_pin_re_raises`).
+#[cfg(test)]
+thread_local! {
+    static PIN_RE_RAISES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times the pin has been put back over a raised film on this thread since this was last
+/// asked (see `PIN_RE_RAISES`).
+#[cfg(test)]
+pub(super) fn take_pin_re_raises() -> usize {
+    PIN_RE_RAISES.with(|held| held.replace(0))
+}
+
+/// Count one placement that put the pin back, for this thread's test eye alone (see
+/// `PIN_RE_RAISES`).
+#[cfg(test)]
+fn note_pin_re_raise() {
+    PIN_RE_RAISES.with(|held| held.set(held.get() + 1));
+}
+
 /// What is to be done with the player's window, from the facts both of the places that put one
 /// somewhere can read.
 ///
-/// **A pinned film mpv draws is the one answer the player is never raised over the pin.** Its band
-/// is the pin's own pixel rather than a hole onto the player's window, so a press on the film has to
-/// reach the pin — which it cannot while the player is the window the point belongs to. The film is
-/// therefore carried with the band, at the top of the ordinary band: over every ordinary window, and
-/// never in front of the pin, where every other answer is the one it has always been: a hover must
-/// go on falling through, and FFmpeg's player keeps the band it has always kept. Which player is up
-/// is read off `video_process_image` — the same record the carry itself is read off — rather than
-/// off the media, which is a fact about the file on screen and not about whose window stands in its
-/// band.
-///
-/// **A pin collapsed into its bubble is the one answer a film mpv draws is left alone by**, and the
-/// reason is that the band the carry is for has gone with it: a collapse puts the pin's own window
-/// — the pixel the film is carried under — away with the bubble that stands for it (see
-/// `hide_pinned_windows`), while the player goes on running (see `settle_bubble_playback`). A
-/// carried film would then be a chrome-less player placed back at its box over Explorer beside the
-/// bubble, which is the one thing a collapse leaves nothing of anybody else's on screen beside (see
-/// `pin_is_collapsed`), and a raised one would be the same film over the same bubble instead.
+/// **The answer is the raise for a film mpv draws under a pin, as it is for every other film.**
+/// mpv's window is topmost like FFmpeg's, and what keeps the pin's own band the pixel a press on
+/// the picture lands in is the raise of the pin that comes straight after every placement (see
+/// `place_player_window`, `film_band_is_hit_testable`). A film standing in the ordinary band is the
+/// fault this answer exists to not have: Explorer is raised over whatever stands there the moment
+/// the user clicks into it, and the band painted over the film goes on taking the press (see
+/// `film_band_is_hit_testable`). Which film a pin draws is read off `video_process_image` — the
+/// same record the placement is read off — rather than off the media, which is a fact about the
+/// file on screen and not about whose window stands in its band.
 ///
 /// The raise is held off for the same reasons it always was: a strip of the pin's chrome or the
 /// volume popup is drawn where the film is, and a film parked for a gesture is deliberately not on
@@ -746,29 +761,41 @@ fn note_player_order(order: PlayerOrder) {
 /// placement road is the one road that must put a parked window back, so it asks this with no park
 /// (see `unpark_player_window`).
 ///
-/// The media engine's route never reaches the carry at all: its band is painted into this app's own
-/// window and it begins no player, so there is no window of somebody else's in the band for either
-/// raiser to place and both find none (see
-/// `only_an_mpv_players_window_is_carried_under_the_pins_chrome`).
+/// **A pin's own film is the one window those two hold-offs are not applied to**, because the raise
+/// they withhold is not what keeps the film visible under the chrome: it is mpv's own window that
+/// holds the band from the first frame it draws (see `--ontop` in `mpv_args`), and the pin is put
+/// back over the film in the same breath as the placement. On FFmpeg's route the band *is* the
+/// player's window and there is nothing to put back, so the hold-off stands as it always has.
+/// What the exception buys besides the chrome is the *place*: a window left behind a band that has
+/// moved is the desktop showing through the hole (see
+/// `only_an_mpv_players_window_is_placed_with_the_pins_chrome_up`).
+///
+/// The media engine's route never reaches a placement at all: its band is painted into this app's
+/// own window and it begins no player, so there is no window of somebody else's in the band for
+/// either raiser to place and both find none (see
+/// `only_an_mpv_players_window_is_placed_with_the_pins_chrome_up`).
 pub(super) fn player_order(
     image: &str,
     pinned: bool,
-    collapsed: bool,
     chrome_up: bool,
     volume_open: bool,
     parked: bool,
 ) -> PlayerOrder {
-    // The pin's own film first, because it is the pin's own pixel the press has to land in and
-    // that is not the chrome's to refuse. Two answers are given before it: a park, since a parked
-    // film is not on screen to be carried, and a film mpv draws under a pin collapsed into its
-    // bubble, since the band a carried film stands in — the pin's own window — went off the screen
-    // with the bubble that stands for it (see `hide_pinned_windows`).
-    let order = if parked || (pinned && collapsed && image == MPV_IMAGE_NAME) {
+    // A park is refused for every window there is: a parked film is not on screen to be raised.
+    // A strip of the pin's chrome or the volume popup is refused for every window but a pinned
+    // film mpv draws: on that route the band is the pin's own pixel, so the pin keeps the press
+    // whatever band the player's window is in (see `film_band_is_hit_testable`), and a raise
+    // there is a *place* a band that has moved needs as well (see the note above). On FFmpeg's
+    // route the band *is* the player's window, so a raise there would bury what the user is
+    // looking at.
+    let order = if parked {
         PlayerOrder::Leave
-    } else if pinned && image == MPV_IMAGE_NAME {
-        PlayerOrder::Carry
     } else if chrome_up || volume_open {
-        PlayerOrder::Leave
+        if pinned && image == MPV_IMAGE_NAME {
+            PlayerOrder::Raise
+        } else {
+            PlayerOrder::Leave
+        }
     } else {
         PlayerOrder::Raise
     };
@@ -779,88 +806,64 @@ pub(super) fn player_order(
     order
 }
 
-/// The z-order an order is placed with — and the whole of the difference between a film moved under
-/// the pin and a film raised over it.
+/// Put a player's window at `box_` in the topmost band, and put the pin back over it where one is
+/// up.
 ///
-/// A `SetWindowPos` places a window *after* the handle it is handed, and there are two bands worth
-/// naming: the topmost band, where the pin stands and where every raised film goes, and the top of
-/// the ordinary band, which is where a carried film goes. `HWND_TOPMOST` would put the film over
-/// the pin and take the press on the picture with it; **`HWND_TOP` is the top of the ordinary
-/// band**, so the film is above every ordinary window — Explorer, and whatever else the user brings
-/// up — and still under the topmost pin, which is exactly the carry: the band is the pin's own
-/// pixel, so the film has to be seen there without being the window the point belongs to (see
-/// `player_order`, `film_band_is_hit_testable`).
+/// **This is the one place either raiser puts a player's window somewhere**, so the two cannot
+/// disagree about the band it goes in or about what has to be standing over it (see
+/// `ensure_video_window_topmost`, `apply_noactivate_to_hwnd`).
 ///
-/// **The z-order bit must not be left alone.** This is what the carry used to do, with
-/// `SWP_NOZORDER`: `SetWindowPos` ignores its insert-after argument under that flag, so a carried
-/// film kept the order it happened to have, and Explorer covered it the moment it was activated —
-/// while the pin's band went on taking the press over a film nobody could see.
+/// **The raise is `HWND_TOPMOST`, and never a placement left to `SWP_NOZORDER`.** `SetWindowPos`
+/// ignores its insert-after argument under that flag, so a window placed that way keeps whatever
+/// order it happened to have — and any ordinary window the user activates, Explorer first among
+/// them, is then raised over the film, while the band painted for it goes on taking the press (see
+/// `film_band_is_hit_testable`).
 ///
-/// **And `HWND_TOP` is only the top of the ordinary band for a window that is standing in that
-/// band**, which is why a carry is demoted before it is placed: the band is the window manager's,
-/// and clearing the `WS_EX_TOPMOST` bit in the style (see `player_ex_style_for`) does not move a
-/// window out of it (see `player_place_window`, which asks for the demotion first).
+/// **And the pin is put back over the film it just raised.** Both windows are topmost, so which of
+/// the two stands in front is a question of which was raised last, and this app raises the player
+/// on every tick and on every monitor pass — so the order is put in rather than left to whoever
+/// raised last. What the pin's window owes above the film is the caption and the transport bar of
+/// a video pin, which are drawn *into* the band over the media (see `pin_overlay_chrome`), and the
+/// press on the picture, which has to be the pin's. This is this app's half of the belt-and-braces
+/// with mpv's own `--ontop`: mpv holds its window up from the first frame it draws, and this is
+/// what answers for the pin standing over it.
 ///
-/// It is a function so that a test can read it: a screen is the only other place the order of two
-/// windows can be seen, and the suite has none.
-pub(super) fn player_insert_after(order: PlayerOrder) -> HWND {
-    // A `Leave` never reaches a placement — both raisers refuse it before asking (see
-    // `ensure_video_window_topmost`, `apply_noactivate_to_hwnd`) — and the raise is the ordinary
-    // answer for every other order.
-    match order {
-        PlayerOrder::Carry => HWND_TOP,
-        PlayerOrder::Raise | PlayerOrder::Leave => HWND_TOPMOST,
-    }
-}
-
-/// Put a player's window where its order says: at `box_`, in the band that order belongs in, with
-/// the flags the raiser asked for.
+/// **A `Leave` never reaches here** — both raisers refuse it before asking (see `player_order`) —
+/// so the pin is not re-raised for a park, and the two hold-offs a `Leave` stands for are answered
+/// where they are caused: a strip of the pin's chrome and an open volume popup each come with a
+/// raise of the pin's own window (see `event_loop`'s chrome block, `toggle_pin_volume`). Nor is a
+/// hover's placement followed by one, because a hover has no pin to put over anything. What is
+/// left is the pin being put back exactly where a pinned film was raised.
 ///
-/// **A carried window is moved out of the topmost band before it is placed, because a style write
-/// is not what moves it.** `player_ex_style_for` clears the `WS_EX_TOPMOST` *bit* for a carry, and
-/// MSDN documents that bit as added and removed with `SetWindowPos` — `HWND_TOPMOST` and
-/// `HWND_NOTOPMOST` — rather than with a `SetWindowLongPtrW` write of it: the band a window
-/// actually stands in is the window manager's, and the style is only the flag it keeps about it.
-/// A window is often *still* topmost at the moment it is carried, since every road that is not the
-/// carry puts a player in that band (see `ensure_video_window_topmost`, `apply_noactivate_to_hwnd`)
-/// — so `HWND_TOP` on its own would place it at the top of the *topmost* band: over the pin,
-/// taking the press on the picture with it, which is the bug the carry exists to not have.
-/// `HWND_NOTOPMOST` immediately before the placement costs one call and does nothing at all to a
-/// window that is not topmost, so the placement below it lands under the pin whichever band the
-/// window was in.
-///
-/// The placement itself goes through `player_insert_after`, so the z-order is always asked for:
-/// `SWP_NOZORDER` is never among `flags`, or the insert-after argument would be ignored and the
-/// carry would be a raise with extra steps.
-pub(super) unsafe fn player_place_window(
+/// Where the window goes is the caller's own box and flags, so the monitor's
+/// `SWP_NOMOVE`/`SWP_NOSIZE` and a tick's box are the same placement either way.
+pub(super) unsafe fn place_player_window(
     hwnd: HWND,
     order: PlayerOrder,
     box_: ScreenRegion,
     flags: SET_WINDOW_POS_FLAGS,
 ) {
-    if order == PlayerOrder::Carry {
-        let _ = SetWindowPos(
-            hwnd,
-            HWND_NOTOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+    let (x, y, width, height) = box_;
+    let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, flags);
+
+    // A raise with no pin standing is a hover's, and there is nothing to put over it.
+    let re_raise = order == PlayerOrder::Raise && pinned();
+
+    #[cfg(test)]
+    if re_raise {
+        note_pin_re_raise();
     }
 
-    let (x, y, width, height) = box_;
-    let _ = SetWindowPos(hwnd, player_insert_after(order), x, y, width, height, flags);
+    if re_raise {
+        raise_pinned_window(HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _));
+    }
 }
 
 /// Put the ffplay window where it belongs and on top of everything, re-discovering and re-asserting
 /// its style by pid so that a window ffplay recreated is styled again rather than inherited.
 ///
-/// **A pinned film mpv draws is carried here rather than raised over the pin**, which is the one
-/// answer `player_order` gives that is not the raise: the pin's window is the one the point in the
-/// band belongs to, so the player is put where the band is and at the top of the ordinary band —
-/// over every ordinary window, and still behind the pin (see `player_insert_after`).
+/// **A player's window is raised here — and the pin is put back over it with it**, for every film
+/// this app shows, mpv's included (see `place_player_window`, which is where both of those happen).
 ///
 /// **This is the one place a player's window is raised, and the volume popup and the pin's
 /// chrome are guarded here rather than by their callers.** That is the whole of the
@@ -884,10 +887,9 @@ pub(super) unsafe fn player_place_window(
 /// the same flag (see `pin_player_is_parked`); the monitor thread's own raise, which nobody can hold
 /// off from outside, is guarded where it is raised (see `apply_noactivate_to_hwnd`).
 pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
-    // What is to be done with the window, from the one answer both of the places that put it
-    // somewhere read: a film mpv is drawing under a pin is carried, not raised over the pin, and
-    // everything held off — the pin's own chrome or popup, or a collapse that put the band itself
-    // away — is nothing this road places (see `player_order`).
+    // What is to be done with the window, from the one answer both of the places that put one
+    // somewhere read: everything held off — the pin's own chrome or popup — is nothing this road
+    // places, and a raise puts the pin back over the film it raised (see `place_player_window`).
     //
     // The park is deliberately not asked of it here: this is the road that must put a parked
     // window back (see `unpark_player_window`), so the park is the callers' refusal and the
@@ -895,7 +897,6 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     let order = player_order(
         video_process_image(),
         pinned(),
-        pin_is_collapsed(),
         pin_chrome_up(),
         pin_volume_open(),
         false,
@@ -903,8 +904,6 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     if order == PlayerOrder::Leave {
         return false;
     }
-
-    let carrying = order == PlayerOrder::Carry;
 
     // Re-discover/re-apply style by PID each time to survive ffplay window recreation
     // and keep topmost state resilient over time.
@@ -927,19 +926,15 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
             return false;
         }
 
-        // Re-assert desired style bits in case ffplay modified them — through the one list, so a
-        // window carried under the pin's own band is not asserted a topmost bit here while the
-        // monitor leaves it off (see `player_ex_style_for`, `player_order`).
+        // Re-assert desired style bits in case ffplay modified them, through the one list the
+        // monitor asserts too (see `player_ex_style_for`).
         let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let new_style = player_ex_style_for(current_style, carrying);
+        let new_style = player_ex_style_for(current_style);
         if new_style != current_style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
         }
 
-        // The z-order the order is placed with — the carry's own word is `HWND_TOP`, the top of the
-        // ordinary band, and not `SWP_NOZORDER`, which would leave a carried film under Explorer
-        // (see `player_insert_after`).
-        player_place_window(
+        place_player_window(
             hwnd,
             order,
             (x, y, width, height),

@@ -196,6 +196,15 @@ pub(super) fn mpv_args(
     // this app shows (see `pinned_press`), and it takes the press there because its band is the
     // pin's own pixel — which is a fact about where the two windows stand. This refusal is not.
     args.push("--window-dragging=no".to_string());
+    // **And mpv holds its own window above everything from the frame it is born on**, which is the
+    // half of the raise this app cannot answer for: the film it draws under a pin is *seen* through
+    // the pin's own band rather than being a window of this app's, and a window left in the
+    // ordinary band is covered by Explorer the moment the user clicks into it — while the band goes
+    // on taking the press (see `player_order`). The app's own raise is the other half, and it is
+    // asked for on every tick and on every monitor pass (see `place_player_window`): what makes
+    // the two halves two rather than one is that this side holds the window up before this app has
+    // ever found its handle, which is what the first frames of a pinned film are drawn under.
+    args.push("--ontop".to_string());
     // The size and the position, always both, and always written `+x+y` whether x and y are
     // negative or not: a box on a monitor left of or above the primary one has a negative
     // coordinate, and `+-2160` is how that coordinate is spelled for a geometry whose offsets are
@@ -1358,6 +1367,7 @@ mod tests {
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
+                "--ontop",
                 "--geometry=640x360+10+20",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1366,9 +1376,9 @@ mod tests {
                 "--volume=80",
                 IPC_ARG,
             ],
-            "the film, then the configuration off, the mouse off, the chrome off, the box, the\
-             two Direct3D options and the level — `--vo` is deliberately not passed and no\
-             `--start` is asked for at the beginning of a file (see `mpv_args`)"
+            "the film, then the configuration off, the mouse off, the chrome off, the order it is\
+             held up in, the box, the two Direct3D options and the level — `--vo` is deliberately\
+             not passed and no `--start` is asked for at the beginning of a file (see `mpv_args`)"
         );
     }
 
@@ -1435,6 +1445,7 @@ mod tests {
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
+                "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1475,6 +1486,7 @@ mod tests {
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
+                "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=no",
@@ -1514,6 +1526,7 @@ mod tests {
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
+                "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1562,6 +1575,7 @@ mod tests {
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
+                "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1600,6 +1614,7 @@ mod tests {
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
+                "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1650,6 +1665,7 @@ mod tests {
                     "--no-osc",
                     "--no-border",
                     "--window-dragging=no",
+                    "--ontop",
                     &geometry,
                     "--gpu-api=d3d11",
                     "--hwdec=auto",
@@ -1732,6 +1748,7 @@ mod tests {
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
+                "--ontop",
                 "--geometry=1432x806+4416+-2160",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
@@ -1793,6 +1810,7 @@ mod tests {
                 "--no-osc",
                 "--no-border",
                 "--window-dragging=no",
+                "--ontop",
                 "--geometry=8x8+0+0",
                 "--gpu-api=d3d11",
                 "--hwdec=auto",
