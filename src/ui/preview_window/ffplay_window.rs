@@ -223,17 +223,28 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // hundred milliseconds of a drag with the film back on screen and the compositor re-blitting it
     // at the pointer's rate: the stutter the park was written for, and a band painted flat under a
     // window that is standing in it (see `pin_player_is_parked`).
-    // **And it waits over a pinned film mpv draws, which is the one answer here the tick shares.**
-    // That film's band is the pin's own pixel, so the pin is the window a press on the picture has
-    // to reach, and a player raised over it takes the press from the pin (see `player_order`).
-    if order != PlayerOrder::Raise {
+    //
+    // **What is held off here is the `Leave` answer and nothing else.** For FFmpeg's own route
+    // those guards are the ones above — a park, a strip of the pin's chrome, an open volume popup —
+    // because that route's band *is* this window, and raising it puts the film over whatever the
+    // pin's own window is drawing there (see `pin_chrome_up`, `pin_volume_open`). Everything else is
+    // raised, and the band it is raised into is the answer's own: topmost for a hover or FFmpeg's
+    // pin, the top of the ordinary band for the film mpv draws under a pin (see
+    // `player_insert_after`). A carried film raised to the top of the ordinary band cannot bury the
+    // pin's chrome or its volume popup, because both of those are drawn into the pin's own window,
+    // which is topmost and so still over the film — which is why the carry is not held off here,
+    // and why its answer must not be `HWND_TOPMOST` either: that would put the film over the pin and
+    // take the press on the picture with it (see `player_order`, `film_band_is_hit_testable`).
+    if order == PlayerOrder::Leave {
         return true;
     }
 
-    // Force the video preview window to topmost so it doesn't hide behind Explorer
+    // Put the player's window in the band its order belongs in: topmost so it doesn't hide behind
+    // Explorer, and the top of the ordinary band for a carried film, so it is over Explorer and
+    // still under the pin.
     let _ = SetWindowPos(
         hwnd,
-        HWND_TOPMOST,
+        player_insert_after(order),
         0,
         0,
         0,

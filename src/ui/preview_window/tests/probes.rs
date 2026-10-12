@@ -1216,22 +1216,37 @@ fn a_pinned_film_mpv_draws_is_the_one_player_never_raised_over_the_pin() {
     );
 }
 
-/// A carried placement leaves the order alone, and the flag that does it is the whole difference
-/// between a film moved under the pin and a film raised over it.
+/// A carried placement asks for the top of the ordinary band, and never for the pin's own.
 ///
-/// `SetWindowPos` ignores its insert-after argument only when `SWP_NOZORDER` is among the flags, so
-/// a placement that carries the window and forgets the flag is a raise with extra steps — the same
-/// bug the tick and the monitor were just taught not to make, one line further down (see
-/// `player_place_flags`). A screen is the only other place this can be seen.
+/// **The regression this pins down.** A carried film used to be placed with `SWP_NOZORDER`, which
+/// leaves the z-order exactly as it stands — the right answer only while nothing else brings a
+/// window up. The moment the user activates Explorer the film is under it, while the pin's own
+/// band, which is the pin's pixel, goes on taking the press and driving a film the user can no
+/// longer see (see `film_band_is_hit_testable`). The z-order has to be asked for, and the one band
+/// a carried film may be put in is the top of the *ordinary* one: above every ordinary window —
+/// Explorer included — and still below every topmost one, which is where the pin stands.
+/// `HWND_TOPMOST` is the pin's own band and would take the press back; `HWND_NOTOPMOST` is a no-op
+/// for a window that is not currently topmost, and the carry clears the topmost bit in the style
+/// immediately before the call (see `player_ex_style_for`), so it would leave the film exactly
+/// where it stood, which is the bug. A screen is the only other place the order of two windows can
+/// be seen.
 #[test]
-fn a_carried_placement_leaves_the_z_order_alone() {
-    assert!(
-        player_place_flags(PlayerOrder::Carry).contains(SWP_NOZORDER),
-        "a carried window is moved where the band is and not raised over it"
+fn a_carried_placement_asks_for_the_top_of_the_ordinary_band() {
+    assert_eq!(
+        player_insert_after(PlayerOrder::Carry),
+        HWND_TOP,
+        "a carried film is put at the top of the ordinary band: over every ordinary window the \
+         user may bring up, and still under the topmost pin whose own pixel its band is"
     );
-    assert!(
-        !player_place_flags(PlayerOrder::Raise).contains(SWP_NOZORDER),
-        "while a raised one asks for the order it has always asked for"
+    assert_ne!(
+        player_insert_after(PlayerOrder::Carry),
+        HWND_TOPMOST,
+        "and never in the pin's own band, which is where a press on the picture belongs"
+    );
+    assert_eq!(
+        player_insert_after(PlayerOrder::Raise),
+        HWND_TOPMOST,
+        "while a raised one asks for the band it has always asked for"
     );
 }
 
@@ -1239,9 +1254,9 @@ fn a_carried_placement_leaves_the_z_order_alone() {
 /// the order is decided, not a detail of the raise.
 ///
 /// A topmost window can never be carried under a topmost pin, so a style that keeps the bit puts the
-/// player back in front of the pin whatever the raise is held off from doing: the press on the
-/// picture is taken from the pin again, and the film is no longer seen through the pin's own band
-/// but standing in front of it. The raise half of this is guarded by
+/// player back in front of the pin whatever band the raise asks for: the press on the picture is
+/// taken from the pin again, and the film is no longer seen through the pin's own band but standing
+/// in front of it. The raise half of this is guarded by
 /// `a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pass`; the style half
 /// is this test, and it is the half a raise-only guard leaves open.
 #[test]
@@ -1280,7 +1295,10 @@ fn a_carried_players_window_is_never_asserted_topmost() {
 /// monitor's pass and a drag's move are the three roads that put a player's window somewhere, and
 /// each is asked here to have read the placement decision (see `player_order`): the answer it came
 /// to is recorded for a test's eye, because a test run has no screen to read a z-order off and the
-/// answer is the whole of what a raiser decides. A raise in any one of them is what this catches.
+/// answer is the whole of what a raiser decides. And the z-order each of those answers is placed
+/// with is asked too, because a carry that asked for `HWND_TOPMOST` would put the film over the pin
+/// however the order was read (see `player_insert_after`). A raise in any one of them is what this
+/// catches.
 #[test]
 fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pass() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1297,8 +1315,7 @@ fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pa
     let content = (100, 80, 420, 320);
 
     // The mpv route under a pin whose chrome is down — the band and the film and nothing of the
-    // pin's own over it, which is the case the raise is not already held off by (see
-    // `pin_chrome_up`).
+    // pin's own over it.
     note_player_process(0, MPV_IMAGE_NAME);
     stand_ffplay_in(Some(false));
     stand_mpv_in(Some(true));
@@ -1323,6 +1340,18 @@ fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pa
         *current = Some(video);
     }
 
+    // Every road that puts the window somewhere is asked the same second question — what z-order
+    // it placed with — and the carry's answer is the top of the ordinary band and never the pin's
+    // own (see `player_insert_after`). A road that carried the film and then asked for
+    // `HWND_TOPMOST` would be the bug this test is about, whatever order it recorded.
+    let carried_into_the_ordinary_band = || {
+        assert_ne!(
+            player_insert_after(last_player_order().expect("a road that asked for a placement")),
+            HWND_TOPMOST,
+            "a road carrying the film asks for the top of the ordinary band, never the pin's own"
+        );
+    };
+
     // The tick's own re-assertion.
     let _ = ensure_video_window_topmost(
         content.0,
@@ -1335,6 +1364,7 @@ fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pa
         Some(PlayerOrder::Carry),
         "the tick's re-assertion carries a pinned mpv film rather than raising it over the pin"
     );
+    carried_into_the_ordinary_band();
 
     // The monitor's pass, the one nobody can hold off from outside.
     let hwnd = HWND(0x1000 as *mut _);
@@ -1344,6 +1374,7 @@ fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pa
         Some(PlayerOrder::Carry),
         "and the monitor's own pass, which no caller can hold off, leaves it under the pin too"
     );
+    carried_into_the_ordinary_band();
 
     // A drag's move: the player is carried with the band and not raised over the pin.
     let window = a_window_at(content);
@@ -1356,6 +1387,7 @@ fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pa
         Some(PlayerOrder::Carry),
         "and a drag's move carries the film with the band rather than raising it over the pin"
     );
+    carried_into_the_ordinary_band();
     finish_pin_drag(hwnd, &window);
 
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
