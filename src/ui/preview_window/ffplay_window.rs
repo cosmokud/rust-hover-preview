@@ -183,6 +183,7 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     let order = player_order(
         video_process_image(),
         pinned(),
+        pin_is_collapsed(),
         pin_chrome_up(),
         pin_volume_open(),
         pin_player_is_parked(),
@@ -227,7 +228,9 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // **What is held off here is the `Leave` answer and nothing else.** For FFmpeg's own route
     // those guards are the ones above — a park, a strip of the pin's chrome, an open volume popup —
     // because that route's band *is* this window, and raising it puts the film over whatever the
-    // pin's own window is drawing there (see `pin_chrome_up`, `pin_volume_open`). Everything else is
+    // pin's own window is drawing there (see `pin_chrome_up`, `pin_volume_open`). A pin collapsed
+    // into its bubble is held off for the film mpv draws and not for FFmpeg's, whose raise is what
+    // it has always had collapsed or not (see `player_order`). Everything else is
     // raised, and the band it is raised into is the answer's own: topmost for a hover or FFmpeg's
     // pin, the top of the ordinary band for the film mpv draws under a pin (see
     // `player_insert_after`). A carried film raised to the top of the ordinary band cannot bury the
@@ -240,15 +243,13 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     }
 
     // Put the player's window in the band its order belongs in: topmost so it doesn't hide behind
-    // Explorer, and the top of the ordinary band for a carried film, so it is over Explorer and
-    // still under the pin.
-    let _ = SetWindowPos(
+    // Explorer, and the top of the ordinary band for a carried film — after the demotion that takes
+    // it out of the topmost band, which a style write does not do — so it is over Explorer and
+    // still under the pin (see `player_place_window`).
+    player_place_window(
         hwnd,
-        player_insert_after(order),
-        0,
-        0,
-        0,
-        0,
+        order,
+        (0, 0, 0, 0),
         SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
     );
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);

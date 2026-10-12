@@ -1168,7 +1168,12 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
 /// The exception is the one band Windows hands to the pin rather than to the window behind it —
 /// an mpv film (see `film_band_is_hit_testable`) — because a player raised over the pin takes the
 /// press the pin is owed. FFmpeg's player keeps its hole, a hover must go on falling through, and
-/// a film parked for a gesture stays hidden. The media engine's route draws its band in this app's
+/// a film parked for a gesture stays hidden. And a pin collapsed into its bubble is the one answer
+/// the carry itself is held back by, because the band it would be carried under went with the pin's
+/// own window: what a carry would leave on screen then is a chrome-less player over Explorer beside
+/// the bubble (see `hide_pinned_windows`). FFmpeg's own player is not asked that — its raise is
+/// what it has always had, collapsed or not, and its band is its own window rather than a hole in
+/// the pin's. The media engine's route draws its band in this app's
 /// own window and begins no player, so there is no window of somebody else's in the band to place
 /// and the decision never reaches it (see
 /// `only_an_mpv_players_window_is_carried_under_the_pins_chrome`). This asserts the decision alone;
@@ -1182,37 +1187,63 @@ fn a_pinned_film_mpv_draws_is_the_one_player_never_raised_over_the_pin() {
         (false, true, "with the volume popup open over it"),
     ] {
         assert_eq!(
-            player_order(MPV_IMAGE_NAME, true, chrome_up, volume_open, false),
+            player_order(MPV_IMAGE_NAME, true, false, chrome_up, volume_open, false),
             PlayerOrder::Carry,
             "an mpv pin's film is carried and never raised over the pin, {what}"
         );
     }
 
     assert_eq!(
-        player_order(MPV_IMAGE_NAME, false, false, false, false),
+        player_order(MPV_IMAGE_NAME, false, false, false, false, false),
         PlayerOrder::Raise,
         "the same film on a hover is raised over the hover as it always was: a hover must keep \
          falling through to what is behind it"
     );
 
     assert_eq!(
-        player_order(FFPLAY_IMAGE_NAME, true, false, false, false),
+        player_order(FFPLAY_IMAGE_NAME, true, false, false, false, false),
         PlayerOrder::Raise,
         "an ffplay pin raises its player over the band as it always has"
     );
     for (chrome_up, volume_open) in [(true, false), (false, true)] {
         assert_eq!(
-            player_order(FFPLAY_IMAGE_NAME, true, chrome_up, volume_open, false),
+            player_order(
+                FFPLAY_IMAGE_NAME,
+                true,
+                false,
+                chrome_up,
+                volume_open,
+                false
+            ),
             PlayerOrder::Leave,
             "and is left exactly where it is while the pin's own chrome is drawn over the film"
         );
     }
 
     assert_eq!(
-        player_order(FFPLAY_IMAGE_NAME, true, false, false, true),
+        player_order(FFPLAY_IMAGE_NAME, true, false, false, false, true),
         PlayerOrder::Leave,
         "and a film parked for a gesture is left alone: a raise here would show it back over the \
          cover the park painted"
+    );
+
+    // A collapsed pin is the one answer a film mpv draws is not carried by: the pin's own window,
+    // which is the band the carry is for, is put away with the bubble that stands for it, so a
+    // place at its box would put a chrome-less player back over Explorer beside the bubble — where
+    // there is no band on screen at all to carry the film under (see `hide_pinned_windows`,
+    // `player_order`).
+    assert_eq!(
+        player_order(MPV_IMAGE_NAME, true, true, false, false, false),
+        PlayerOrder::Leave,
+        "a collapsed pin leaves the film mpv draws hidden rather than placing it back over \
+         Explorer beside the bubble"
+    );
+    assert_eq!(
+        player_order(FFPLAY_IMAGE_NAME, true, true, false, false, false),
+        PlayerOrder::Raise,
+        "while FFmpeg's own player keeps the raise it has always had, collapsed or not: its band \
+         is its own window rather than a hole in the pin's, and that road is not this one's to \
+         change"
     );
 }
 
@@ -1225,11 +1256,16 @@ fn a_pinned_film_mpv_draws_is_the_one_player_never_raised_over_the_pin() {
 /// longer see (see `film_band_is_hit_testable`). The z-order has to be asked for, and the one band
 /// a carried film may be put in is the top of the *ordinary* one: above every ordinary window —
 /// Explorer included — and still below every topmost one, which is where the pin stands.
-/// `HWND_TOPMOST` is the pin's own band and would take the press back; `HWND_NOTOPMOST` is a no-op
-/// for a window that is not currently topmost, and the carry clears the topmost bit in the style
-/// immediately before the call (see `player_ex_style_for`), so it would leave the film exactly
-/// where it stood, which is the bug. A screen is the only other place the order of two windows can
-/// be seen.
+/// `HWND_TOPMOST` is the pin's own band and would take the press back.
+///
+/// **And asking for that band is only half of it, because the band a window stands in is not the
+/// one its style says.** `player_ex_style_for` clears the `WS_EX_TOPMOST` bit for a carry, but MSDN
+/// moves a window between the two bands with `HWND_TOPMOST`/`HWND_NOTOPMOST` and a
+/// `SetWindowLongPtrW` write is not what does it — and a player is often still topmost at the
+/// moment it is carried, since a hover raises it and a pin is taken up over it. A placement that
+/// asked only for `HWND_TOP` would put it at the top of the *topmost* band, over the pin: the
+/// demotion that comes first is in `player_place_window`, and whether it landed is the one thing
+/// here no test can see — a screen is where a band is read, and the suite has none.
 #[test]
 fn a_carried_placement_asks_for_the_top_of_the_ordinary_band() {
     assert_eq!(
@@ -1237,11 +1273,6 @@ fn a_carried_placement_asks_for_the_top_of_the_ordinary_band() {
         HWND_TOP,
         "a carried film is put at the top of the ordinary band: over every ordinary window the \
          user may bring up, and still under the topmost pin whose own pixel its band is"
-    );
-    assert_ne!(
-        player_insert_after(PlayerOrder::Carry),
-        HWND_TOPMOST,
-        "and never in the pin's own band, which is where a press on the picture belongs"
     );
     assert_eq!(
         player_insert_after(PlayerOrder::Raise),
@@ -1295,10 +1326,9 @@ fn a_carried_players_window_is_never_asserted_topmost() {
 /// monitor's pass and a drag's move are the three roads that put a player's window somewhere, and
 /// each is asked here to have read the placement decision (see `player_order`): the answer it came
 /// to is recorded for a test's eye, because a test run has no screen to read a z-order off and the
-/// answer is the whole of what a raiser decides. And the z-order each of those answers is placed
-/// with is asked too, because a carry that asked for `HWND_TOPMOST` would put the film over the pin
-/// however the order was read (see `player_insert_after`). A raise in any one of them is what this
-/// catches.
+/// answer is the whole of what a raiser decides. A raise in any one of them is what this catches;
+/// what each answer is placed with is `player_insert_after`'s own, pinned by
+/// `a_carried_placement_asks_for_the_top_of_the_ordinary_band`.
 #[test]
 fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pass() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1340,18 +1370,6 @@ fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pa
         *current = Some(video);
     }
 
-    // Every road that puts the window somewhere is asked the same second question — what z-order
-    // it placed with — and the carry's answer is the top of the ordinary band and never the pin's
-    // own (see `player_insert_after`). A road that carried the film and then asked for
-    // `HWND_TOPMOST` would be the bug this test is about, whatever order it recorded.
-    let carried_into_the_ordinary_band = || {
-        assert_ne!(
-            player_insert_after(last_player_order().expect("a road that asked for a placement")),
-            HWND_TOPMOST,
-            "a road carrying the film asks for the top of the ordinary band, never the pin's own"
-        );
-    };
-
     // The tick's own re-assertion.
     let _ = ensure_video_window_topmost(
         content.0,
@@ -1364,7 +1382,6 @@ fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pa
         Some(PlayerOrder::Carry),
         "the tick's re-assertion carries a pinned mpv film rather than raising it over the pin"
     );
-    carried_into_the_ordinary_band();
 
     // The monitor's pass, the one nobody can hold off from outside.
     let hwnd = HWND(0x1000 as *mut _);
@@ -1374,7 +1391,6 @@ fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pa
         Some(PlayerOrder::Carry),
         "and the monitor's own pass, which no caller can hold off, leaves it under the pin too"
     );
-    carried_into_the_ordinary_band();
 
     // A drag's move: the player is carried with the band and not raised over the pin.
     let window = a_window_at(content);
@@ -1387,8 +1403,33 @@ fn a_pinned_mpv_film_is_never_put_above_the_pin_by_a_tick_a_drag_or_a_monitor_pa
         Some(PlayerOrder::Carry),
         "and a drag's move carries the film with the band rather than raising it over the pin"
     );
-    carried_into_the_ordinary_band();
     finish_pin_drag(hwnd, &window);
+
+    // A pin collapsed into its bubble: the band the carry is for went with the pin's own window,
+    // which is put away with the bubble that stands for it (see `hide_pinned_windows`), while the
+    // player goes on running. A carry placed here would be a chrome-less film reappearing over
+    // Explorer beside the bubble about a monitor pass later, which is an artifact the carry would
+    // ship rather than one it fixes — so the road that must put a window up places nothing at all,
+    // and the answer it read is the record of that.
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
+            pin.collapsed = true;
+        }
+    }
+    assert!(
+        !ensure_video_window_topmost(
+            content.0,
+            content.1,
+            content.2 - content.0,
+            content.3 - content.1,
+        ),
+        "a collapsed pin places nothing: the band a carried film stands in is off the screen"
+    );
+    assert_eq!(
+        last_player_order(),
+        Some(PlayerOrder::Leave),
+        "and the film mpv draws is left where the collapse left it rather than carried back"
+    );
 
     VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     note_player_process(previous_pid, previous_image);
