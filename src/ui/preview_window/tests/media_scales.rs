@@ -267,23 +267,22 @@ fn a_video_follows_its_own_scale() {
     );
 }
 
-/// A hovered video is a bitmap, and a fit is the bitmap at the size it is: a film smaller
-/// than the work area is shown at its own dimensions rather than stretched over the display.
+/// A hovered video at a fit fills the room it is given, and at a share of its own size takes that
+/// share — the two bases the `Scaling → Video` menu offers, told apart.
 ///
-/// This is a visible change for anyone who chose `Fit to Screen` for a video and did not
-/// think to mean *bigger than the file*, and it is the same answer every other picture in
-/// this app already gives (`bitmap_at_display_scale`). It is worth what it costs either way:
-/// the frame a video's hover draws is the frame the engine delivered, at the box the layout
-/// chose, copied into the layered window's DIB and handed to the compositor — so a 1080p
-/// file fitted to a 4K display is a 3840x2160 surface, thirty-three megabytes each way, for
-/// every frame of a film that is playing. A percentage above `100%` is untouched, because
-/// that enlargement is the user saying so.
+/// A video is not a bitmap for this question, whatever engine plays it: what its preview is, once
+/// its player has a window up, is a box the film is drawn into — the media engine's frames landing
+/// in this app's own window, FFmpeg's or mpv's player putting up a window of its own at the same
+/// box — so a fit is the size the film is watched at, up as well as down. It is the fit a pinned
+/// window has always taken, and the assertion below that the two roads agree is the whole of what
+/// changed: a film smaller than the display used to sit at its own size on a hover while a pin
+/// maximized over the same display enlarged it.
 ///
-/// And the pinned window keeps enlarging, which is the half of the fit that is deliberate:
-/// a pin is fitted to its media, and scaling that media up to the room is what makes a
-/// maximize a maximize (see `pinned_media_box`).
+/// The shares below the fit are the file's own size for a video as they are for a picture, which is
+/// the half of this that did not change: `By Own Size 150%` enlarges because a user asked for it,
+/// and `By Screen 50%` is half of the film rather than half of the room.
 #[test]
-fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
+fn a_hovered_video_fills_the_room_at_a_fit_and_takes_its_own_size_below_one() {
     let small = PathBuf::from(r"C:\clips\holiday.mp4");
     let large = PathBuf::from(r"C:\clips\concert-4k.mp4");
     let room = (3840u32, 2160u32);
@@ -318,10 +317,10 @@ fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
     let hover = HoverFacts::read(&small);
     let hover_large = HoverFacts::read(Path::new(r"C:\clips\concert-4k.mp4"));
 
-    // Smaller than the room: at its own size, which is what a fit means for a bitmap. The
-    // box is asked of `scale_in_room` rather than of the scale alone, because the scale is
-    // only half the claim — `100%` of a film is its own size only because nothing above it
-    // enlarges.
+    // Smaller than the room: the room, which is what a fit is for something drawn into the box it
+    // is given rather than scaled out of a picture of its own. The box is asked of
+    // `scale_in_room` rather than of the scale alone, because the scale is only half the claim —
+    // `FitToScreen` of a film is the whole work area only because nothing caps it there.
     assert_eq!(
         scale_dimensions(
             1920,
@@ -330,13 +329,21 @@ fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
             room.1,
             hover_preview_scale_of(&hover, at_fit)
         ),
-        (1920, 1080),
-        "a 1080p film fitted to a 4K display stays at 1920x1080 rather than being stretched \
-             over the whole work area"
+        (3840, 2160),
+        "a 1080p film fitted to a 4K display is stretched over the whole work area, which is the \
+             size it is watched at"
     );
 
-    // Larger than the room: still fitted down, because shrinking to fit is what a fit is
-    // for and `bitmap_at_display_scale` leaves that alone.
+    // And the pinned window's own fit is the same answer, which is what makes the hover and the
+    // maximize one rule rather than two: a film fitted in a pinned window fills the room.
+    assert_eq!(
+        hover_preview_scale_of(&hover, at_fit),
+        effective_preview_scale(&small, at_fit),
+        "a hover's fit and a pin's fit are the same fit, so a film does not change size when it is \
+             pinned"
+    );
+
+    // Larger than the room: still fitted down, because shrinking to fit is what a fit is for.
     assert_eq!(
         scale_dimensions(
             7680,
@@ -365,14 +372,13 @@ fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
     assert_eq!(
         hover_preview_scale_of(&hover, hover_scales()),
         PreviewScale::Percent(100),
-        "which is also what the app starts at, so a fresh install never enlarged a video and \
-             still does not"
+        "which is also what the app starts at, so a fresh install shows a film at its own size \
+             and still does"
     );
 
     // A reduced fit of the display is the room's fitted size reduced to the
     // share it names, and a bitmap's fitted size is its own — so a hover is
-    // asked for that share of the film's own size, and a film smaller than the
-    // room is still never stretched over it.
+    // asked for that share of the film's own size, rather than half of the room.
     let at_half_fit = HoverScales {
         video: PreviewScale::FitToScreenReduced(50),
         ..hover_scales()
@@ -391,11 +397,13 @@ fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
             hover_preview_scale_of(&hover, at_half_fit)
         ),
         (960, 540),
-        "a 1080p film at half of its fitted size is 960x540, not half of the display"
+        "a 1080p film at `By Screen 50%` is 960x540: half of the film, not half of the room, \
+             which is the base the menu's percentage rows are read against"
     );
 
-    // And the pin is not one of these hovers: the same file fitted for a pinned window is
-    // still stretched to the room, which is the answer `pinned_media_box` is written for.
+    // And a pinned window reads the fit the same way the hover does — asserted beside it above —
+    // while the two still part company at a reduced fit, which is the answer `pinned_media_box`
+    // is written for and the one thing this change did not move.
     assert_eq!(
         scale_dimensions(
             1920,
@@ -409,9 +417,11 @@ fn a_hovered_video_is_never_enlarged_to_fill_the_room() {
              a maximize"
     );
 
-    // The pin keeps the whole of the fit's bargain at a reduced fit too: the
+    // And the pin keeps the whole of the fit's bargain at a reduced fit too: the
     // room is what is reduced, so a pinned film at half of a fitted room is
-    // half of the display rather than half of the film.
+    // half of the display rather than half of the film. It is the one place the two roads are
+    // still apart, and deliberately: a pinned window is fitted to the media it shows, and a
+    // reduced fit of the display is the room a maximize takes its share of.
     assert_eq!(
         scale_dimensions(
             1920,

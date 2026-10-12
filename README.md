@@ -334,7 +334,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - Keyboard previews have no cursor, so **Nothing** acts like **Filename**.
 - **Scaling**
   - **Image** — **Fit to Screen**, a share of the display's fitted size (`75%`, `50%`, `25%`, `10%`), or a share of the image's own size (`400%`–`25%`). The two groups are listed under **By Screen** and **By Own Size**. Default `100%`.
-  - **Video** — Same shares for a video. Default `100%`.
+  - **Video** — Same shares for a video, except that **Fit to Screen** is the display's room: a film smaller than the screen fills it, as a pinned window and a maximize already do. Default `100%`.
   - **Animated** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery.
     - A still GIF or PNG uses **Image**.
     - Default `100%`.
