@@ -2121,17 +2121,22 @@ pub fn run_preview_window() {
 
                 if changed == Some(true) {
                     refresh_requested = true;
+                }
 
-                    // A strip that has just come up is painted into the pin's own rows,
-                    // which for a video FFmpeg plays are rows of that window — and that
-                    // window is the one on top for as long as no strip is showing. Both
-                    // of its raises are held off from here on (see `pin_chrome_up`), so
-                    // this is the one raise the pin owes on the way up; the way out needs
-                    // none, the first raise through either caller once the last strip has
-                    // gone puts the player back on top.
-                    if pin_chrome_up() {
-                        raise_pinned_window(hwnd);
-                    }
+                // A strip of a pin's chrome is painted into the pin's own rows, which for a
+                // video a player draws are rows of that window — and that window is the one on
+                // top for as long as no strip is showing. Both of its raises are held off from
+                // here on (see `pin_chrome_up`), so the raise the pin owes is the pin's own: on
+                // the way up, which is a moment a hand is looking for a close button, and again
+                // for as long as a strip is showing, because the film stands itself back up over
+                // the pin on its own band (see `player_stands_over_the_pin`). The way out needs
+                // none: the first raise through either caller once the last strip has gone puts
+                // the player back on top. What keeps this one raise from being a raise per tick
+                // is that it is asked of the order that is standing rather than of the strips
+                // that are up — the player *under* the pin is the answer both raisers put in,
+                // and the one this leaves alone (see `place_player_window`).
+                if pin_chrome_up() && player_stands_over_the_pin(hwnd) {
+                    raise_pinned_window(hwnd);
                 }
             }
 
