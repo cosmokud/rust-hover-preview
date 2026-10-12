@@ -1061,7 +1061,7 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
                 // window sitting over the program the button exists to start.
                 pin_chrome::CaptionButton::OpenWith => {
                     if let Some(path) = pinned_path() {
-                        open_path_with_default_app(&path);
+                        open_path_with_default_app(&path, hwnd);
                         request_pin_end();
                     }
                 }
@@ -1069,7 +1069,7 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
                 // is the system's, and the pin comes down as the dialog goes up.
                 pin_chrome::CaptionButton::OpenWithList => {
                     if let Some(path) = pinned_path() {
-                        show_open_with_dialog(&path);
+                        show_open_with_dialog(&path, hwnd);
                         request_pin_end();
                     }
                 }
