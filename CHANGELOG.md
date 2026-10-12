@@ -120,6 +120,7 @@
 - **Still AVIF with sequence brand recognized; single-image HEIC safe** — The probe reads all ISO brands, so `avif`+`avis` is recognized as still and drawn as first frame, `mif1` HEIC is read as still, and JXL works as naked codestream or container.
 - **Run at Startup points at running copy** — Every start rewrites the entry if it names a different copy, compares paths honestly for case/`\\?\`/short names/junctions, leaves arguments and missing entries alone, and never touches `config.ini`.
 - **Normalize measures loudness not peak** — It now uses FFmpeg `ebur128` integrated loudness to `-14 LUFS` with true-peak limiting at `-1 dBTP`, so two files of the same loudness are heard the same; already-target files still take the filter, and Video Normalize uses the same measurement.
+- **Open With opens on the pin's display** — The default program and the `openas` picker are launched with the pin's own window as parent and its monitor as the hint, so a pin on a second display hands the file to a program on that display rather than on the primary one; a program that puts its window back where it was last closed still reopens there.
 
 ## [0.3.6] - 2026-09-27
 

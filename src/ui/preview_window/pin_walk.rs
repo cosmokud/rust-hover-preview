@@ -554,39 +554,69 @@ pub(super) fn pin_key_restores_bubble(collapsed: bool, explorer_focused: bool) -
 /// says whether a program started, not whether the user still wanted the preview (see
 /// `pinned_release`).
 ///
+/// The program is opened where the pin is standing rather than where the Shell would put it
+/// on its own: the pin's own window goes in as the parent and its monitor as `SEE_MASK_HMONITOR`,
+/// which is the same context Explorer hands its own launches, so a preview on a second display
+/// hands the file to a program on that display rather than on the primary one.
+///
+/// shortcut: a program that puts its window back where it was last closed ignores the hint and
+/// reopens there, and only a program asking the system where to go follows it — nothing here can
+/// move another program's window for it, so those keep opening where they were.
+///
 /// # Safety
 ///
-/// `ShellExecuteW` is a plain `extern "system"` call with no caller-supplied pointers: the
-/// verb and the file are this function's own null-terminated buffers, and the window handle
-/// handed it is null rather than borrowed, so there is nothing for the caller to keep alive
-/// across the call and nothing it can invalidate underneath it. The file itself belongs to
+/// `ShellExecuteExW` is a plain `extern "system"` call with no caller-supplied pointers kept past
+/// it: the verb and the file are this function's own null-terminated buffers, and the window handle
+/// handed it is the live preview window the press was released on, so there is nothing for the caller
+/// to keep alive across the call and nothing it can invalidate underneath it. The file itself belongs to
 /// whichever program the Shell starts, and this side has no handle on it to release.
-pub(super) unsafe fn open_path_with_default_app(path: &Path) {
-    let wide: Vec<u16> = std::ffi::OsStr::new(&plain_path(path))
+pub(super) unsafe fn open_path_with_default_app(path: &Path, hwnd: HWND) {
+    shell_open_on(hwnd, w!("open"), path);
+}
+
+/// Ask the Shell to act on a file on the monitor the pin is standing on, through `ShellExecuteExW`
+/// with the pin's own window as the parent and its monitor as `SEE_MASK_HMONITOR`.
+///
+/// One road for both hand-off buttons: the default program and the `openas` picker are both verbs
+/// the Shell performs, so both take the same parent and the same monitor hint. `SEE_MASK_ASYNCOK`
+/// is what keeps this from blocking the window procedure it is pressed on: the pin's end is asked for
+/// as this returns, and a call that waited would hold the loop that ends it behind the program it
+/// starts — including behind the picker, which is a dialog the user may keep up a while.
+///
+/// The answer is read and deliberately not asserted on, and not acted on either: a format with
+/// nothing filed against it is the user's machine rather than a fault in this one, and a check that
+/// panicked on it would be an alarm that goes off for an ordinary machine (see `pinned_release`,
+/// which takes the pin down whatever came back rather than leaving a topmost window over the program
+/// the button exists to start).
+///
+/// # Safety
+///
+/// The verb and the file are this function's own null-terminated buffers living past the call, and
+/// the window handle is the live preview window the press was released on; the monitor is a number
+/// read off that window and never dereferenced. Nothing is kept past the call and nothing borrowed
+/// outlives it.
+unsafe fn shell_open_on(hwnd: HWND, verb: PCWSTR, path: &Path) {
+    let file: Vec<u16> = std::ffi::OsStr::new(&plain_path(path))
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
 
-    let started = ShellExecuteW(
-        HWND(std::ptr::null_mut()),
-        w!("open"),
-        PCWSTR(wide.as_ptr()),
-        PCWSTR::null(),
-        PCWSTR::null(),
-        SW_SHOWNORMAL,
-    );
+    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
 
-    // The handle is read and deliberately not asserted on, and no longer acted on either. It
-    // is the documented test of whether the Shell started something — a handle above 32, and
-    // one of its own error codes at or below 32 for anything it would not start — and which
-    // of those it was is not asked, because a format with nothing filed against it is the
-    // user's machine rather than a fault in this one, and a check that panicked on it would
-    // be an alarm that goes off for an ordinary machine. It used to be acted on: the pin came
-    // down only on a real launch, so a hand-off that never happened left the window standing.
-    // It does not any more, because the answer says whether a program started and not whether
-    // the user still wanted the preview, and the mistake of leaving a topmost window over the
-    // program a button exists to start is the one worth not making (see `pinned_release`).
-    let _ = started;
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_HMONITOR | SEE_MASK_ASYNCOK,
+        hwnd,
+        lpVerb: verb,
+        lpFile: PCWSTR(file.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        Anonymous: SHELLEXECUTEINFOW_0 {
+            hMonitor: HANDLE(monitor.0),
+        },
+        ..Default::default()
+    };
+
+    let _ = ShellExecuteExW(&mut info);
 }
 
 /// Show the Shell's own "How do you want to open this?" dialog for a file: the list of
@@ -601,20 +631,22 @@ pub(super) unsafe fn open_path_with_default_app(path: &Path) {
 /// in their own language, with their own accessibility, and it is the dialog they have already
 /// seen a thousand times from Explorer's own context menu.
 ///
-/// It is raised by handing `shell32`'s `OpenAs_RunDLL` export the file, which is the route
-/// Explorer's own "Open with" item takes and the one a caller without a COM apartment can
-/// still reach. The obvious alternative, `SHOpenWithDialog`, cannot be used: since Windows 11
-/// 22H2 that entry point opens nothing at all and says so, telling the caller to go and change
-/// the default in Settings instead of offering the list. A button whose only job is to offer
+/// It is raised through the Shell's own `openas` verb on the pin's own window, which is the route
+/// that still offers the list: the obvious alternative, `SHOpenWithDialog`, cannot be used, since
+/// Windows 11 22H2 that entry point opens nothing at all and says so, telling the caller to go and
+/// change the default in Settings instead of offering the list. A button whose only job is to offer
 /// the list cannot be built on an entry point that has stopped offering it, so this is the
-/// other way in and not a preference between two that both work.
+/// other way in and not a preference between two that both work. Going through the Shell is also
+/// what puts the list where the pin is: the pin's window goes in as the parent and its monitor as
+/// the hint, so the list stands on the pin's display and the program picked from it starts there
+/// too (see `shell_open_on`).
 ///
 /// The pin is not up while this is: the caller asks for its end as the dialog is put up, so
 /// that the list is not behind a topmost window of the file it is listing ways to open, and
 /// so that the program the user goes on to choose is not opening behind that window too. A
 /// pin that waited for the dialog to go instead would be a pin that has to be right about
 /// when the dialog has gone — a question this app cannot answer, because the dialog is not
-/// its window, its class, or on any thread it owns, and on Windows 11 the entry point above
+/// its window, its class, or on any thread it owns, and on Windows 11 the Shell
 /// may hand the list to a process that has already exited by the time anyone looks. Asking
 /// nothing and closing is the one answer that cannot be wrong, and the cost of being wrong
 /// the other way is the whole of it: a cancelled dialog costs the user a hover to get the
@@ -622,38 +654,9 @@ pub(super) unsafe fn open_path_with_default_app(path: &Path) {
 ///
 /// # Safety
 ///
-/// Nothing here is a borrowed pointer: the command line is a `String` this function owns,
-/// handed to the standard library as one argument, and no handle is involved at all. The
-/// file belongs to whichever program the user goes on to pick, and this side has no handle
-/// on it to release.
-pub(super) fn show_open_with_dialog(path: &Path) {
-    // The one argument `rundll32` is given, in the spelling it wants.
-    //
-    // `rundll32` does not read its command line as a list of arguments. It takes everything up
-    // to the first space as the "<library>,<entry>" pair, and then hands the function the whole
-    // of the rest of the line as one opaque tail — whatever is in it, verbatim, quotes and all.
-    // So the tail is passed with `raw_arg`, which puts it on the wire exactly as written and
-    // skips the quoting `arg` would otherwise add to any argument holding a space.
-    //
-    // Two spellings that look reasonable both put a filename into that tail that cannot exist,
-    // and neither fails loudly — `rundll32` simply exits at once, and a button that does that
-    // is a button that does nothing. Passing the path as a second argument reaches the tail as
-    // `"C:\...\my file.md"`, quotes included, because the library was already split off before
-    // the path was reached; and quoting it inside a single argument nests a second pair in the
-    // same place. Either way the Shell is handed a name with quote characters in it, finds no
-    // such file, and shows nothing. The path goes in bare, and `plain_path` above is what
-    // guarantees the only space in the tail is the one separating the entry point from it.
-    let tail = format!("shell32.dll,OpenAs_RunDLL {}", plain_path(path));
-
-    let mut command = engine_processes::hidden_command("rundll32.exe");
-    command.raw_arg(&tail);
-
-    // The child is dropped on the floor rather than kept: nothing here is waiting on it and
-    // nothing comes after it, since the pin this was raised from is on its way down. Waiting
-    // for it would be waiting on this thread's message loop from inside itself.
-    let _ = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+/// The window handle is the live preview window the press was released on, which is what parents
+/// the list to the pin's display; the file belongs to whichever program the user goes on to pick,
+/// and this side has no handle on it to release (see `shell_open_on`).
+pub(super) unsafe fn show_open_with_dialog(path: &Path, hwnd: HWND) {
+    shell_open_on(hwnd, w!("openas"), path);
 }
