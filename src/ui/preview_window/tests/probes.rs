@@ -1029,6 +1029,86 @@ fn a_players_window_that_is_not_on_screen_is_put_back_in_the_band() {
     stand_pin(previous_pin);
 }
 
+/// A collapsed pin places nothing: its band went with the window, so even a hidden film is left
+/// hidden rather than put back into a band nobody can see.
+///
+/// A collapsed pin has two asks of every road that puts a player's window somewhere: `hide_pinned_windows`
+/// takes the film off the screen with the window, and what must then not happen is any road
+/// putting it back — the tick's re-assertion, the monitor's pass, or a drag's move — because a
+/// place at the pin's box is a chrome-less film over Explorer beside the bubble. Both roads are
+/// asked here through the same stand-in window the band tests stand: the tick's road through
+/// `ensure_video_window_topmost` and a drag's through `ensure_pinned_sibling_box` (see
+/// `hide_pinned_windows`).
+#[test]
+fn a_collapsed_pin_places_no_players_window() {
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, ShowWindow, SW_HIDE};
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let band = (200, 180, 520, 420);
+
+    // The pin as a collapse leaves it: up, with its window off the screen.
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    note_player_process(0, MPV_IMAGE_NAME);
+
+    // The tick's road, over a film that is still on screen.
+    let player = unsafe { stand_a_player_window(content) };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+    unsafe {
+        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
+    }
+    assert!(
+        !ensure_video_window_topmost(band.0, band.1, band.2 - band.0, band.3 - band.1),
+        "a collapsed pin places nothing: the band went with the window, so the film stays where it stands"
+    );
+    assert_eq!(
+        window_box_on_screen(player),
+        content,
+        "and a film on screen is not moved into a band nobody can see"
+    );
+
+    // And the hold-off's own exception, over a film that is not: a hidden window is still owed no
+    // band while the pin is collapsed.
+    unsafe {
+        let _ = ShowWindow(player, SW_HIDE);
+    }
+    assert!(
+        !ensure_video_window_topmost(band.0, band.1, band.2 - band.0, band.3 - band.1),
+        "a collapsed pin owes no band either: the place beside the bubble is a chrome-less film over Explorer"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(player).as_bool() },
+        "so a hidden film stays hidden"
+    );
+
+    // A drag's move asks the same question of the same pin and gets the same answer.
+    unsafe {
+        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
+    }
+    ensure_pinned_sibling_box(band);
+    assert_eq!(
+        window_box_on_screen(player),
+        content,
+        "a drag's move carries nothing while the pin is collapsed"
+    );
+
+    unsafe { DestroyWindow(player).expect("the stand-in window let go of") };
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
+    stand_pin(previous_pin);
+}
+
 /// Whether a window carries the extended style that makes a press on it fall through to whatever is
 /// behind it, read back off the machine rather than remembered from what was asked for.
 fn is_click_through(hwnd: HWND) -> bool {
