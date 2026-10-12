@@ -822,3 +822,35 @@ fn the_pin_arc_leaves_the_band_it_is_drawn_over_except_where_it_is() {
         "and a window that is waiting for nothing is painted exactly as it was"
     );
 }
+
+/// The list is carried onto the pin's box, not onto the pin's corner: centred on the pin's
+/// own middle, so a press on the second display leaves the list on that display rather than
+/// where the system centred it.
+#[test]
+fn the_open_with_list_is_carried_onto_the_pin_s_box() {
+    let room = ScreenBounds { left: 3440, top: -2160, right: 5360, bottom: -1080 };
+    let pin = (3500, -2000, 4000, -1500);
+
+    assert_eq!(
+        open_with_spot_in(room, ((pin.0 + pin.2) / 2, (pin.1 + pin.3) / 2), (448, 624)),
+        (3526, -2062),
+        "centred on the pin's middle"
+    );
+}
+
+/// A list the room cannot hold at full size is pushed wholly onto the display rather than hung
+/// off its edge, and only a window nobody has moved is carried at all: one whose middle is
+/// still on the primary display, where the system centres it.
+#[test]
+fn the_open_with_carry_leaves_a_moved_list_where_it_is() {
+    let room = ScreenBounds { left: 3440, top: -2160, right: 5360, bottom: -1080 };
+    let primary = ScreenBounds { left: 0, top: 0, right: 3440, bottom: 1440 };
+
+    assert_eq!(
+        open_with_spot_in(room, (3400, -1100), (448, 624)),
+        (3440, -1704),
+        "clamped onto the pin's display rather than off its edge"
+    );
+    assert!(centre_on_display((1720, 720), primary), "still where the system put it");
+    assert!(!centre_on_display((4400, -1620), primary), "carried by the user stays carried");
+}

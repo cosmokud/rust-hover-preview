@@ -1066,10 +1066,19 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
                     }
                 }
                 // The Shell's own list, the same way round: the file is in hand, the dialog
-                // is the system's, and the pin comes down as the dialog goes up.
+                // is the system's, and the pin comes down as the dialog goes up — carried
+                // onto the pin's display on a thread of its own, so the list stands where
+                // the pin stood rather than where the system centres it, and the press is
+                // not held waiting for a window this app does not own (see
+                // `carry_open_with_to`).
                 pin_chrome::CaptionButton::OpenWithList => {
                     if let Some(path) = pinned_path() {
-                        show_open_with_dialog(&path, hwnd);
+                        let before = engine_processes::processes_named(OPEN_WITH_IMAGE);
+                        show_open_with_dialog(&path);
+                        if let Some(box_) = window_origin(hwnd) {
+                            let at = (box_.0, box_.1, box_.0 + box_.2, box_.1 + box_.3);
+                            std::thread::spawn(move || carry_open_with_to(at, &before));
+                        }
                         request_pin_end();
                     }
                 }
