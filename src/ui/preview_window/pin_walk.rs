@@ -698,16 +698,65 @@ pub(super) fn show_open_with_dialog(path: &Path) {
         .spawn();
 }
 
-/// The image name of the process the list runs as, which is what the carry below looks for: the
-/// dialog is drawn by the system's `OpenWith.exe` rather than by the `rundll32` that raises it
-/// (see `show_open_with_dialog`).
-pub(super) const OPEN_WITH_IMAGE: &str = "OpenWith.exe";
+/// The windows of the list already up, as numbers a thread can carry: only a window that appears
+/// after this snapshot is this press's to move (see `carry_open_with_to`).
+pub(super) fn open_with_snapshot() -> Vec<isize> {
+    open_with_dialogs()
+        .into_iter()
+        .map(|hwnd| hwnd.0 as isize)
+        .collect()
+}
+
+/// The system's "How do you want to open this?" dialogs now up, found by class rather than by
+/// process or by `EnumWindows`: on this build that call does not list the dialog at all — a
+/// visible, top-level, unowned window the desktop's own `FindWindowExW` names (measured) — and
+/// its process is no identity either, since the id is already in a snapshot before its window
+/// exists. So this is the chain off the desktop for the class itself, newest last.
+fn open_with_dialogs() -> Vec<HWND> {
+    let mut dialogs = Vec::new();
+    unsafe {
+        let mut after = HWND::default();
+        loop {
+            match FindWindowExW(HWND::default(), after, w!("Open With"), PCWSTR::null()) {
+                Ok(found) if !found.is_invalid() => {
+                    dialogs.push(found);
+                    after = found;
+                }
+                _ => break,
+            }
+            if dialogs.len() > 16 {
+                break;
+            }
+        }
+    }
+    dialogs
+}
+
+/// Whether a window is the list's own: the class the chain above is walked for, asked of one
+/// window — the one in front — where the chain cannot say which dialog is the live one (see
+/// `carry_open_with_to`).
+fn is_open_with_dialog(hwnd: HWND) -> bool {
+    let mut class = [0u16; 256];
+    let read = unsafe { GetClassNameW(hwnd, &mut class) };
+    read > 0 && String::from_utf16_lossy(&class[..read as usize]) == "Open With"
+}
 
 /// How long the carry waits for the list to put its window up, which bounds a wait on a window
 /// this app does not own: the dialog usually arrives in well under a second, and a list that has
 /// not appeared by then is a launch that failed rather than one still starting (see
 /// `show_open_with_dialog`).
 pub(super) const OPEN_WITH_WAIT: Duration = Duration::from_secs(10);
+
+/// How long the carry waits for a window of this press's before reading the one in front
+/// instead: every press raises a window of its own, so a press with nothing new after this is
+/// one whose dialog the system is showing in a window it already had (see `carry_open_with_to`).
+const OPEN_WITH_APPEAR_WAIT: Duration = Duration::from_secs(2);
+
+/// How long after its last move the carry keeps watching: the dialog centres itself after it
+/// comes up, so a window put onto the pin's box that drifts back where the system puts it is
+/// carried again — and after this, whatever the window does is the user's (see
+/// `carry_open_with_to`).
+const OPEN_WITH_SETTLE: Duration = Duration::from_millis(1500);
 
 /// How often the carry looks for the list's window while it waits for it.
 pub(super) const OPEN_WITH_POLL: Duration = Duration::from_millis(25);
@@ -718,55 +767,104 @@ pub(super) const OPEN_WITH_POLL: Duration = Duration::from_millis(25);
 /// so once it is up it is moved to the pin's box, which is the display the hand pressed on.
 /// `at` is the pin's own screen box, read by the caller holding the release, because the pin
 /// comes down as the dialog goes up and there is no window left to measure afterwards.
+/// `before` holds the dialogs already up when this press was made, so a list left over from
+/// an earlier press is not mistaken for this one's: only a window this press raised is this
+/// press's to carry.
 ///
-/// Only a window that has not been moved yet is touched: one the user has already carried
-/// somewhere is theirs, and a second press reaching for it again — the pin is gone by then, so
-/// `at` is wherever the pointer is — must not yank it back. Which is what the centre says: a
-/// list the system has just put up is still sitting where it opened, and a list the user has
-/// touched is not. A press with no window up yet waits for it; a press whose window never
-/// comes is a launch that failed, and there is nothing to carry.
-pub(super) fn carry_open_with_to(at: ScreenRegion, before: &[u32]) {
-    let deadline = Instant::now() + OPEN_WITH_WAIT;
+/// Only a window still sitting where the system put it is touched: one the user has already
+/// carried somewhere is theirs, and a second press reaching for it again must not yank it
+/// back. Which is what the centre says: a list the system has just put up is still centred on
+/// the primary display, and a list the user has touched is not. A press with no window up yet
+/// waits for it; a press whose window never comes is a launch that failed, and there is
+/// nothing to carry.
+///
+/// The carry ends settled: a window put onto the pin's box is watched a moment longer and
+/// carried again if it drifts back where the system puts it — the dialog centres itself after
+/// it comes up — and after that, whatever the window does is the user's. A dialog that went
+/// again — picked or cancelled faster than the carry — ends the wait rather than running it
+/// out. No window of this press's after a while is the system showing the dialog in a window
+/// it already had: the live dialog is the one in front, and only while it too is still where
+/// the system put it.
+pub(super) fn carry_open_with_to(at: ScreenRegion, before: Vec<isize>) {
+    let start = Instant::now();
+    let deadline = start + OPEN_WITH_WAIT;
+    // Windows this carry has put onto the pin's box, watched until the settle below runs out.
+    let mut watch: Vec<HWND> = Vec::new();
+    let mut seen = false;
+    let mut last_move: Option<Instant> = None;
 
-    while Instant::now() < deadline {
-        if carry_open_with_once(at, before) {
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
             return;
         }
+
+        watch.retain(|hwnd| unsafe { IsWindow(*hwnd) }.as_bool());
+        let mut fresh: Vec<HWND> = Vec::new();
+        for hwnd in open_with_dialogs() {
+            if before.contains(&(hwnd.0 as isize)) {
+                continue;
+            }
+            fresh.push(hwnd);
+        }
+        seen |= !fresh.is_empty();
+        let fresh_empty = fresh.is_empty();
+
+        // The watched ones ride along: a window put onto the pin's box that drifts back
+        // where the system puts it is carried again while the settle below runs.
+        let mut moving: Vec<HWND> = fresh;
+        moving.extend(watch.iter().copied());
+        for hwnd in moving {
+            if carry_open_with_window(hwnd, at) {
+                last_move = Some(now);
+                if !watch.iter().any(|held| held.0 as isize == hwnd.0 as isize) {
+                    watch.push(hwnd);
+                }
+            }
+        }
+
+        // No window of this press's after a while, and none watched: the dialog in front is
+        // the live one, if it is still where the system put it.
+        if fresh_empty && watch.is_empty() && now.duration_since(start) >= OPEN_WITH_APPEAR_WAIT
+        {
+            if let Some(hwnd) = foreground_open_with_dialog() {
+                if carry_open_with_window(hwnd, at) {
+                    last_move = Some(now);
+                    seen = true;
+                    watch.push(hwnd);
+                }
+            }
+        }
+
+        // Settled: something was moved and nothing has needed moving for a while, so a window
+        // the user carries after this stays carried.
+        if last_move.is_some_and(|moved| now.duration_since(moved) >= OPEN_WITH_SETTLE) {
+            return;
+        }
+        // Gone again after being seen, with nothing moved: picked or cancelled before the
+        // carry got to it, and there is nothing left to move.
+        if seen && fresh_empty && last_move.is_none() {
+            return;
+        }
+
         std::thread::sleep(OPEN_WITH_POLL);
     }
 }
 
-/// One look for the list's window, answering whether there is nothing left to wait for: carried,
-/// or gone rather than still coming.
-///
-/// A window that is not there yet is not an answer — the dialog arrives on its own process's
-/// clock, so the caller waits and looks again — while a window that was there and has since
-/// gone is: the user picked, or cancelled, faster than the carry got to it, and there is nothing
-/// left to move.
-///
-/// `before` holds the dialog processes that were already up when this press was made, so a
-/// dialog left over from an earlier press is not mistaken for this one's: only a process this
-/// press raised — one not in the list — is this press's to carry.
-fn carry_open_with_once(at: ScreenRegion, before: &[u32]) -> bool {
-    let mut seen = false;
-
-    for pid in engine_processes::processes_named(OPEN_WITH_IMAGE) {
-        if before.contains(&pid) {
-            continue;
-        }
-        seen = true;
-        if carry_open_with_windows(pid, at) {
-            return true;
-        }
+/// The live dialog where the chain cannot say which one it is: the window in front, and only
+/// while it is the list's own — a press from another program has no pin box to carry anything
+/// onto, and this carry only ever runs for one of this app's presses (see `carry_open_with_to`).
+fn foreground_open_with_dialog() -> Option<HWND> {
+    // Safety: the handle is read off the live desktop and only read from; a window gone since
+    // is refused by the calls made on it rather than acted on.
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.is_invalid() || !is_open_with_dialog(foreground) {
+        return None;
     }
-
-    // Nothing of this press's up yet is a reason to keep waiting; nothing up at all after
-    // something was is the dialog gone again — picked or cancelled — and not still coming.
-    seen
+    Some(foreground)
 }
 
-/// Move the list windows of `pid` that are still sitting where the system put them onto the
-/// pin's box, answering whether any of them was carried.
+/// Move one of the list's windows onto the pin's box, answering whether it was carried.
 ///
 /// A window is only moved while its centre is still on the primary display: that is where the
 /// system centres the dialog, so a window whose middle is there is one nobody has touched yet,
@@ -774,47 +872,40 @@ fn carry_open_with_once(at: ScreenRegion, before: &[u32]) -> bool {
 /// move keeps the window's own size and z-order and never activates it — the pin is coming
 /// down and the dialog is the hand's next stop, but stealing the keyboard to say so would
 /// take it from wherever the user has since put it.
-fn carry_open_with_windows(pid: u32, at: ScreenRegion) -> bool {
-    let found = open_with_windows(pid);
-    let mut carried = false;
-
-    for hwnd in found {
-        let mut rect = RECT::default();
-        // Safety: the handle was just enumerated as a live window of the dialog's own process,
-        // and only its box is read; a window gone since is refused rather than acted on.
-        if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
-            continue;
-        }
-        if rect.right <= rect.left || rect.bottom <= rect.top {
-            continue;
-        }
-        let middle = (
-            rect.left.saturating_add(rect.right) / 2,
-            rect.top.saturating_add(rect.bottom) / 2,
-        );
-        if !on_primary_display(middle.0, middle.1) {
-            continue;
-        }
-
-        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
-        let (left, top) = open_with_spot(at, (width, height));
-        // Safety: the handle is the dialog's own live window and only its position is
-        // touched — size, order and activation all left as they are (see above).
-        unsafe {
-            let _ = SetWindowPos(
-                hwnd,
-                HWND(std::ptr::null_mut()),
-                left,
-                top,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-        }
-        carried = true;
+fn carry_open_with_window(hwnd: HWND, at: ScreenRegion) -> bool {
+    let mut rect = RECT::default();
+    // Safety: the handle was just named by the desktop's own chain, and only its box is read;
+    // a window gone since is refused rather than acted on.
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return false;
+    }
+    if rect.right <= rect.left || rect.bottom <= rect.top {
+        return false;
+    }
+    let middle = (
+        rect.left.saturating_add(rect.right) / 2,
+        rect.top.saturating_add(rect.bottom) / 2,
+    );
+    if !on_primary_display(middle.0, middle.1) {
+        return false;
     }
 
-    carried
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    let (left, top) = open_with_spot(at, (width, height));
+    // Safety: the handle is the dialog's own live window and only its position is
+    // touched — size, order and activation all left as they are (see above).
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            HWND(std::ptr::null_mut()),
+            left,
+            top,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+    true
 }
 
 /// Where the list goes on the pin's display: centred on the pin's own box, clamped onto the
@@ -836,7 +927,7 @@ pub(super) fn open_with_spot_in(bounds: ScreenBounds, middle: (i32, i32), size: 
 
 /// Whether a point is on the primary display, whose room is the fallback `primary` names: the
 /// system centres the list there, so a list whose middle answers yes is one nobody has moved
-/// yet (see `carry_open_with_windows`).
+/// yet (see `carry_open_with_window`).
 fn on_primary_display(x: i32, y: i32) -> bool {
     centre_on_display((x, y), DESKTOPS.primary())
 }
@@ -847,46 +938,4 @@ pub(super) fn centre_on_display(point: (i32, i32), bounds: ScreenBounds) -> bool
     point.0 >= bounds.left && point.0 < bounds.right && point.1 >= bounds.top && point.1 < bounds.bottom
 }
 
-/// The live top-level windows of `pid`: visible, with a box, and owned by nobody — the dialog
-/// rather than one of its own popups.
-///
-/// # Safety
-///
-/// The handles are enumerated off the live desktop and only read; a window gone since is refused
-/// by the calls made on it rather than acted on.
-fn open_with_windows(pid: u32) -> Vec<HWND> {
-    struct Found {
-        pid: u32,
-        windows: Vec<HWND>,
-    }
 
-    unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let found = &mut *(lparam.0 as *mut Found);
-        let mut owner_pid = 0u32;
-        GetWindowThreadProcessId(hwnd, Some(&mut owner_pid));
-        if owner_pid != found.pid {
-            return BOOL(1);
-        }
-        if !IsWindowVisible(hwnd).as_bool() {
-            return BOOL(1);
-        }
-        if GetWindow(hwnd, GW_OWNER).map(|owner| !owner.is_invalid()).unwrap_or(false) {
-            return BOOL(1);
-        }
-        let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err()
-            || rect.right <= rect.left
-            || rect.bottom <= rect.top
-        {
-            return BOOL(1);
-        }
-        found.windows.push(hwnd);
-        BOOL(1)
-    }
-
-    let mut found = Found { pid, windows: Vec::new() };
-    unsafe {
-        let _ = EnumWindows(Some(callback), LPARAM(&mut found as *mut Found as isize));
-    }
-    found.windows
-}

@@ -1073,11 +1073,11 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
                 // `carry_open_with_to`).
                 pin_chrome::CaptionButton::OpenWithList => {
                     if let Some(path) = pinned_path() {
-                        let before = engine_processes::processes_named(OPEN_WITH_IMAGE);
+                        let before = open_with_snapshot();
                         show_open_with_dialog(&path);
                         if let Some(box_) = window_origin(hwnd) {
                             let at = (box_.0, box_.1, box_.0 + box_.2, box_.1 + box_.3);
-                            std::thread::spawn(move || carry_open_with_to(at, &before));
+                            std::thread::spawn(move || carry_open_with_to(at, before));
                         }
                         request_pin_end();
                     }
