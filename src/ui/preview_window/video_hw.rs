@@ -420,12 +420,12 @@ pub(super) enum VideoLoopAction {
 /// is what a release does to the transport's own clock, and it is the same arithmetic for the same
 /// reason (see `PinTransport::released`).
 ///
-/// **And the film's own jump is asked here rather than remembered with the record, which is the
+/// **And the film's own end of file is asked here rather than remembered with the record, which is the
 /// whole of what makes a pinned loop reach a player the pin did not begin.** A record is made where
 /// a player is begun, and mpv is the one player a take-up does not begin again — so a film the
-/// hover played once on carried the *hover's* answer into the pin: with the hover's jump off and
-/// `Pin Mode Jump → Loop` on there was nothing to rewind at all, and with the hover's jump on and
-/// the pin's jump a step the rewind undid a step the pin had asked for. `loops` is that question,
+/// hover played once on carried the *hover's* answer into the pin: with the hover's loop off and
+/// `End of File → Loop` on there was nothing to rewind at all, and with the hover's loop on and
+/// the pin's end of file a step on the rewind undid a step the pin had asked for. `loops` is that question,
 /// asked of the setting the film on screen is played under (see `pin_video_loops`).
 pub(super) fn video_loop_action(loop_: &VideoLoop, playing: bool, loops: bool) -> VideoLoopAction {
     if !playing {
@@ -460,7 +460,7 @@ pub(super) fn video_loop_action(loop_: &VideoLoop, playing: bool, loops: bool) -
 /// pass. Taking it out also drops the clock of the player being replaced, which is right in its own
 /// right — a clock whose player is gone is a clock with nothing to measure.
 ///
-/// `loops` is the film's own jump, read by the caller, which is the one that knows what is on
+/// `loops` is the film's own end of file, read by the caller, which is the one that knows what is on
 /// screen: this tick is asked for a pinned film as much as for a hovered one, and a pinned film's
 /// loop is the one road mpv has (see `video_loop_action`).
 pub(super) fn video_loop_tick(playing: bool, loops: bool) -> bool {
