@@ -56,40 +56,35 @@ pub(super) fn player_draws_subtitles(path: &Path) -> bool {
 /// Whether a hovered film loops, read when a player is started rather than when the
 /// setting changes: a preview is a few seconds long, and the next one is played at
 /// whatever the setting is by then.
-pub(super) fn current_video_jump_enabled() -> bool {
+pub(super) fn current_video_loop() -> bool {
     CONFIG
         .lock()
-        .map(|cfg| cfg.video_jump_enabled)
-        .unwrap_or(DEFAULT_VIDEO_JUMP_ENABLED)
+        .map(|cfg| cfg.video_loop)
+        .unwrap_or(DEFAULT_VIDEO_LOOP)
 }
 
-/// What a pinned film does at the end of it, and whether that answer is acted on at
-/// all — the film's own jump mode and its master switch, read the way the hover's
-/// loop is and at the same moment.
+/// What a *pinned* film does at the end of it — the film's own end-of-file setting, read the
+/// way the hover's loop is and at the same moment.
 ///
-/// `Loop` is the film beginning again, `To Next` the file beside it, `Shuffle` a
-/// random film of the folder, and a switch that is off is the film stopping at the
-/// end of it rather than any of the three (see `loop_ended_pinned_player`).
-pub(super) fn current_pin_mode_video_jump() -> (bool, PinJumpMode) {
+/// `Pause` is the film left where it ended, `Loop` the film beginning again, and `Continue`
+/// the file the walk takes next — which is the file beside it, or a random film of the
+/// folder where the pin's own shuffle says so (see `pin_video_loops` and `pin_walk`).
+pub(super) fn current_pin_mode_video_end_of_file() -> PinEndOfFile {
     CONFIG
         .lock()
-        .map(|cfg| (cfg.pin_mode_video_jump_enabled, cfg.pin_mode_video_jump))
-        .unwrap_or((
-            DEFAULT_PIN_MODE_VIDEO_JUMP_ENABLED,
-            DEFAULT_PIN_MODE_VIDEO_JUMP,
-        ))
+        .map(|cfg| cfg.pin_mode_video_end_of_file)
+        .unwrap_or(DEFAULT_PIN_MODE_VIDEO_END_OF_FILE)
 }
 
-/// Whether the film `path` is showing goes round on its own: a hovered film loops
-/// where its own jump switch says so, and a pinned one where the pin's jump is both
-/// on and a loop — every other film plays its pass once, and the end of it is what
-/// either moves the pin on or stops it (see `loop_ended_pinned_player`).
+/// Whether the film `path` is showing goes round on its own: a hovered film loops where its
+/// own loop switch says so, and a pinned one where the pin's end of file is a loop — every
+/// other film plays its pass once, and the end of it is what either moves the pin on, steps
+/// through the folder, or stops it (see `loop_ended_pinned_player`).
 pub(super) fn pin_video_loops(path: &Path) -> bool {
     if pinned() && pinned_path().as_deref() == Some(path) {
-        let (enabled, jump) = current_pin_mode_video_jump();
-        enabled && jump == PinJumpMode::Loop
+        current_pin_mode_video_end_of_file() == PinEndOfFile::Loop
     } else {
-        current_video_jump_enabled()
+        current_video_loop()
     }
 }
 

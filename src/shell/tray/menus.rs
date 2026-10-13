@@ -13,7 +13,7 @@
 use super::ids::{
     EngineIdleIds, BACKGROUND_CHOICES, CACHE_SIZE_CHOICES_MB, DDS_BACKGROUND_CHOICES,
     DECODE_BUDGET_CHOICES_GB, FONT_SIZE_CHOICES, HTML_BACKGROUND_CHOICES,
-    ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_JUMP_ENABLED, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_VOLUME_BASE,
+    ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SHUFFLE, ID_TRAY_AUDIO_VOLUME_BASE,
     ID_TRAY_AVOID_BASE, ID_TRAY_CHECK_UPDATES, ID_TRAY_DDS_BACKGROUND_BASE,
     ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
     ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
@@ -23,9 +23,9 @@ use super::ids::{
     ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
     ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
-    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_JUMP_BASE,
-    ID_TRAY_PIN_MODE_AUDIO_JUMP_ENABLED, ID_TRAY_PIN_MODE_VIDEO_JUMP_BASE,
-    ID_TRAY_PIN_MODE_VIDEO_JUMP_ENABLED, ID_TRAY_PIN_PAUSE_AUDIO,
+    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
+    ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
+    ID_TRAY_PIN_PAUSE_AUDIO,
     ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_POSITION_BEST,
     ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE,
     ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML,
@@ -36,15 +36,17 @@ use super::ids::{
     ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS,
     ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
     ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
-    ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_JUMP_ENABLED, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SUBTITLES,
+    ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE,
+    ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE,
     ID_TRAY_WEBVIEW_IDLE_BASE, MAX_TRAY_CUSTOM_THEMES, TRAY_CUSTOM_THEMES,
 };
 use super::submenus::{
     append_afk_timer_menu, append_audio_scale_menu, append_avoid_menu,
     append_background_menu, append_bitmap_scale_menu, append_codecs_menu,
-    append_document_scale_menu, append_engine_idle_menu, append_jump_menu, append_labeled_item,
-    append_office_engine_menu, append_pin_jump_menu,
+    append_document_scale_menu, append_end_of_file_menu, append_engine_idle_menu,
+    append_labeled_item, append_loop_item,
+    append_office_engine_menu, append_shuffle_item,
     append_pin_nav_menu, append_pin_seek_menu_renamed, append_seek_menu_renamed, append_tick_menu,
     append_video_engine_menu, cache_size_label,
     decode_budget_label, default_label, pin_minimize_label, pin_update_label,
@@ -57,7 +59,7 @@ use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
     PinMinimizeTo, PreviewType, TextTheme, TriggerKeyMode, VideoEngine,
     DEFAULT_ANIMATED_SCALE,
-    DEFAULT_AUDIO_JUMP_ENABLED, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AUDIO_VOLUME,
+    DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AUDIO_VOLUME,
     DEFAULT_AVOID_MODE,
     DEFAULT_CHECK_FOR_UPDATES,
     DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND,
@@ -66,8 +68,8 @@ use crate::config::config::{
     DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND,
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB,
     DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME,
-    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_MODE_AUDIO_JUMP, DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED,
-    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_VIDEO_JUMP, DEFAULT_PIN_MODE_VIDEO_JUMP_ENABLED,
+    DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
     DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
     DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
@@ -75,7 +77,7 @@ use crate::config::config::{
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
     DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_JUMP_ENABLED, DEFAULT_VIDEO_SCALE,
+    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_LOOP, DEFAULT_VIDEO_SCALE,
     DEFAULT_VIDEO_SUBTITLES,
     DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
     VOLUME_CHOICES,
@@ -1039,12 +1041,12 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         audio_volume,
         audio_seek,
         pin_mode_audio_seek,
-        video_jump,
-        audio_jump,
-        pin_video_jump,
-        pin_video_jump_enabled,
-        pin_audio_jump,
-        pin_audio_jump_enabled,
+        video_loop,
+        audio_loop,
+        video_shuffle,
+        audio_shuffle,
+        pin_video_end_of_file,
+        pin_audio_end_of_file,
     ) = CONFIG
         .lock()
         .map(|c| {
@@ -1053,12 +1055,12 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                 c.audio_volume,
                 c.audio_seek,
                 c.pin_mode_audio_seek,
-                c.video_jump_enabled,
-                c.audio_jump_enabled,
-                c.pin_mode_video_jump,
-                c.pin_mode_video_jump_enabled,
-                c.pin_mode_audio_jump,
-                c.pin_mode_audio_jump_enabled,
+                c.video_loop,
+                c.audio_loop,
+                c.pin_mode_video_shuffle,
+                c.pin_mode_audio_shuffle,
+                c.pin_mode_video_end_of_file,
+                c.pin_mode_audio_end_of_file,
             )
         })
         .unwrap_or((
@@ -1066,12 +1068,12 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_AUDIO_VOLUME,
             DEFAULT_AUDIO_SEEK,
             DEFAULT_PIN_MODE_AUDIO_SEEK,
-            DEFAULT_VIDEO_JUMP_ENABLED,
-            DEFAULT_AUDIO_JUMP_ENABLED,
-            DEFAULT_PIN_MODE_VIDEO_JUMP,
-            DEFAULT_PIN_MODE_VIDEO_JUMP_ENABLED,
-            DEFAULT_PIN_MODE_AUDIO_JUMP,
-            DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED,
+            DEFAULT_VIDEO_LOOP,
+            DEFAULT_AUDIO_LOOP,
+            DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
+            DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+            DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
+            DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
         ));
 
     let volume_menu = CreatePopupMenu().unwrap();
@@ -1226,10 +1228,11 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Volume"),
     );
 
-    // The video kind's own `Jump` and `Pin Mode Jump`, below its `Volume`: whether a
-    // hovered film goes round at the end of it, and what a pinned film's end does —
-    // go round, step to the next file, or step to a random one — with the master's
-    // switch (see `append_jump_menu` and `append_pin_jump_menu`).
+    // The film kind's own rows, below its `Volume`: whether a hovered film goes round at the
+    // end of it, whether a *pinned* film's forward steps shuffle, and what a pinned film's end
+    // does — stop there, go round, or step on to the next file, which the `Shuffle` row above
+    // decides between the file beside it and a random one (see `append_loop_item`,
+    // `append_shuffle_item` and `append_end_of_file_menu`).
     let video_preview = CreatePopupMenu().unwrap();
     let _ = AppendMenuW(
         video_preview,
@@ -1237,14 +1240,23 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         video_levels.0 as usize,
         w!("Volume"),
     );
-    append_jump_menu(video_preview, ID_TRAY_VIDEO_JUMP_ENABLED, video_jump);
-    append_pin_jump_menu(
+    append_loop_item(
         video_preview,
-        ID_TRAY_PIN_MODE_VIDEO_JUMP_ENABLED,
-        ID_TRAY_PIN_MODE_VIDEO_JUMP_BASE,
-        pin_video_jump_enabled,
-        pin_video_jump,
-        DEFAULT_PIN_MODE_VIDEO_JUMP,
+        ID_TRAY_VIDEO_LOOP,
+        video_loop,
+        DEFAULT_VIDEO_LOOP,
+    );
+    append_shuffle_item(
+        video_preview,
+        ID_TRAY_VIDEO_SHUFFLE,
+        video_shuffle,
+        DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
+    );
+    append_end_of_file_menu(
+        video_preview,
+        ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
+        pin_video_end_of_file,
+        DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
     );
     let _ = AppendMenuW(
         menu,
@@ -1253,12 +1265,12 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Video Preview"),
     );
 
-    // And the sound kind's own: the same two rows, with the `Seek` and `Pin Mode Seek`
-    // the sound's `Volume` answers — where in a file a hovered sound starts, and where
-    // a *pinned* one does — the sound's setting's to decide in each case (see
-    // `pin_mode_audio_seek`). They are renamed from the old `Volume` menu's `Audio Seek`
-    // and `Pin Mode Audio Seek` because they sit under `Audio Preview` now rather than
-    // under `Volume`.
+    // And the sound kind's own: the same three rows, with the `Seek` and `Pin Mode Seek` the
+    // sound's `Volume` answers — where in a file a hovered sound starts, and where a *pinned*
+    // one does — the sound's setting's to decide in each case (see `pin_mode_audio_seek`). They
+    // are renamed from the old `Volume` menu's `Audio Seek` and `Pin Mode Audio Seek` because
+    // they sit under `Audio Preview` now rather than under `Volume`, and they follow the three
+    // rows that are the same question asked of a film.
     let audio_preview = CreatePopupMenu().unwrap();
     let _ = AppendMenuW(
         audio_preview,
@@ -1266,17 +1278,26 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         audio_levels.0 as usize,
         w!("Volume"),
     );
+    append_loop_item(
+        audio_preview,
+        ID_TRAY_AUDIO_LOOP,
+        audio_loop,
+        DEFAULT_AUDIO_LOOP,
+    );
+    append_shuffle_item(
+        audio_preview,
+        ID_TRAY_AUDIO_SHUFFLE,
+        audio_shuffle,
+        DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+    );
+    append_end_of_file_menu(
+        audio_preview,
+        ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
+        pin_audio_end_of_file,
+        DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+    );
     append_seek_menu_renamed(audio_preview, w!("Seek"), audio_seek);
     append_pin_seek_menu_renamed(audio_preview, w!("Pin Mode Seek"), pin_mode_audio_seek);
-    append_jump_menu(audio_preview, ID_TRAY_AUDIO_JUMP_ENABLED, audio_jump);
-    append_pin_jump_menu(
-        audio_preview,
-        ID_TRAY_PIN_MODE_AUDIO_JUMP_ENABLED,
-        ID_TRAY_PIN_MODE_AUDIO_JUMP_BASE,
-        pin_audio_jump_enabled,
-        pin_audio_jump,
-        DEFAULT_PIN_MODE_AUDIO_JUMP,
-    );
     let _ = AppendMenuW(
         menu,
         MF_STRING | MF_POPUP,

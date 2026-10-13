@@ -19,7 +19,7 @@ use super::defaults::{
 };
 use super::setting_types::{
     sanitize_afk_timer_secs, sanitize_dds_background, sanitize_html_background, AudioSeek,
-    AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinJumpMode, PinMinimizeTo, PinNavFileTypes,
+    AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile, PinMinimizeTo, PinNavFileTypes,
     PreviewScale, TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine,
 };
 
@@ -211,33 +211,33 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
-            "pin_mode_audio_jump",
-            Some(self.pin_mode_audio_jump.as_str().to_string()),
+            "pin_mode_audio_end_of_file",
+            Some(self.pin_mode_audio_end_of_file.as_str().to_string()),
         );
         ini.set(
             CONFIG_SECTION,
-            "pin_mode_audio_jump_enabled",
-            Some(self.pin_mode_audio_jump_enabled.to_string()),
+            "pin_mode_audio_shuffle",
+            Some(self.pin_mode_audio_shuffle.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
-            "pin_mode_video_jump",
-            Some(self.pin_mode_video_jump.as_str().to_string()),
+            "pin_mode_video_end_of_file",
+            Some(self.pin_mode_video_end_of_file.as_str().to_string()),
         );
         ini.set(
             CONFIG_SECTION,
-            "pin_mode_video_jump_enabled",
-            Some(self.pin_mode_video_jump_enabled.to_string()),
+            "pin_mode_video_shuffle",
+            Some(self.pin_mode_video_shuffle.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
-            "video_jump_enabled",
-            Some(self.video_jump_enabled.to_string()),
+            "video_loop",
+            Some(self.video_loop.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
-            "audio_jump_enabled",
-            Some(self.audio_jump_enabled.to_string()),
+            "audio_loop",
+            Some(self.audio_loop.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -742,63 +742,70 @@ impl AppConfig {
                 self.pin_mode_audio_seek = seek;
             }
         }
-        // What a pinned sound does at the end of its file, and whether that
-        // answer is acted on at all — the pin's own jump mode and its master
-        // switch, read the way every named choice and yes-or-no setting is. A
-        // file written before either key existed leaves the setting where this
-        // build starts, and a value that names no jump is left there too. A
-        // file that still names the retired `pin_mode_audio_shuffle`/`loop`
-        // pair seeds the mode once where the new key is absent — a loop left
-        // on is the sound beginning again, a loop off with a shuffle on is a
-        // random sound, and anything else is the file beside it — and is not
-        // written back, so the seeding happens once (see `differs`).
-        if let Some(value) = ini.get(CONFIG_SECTION, "pin_mode_audio_jump") {
-            if let Some(jump) = PinJumpMode::from_str(&value) {
-                self.pin_mode_audio_jump = jump;
+        // What a pinned sound does at the end of its file, and which file a forward step of
+        // its walk takes — the pin's own end of file and its shuffle, read the way every
+        // named choice and yes-or-no setting is. A file written before either key existed
+        // leaves the setting where this build starts, and a value that names no end of file
+        // is left there too.
+        //
+        // A file that still names one of the keys these replaced is seeded from it, once:
+        // what is read here is written back under the names this build writes, and the
+        // retired keys go with it (see `differs`).
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_mode_audio_end_of_file") {
+            if let Some(end) = PinEndOfFile::from_str(&value) {
+                self.pin_mode_audio_end_of_file = end;
             }
-        } else {
-            let looped = ini
-                .getboolcoerce(CONFIG_SECTION, "pin_mode_audio_loop")
-                .ok()
-                .flatten()
-                .unwrap_or(true);
-            let shuffled = ini
-                .getboolcoerce(CONFIG_SECTION, "pin_mode_audio_shuffle")
-                .ok()
-                .flatten()
-                .unwrap_or(false);
-            self.pin_mode_audio_jump = if looped {
-                PinJumpMode::Loop
-            } else if shuffled {
-                PinJumpMode::Shuffle
-            } else {
-                PinJumpMode::ToNext
-            };
-        }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_jump_enabled")
-        {
-            self.pin_mode_audio_jump_enabled = value;
-        }
-        // The film's own answer to the same question, and its own master
-        // switch: a file that says nothing about either leaves both where
-        // this build starts.
-        if let Some(value) = ini.get(CONFIG_SECTION, "pin_mode_video_jump") {
-            if let Some(jump) = PinJumpMode::from_str(&value) {
-                self.pin_mode_video_jump = jump;
+        } else if let Some(value) = ini.get(CONFIG_SECTION, "pin_mode_audio_jump") {
+            if let Some((end, shuffle)) = retired_end_of_file(&value) {
+                self.pin_mode_audio_end_of_file = end;
+                self.pin_mode_audio_shuffle |= shuffle;
+            }
+        } else if let Ok(Some(looped)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_loop") {
+            // The pair older still: a loop left off is the sound stepping to the one
+            // beside it, and what the shuffle beside it said is read as the switch it now
+            // is, below.
+            if !looped {
+                self.pin_mode_audio_end_of_file = PinEndOfFile::Continue;
             }
         }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_video_jump_enabled")
-        {
-            self.pin_mode_video_jump_enabled = value;
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_shuffle") {
+            self.pin_mode_audio_shuffle = value;
         }
-        // Whether a hovered film or sound loops: on, it goes round; off, it
-        // stops at the end. A file that says nothing about either leaves both
-        // where this build starts.
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_jump_enabled") {
-            self.video_jump_enabled = value;
+        // A file from the era of the master switch: a switch that was off is the sound left
+        // where its file ended, which is what `Pause` says.
+        if let Ok(Some(false)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_jump_enabled") {
+            self.pin_mode_audio_end_of_file = PinEndOfFile::Pause;
         }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "audio_jump_enabled") {
-            self.audio_jump_enabled = value;
+        // The film's own answer to the same two questions, seeded the same way: a file that
+        // says nothing about either leaves both where this build starts.
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_mode_video_end_of_file") {
+            if let Some(end) = PinEndOfFile::from_str(&value) {
+                self.pin_mode_video_end_of_file = end;
+            }
+        } else if let Some(value) = ini.get(CONFIG_SECTION, "pin_mode_video_jump") {
+            if let Some((end, shuffle)) = retired_end_of_file(&value) {
+                self.pin_mode_video_end_of_file = end;
+                self.pin_mode_video_shuffle |= shuffle;
+            }
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_video_shuffle") {
+            self.pin_mode_video_shuffle = value;
+        }
+        if let Ok(Some(false)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_video_jump_enabled") {
+            self.pin_mode_video_end_of_file = PinEndOfFile::Pause;
+        }
+        // Whether a hovered film or sound loops: on, it goes round; off, it stops at the
+        // end. The key it is written under has been renamed once, and the name it had is
+        // read here so that a file written before the rename keeps its answer.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_loop") {
+            self.video_loop = value;
+        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_jump_enabled") {
+            self.video_loop = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "audio_loop") {
+            self.audio_loop = value;
+        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "audio_jump_enabled") {
+            self.audio_loop = value;
         }
         // Whether a sound's loudness is measured and brought to one level, which a file
         // written before the setting existed has no key for: a fresh installation does not
@@ -1079,5 +1086,18 @@ impl AppConfig {
         // ran over the file before this did, and which list it walks is a fact about the row
         // rather than about this read.
         lists::read_all(ini, self);
+    }
+}
+
+/// The end of file a retired `pin_mode_*_jump` value names, and whether it also turned the
+/// shuffle on: `shuffle` was a random file of the same kind at the end of a file, which this
+/// build spells as `Continue` with the shuffle switch beside the setting — so a file that
+/// named it seeds both, and the walk it described is the walk it still gets. A value that
+/// names no end of file at all is `None`, which leaves the setting where it was rather than
+/// guessing at one.
+fn retired_end_of_file(value: &str) -> Option<(PinEndOfFile, bool)> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "shuffle" | "random" => Some((PinEndOfFile::Continue, true)),
+        _ => PinEndOfFile::from_str(value).map(|end| (end, false)),
     }
 }

@@ -26,7 +26,7 @@ use super::super::ids::{
 };
 use super::super::submenus::{
     afk_timer_secs_at, audio_scale_at, background_at, dds_background_at, document_scale_at,
-    engine_idle_at, html_background_at, pin_jump_at,
+    engine_idle_at, end_of_file_at, html_background_at,
 };
 
 use crate::app::dialogs;
@@ -617,56 +617,58 @@ pub(in super::super) fn set_pin_mode_audio_seek(index: u16) {
     }
 }
 
-/// The jump an item of a `Pin Mode Jump` submenu stands for, by the position it was
-/// listed at: the film's own jump or the sound's, written into the pin's setting
-/// rather than the hover's.
+/// What a pinned film or sound does at the end of its file, by the position it was
+/// listed at: the film's own end of file or the sound's, written into the pin's setting
+/// rather than the hover's loop.
 ///
 /// Nothing on screen is rebuilt: a file already playing is left where it is, and what
-/// a click here changes is what the *next* end does — go round, step on, or shuffle —
-/// the same bargain the seek beside it makes.
-pub(in super::super) fn set_pin_jump_mode(index: u16, video: bool) {
-    let Some(jump) = pin_jump_at(index) else {
+/// a click here changes is what the *next* end does — stop there, go round, or step on
+/// to the next file — the same bargain the seek beside it makes.
+pub(in super::super) fn set_pin_end_of_file(index: u16, video: bool) {
+    let Some(end_of_file) = end_of_file_at(index) else {
         return;
     };
 
     if let Ok(mut config) = CONFIG.lock() {
         if video {
-            config.pin_mode_video_jump = jump;
+            config.pin_mode_video_end_of_file = end_of_file;
         } else {
-            config.pin_mode_audio_jump = jump;
+            config.pin_mode_audio_end_of_file = end_of_file;
         }
         config.save();
     }
 }
 
 /// Whether a hovered film or sound goes round at the end of it, which is what the
-/// `Jump → Enabled (Loop)` row throws the other way round.
+/// `Loop` row throws the other way round.
 ///
 /// Nothing on screen is rebuilt: a file already playing is left where it is, and what a
 /// click here changes is what the *next* end does.
-pub(in super::super) fn toggle_jump_enabled(video: bool) {
+pub(in super::super) fn toggle_loop(video: bool) {
     if let Ok(mut config) = CONFIG.lock() {
         if video {
-            config.video_jump_enabled = !config.video_jump_enabled;
+            config.video_loop = !config.video_loop;
         } else {
-            config.audio_jump_enabled = !config.audio_jump_enabled;
+            config.audio_loop = !config.audio_loop;
         }
         config.save();
     }
 }
 
-/// Whether a pinned film or sound acts on its own jump mode at all, which is what the
-/// `Pin Mode Jump → Enabled` row throws the other way round.
+/// Whether a *pinned* film or sound takes the next file of its walk at random rather than
+/// the one beside it, which is what the `Shuffle` row throws the other way round.
 ///
-/// Nothing on screen is rebuilt either: a file already playing is left where it is, and
-/// what a click here changes is what the *next* end does — a switch that is off stops
-/// the film or the sound at the end of it rather than any of the three jumps.
-pub(in super::super) fn toggle_pin_jump_enabled(video: bool) {
+/// Nothing on screen is rebuilt either: a walk already in hand carries the shuffle it was
+/// planned with, and what a click here changes is the walk the next step is planned as —
+/// whether that step is a caption's next press, a forward key, or the end of a file the
+/// kind's own `End of File` row calls `Continue`. A step back is the file before it either
+/// way.
+pub(in super::super) fn toggle_pin_shuffle(video: bool) {
     if let Ok(mut config) = CONFIG.lock() {
         if video {
-            config.pin_mode_video_jump_enabled = !config.pin_mode_video_jump_enabled;
+            config.pin_mode_video_shuffle = !config.pin_mode_video_shuffle;
         } else {
-            config.pin_mode_audio_jump_enabled = !config.pin_mode_audio_jump_enabled;
+            config.pin_mode_audio_shuffle = !config.pin_mode_audio_shuffle;
         }
         config.save();
     }

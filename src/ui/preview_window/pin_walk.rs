@@ -103,10 +103,9 @@ pub(crate) struct PinStep {
     /// the folder (see `PinPlanner`).
     pub(super) list: Vec<PathBuf>,
     /// Whether a step *forward* of this walk is a random one of the folder's sounds
-    /// or films rather than the one beside it: a shuffle where the anchor's own pin
-    /// jump says `Shuffle` — the audio jump for a walk anchored on a sound, the video
-    /// jump for one anchored on a film — and a step beside it everywhere else (see
-    /// `shuffle_step`).
+    /// or films rather than the one beside it: the pin's own shuffle — the audio one for a
+    /// walk anchored on a sound, the video one for a walk anchored on a film — and a step
+    /// beside it everywhere else (see `shuffle_step`).
     ///
     /// A step back is the file before it either way: a shuffle is an
     /// order the *next* file is picked in, and there is no order a
@@ -430,9 +429,8 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             let list = pin_navigation::list_for(at, anchor, config).unwrap_or_else(|| empty.clone());
 
             // Whether a step forward of this walk is a random one of the anchor's own
-            // kind rather than the file beside it: the audio jump says so for a walk
-            // anchored on a sound, the video jump for one anchored on a film, and a
-            // manual Next shuffles by the same flag — a shuffle is an order the *next*
+            // kind rather than the file beside it: the pin's own shuffle says so, and a
+            // manual Next shuffles by the same switch — a shuffle is an order the *next*
             // file is picked in, whatever asked for it (see `PinStep::step`). Each pool
             // is the anchor's kind of the list, read where the list is: which files those
             // are is a question of the `[audio]` and video lists of the file the walk was
@@ -440,9 +438,9 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             // starts as every file of the pool but the one on screen, since that one is
             // already showing.
             let audio_shuffle = anchor == Some(NavCategory::Audio)
-                && config.pin_mode_audio_jump == PinJumpMode::Shuffle;
+                && config.pin_mode_audio_shuffle;
             let video_shuffle = anchor == Some(NavCategory::Video)
-                && config.pin_mode_video_jump == PinJumpMode::Shuffle;
+                && config.pin_mode_video_shuffle;
             let sounds: Vec<PathBuf> = if audio_shuffle {
                 list
                     .iter()
