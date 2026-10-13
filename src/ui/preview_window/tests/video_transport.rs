@@ -1016,8 +1016,8 @@ fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume()
     clear_restart_count();
 }
 
-/// A wrap of a film this app is looping: mpv is sent back to the second down its pipe, and
-/// FFmpeg's film is begun again at it (see `video_loop_tick`).
+/// A wrap of a film this app is looping: mpv is sent back to the second down its pipe and set going
+/// there, and FFmpeg's film is begun again at it (see `video_loop_tick`).
 #[test]
 fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1078,8 +1078,14 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     );
     assert_eq!(
         mpv_ipc::noted_lines(),
-        vec![format!("{}\n", r#"{"command":["seek",0.000,"absolute"],"async":true}"#)],
-        "the wrap is a seek to the beginning, which is the only second a loop can restart at"
+        vec![
+            format!("{}\n", r#"{"command":["seek",0.000,"absolute"],"async":true}"#),
+            format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
+        ],
+        "the wrap is a seek to the beginning, which is the only second a loop can restart at, and \
+         then the play that brings back a film mpv had paused on its last frame: mpv keeps a pause \
+         across a seek, so a wrap that arrived after the pass had ended would otherwise leave the \
+         film standing at its first frame, silent, for good"
     );
 
     // The machine's own engine: a loop it cannot be told to give is a player begun again, the same
@@ -1115,4 +1121,63 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
         *media = previous_media;
     }
     clear_restart_count();
+}
+
+/// The clock a pass is measured by starts when the film begins playing rather than when its process
+/// was spawned: a player is a good part of a second away from the picture, and a clock that runs
+/// ahead of it reaches the end of the pass early and cuts that time off the film's tail on every
+/// wrap (see `rebase_video_loop_clock`).
+#[test]
+fn the_loop_clock_is_moved_onto_the_moment_the_film_began_playing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let content = (0, 0, 320, 240);
+    let film = PathBuf::from("slow-to-open-film.mkv");
+    note_video_loop(101, &film, content, 0.0, Some(8.0));
+
+    let position = || {
+        VIDEO_LOOP
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|loop_| loop_.position()))
+            .unwrap_or_default()
+    };
+    // The clock as a launch leaves it: started when the process was, so standing however long the
+    // player spent opening the file ahead of the picture.
+    let ahead_by = |seconds: u64| {
+        if let Ok(mut slot) = VIDEO_LOOP.lock() {
+            if let Some(loop_) = slot.as_mut() {
+                loop_.at = Instant::now() - Duration::from_secs(seconds);
+            }
+        }
+    };
+
+    ahead_by(2);
+    assert!(
+        position() >= 2.0,
+        "a clock started at the spawn stands ahead of the picture by the time the player spent \
+         opening the file, which is what the rewind is posted early by"
+    );
+
+    rebase_video_loop_clock(101);
+    assert!(
+        position() < 0.5,
+        "the frame the player has just put up is the beginning of the pass, so the clock is moved \
+         onto this moment and measures the film from where it actually is"
+    );
+
+    // And a window coming up for a player this app does not hold is not this clock's to move: the
+    // record names the player it is the clock of.
+    ahead_by(2);
+    rebase_video_loop_clock(202);
+    assert!(
+        position() >= 2.0,
+        "a clock belonging to another player is left where it stands"
+    );
+
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        *slot = None;
+    }
 }

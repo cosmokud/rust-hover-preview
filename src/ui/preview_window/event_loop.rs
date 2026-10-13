@@ -848,6 +848,11 @@ pub fn run_preview_window() {
                             *media = Some(start.media);
                         }
 
+                        // And the film is playing from here, which is what the loop it may be
+                        // giving is measured by: the clock was started when the process was
+                        // (see `rebase_video_loop_clock`).
+                        rebase_video_loop_clock(start.pid);
+
                         let _ = ShowWindow(hwnd, SW_HIDE);
                         pending_load = None;
                         clear_pointer_hold();
