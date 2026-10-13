@@ -668,7 +668,7 @@ pub(super) fn loop_ended_pinned_player(
     // margin a rewind is posted within is never rewound at all (see `video_launch`), so its end is the
     // arm below, which is the bar's only answer to a player that stands on its last frame rather than
     // going.
-    if end_of_file == PinEndOfFile::Pause
+    if pin_video_pauses_at_the_top(&path)
         && video_launch::rewind_due(true, transport.duration, reached)
     {
         return false;
@@ -690,6 +690,22 @@ pub(super) fn loop_ended_pinned_player(
             return false;
         }
         let held = transport.duration.unwrap_or(reached).min(reached);
+        // **A player this app cannot command is held by key, and that is the only hold there is for
+        // one.** The routes under mpv run the player they were launched with, and that player is the
+        // *hover's* — `-loop 0`, given because the hover's own loop is on, and kept by the pin, which
+        // begins no player of its own over one that is already going — so the film wraps itself at
+        // the end of every pass unless the player is stopped, and the one thing that stops it is the
+        // key the pause button already posts (see `video_key_pause`). A player with no window to post
+        // that key through is ended instead, which is the same pair the press is (see
+        // `hold_pinned_player_without_a_key`).
+        if video_route(&path) == VideoRoute::Ffplay {
+            if video_key_pause() {
+                update_pin_transport(|transport| transport.held(held));
+            } else {
+                hold_pinned_player_without_a_key(held);
+            }
+            return true;
+        }
         update_pin_transport(|transport| transport.player_gone(held));
         return true;
     }

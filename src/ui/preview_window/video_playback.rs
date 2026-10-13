@@ -88,12 +88,19 @@ pub(super) fn pin_video_loops(path: &Path) -> bool {
     }
 }
 
-/// Whether the pinned film `path` is one that stops at the beginning of itself at the end of a pass.
+/// Whether the pinned film `path` is one that stops at the beginning of itself at the end of a pass,
+/// on the one road this app can take a *running* player back to its first frame: mpv's pipe.
 ///
 /// `End of File → Pause` is the one end of file that neither begins the pass again nor steps on, and
 /// what it does at the end of a pass is what a loop does — take the film back to its first frame
-/// down the pipe the player listens on, the one road mpv has (see `video_loop_tick`) — and then leave
-/// it standing there.
+/// down the pipe the player listens on (see `video_loop_tick`) — and then leave it standing there.
+///
+/// **And the route is part of the question rather than an accident of it.** The routes under mpv are
+/// players nothing of this app's can be told once they are going, so the tick's rewind answers one of
+/// them by *ending* it and beginning another from zero, playing (see `video_loop_tick`) — a `Pause`
+/// that plays the film again, pass after pass, which is the one thing this end of file exists not to
+/// do. What those routes do instead is stop the film where it stands when its end arrives, which is a
+/// hold of the player rather than a rewind of the film (see `loop_ended_pinned_player`).
 ///
 /// **At the top and not at the end**, which is the whole of what keeps the press that plays it again
 /// a clean one. A film held at the top is resumed by that press with a single command, the same
@@ -109,6 +116,7 @@ pub(super) fn pin_video_pauses_at_the_top(path: &Path) -> bool {
     pinned()
         && pinned_path().as_deref() == Some(path)
         && current_pin_mode_video_end_of_file() == PinEndOfFile::Pause
+        && video_route(path) == VideoRoute::Mpv
 }
 
 /// The player a preview holds: the process this app began, or — under test — the id one would

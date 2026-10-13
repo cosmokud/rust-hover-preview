@@ -1561,6 +1561,100 @@ fn the_end_of_file_that_pauses_is_left_to_the_rewind_where_it_can_take_the_film(
     }
 }
 
+/// The end of file that pauses stops the film where it stands on every route the tick's rewind
+/// cannot take home, rather than beginning it again.
+///
+/// mpv alone is a player this app can take back to the first frame while it runs (see
+/// `pin_video_pauses_at_the_top`), and the route under it is a player nothing can be told once it is
+/// going: FFmpeg's player wraps to the beginning by itself where it was given FFmpeg's own `-loop 0`,
+/// which is what a *hover's* film is begun with and the pin keeps, because a pin does not begin a
+/// player of its own over a hover's. So a pass that ends in a hold is a hold of that player — the
+/// pause key the play button already posts, with the same fallback for a player with no window to
+/// post one through — and never a rewind: the tick's rewind answers a player it cannot command by
+/// ending it and beginning another one *playing* from zero (see `video_loop_tick`), which is a
+/// `Pause` that plays the film again, pass after pass.
+#[test]
+fn the_end_of_file_that_pauses_stops_a_players_film_where_it_stands() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_live_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("live-pausing-film.mkv");
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    stand_pin(Some(a_playing_pin(&film, content)));
+    let _jumps = VideoJumps::set(true, PinEndOfFile::Pause);
+    ffplay_window::clear_pause_posts();
+    clear_restart_count();
+
+    assert!(
+        !pin_video_pauses_at_the_top(&film),
+        "a rewind this app can only answer with a player begun again at zero is not this route's"
+    );
+
+    // A film the pin took over from the hover is a player this app is looping itself — its clock is
+    // a record, and the tick reads it as a wrap that is due.
+    note_video_loop(101, &film, content, 0.0, Some(200.0));
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        if let Some(loop_) = slot.as_mut() {
+            loop_.at = Instant::now() - Duration::from_secs(201);
+        }
+    }
+    assert!(
+        !video_loop_tick(true, pin_video_loops(&film) || pin_video_pauses_at_the_top(&film)),
+        "so the tick leaves it where it is rather than beginning it again"
+    );
+    assert_eq!(
+        restart_count(),
+        0,
+        "which is the whole of the fault: a rewind here is a player begun again, playing"
+    );
+
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        *slot = None;
+    }
+
+    // And the end of the pass itself stops the film that is standing there, at the film's own end,
+    // with the bar held on it and the button turned back into a play button.
+    a_pass_that_has_run_out(Duration::from_secs(200));
+    let mut wait = None;
+    assert!(
+        loop_ended_pinned_player(None, &mut wait, false),
+        "the end of a film whose player cannot be told to pause is answered here"
+    );
+    assert!(wait.is_none(), "a pause asks for no walk");
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        1,
+        "the player is held where it is by the same key the play button posts"
+    );
+
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("the pin is up");
+    assert_eq!(
+        transport.paused_at,
+        Some(200.0),
+        "the bar stands at the film's own end rather than sweeping past it"
+    );
+    assert!(!pin_is_playing(&transport));
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
 /// The end of file that steps on waits for the film's own end, and the bar stops there while the
 /// walk is out.
 ///
