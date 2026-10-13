@@ -1089,12 +1089,10 @@ pub fn run_preview_window() {
                             engine_failed = Some(failing);
                         }
                     }
-                    // A film the media engine plays for the pin whose end of file is `Continue`
-                    // loop ends the same way a sound the engine plays does: the session is
-                    // let go — which is also what stops the end being read again on the
-                    // sixty ticks a second this loop turns — and the next file of the folder
-                    // is asked for, the same ask the caption's own **Next** button makes and
-                    // the same wait for its answer (see `pinned_native_video_ended`).
+                    // A film the media engine plays for the pin ends the same way a sound the engine
+                    // plays does, and one place reads its end because the readings are one reading:
+                    // the walk's next file where the end of file steps on, or the bar held where a
+                    // film the engine has stopped on stands (see `pinned_native_video_end`).
                     if media.media_type.is_native_video() {
                         if let Some(path) = current_show.as_ref().and_then(self::show_path) {
                             // The engine is the one player this app can tell what to do at the end of
@@ -1104,15 +1102,12 @@ pub fn run_preview_window() {
                             // settled at a launch (see `apply_native_video_loop`).
                             apply_native_video_loop(path);
 
-                            if pinned_native_video_ended(path) {
-                                video_player::stop();
-                                ask_pin_walk(
-                                    path.to_path_buf(),
-                                    1,
-                                    pin_walk_anchor(&pin_walk, &pin_walk_of_current),
-                                );
-                                pin_walk_wait = Some(PinWait::new());
-                            }
+                            answer_native_pass_end(
+                                pinned_native_video_end(path),
+                                path,
+                                pin_walk_anchor(&pin_walk, &pin_walk_of_current),
+                                &mut pin_walk_wait,
+                            );
                         }
                     }
                     // A sound's card is the one painted preview that changes while it is on

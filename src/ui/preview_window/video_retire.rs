@@ -744,22 +744,114 @@ pub(super) fn loop_ended_pinned_player(
     true
 }
 
-/// Whether the film the media engine is playing for the pin has ended, which is the
-/// one thing a pinned film whose end of file is a step on is advanced by.
+/// Answer what the film the media engine is playing has asked at the end of its pass: step the walk
+/// on, hold the bar on the film the engine has stopped on, or do nothing.
 ///
-/// The engine was asked not to loop when the session was started (see
-/// `video_player::play`), so its end is its own to report: the engine's word for it,
-/// or its clock at the length of the file, is the end of the film. A path is part of
-/// the question because the engine holds one film at a time — a file the engine is not
-/// playing has not ended, whatever the clock of the file on screen says (see
-/// `video_player::video_ended`).
-pub(super) fn pinned_native_video_ended(path: &Path) -> bool {
-    if !(pinned() && pinned_path().as_deref() == Some(path)) {
-        return false;
+/// It is the pin's own ask rather than the film's, so it is the work of the answer that is here — the
+/// session let go, the walk asked for, the bar written down — and the reading of what the film's end
+/// of file wants is `pinned_native_video_end`, which a run needs an engine for and this does not.
+///
+/// It answers whether the pass's end was acted on at all, which is what a tick can say about a film
+/// whose end it has read and a film it has not.
+pub(super) fn answer_native_pass_end(
+    end: NativePassEnd,
+    path: &Path,
+    anchor: Option<NavCategory>,
+    wait: &mut Option<PinWait>,
+) -> bool {
+    match end {
+        NativePassEnd::Nothing => false,
+        NativePassEnd::Walk => {
+            // The session is let go — which is also what stops the end being read again on the sixty
+            // ticks a second this loop turns — and the next file of the folder is asked for, the same
+            // ask the caption's own **Next** button makes and the same wait for its answer.
+            video_player::stop();
+            ask_pin_walk(path.to_path_buf(), 1, anchor);
+            *wait = Some(PinWait::new());
+            true
+        }
+        NativePassEnd::Hold => {
+            // **The engine stands on the last frame of a film it was told to play once and says
+            // nothing more**, so this is the bar's only way of hearing that the film is over: the
+            // second it is held at is the film's own length, and a hold is what stops the clock and
+            // turns the button into the play button a finished film is owed (see `pin_playhead` and
+            // `pin_is_playing`). The press takes a film held here back to its top (see
+            // `toggle_pinned_playback`).
+            //
+            // Nothing is written where the bar already says the film is held, which is every tick
+            // after the first: the hold is a transition, and a film whose length nothing has read has
+            // no second for one — the same corner the reading of a film mpv stands on is left with
+            // (see `loop_ended_pinned_player`).
+            //
+            // shortcut: the clock half of the reading this answer comes from can go on saying the film
+            // is at its end for a moment after this app has taken it to another second, so a press over
+            // a finished film can leave the bar held over a film that is playing again until the press
+            // after it; upgrade when the engine's own seeked event is watched (see `video_ended`).
+            let Some((_, _, transport, _)) = pinned_playback_state() else {
+                return false;
+            };
+            if transport.paused_at.is_some() {
+                return false;
+            }
+            let Some(at) = pin_duration(&transport) else {
+                return false;
+            };
+            update_pin_transport(|transport| transport.held(at));
+            true
+        }
     }
-    current_pin_mode_video_end_of_file() == PinEndOfFile::Continue
-        && video_player::playing_path().as_deref() == Some(path)
-        && video_player::video_ended()
+}
+
+/// What the end of a pass of the film the media engine plays asks of the pin.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum NativePassEnd {
+    /// Nothing: a pass that is still being played, and a film the engine is looping itself — which
+    /// reports no end of one at all (see `apply_native_video_loop`).
+    Nothing,
+    /// The walk's next file, which is the ask the caption's own **Next** button makes.
+    Walk,
+    /// The bar held on the film the engine has stopped on, which is `Pause` left where it stands.
+    Hold,
+}
+
+/// What the film the media engine is playing for the pin asks at the end of its pass, from the two
+/// facts that decide it.
+///
+/// The engine was handed the end of file the film on screen is played under, so its end is its own
+/// to report: the engine's word for it, or its clock at the length of the file, is the end of the
+/// film (see `video_player::video_ended` and `apply_native_video_loop`).
+///
+/// It is a function of its two facts rather than of a session because a session is a thread-local
+/// nothing but the running app holds (see `pinned_native_video_end`, which is the reading itself).
+pub(super) fn native_pass_end(end_of_file: PinEndOfFile, ended: bool) -> NativePassEnd {
+    if !ended {
+        return NativePassEnd::Nothing;
+    }
+
+    match end_of_file {
+        PinEndOfFile::Loop => NativePassEnd::Nothing,
+        PinEndOfFile::Continue => NativePassEnd::Walk,
+        PinEndOfFile::Pause => NativePassEnd::Hold,
+    }
+}
+
+/// What the pass of the film the media engine is playing for the pin asks of the pin now, read where
+/// the end is answered.
+///
+/// A path is part of the question because the engine holds one film at a time — a file the engine is
+/// not playing has not ended, whatever the clock of the file on screen says (see
+/// `video_player::playing_path`).
+pub(super) fn pinned_native_video_end(path: &Path) -> NativePassEnd {
+    if !(pinned() && pinned_path().as_deref() == Some(path))
+        || video_player::playing_path().as_deref() != Some(path)
+    {
+        return NativePassEnd::Nothing;
+    }
+
+    native_pass_end(
+        current_pin_mode_video_end_of_file(),
+        video_player::video_ended(),
+    )
 }
 
 /// Give a player that has been told nothing yet the hold that was written down for it.
