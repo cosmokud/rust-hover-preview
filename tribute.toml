@@ -4,8 +4,8 @@
 # --check` exits 2 when what is committed no longer matches that tree.
 #
 # Everything here is a deliberate departure from the defaults, and nothing else
-# is: the accepted list below is the default one plus the three additions noted
-# in it, and the entries after it are the crates those defaults do not describe
+# is: the accepted list below is the default one minus ISC (no dependency uses it)
+# plus the three additions noted in it, and the entries after it are the crates those defaults do not describe
 # correctly.
 
 # The allowlist, and the order an `A OR B` expression is read in: the first
@@ -15,7 +15,6 @@ accepted = [
     "Apache-2.0",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "ISC",
     "0BSD",
     "Zlib",
     "Unlicense",
@@ -52,9 +51,8 @@ expression = "MIT AND BSD-2-Clause"
 
 # The UnRAR sources `unrar_sys` vendors under `vendor/unrar` are not a crate, so
 # no dependency declaration covers them: that crate's MIT OR Apache-2.0 is the
-# Rust wrapper alone, while the C++ it compiles in is RARLAB's. This is the
-# licence README's note about RAR archives describes, given a place in the
-# notices.
+# Rust wrapper alone, while the C++ it compiles in is RARLAB's. This is the note
+# about RAR archives in README's licence section, given a place in the notices.
 [[extra]]
 name = "UnRAR (bundled in unrar_sys)"
 expression = "LicenseRef-UnRAR"
