@@ -40,18 +40,8 @@ pub(super) const ID_TRAY_PIN_UPDATE_HOVER: u16 = 1017;
 /// pin's own business and neither is a click on the row beside it.
 pub(super) const ID_TRAY_PIN_PAUSE_AUDIO: u16 = 1018;
 pub(super) const ID_TRAY_PIN_PAUSE_VIDEO: u16 = 1019;
-/// The two rows of the `Pin Mode → Navigation Files` submenu: whether a pin's own previous/next
-/// buttons walk every file this build can preview or only those of the pinned file's own kind
-/// of thing (see `PinNavFileTypes`).
-///
-/// They sit in the slack above the pin's own rows, which begin at
-/// 1016 — the one gap this block has left between the HTML
-/// backdrop's half, which ends at 1012, and the pin's own rows:
-/// a walk's two answers belong under the pin's own row rather
-/// than in a range of their own, since a setting of two ways is
-/// two ids and not a list.
-pub(super) const ID_TRAY_PIN_NAV_ALL: u16 = 1014;
-pub(super) const ID_TRAY_PIN_NAV_CATEGORY: u16 = 1015;
+/// The retired single-pair `Navigation Files` ids (1014/1015): kept free, never reused, so
+/// an old menu cannot be read as a new row (see the per-anchor ids at 1672+).
 /// The two rows of the `Pin Mode → Minimize` submenu: where a pin the minimize button put away
 /// goes — the round bubble left on the desktop, or the app's own button in the taskbar.
 ///
@@ -312,6 +302,16 @@ pub(super) const CODEC_COMMANDS: u16 = 64;
 /// out — and is wider than any machine's install list is likely to be.
 pub(super) const ID_TRAY_MPV_BASE: u16 = 1664;
 pub(super) const MPV_COMMANDS: u16 = 8;
+/// The `Pin Mode → Navigation Files` rows: three anchors — Video, Audio, Others — each
+/// with All and Same Category. They sit past every id the app hands out, so no click is
+/// read as another submenu's item (see `PinNavFileTypes`). The old single-pair ids
+/// 1014/1015 are retired, not reused.
+pub(super) const ID_TRAY_PIN_NAV_VIDEO_ALL: u16 = 1672;
+pub(super) const ID_TRAY_PIN_NAV_VIDEO_CATEGORY: u16 = 1673;
+pub(super) const ID_TRAY_PIN_NAV_AUDIO_ALL: u16 = 1674;
+pub(super) const ID_TRAY_PIN_NAV_AUDIO_CATEGORY: u16 = 1675;
+pub(super) const ID_TRAY_PIN_NAV_OTHERS_ALL: u16 = 1676;
+pub(super) const ID_TRAY_PIN_NAV_OTHERS_CATEGORY: u16 = 1677;
 /// The row above `Run at Startup`, which is in the menu only while a newer release is
 /// waiting: it puts the installer `updates` fetched on, and the app ends itself as the
 /// installer takes over rather than being the copy that has to be terminated.

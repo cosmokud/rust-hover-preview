@@ -184,28 +184,34 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
         (ID_TRAY_PIN, ID_TRAY_TRIGGER_ENABLED),
         (ID_TRAY_PIN_UPDATE, ID_TRAY_TRIGGER_ENABLED),
         (ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_TRIGGER_ENABLED),
-        (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_NAV_CATEGORY),
-        (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN),
-        (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_UPDATE),
-        (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_UPDATE_HOVER),
-        (ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN),
-        (ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN_UPDATE),
-        (ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN_UPDATE_HOVER),
-        (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_PAUSE_AUDIO),
-        (ID_TRAY_PIN_NAV_ALL, ID_TRAY_PIN_PAUSE_VIDEO),
+        (ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_NAV_VIDEO_CATEGORY),
+        (ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_AUDIO_CATEGORY),
+        (ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY),
+        (ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_NAV_AUDIO_ALL),
+        (ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_NAV_OTHERS_ALL),
+        (ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_OTHERS_ALL),
+        (ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN),
+        (ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_UPDATE),
+        (ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_UPDATE_HOVER),
+        (ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN),
+        (ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN),
+        (ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_PAUSE_AUDIO),
+        (ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_PAUSE_VIDEO),
         (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR),
         (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN),
         (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_UPDATE),
         (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_UPDATE_HOVER),
-        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_NAV_ALL),
-        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_NAV_CATEGORY),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_NAV_VIDEO_ALL),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_NAV_AUDIO_ALL),
+        (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_NAV_OTHERS_ALL),
         (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_PAUSE_AUDIO),
         (ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_PAUSE_VIDEO),
         (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN),
         (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_UPDATE),
         (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_UPDATE_HOVER),
-        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_NAV_ALL),
-        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_NAV_CATEGORY),
+        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_NAV_VIDEO_ALL),
+        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_NAV_AUDIO_ALL),
+        (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_NAV_OTHERS_ALL),
         (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_PAUSE_AUDIO),
         (ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_PAUSE_VIDEO),
     ] {
@@ -232,8 +238,12 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
         (ID_TRAY_SCALE_BASE, BITMAP_SCALE_CHOICES.len() as u16),
     ] {
         for row in [
-            ID_TRAY_PIN_NAV_ALL,
-            ID_TRAY_PIN_NAV_CATEGORY,
+            ID_TRAY_PIN_NAV_VIDEO_ALL,
+            ID_TRAY_PIN_NAV_VIDEO_CATEGORY,
+            ID_TRAY_PIN_NAV_AUDIO_ALL,
+            ID_TRAY_PIN_NAV_AUDIO_CATEGORY,
+            ID_TRAY_PIN_NAV_OTHERS_ALL,
+            ID_TRAY_PIN_NAV_OTHERS_CATEGORY,
             ID_TRAY_PIN_MINIMIZE_BUBBLE,
             ID_TRAY_PIN_MINIMIZE_TASKBAR,
         ] {
@@ -256,8 +266,16 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
         "the pointer's own hover is not one of the ways until it is asked for"
     );
     assert_eq!(
-        defaults.pin_nav_file_types, DEFAULT_PIN_NAV_FILE_TYPES,
-        "a pin walks the whole folder until it is told otherwise"
+        defaults.pin_nav_video, DEFAULT_PIN_NAV_VIDEO,
+        "a walk anchored on a video walks videos only"
+    );
+    assert_eq!(
+        defaults.pin_nav_audio, DEFAULT_PIN_NAV_AUDIO,
+        "a walk anchored on a sound walks sounds only"
+    );
+    assert_eq!(
+        defaults.pin_nav_others, DEFAULT_PIN_NAV_OTHERS,
+        "a walk anchored elsewhere walks the whole folder"
     );
     assert_eq!(
         defaults.pin_minimize_to, DEFAULT_PIN_MINIMIZE_TO,
@@ -1097,8 +1115,12 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_PIN_UPDATE_HOVER,
             ID_TRAY_PIN_PAUSE_AUDIO,
             ID_TRAY_PIN_PAUSE_VIDEO,
-            ID_TRAY_PIN_NAV_ALL,
-            ID_TRAY_PIN_NAV_CATEGORY,
+            ID_TRAY_PIN_NAV_VIDEO_ALL,
+            ID_TRAY_PIN_NAV_VIDEO_CATEGORY,
+            ID_TRAY_PIN_NAV_AUDIO_ALL,
+            ID_TRAY_PIN_NAV_AUDIO_CATEGORY,
+            ID_TRAY_PIN_NAV_OTHERS_ALL,
+            ID_TRAY_PIN_NAV_OTHERS_CATEGORY,
             ID_TRAY_TRIGGER_DISABLE,
             ID_TRAY_TRIGGER_ENABLE,
             ID_TRAY_TRIGGER_ENABLED,

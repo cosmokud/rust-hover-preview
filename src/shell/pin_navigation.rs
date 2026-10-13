@@ -61,11 +61,12 @@ pub fn list_for(current: &Path, config: &AppConfig) -> Option<Vec<PathBuf>> {
     let entries = entries_for(folder, config)?;
 
     let wanted = wanted_category(current, config);
+    let mode = nav_mode_for(wanted, config);
 
     Some(
         entries
             .iter()
-            .filter(|entry| walks(entry.kind, config, wanted))
+            .filter(|entry| walks(entry.kind, wanted, mode))
             .map(|entry| entry.path.clone())
             .collect(),
     )
@@ -77,10 +78,22 @@ fn wanted_category(current: &Path, config: &AppConfig) -> Option<routing::NavCat
     routing::kind_of(current, config).map(routing::nav_category)
 }
 
+/// Which walk a file anchored on `wanted` takes: videos answer to the Video switch, sounds
+/// to the Audio switch, and everything else — including a file nothing claims — to Others.
+/// The walk is anchored on the first file pinned, so a document walks end to end while a
+/// sound walks sounds only (see `list_for`).
+pub fn nav_mode_for(wanted: Option<routing::NavCategory>, config: &AppConfig) -> PinNavFileTypes {
+    match wanted {
+        Some(routing::NavCategory::Video) => config.pin_nav_video,
+        Some(routing::NavCategory::Audio) => config.pin_nav_audio,
+        _ => config.pin_nav_others,
+    }
+}
+
 /// Whether an entry of the walk's kind is one this walk steps through: everything under `All`,
-/// and under `Category` only the entries of the category the current file is in.
-fn walks(kind: PreviewType, config: &AppConfig, wanted: Option<routing::NavCategory>) -> bool {
-    config.pin_nav_file_types == PinNavFileTypes::All
+/// and under `Category` only the entries of the category the walk was anchored on.
+fn walks(kind: PreviewType, wanted: Option<routing::NavCategory>, mode: PinNavFileTypes) -> bool {
+    mode == PinNavFileTypes::All
         || (wanted.is_some() && wanted == Some(routing::nav_category(kind)))
 }
 
@@ -437,7 +450,7 @@ pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::config::DEFAULT_PIN_NAV_FILE_TYPES;
+    use crate::config::config::{DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO};
 
     /// A folder of a test's own under the temp folder, named by the test and cleared first,
     /// so two tests walking two files cannot see each other's.
@@ -488,7 +501,9 @@ mod tests {
         FOLDERS.lock().expect("the walk's own map").clear();
 
         let config = AppConfig {
-            pin_nav_file_types: mode,
+            pin_nav_video: mode,
+            pin_nav_audio: mode,
+            pin_nav_others: mode,
             ..AppConfig::default()
         };
 
@@ -499,9 +514,10 @@ mod tests {
         // The same filter the walk itself applies, so a test cannot pass while production
         // filters differently.
         let wanted = wanted_category(current, &config);
+        let mode = nav_mode_for(wanted, &config);
         let walked: Vec<PathBuf> = ordered
             .iter()
-            .filter(|entry| walks(entry.kind, &config, wanted))
+            .filter(|entry| walks(entry.kind, wanted, mode))
             .map(|entry| entry.path.clone())
             .collect();
 
@@ -919,12 +935,15 @@ mod tests {
         );
     }
 
-    /// The default is `All`, so a pin walks a folder end to end where the configuration says
-    /// nothing at all — which is what a `config.ini` written before this setting existed is
-    /// read as, and what a file naming a value this build cannot read is left at.
+    /// Video and Audio start narrow and Others starts wide, so a film never steps into a
+    /// song while a document walks end to end — which is what a `config.ini` written
+    /// before these settings existed is read as, and what a file naming a value this
+    /// build cannot read is left at.
     #[test]
     fn a_pin_walks_everything_unless_it_is_told_otherwise() {
-        assert_eq!(DEFAULT_PIN_NAV_FILE_TYPES, PinNavFileTypes::All);
+        assert_eq!(DEFAULT_PIN_NAV_VIDEO, PinNavFileTypes::Category);
+        assert_eq!(DEFAULT_PIN_NAV_AUDIO, PinNavFileTypes::Category);
+        assert_eq!(DEFAULT_PIN_NAV_OTHERS, PinNavFileTypes::All);
         assert_eq!(PinNavFileTypes::All.as_str(), "all");
         assert_eq!(PinNavFileTypes::Category.as_str(), "category");
     }

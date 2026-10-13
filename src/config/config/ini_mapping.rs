@@ -105,8 +105,18 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
-            "pin_nav_file_types",
-            Some(self.pin_nav_file_types.as_str().to_string()),
+            "pin_nav_video",
+            Some(self.pin_nav_video.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_nav_audio",
+            Some(self.pin_nav_audio.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_nav_others",
+            Some(self.pin_nav_others.as_str().to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -566,13 +576,33 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_update_on_hover") {
             self.pin_update_on_hover = value;
         }
-        // Which files the pin's own previous/next buttons step through. A value that names
-        // neither of the two is not one of them: the file is left at the answer a fresh one
-        // has, which is every file the build could preview.
-        if let Some(value) = ini.get(CONFIG_SECTION, "pin_nav_file_types") {
+        // The per-anchor answers, read the same way. A file holding only the retired single
+        // key seeds all three with it, so a user who picked one walk keeps it; a value
+        // that names neither way leaves that anchor at its fresh default. The old key is
+        // not written back (see `to_ini`), so the seeding happens once.
+        let legacy = ini
+            .get(CONFIG_SECTION, "pin_nav_file_types")
+            .and_then(|value| PinNavFileTypes::from_str(&value));
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_nav_video") {
             if let Some(mode) = PinNavFileTypes::from_str(&value) {
-                self.pin_nav_file_types = mode;
+                self.pin_nav_video = mode;
             }
+        } else if let Some(mode) = legacy {
+            self.pin_nav_video = mode;
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_nav_audio") {
+            if let Some(mode) = PinNavFileTypes::from_str(&value) {
+                self.pin_nav_audio = mode;
+            }
+        } else if let Some(mode) = legacy {
+            self.pin_nav_audio = mode;
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_nav_others") {
+            if let Some(mode) = PinNavFileTypes::from_str(&value) {
+                self.pin_nav_others = mode;
+            }
+        } else if let Some(mode) = legacy {
+            self.pin_nav_others = mode;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;

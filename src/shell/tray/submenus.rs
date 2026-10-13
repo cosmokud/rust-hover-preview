@@ -18,7 +18,9 @@ use super::ids::{
     BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES,
     ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE,
     ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_MPV_BASE,
-    ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK,
+    ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_AUDIO_CATEGORY,
+    ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL,
+    ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK,
     TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
 };
 
@@ -27,7 +29,8 @@ use crate::config::config::{
     AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewScale,
     TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
     DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MODE_AUDIO_SEEK,
-    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
+    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
+    DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
@@ -200,6 +203,67 @@ pub(super) fn pin_nav_label(types: PinNavFileTypes) -> &'static str {
         PinNavFileTypes::All => "All Files",
         PinNavFileTypes::Category => "Same Category",
     }
+}
+
+/// One `Navigation Files` anchor submenu: the two walks a pin anchored on this kind of
+/// file takes, with the one the setting is on checked and the one it starts at marked.
+fn append_pin_nav_anchor(
+    parent: HMENU,
+    label: PCWSTR,
+    all_id: u16,
+    category_id: u16,
+    selected: PinNavFileTypes,
+    default: PinNavFileTypes,
+) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+    append_labeled_item(
+        menu,
+        MF_STRING | if selected == PinNavFileTypes::All { MF_CHECKED } else { MF_UNCHECKED },
+        all_id,
+        &default_label(pin_nav_label(PinNavFileTypes::All), default == PinNavFileTypes::All),
+    );
+    append_labeled_item(
+        menu,
+        MF_STRING | if selected == PinNavFileTypes::Category { MF_CHECKED } else { MF_UNCHECKED },
+        category_id,
+        &default_label(
+            pin_nav_label(PinNavFileTypes::Category),
+            default == PinNavFileTypes::Category,
+        ),
+    );
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+}
+
+/// The `Navigation Files` submenu: three anchors — Video, Audio, Others — each with its
+/// own All/Same Category pair. The walk is anchored on the first file pinned, so a
+/// video walks videos while a document walks end to end (see `nav_mode_for`).
+pub(super) fn append_pin_nav_menu(parent: HMENU, video: PinNavFileTypes, audio: PinNavFileTypes, others: PinNavFileTypes) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+    append_pin_nav_anchor(
+        menu,
+        w!("Video"),
+        ID_TRAY_PIN_NAV_VIDEO_ALL,
+        ID_TRAY_PIN_NAV_VIDEO_CATEGORY,
+        video,
+        DEFAULT_PIN_NAV_VIDEO,
+    );
+    append_pin_nav_anchor(
+        menu,
+        w!("Audio"),
+        ID_TRAY_PIN_NAV_AUDIO_ALL,
+        ID_TRAY_PIN_NAV_AUDIO_CATEGORY,
+        audio,
+        DEFAULT_PIN_NAV_AUDIO,
+    );
+    append_pin_nav_anchor(
+        menu,
+        w!("Others"),
+        ID_TRAY_PIN_NAV_OTHERS_ALL,
+        ID_TRAY_PIN_NAV_OTHERS_CATEGORY,
+        others,
+        DEFAULT_PIN_NAV_OTHERS,
+    );
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Navigation Files")) };
 }
 
 /// What the two places a pinned window's minimize can put it are called, with the one the setting

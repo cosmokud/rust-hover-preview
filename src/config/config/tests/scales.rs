@@ -831,70 +831,70 @@ fn reads_how_a_pinned_sound_steps_and_ends_from_their_own_keys() {
     assert!(!config.pin_mode_audio_loop);
 }
 
-/// Which files a pin's own previous/next buttons step through is one of its own keys, and
-/// it is written under the name the tray's `Nav File Types` submenu shows: `category` is
-/// the folder narrowed to the pinned file's own kind of thing, and every file this build
-/// could preview is what a file that names neither — or names nothing at all — is read as.
+/// Which files a pin's own previous/next buttons step through is three keys of its own, one
+/// per anchor, written under the names the tray's `Navigation Files` submenu shows:
+/// `category` is the walk narrowed to the anchor's kind, and what a file that names
+/// neither — or names nothing at all — is read as is each anchor's fresh default.
 #[test]
 fn reads_which_files_the_pin_steps_through_from_its_own_key() {
     let mut ini = Ini::new();
-    ini.set(
-        CONFIG_SECTION,
-        "pin_nav_file_types",
-        Some("category".to_string()),
-    );
-    assert_eq!(
-        read_file(&mut ini).pin_nav_file_types,
-        PinNavFileTypes::Category
-    );
+    ini.set(CONFIG_SECTION, "pin_nav_audio", Some("all".to_string()));
+    ini.set(CONFIG_SECTION, "pin_nav_video", Some("category".to_string()));
+    ini.set(CONFIG_SECTION, "pin_nav_others", Some("category".to_string()));
+    let config = read_file(&mut ini);
+    assert_eq!(config.pin_nav_audio, PinNavFileTypes::All);
+    assert_eq!(config.pin_nav_video, PinNavFileTypes::Category);
+    assert_eq!(config.pin_nav_others, PinNavFileTypes::Category);
 
     let mut unknown = Ini::new();
-    unknown.set(
-        CONFIG_SECTION,
-        "pin_nav_file_types",
-        Some("sideways".to_string()),
-    );
+    unknown.set(CONFIG_SECTION, "pin_nav_audio", Some("sideways".to_string()));
     assert_eq!(
-        read_file(&mut unknown).pin_nav_file_types,
-        DEFAULT_PIN_NAV_FILE_TYPES,
+        read_file(&mut unknown).pin_nav_audio,
+        DEFAULT_PIN_NAV_AUDIO,
         "a value the app cannot read is answered with what a fresh one walks rather than \
          guessed at"
     );
 
     let mut older = Ini::new();
     older.set(CONFIG_SECTION, "pin_key", Some("space".to_string()));
-    assert_eq!(
-        read_file(&mut older).pin_nav_file_types,
-        DEFAULT_PIN_NAV_FILE_TYPES,
-        "a file written before the setting existed walks every file a fresh one walks"
-    );
+    let config = read_file(&mut older);
+    assert_eq!(config.pin_nav_video, DEFAULT_PIN_NAV_VIDEO);
+    assert_eq!(config.pin_nav_audio, DEFAULT_PIN_NAV_AUDIO);
+    assert_eq!(config.pin_nav_others, DEFAULT_PIN_NAV_OTHERS);
+
+    // A file holding only the retired single key seeds all three with it, once.
+    let mut legacy = Ini::new();
+    legacy.set(CONFIG_SECTION, "pin_nav_file_types", Some("category".to_string()));
+    let config = read_file(&mut legacy);
+    assert_eq!(config.pin_nav_video, PinNavFileTypes::Category);
+    assert_eq!(config.pin_nav_audio, PinNavFileTypes::Category);
+    assert_eq!(config.pin_nav_others, PinNavFileTypes::Category);
 }
 
-/// The key is written under the name it is read under, so the file a user edits by hand
-/// is the file the app wrote: what comes back out of `save` is what went in, and the
-/// heading table names it (see `every_setting_the_app_writes_is_one_the_table_names`).
+/// The keys are written under the names they are read under, so the file a user edits by
+/// hand is the file the app wrote: what comes back out of `save` is what went in, and the
+/// heading table names them (see `every_setting_the_app_writes_is_one_the_table_names`).
+/// The retired single key is read but never written back.
 #[test]
 fn the_pin_navigation_setting_survives_a_write_and_a_read() {
     let config = AppConfig {
-        pin_nav_file_types: PinNavFileTypes::Category,
+        pin_nav_audio: PinNavFileTypes::All,
         ..AppConfig::default()
     };
 
     let mut written = Ini::new();
     let _ = written.read(ordered_text(&config.to_ini()));
     assert_eq!(
-        written.get(CONFIG_SECTION, "pin_nav_file_types"),
-        Some("category".to_string())
+        written.get(CONFIG_SECTION, "pin_nav_audio"),
+        Some("all".to_string())
     );
+    assert_eq!(written.get(CONFIG_SECTION, "pin_nav_file_types"), None);
 
     let mut read_back = Ini::new();
     read_back
         .read(ordered_text(&config.to_ini()))
         .expect("a file this app wrote is one it can read");
-    assert_eq!(
-        read_file(&mut read_back).pin_nav_file_types,
-        PinNavFileTypes::Category
-    );
+    assert_eq!(read_file(&mut read_back).pin_nav_audio, PinNavFileTypes::All);
 }
 
 /// Where a pin put away by its own minimize goes is a setting of its own, read from its own

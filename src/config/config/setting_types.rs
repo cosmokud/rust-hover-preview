@@ -974,9 +974,15 @@ impl PinNavFileTypes {
     }
 }
 
-/// What the pin's own buttons step through unless the configuration says otherwise: every
-/// file this build can preview, which is the answer that makes them a way through a folder.
-pub const DEFAULT_PIN_NAV_FILE_TYPES: PinNavFileTypes = PinNavFileTypes::All;
+/// What a walk anchored on a video steps through: only videos, so a film never steps
+/// into a song (see `Pin Mode → Navigation Files → Video`).
+pub const DEFAULT_PIN_NAV_VIDEO: PinNavFileTypes = PinNavFileTypes::Category;
+/// What a walk anchored on a sound steps through: only sounds (see `Pin Mode →
+/// Navigation Files → Audio`).
+pub const DEFAULT_PIN_NAV_AUDIO: PinNavFileTypes = PinNavFileTypes::Category;
+/// What a walk anchored on any other file steps through: every previewable file, so a
+/// document walks end to end (see `Pin Mode → Navigation Files → Others`).
+pub const DEFAULT_PIN_NAV_OTHERS: PinNavFileTypes = PinNavFileTypes::All;
 
 /// What a pinned window's minimize button puts it away as, unless the configuration says
 /// otherwise.

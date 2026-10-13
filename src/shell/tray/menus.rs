@@ -23,8 +23,7 @@ use super::ids::{
     ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
     ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
-    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_NAV_ALL,
-    ID_TRAY_PIN_NAV_CATEGORY, ID_TRAY_PIN_PAUSE_AUDIO,
+    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_PAUSE_AUDIO,
     ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_POSITION_BEST,
     ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE,
     ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML,
@@ -43,9 +42,9 @@ use super::submenus::{
     append_afk_timer_menu, append_audio_scale_menu, append_audio_seek_menu, append_avoid_menu,
     append_background_menu, append_bitmap_scale_menu, append_codecs_menu,
     append_document_scale_menu, append_engine_idle_menu, append_labeled_item,
-    append_office_engine_menu, append_pin_mode_audio_seek_menu, append_tick_menu,
+    append_office_engine_menu, append_pin_mode_audio_seek_menu, append_pin_nav_menu, append_tick_menu,
     append_video_engine_menu, cache_size_label,
-    decode_budget_label, default_label, pin_minimize_label, pin_nav_label, pin_update_label,
+    decode_budget_label, default_label, pin_minimize_label, pin_update_label,
     remember_volume_label,
     system_menu_label, timing_delay_menu, update_available_label,
 };
@@ -53,7 +52,7 @@ use super::submenus::{
 use crate::app::updates;
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
-    PinMinimizeTo, PinNavFileTypes, PreviewType, TextTheme, TriggerKeyMode, VideoEngine,
+    PinMinimizeTo, PreviewType, TextTheme, TriggerKeyMode, VideoEngine,
     DEFAULT_ANIMATED_SCALE,
     DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AUDIO_VOLUME, DEFAULT_AVOID_MODE,
     DEFAULT_CHECK_FOR_UPDATES,
@@ -64,7 +63,8 @@ use crate::config::config::{
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB,
     DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_MODE_AUDIO_SEEK,
-    DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_PAUSE_AUDIO,
+    DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
+    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_PREVIEW_SCALE, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
@@ -133,7 +133,9 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         pin_pause_video,
         pin_update,
         pin_update_on_hover,
-        pin_nav_file_types,
+        pin_nav_video,
+        pin_nav_audio,
+        pin_nav_others,
     ) = CONFIG
         .lock()
         .map(|c| {
@@ -145,7 +147,9 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                 c.pin_pause_video,
                 c.pin_update_enabled,
                 c.pin_update_on_hover,
-                c.pin_nav_file_types,
+                c.pin_nav_video,
+                c.pin_nav_audio,
+                c.pin_nav_others,
             )
         })
         .unwrap_or((
@@ -156,7 +160,9 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_PIN_PAUSE_VIDEO,
             DEFAULT_PIN_UPDATE_ENABLED,
             DEFAULT_PIN_UPDATE_ON_HOVER,
-            DEFAULT_PIN_NAV_FILE_TYPES,
+            DEFAULT_PIN_NAV_VIDEO,
+            DEFAULT_PIN_NAV_AUDIO,
+            DEFAULT_PIN_NAV_OTHERS,
         ));
     let mut pin_key_chars = pin_key.chars();
     let pin_key_display = match pin_key_chars.next() {
@@ -293,45 +299,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Minimize"),
     );
 
-    // The `Navigation Files` submenu: what the pin's own previous/next
-    // buttons step through — every file this build can preview, or only
-    // those of the kind of thing the pinned file is. It is a question
-    // about the walk rather than about the pin, which is why it hangs
-    // under the same row as the two switches above it and not on its own:
-    // the buttons are the pin's, and what they are buttons *of* is the
-    // whole of the setting.
-    //
-    // The two answers are one of two rather than a switch, because a
-    // folder of mixed work is what a hand is most often looking at and the
-    // narrow walk is not obviously the better one — so which walk a pin
-    // takes is asked rather than assumed (see `PinNavFileTypes`).
-    let nav_types_menu = CreatePopupMenu().unwrap();
-    let nav_types_flag = |candidate: PinNavFileTypes| {
-        MF_STRING
-            | if pin_nav_file_types == candidate {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            }
-    };
-    append_labeled_item(
-        nav_types_menu,
-        nav_types_flag(PinNavFileTypes::All),
-        ID_TRAY_PIN_NAV_ALL,
-        pin_nav_label(PinNavFileTypes::All),
-    );
-    append_labeled_item(
-        nav_types_menu,
-        nav_types_flag(PinNavFileTypes::Category),
-        ID_TRAY_PIN_NAV_CATEGORY,
-        pin_nav_label(PinNavFileTypes::Category),
-    );
-    let _ = AppendMenuW(
-        pin_menu,
-        MF_STRING | MF_POPUP,
-        nav_types_menu.0 as usize,
-        w!("Navigation Files"),
-    );
+    // The `Navigation Files` submenu: three anchors — Video, Audio, Others — each with
+    // its own All/Same Category pair. The walk is anchored on the first file pinned,
+    // so a video walks videos while a document walks end to end (see `nav_mode_for`).
+    append_pin_nav_menu(pin_menu, pin_nav_video, pin_nav_audio, pin_nav_others);
 
     let _ = AppendMenuW(
         menu,

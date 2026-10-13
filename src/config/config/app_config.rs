@@ -25,7 +25,8 @@ use super::setting_types::{
     DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND,
     DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
     DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_NAV_FILE_TYPES, DEFAULT_PIN_MODE_AUDIO_SEEK,
+    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
+    DEFAULT_PIN_MODE_AUDIO_SEEK,
     DEFAULT_PIN_MODE_AUDIO_LOOP, DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO,
     DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_TEXT_SCALE,
@@ -92,15 +93,12 @@ pub struct AppConfig {
     /// after another, the way a Quick Look window does; off, moving the pointer across a
     /// listing leaves the pin alone (see `pin_update_enabled`).
     pub pin_update_on_hover: bool,
-    /// Which files the pin's own previous/next buttons step through: every file this build
-    /// could preview, or only the ones of the pinned file's own category (see
-    /// `DEFAULT_PIN_NAV_FILE_TYPES`).
-    ///
-    /// It is a setting of its own because the two are two different folders: a folder of mixed
-    /// work is a list the buttons walk end to end under `All` and only part of under
-    /// `Category`, and neither is the other. The walk itself is over the folder the pin was
-    /// taken up in and no other, and its order is the order the listing is showing.
-    pub pin_nav_file_types: PinNavFileTypes,
+    /// What a walk anchored on a video steps through (see `DEFAULT_PIN_NAV_VIDEO`).
+    pub pin_nav_video: PinNavFileTypes,
+    /// What a walk anchored on a sound steps through (see `DEFAULT_PIN_NAV_AUDIO`).
+    pub pin_nav_audio: PinNavFileTypes,
+    /// What a walk anchored on any other file steps through (see `DEFAULT_PIN_NAV_OTHERS`).
+    pub pin_nav_others: PinNavFileTypes,
     pub follow_cursor: bool,
     /// How far a preview is placed clear of the item it is about, so the file the
     /// pointer is on or the keyboard is focused on stays readable while its preview is
@@ -647,7 +645,9 @@ impl Default for AppConfig {
             pin_pause_audio: DEFAULT_PIN_PAUSE_AUDIO,
             pin_update_enabled: DEFAULT_PIN_UPDATE_ENABLED,
             pin_update_on_hover: DEFAULT_PIN_UPDATE_ON_HOVER,
-            pin_nav_file_types: DEFAULT_PIN_NAV_FILE_TYPES,
+            pin_nav_video: DEFAULT_PIN_NAV_VIDEO,
+            pin_nav_audio: DEFAULT_PIN_NAV_AUDIO,
+            pin_nav_others: DEFAULT_PIN_NAV_OTHERS,
             follow_cursor: DEFAULT_FOLLOW_CURSOR,
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
