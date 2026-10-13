@@ -4,17 +4,16 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or move with the arrow keys — and a preview appears beside it. It works with mouse and keyboard, and you configure it from the tray icon or a simple `config.ini`.
+A Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in File Explorer for an instant preview, or press **Space** to lock open a pinned preview window. Works with keyboard navigation, and customizes easily via the tray icon or a simple `config.ini`
 
 [Showcase.webm](https://github.com/user-attachments/assets/33ee1f35-d399-4226-8847-5bd50f867ebb)
 
 ## Highlights
 
 - Mouse-hover and keyboard-navigation previews in Explorer, beside the cursor or the focused item and kept on screen.
-- Press a key and a preview becomes a window of its own — captioned, movable, resizable, always on top, where it stays until you close it.
-- Supports images, design documents, camera raw, vector drawings, fonts, videos, PDFs, ebooks, comics, text/code, archives, Office documents, and more.
-- A file's preview depends on what's really inside it, not its name — so renamed files still show correctly, unreadable content gets no preview, and ambiguous types are resolved by extension or content.
-- Scaling fit-to-screen, by a share of the display's fitted size, or from 25% to 400% of a file's own size, with separate scaling for images and videos and for vector drawings, PDFs, documents, fonts, design documents, and sounds.
+- Press a key (SPACE by default) and a preview becomes a window of its own — captioned, movable, resizable, always on top, where it stays until you close it.
+- Supports images, videos, audios, ebooks, Office documents, design documents, text/code, archives, camera raw, vector drawings, fonts, and more.
+- *Granular display scaling:* Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.
 - Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
 
 ## Supported Formats
@@ -38,9 +37,9 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 
 ### Audio
 
-| Engine | `config.ini` | Default extensions |
-| --- | --- | --- |
-| The media engine Windows ships, then [FFmpeg](#optional-enable-video-preview-with-ffmpeg)'s player — the machine's answer, not a setting | `[audio]` | aac, ac3, aif, aifc, aiff, amr, ape, au, awb, caf, dff, dsf, dts, dtshd, eac3, flac, m4a, m4b, mka, mp2, mp3, mpa, mpc, oga, ogg, ofr, ofs, opus, ra, shn, snd, spx, tak, tta, voc, wav, wave, wma, wv |
+| Engine                                                                                                                                   | `config.ini` | Default extensions                                                                                                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The media engine Windows ships, then [FFmpeg](#optional-enable-video-preview-with-ffmpeg)'s player — the machine's answer, not a setting | `[audio]`    | aac, ac3, aif, aifc, aiff, amr, ape, au, awb, caf, dff, dsf, dts, dtshd, eac3, flac, m4a, m4b, mka, mp2, mp3, mpa, mpc, oga, ogg, ofr, ofs, opus, ra, shn, snd, spx, tak, tta, voc, wav, wave, wma, wv |
 
 ### Text
 
