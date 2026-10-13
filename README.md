@@ -34,6 +34,7 @@ A Windows 11 tray app inspired by QTTabBar. Hover a file in File Explorer — or
 | --- | --- | --- |
 | The media engine Windows 11 ships | `[video]` | 3g2, 3gp, 3gpp, asf, avi, dvr-ms, m1v, m2t, m2ts, m2v, m4v, mkv, mov, mp4, mpe, mpeg, mpg, mts, qt, ts, vob, webm, wmv |
 | [FFmpeg](#optional-enable-video-preview-with-ffmpeg)'s player (`ffplay`) | `[ffmpeg]` | 264, 265, 266, apv, av1, avc, avs, avs2, avs3, bik, bk2, c93, cavs, cdg, cdxl, cin, cpk, dav, dif, divx, drc, dv, evc, f4v, flm, flv, gxf, h261, h263, h264, h265, h266, h26l, hevc, ifv, imx, ismv, ivf, ivr, kux, m2p, mj2, mjpeg, mjpg, mk3d, moflex, mpv, mve, mvi, mxf, mxg, nsv, nut, obu, ogm, ogv, pmp, psp, rcv, rm, rmvb, roq, rsd, smk, str, swf, thp, tod, tp, tr, ty, ty+, usm, vc1, vc2, viv, vro, vvc, vw, wtv, xl, xmv, y4m, yop |
+| [mpv](#optional-enable-video-preview-with-mpv) | — (no list of its own) | union of `[video]` + `[ffmpeg]` above (23 + 84 = 107 names) |
 
 ### Audio
 
@@ -101,30 +102,9 @@ Each release provides two options:
 
 No Rust toolchain is needed.
 
-### Optional: Enable Video Preview with FFmpeg
-
-FFmpeg adds the video formats and the audio ones Windows does not decode — the `[ffmpeg]` list, and the `[audio]` names Windows' own decoders do not reach. It also plays any `[video]` name the media engine turns down, or every video there is, where **Engine → Video Engine** names FFmpeg. `ffplay` and `ffprobe` need to be in your `PATH`.
-
-**Option A: winget**
-
-```powershell
-winget install --id Gyan.FFmpeg -e
-```
-
-**Option B: manual**
-
-1. Download a Windows build from [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
-2. Extract it, for example to `C:\ffmpeg`
-3. Add `C:\ffmpeg\bin` to your user `PATH`
-
-Verify either way:
-
-```powershell
-ffplay -version
-ffprobe -version
-```
-
 ### Optional: Enable Video Preview with mpv
+
+Prefer mpv where both players are installed: it decodes on the graphics card by default, draws its own subtitles, and seeks more cheaply than `ffplay`.
 
 mpv is a third player beside the two above. Where it is installed, **Best** plays *every* video through mpv — whatever the file's size, and whether or not it could be measured — decoding on the graphics card by default and drawing its own subtitles: the track the film itself marks as its default, and any `.srt` file beside it, so the app extracts no subtitle copy for it. (A film whose own track is not marked default, as FFmpeg's muxer writes them, shows none — mpv follows the file, and that is deliberate.) Where it is not installed the app behaves exactly as it does today, and a machine without mpv reads `video_engine=mpv` as `best`.
 
@@ -148,6 +128,29 @@ Verify either way:
 
 ```powershell
 mpv --version
+```
+
+### Optional: Enable Video Preview with FFmpeg
+
+FFmpeg adds the video formats and the audio ones Windows does not decode — the `[ffmpeg]` list, and the `[audio]` names Windows' own decoders do not reach. It also plays any `[video]` name the media engine turns down, or every video there is, where **Engine → Video Engine** names FFmpeg. `ffplay` and `ffprobe` need to be in your `PATH`.
+
+**Option A: winget**
+
+```powershell
+winget install --id Gyan.FFmpeg -e
+```
+
+**Option B: manual**
+
+1. Download a Windows build from [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+2. Extract it, for example to `C:\ffmpeg`
+3. Add `C:\ffmpeg\bin` to your user `PATH`
+
+Verify either way:
+
+```powershell
+ffplay -version
+ffprobe -version
 ```
 
 ### Optional: Enable More Video Codecs (Windows Codecs)
@@ -232,6 +235,11 @@ Or download the official installer from [https://calibre-ebook.com/download\_win
 2. Hover media files in Explorer to preview them.
 3. Or navigate with the keyboard — arrow keys, Tab, or a file's name typed to jump to it — to preview the focused item.
 4. Right-click the tray icon to configure behavior.
+
+Pin mode works like Quick Look: pressing `Space` (`pin_key`, watched while `pin_enabled`)
+turns the settled preview into an always-on-top window. `Space` in a focused pin pauses and
+resumes a sound; a minimized pin sits in a draggable bubble that `Space` in Explorer brings
+back. Arrow keys walk siblings, `Escape` closes.
 
 ## System Tray Menu
 
