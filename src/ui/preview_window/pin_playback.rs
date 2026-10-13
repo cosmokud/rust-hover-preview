@@ -792,10 +792,21 @@ pub(super) fn toggle_pinned_audio(
 
     match playing_player(&path, &track) {
         Player::Native => {
-            // The engine is asked to hold, and to go on from where it is holding. A session that
-            // is not there — a file already let go — is asked to play, which begins no session
-            // rather than starting a sound nobody asked for.
-            video_player::set_paused(video_player::is_playing());
+            // A sound the card holds at the end of its file is a sound with no session behind
+            // it: the engine's own was let go the moment it ended (see
+            // `pinned_native_audio_end`), and the second the card stands at is the beginning of
+            // the file. The press is therefore the sound started again from that second rather
+            // than a hold lifted, which is the same bargain the player this app started is
+            // given below (see the `Ffmpeg` arm).
+            if paused.is_some() {
+                video_player::play_audio(&path, pinned_audio_level(), 0.0, pin_audio_loops(&path));
+                *paused = None;
+            } else {
+                // The engine is asked to hold, and to go on from where it is holding. A session that
+                // is not there — a file already let go — is asked to play, which begins no session
+                // rather than starting a sound nobody asked for.
+                video_player::set_paused(video_player::is_playing());
+            }
         }
         Player::Ffmpeg => {
             if let Some(from) = *paused {

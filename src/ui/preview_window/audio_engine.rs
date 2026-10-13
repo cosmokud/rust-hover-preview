@@ -917,24 +917,72 @@ pub(super) fn pin_audio_loops(path: &Path) -> bool {
     }
 }
 
-/// Whether the sound the native engine is playing for the pin has ended, which
-/// is the one thing a pinned sound whose jump is on and not a loop is advanced by.
+/// What the end of a pinned sound's pass asks for: a pass round the same file, the next
+/// file of the folder, or a card left standing with nothing playing.
 ///
-/// The engine was asked not to loop when the player was started (see
-/// `start_audio_playback_at`), so its end is its own to report: the engine's
+/// It is the one answer both of the pin's players' ends are read by — a sound FFmpeg plays
+/// whose pass has come to an end (`wrap_audio_player`) and a sound the engine Windows has
+/// that has played to the end of its file (`pinned_native_audio_end`) — so that the two
+/// ends cannot come to different answers about what the one setting means. The setting is
+/// the pin's own `Pin Mode Jump`: with its switch off the sound stops where it ends,
+/// `Loop` is a sound that goes round, and either of the other jumps is the next file of the
+/// folder, the same ask the card's own **Next** button makes (see `pin_audio_loops`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum PinPassEnd {
+    /// The sound goes round again from the beginning of its file.
+    Wrap,
+    /// The next file of the folder is asked for, with the walk's own wait (see
+    /// `ask_pin_walk`).
+    Walk,
+    /// Nothing is playing and nothing is asked for: the card is left held at the beginning
+    /// of the file, where the button it shows starts the sound again from.
+    Held,
+}
+
+/// What the end of a pinned sound's pass is, for the jump switch and the jump the pin is
+/// playing under: split out so that the one rule both players' ends are read by can be read
+/// and tested without a player, a file or a configuration (see `PinPassEnd`).
+pub(super) fn pinned_pass_end(enabled: bool, jump: PinJumpMode) -> PinPassEnd {
+    match (enabled, jump) {
+        (false, _) => PinPassEnd::Held,
+        (true, PinJumpMode::Loop) => PinPassEnd::Wrap,
+        (true, _) => PinPassEnd::Walk,
+    }
+}
+
+/// The same, read out of the pin's own jump setting: the one place the configuration is
+/// asked what the end of a pass means (see `pinned_pass_end`).
+pub(super) fn current_pin_pass_end() -> PinPassEnd {
+    let (enabled, jump) = current_pin_mode_audio_jump();
+    pinned_pass_end(enabled, jump)
+}
+
+/// What the end of a pinned sound the engine Windows is playing asks for, where that sound
+/// has reached the end of its file at all — nothing at all where it has not, which is also
+/// every sound the engine is not playing and every sound the pin is not showing.
+///
+/// The engine was asked not to loop a sound whose jump is not a loop when the player was
+/// started (see `start_audio_playback_at`), so its end is its own to report: the engine's
 /// word for it, or its clock at the length of the file, is the end of the
 /// sound. A path is part of the question because the engine holds one sound at
 /// a time — a file the engine is not playing has not ended, whatever the clock
 /// of the file on screen says (see `video_player::audio_ended`).
-pub(super) fn pinned_native_audio_ended(path: &Path) -> bool {
+pub(super) fn pinned_native_audio_end(path: &Path) -> Option<PinPassEnd> {
     if !(pinned() && pinned_path().as_deref() == Some(path)) {
-        return false;
+        return None;
     }
-    let (enabled, jump) = current_pin_mode_audio_jump();
-    enabled
-        && jump != PinJumpMode::Loop
-        && video_player::playing_path().as_deref() == Some(path)
-        && video_player::audio_ended()
+
+    match current_pin_pass_end() {
+        // A sound the engine was asked to loop has no end to answer for, whatever its own
+        // clock says at the seam between two passes of it (see `pin_audio_loops`).
+        PinPassEnd::Wrap => None,
+        end => {
+            let ended = video_player::playing_path().as_deref() == Some(path)
+                && video_player::audio_ended();
+
+            ended.then_some(end)
+        }
+    }
 }
 
 /// Put a sound FFmpeg plays round to the beginning of its file where the player it was given has
@@ -962,12 +1010,16 @@ pub(super) fn pinned_native_audio_ended(path: &Path) -> bool {
 /// the next file of the folder, the same ask the caption's own **Next** button
 /// makes (see `ask_pin_walk`). The walk is the planner's work, so the wait for
 /// its answer is the pin's own — the same arc a **Next** press turns (see
-/// `PinWait`).
+/// `PinWait`). One whose jump switch is off neither goes round nor moves the pin on:
+/// the card is left *held*, the file standing at its beginning with the play button up,
+/// which is where the press that starts the sound again begins it (see `PinPassEnd` and
+/// `toggle_pinned_audio`).
 pub(super) fn wrap_audio_player(
     media: &mut MediaData,
     path: &Path,
     started: &mut Option<Instant>,
     offset: &mut f64,
+    paused: &mut Option<f64>,
     wait: &mut Option<PinWait>,
     anchor: Option<NavCategory>,
 ) {
@@ -1000,23 +1052,34 @@ pub(super) fn wrap_audio_player(
     }
 
     // What the end of the pass means: a pinned sound whose jump switch is off stops
-    // at the end of its file — the pass is not gone round and no file is asked for,
-    // which is what a sound that has ended is until something else is played — and any
-    // other jump but a loop is the next file of the folder, the same ask the caption's
-    // own **Next** button makes, with the same wait for its answer. The card is left
-    // with no clock and no player either way. A hovered sound whose jump switch is off
+    // at the end of its file — the pass is not gone round, no file is asked for, and the
+    // card is left held at the beginning of it, where the play button it now shows starts
+    // the sound again from — and any other jump but a loop is the next file of the folder,
+    // the same ask the caption's own **Next** button makes, with the same wait for its
+    // answer. A hovered sound whose jump switch is off
     // stops the same way; one whose switch is on is wrapped below.
     if pinned() && pinned_path().as_deref() == Some(path) {
-        let (enabled, jump) = current_pin_mode_audio_jump();
-        if !enabled || jump != PinJumpMode::Loop {
-            *started = None;
-            AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+        match current_pin_pass_end() {
+            PinPassEnd::Wrap => {}
+            PinPassEnd::Walk => {
+                *started = None;
+                AUDIO_CARD_DIRTY.store(true, Ordering::Release);
 
-            if enabled {
                 ask_pin_walk(path.to_path_buf(), 1, anchor);
                 *wait = Some(PinWait::new());
+                return;
             }
-            return;
+            // A sound that has ended is a sound nothing is playing, so the card is left
+            // held rather than reading as one still going: the second it is held at is the
+            // beginning of the file, because that is where the press that starts it again
+            // will begin it, and a card held at the end of a file would be a press that
+            // played its last moment and stopped again (see `toggle_pinned_audio`).
+            PinPassEnd::Held => {
+                *started = None;
+                *paused = Some(0.0);
+                AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+                return;
+            }
         }
     } else if !current_audio_jump_enabled() {
         *started = None;
@@ -1058,11 +1121,12 @@ pub(super) fn wrap_audio_player(
 /// and what a hover would otherwise show is a sound playing from its middle with a card saying it
 /// has just begun.
 ///
-/// `paused_at` is what a key answered by holding a pinned sound has to say in its place: a player
-/// this app ended is a player that measures nothing, and a card with no clock at all is a card
-/// that has forgotten where in the file the sound was left. A sound the engine Windows has is not
-/// in this branch, because that engine holds where it is told to and keeps reporting that second
-/// for itself (see `toggle_pinned_audio`).
+/// `paused_at` is what a key answered by holding a pinned sound has to say in its place, and
+/// what the end of a pinned sound's pass says where the pin's jump switch is off — a player
+/// this app ended is a player that measures nothing either way, and a card with no clock at all
+/// is a card that has forgotten where in the file the sound was left. A sound the engine Windows
+/// has is not in this branch, because that engine holds where it is told to and keeps reporting
+/// that second for itself (see `toggle_pinned_audio`).
 pub(super) fn audio_clock(
     path: &Path,
     started: Option<Instant>,
