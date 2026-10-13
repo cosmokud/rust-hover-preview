@@ -20,72 +20,92 @@ A Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in F
 
 ### Images
 
-| Engine | `config.ini` | Default extensions |
+
+| Engine                                                                   | `config.ini` | Default extensions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | --- | --- | --- |
-| This app's own decoders and the codecs Windows ships | `[image]` | apng, avci, avif, bmp, dds, exr, ff, gif, hdr, heic, heif, ico, jfif, jpe, jpeg, jpg, jxl, pam, pbm, pgm, png, pnm, ppm, qoi, tga, tif, tiff, webp |
-| [ImageMagick](#optional-enable-camera-raw-and-more-pictures-imagemagick) | `[magick]` | 3fr, aai, art, arw, ase, aseprite, bayer, bayera, bgr, bgra, bgro, c2pa, cal, cals, cmyk, cmyka, cr2, cr3, crw, cube, cur, cut, dcm, dcr, dcx, dng, dpx, dxt1, dxt5, erf, fax, fff, fit, fits, fl32, fts, ftxt, g3, g4, gray, graya, group4, hrz, icb, iiq, ipl, j2c, j2k, jng, jnx, jp2, jpc, jpm, jpt, k25, kdc, mac, map, mat, mdc, mef, miff, mng, mono, mos, mpc, mrw, mtv, nef, nrw, orf, otb, pal, palm, pango, pcds, pef, pes, pfm, pgx, phm, picon, pict, pix, pwp, raf, raw, rgb, rgb565, rgba, rgbo, rgf, rla, rle, rmf, rw2, rwl, scr, sct, sf3, sfw, sgi, six, sixel, sr2, srf, srw, stegano, sun, tim, tm2, uyvy, vda, vicar, viff, vips, vst, wbinfo, wbmp, x3f, xbm, xcf, xpm, xv, ycbcr, ycbcra, yuv |
+| This app's own decoders and the codecs Windows ships                     | `[image]`    | apng, avci, avif, bmp, dds, exr, ff, gif, hdr, heic, heif, ico, jfif, jpe, jpeg, jpg, jxl, pam, pbm, pgm, png, pnm, ppm, qoi, tga, tif, tiff, webp                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| [ImageMagick](#optional-enable-camera-raw-and-more-pictures-imagemagick) | `[magick]`   | 3fr, aai, art, arw, ase, aseprite, bayer, bayera, bgr, bgra, bgro, c2pa, cal, cals, cmyk, cmyka, cr2, cr3, crw, cube, cur, cut, dcm, dcr, dcx, dng, dpx, dxt1, dxt5, erf, fax, fff, fit, fits, fl32, fts, ftxt, g3, g4, gray, graya, group4, hrz, icb, iiq, ipl, j2c, j2k, jng, jnx, jp2, jpc, jpm, jpt, k25, kdc, mac, map, mat, mdc, mef, miff, mng, mono, mos, mpc, mrw, mtv, nef, nrw, orf, otb, pal, palm, pango, pcds, pef, pes, pfm, pgx, phm, picon, pict, pix, pwp, raf, raw, rgb, rgb565, rgba, rgbo, rgf, rla, rle, rmf, rw2, rwl, scr, sct, sf3, sfw, sgi, six, sixel, sr2, srf, srw, stegano, sun, tim, tm2, uyvy, vda, vicar, viff, vips, vst, wbinfo, wbmp, x3f, xbm, xcf, xpm, xv, ycbcr, ycbcra, yuv |
+
 
 `heic`, `heif`, `avif`, `avci`, `jxl` and a still `webp` are decoded by a codec Windows provides rather than one this app carries, so each of those six stills needs its [Store extension](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs) installed once; every other entry of `[image]` needs nothing installed.
 
 ### Videos
 
-| Engine | `config.ini` | Default extensions |
+
+| Engine                                                                   | `config.ini`           | Default extensions                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | --- | --- | --- |
-| The media engine Windows 11 ships | `[video]` | 3g2, 3gp, 3gpp, asf, avi, dvr-ms, m1v, m2t, m2ts, m2v, m4v, mkv, mov, mp4, mpe, mpeg, mpg, mts, qt, ts, vob, webm, wmv |
-| [FFmpeg](#optional-enable-video-preview-with-ffmpeg)'s player (`ffplay`) | `[ffmpeg]` | 264, 265, 266, apv, av1, avc, avs, avs2, avs3, bik, bk2, c93, cavs, cdg, cdxl, cin, cpk, dav, dif, divx, drc, dv, evc, f4v, flm, flv, gxf, h261, h263, h264, h265, h266, h26l, hevc, ifv, imx, ismv, ivf, ivr, kux, m2p, mj2, mjpeg, mjpg, mk3d, moflex, mpv, mve, mvi, mxf, mxg, nsv, nut, obu, ogm, ogv, pmp, psp, rcv, rm, rmvb, roq, rsd, smk, str, swf, thp, tod, tp, tr, ty, ty+, usm, vc1, vc2, viv, vro, vvc, vw, wtv, xl, xmv, y4m, yop |
-| [mpv](#optional-enable-video-preview-with-mpv) | — (no list of its own) | union of `[video]` + `[ffmpeg]` above (23 + 84 = 107 names) |
+| The media engine Windows 11 ships                                        | `[video]`              | 3g2, 3gp, 3gpp, asf, avi, dvr-ms, m1v, m2t, m2ts, m2v, m4v, mkv, mov, mp4, mpe, mpeg, mpg, mts, qt, ts, vob, webm, wmv                                                                                                                                                                                                                                                                                                                           |
+| [FFmpeg](#optional-enable-video-preview-with-ffmpeg)'s player (`ffplay`) | `[ffmpeg]`             | 264, 265, 266, apv, av1, avc, avs, avs2, avs3, bik, bk2, c93, cavs, cdg, cdxl, cin, cpk, dav, dif, divx, drc, dv, evc, f4v, flm, flv, gxf, h261, h263, h264, h265, h266, h26l, hevc, ifv, imx, ismv, ivf, ivr, kux, m2p, mj2, mjpeg, mjpg, mk3d, moflex, mpv, mve, mvi, mxf, mxg, nsv, nut, obu, ogm, ogv, pmp, psp, rcv, rm, rmvb, roq, rsd, smk, str, swf, thp, tod, tp, tr, ty, ty+, usm, vc1, vc2, viv, vro, vvc, vw, wtv, xl, xmv, y4m, yop |
+| [mpv](#optional-enable-video-preview-with-mpv)                           | — (no list of its own) | union of `[video]` + `[ffmpeg]` above (23 + 84 = 107 names)                                                                                                                                                                                                                                                                                                                                                                                      |
+
 
 ### Audio
 
+
 | Engine                                                                                                                                   | `config.ini` | Default extensions                                                                                                                                                                                     |
-| ---------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| --- | --- | --- |
 | The media engine Windows ships, then [FFmpeg](#optional-enable-video-preview-with-ffmpeg)'s player — the machine's answer, not a setting | `[audio]`    | aac, ac3, aif, aifc, aiff, amr, ape, au, awb, caf, dff, dsf, dts, dtshd, eac3, flac, m4a, m4b, mka, mp2, mp3, mpa, mpc, oga, ogg, ofr, ofs, opus, ra, shn, snd, spx, tak, tta, voc, wav, wave, wma, wv |
+
 
 ### Text
 
-| Engine | `config.ini` | Default extensions |
+
+| Engine                       | `config.ini`          | Default extensions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | --- | --- | --- |
 | This app, syntax-highlighted | `[text]` `extensions` | adb, adoc, ads, asciidoc, asm, asp, aspx, astro, awk, bash, bat, bib, bzl, c, cc, cfg, cg, cjs, clj, cljc, cljs, cmake, cmd, comp, conf, cpp, cs, csh, cshtml, css, csv, csx, cts, cxx, d, dart, diff, diz, edn, ejs, el, elm, env, erb, erl, ex, exs, f, f03, f77, f90, f95, fish, for, frag, fs, fsi, fsx, ftn, fx, geom, glsl, go, gql, gradle, graphql, groovy, h, haml, hbs, hcl, hh, hlsl, hpp, hrl, hs, htm, html, hxx, inc, ini, ipynb, java, jl, js, json, json5, jsonc, jsonl, jsp, jsx, ksh, kt, kts, latex, less, lhs, liquid, lisp, ll, lock, log, lsp, lua, m, mak, man, markdown, md, mdown, metal, mjs, mk, mkd, ml, mli, mm, mts, mustache, nasm, nfo, nim, ninja, nix, njk, org, pas, patch, php, phtml, pl, plist, pm, properties, proto, ps1, psd1, psm1, py, pyi, pyw, r, rake, rb, rkt, rmd, rs, rst, rtf, s, sass, scala, scm, scss, sh, slim, sol, sql, srt, ss, styl, sv, svelte, svh, swift, tcl, tex, text, tf, tfvars, toml, ts, tsv, tsx, twig, txt, v, vbs, vert, vhd, vhdl, vtt, vue, wat, wgsl, xhtml, xml, xsd, xsl, xslt, yaml, yml, zig, zsh |
-| This app, as plain text | `[text]` `names` | authors, .babelrc, brewfile, caddyfile, changelog, changes, .clang-format, .clang-tidy, cmakelists.txt, code_of_conduct, containerfile, contributing, contributors, copying, copyright, dockerfile, .dockerignore, .editorconfig, .env, .env.example, .env.local, .eslintignore, .eslintrc, gemfile, .gitattributes, .gitconfig, .gitignore, .gitkeep, .gitmodules, gnumakefile, .golangci.yml, history, .htaccess, install, jenkinsfile, justfile, licence, license, .mailmap, makefile, makefile.am, makefile.in, notice, .npmignore, .prettierignore, .prettierrc, procfile, rakefile, readme, .rustfmt.toml, security, .stylelintrc, unlicense, vagrantfile |
+| This app, as plain text      | `[text]` `names`      | authors, .babelrc, brewfile, caddyfile, changelog, changes, .clang-format, .clang-tidy, cmakelists.txt, code\_of\_conduct, containerfile, contributing, contributors, copying, copyright, dockerfile, .dockerignore, .editorconfig, .env, .env.example, .env.local, .eslintignore, .eslintrc, gemfile, .gitattributes, .gitconfig, .gitignore, .gitkeep, .gitmodules, gnumakefile, .golangci.yml, history, .htaccess, install, jenkinsfile, justfile, licence, license, .mailmap, makefile, makefile.am, makefile.in, notice, .npmignore, .prettierignore, .prettierrc, procfile, rakefile, readme, .rustfmt.toml, security, .stylelintrc, unlicense, vagrantfile                                                                                                                                                                                                                                                                                                                                                                                                               |
+
 
 ### Ebook
 
-| Engine | `config.ini` | Default extensions |
+
+| Engine                                                                                                      | `config.ini` | Default extensions                                                          |
 | --- | --- | --- |
-| The Windows PDF engine for the PDF's three spellings; this app's own readers for the three comic containers | `[ebook]` | cbc, cbr, cbz, epdf, pdf, pdfa |
-| [Calibre](#optional-enable-ebooks-calibre), which converts the book to a PDF first | `[calibre]` | azw, azw3, azw4, djvu, epub, fb2, htmlz, lit, lrf, mobi, pml, prc, snb, tcr |
+| The Windows PDF engine for the PDF's three spellings; this app's own readers for the three comic containers | `[ebook]`    | cbc, cbr, cbz, epdf, pdf, pdfa                                              |
+| [Calibre](#optional-enable-ebooks-calibre), which converts the book to a PDF first                          | `[calibre]`  | azw, azw3, azw4, djvu, epub, fb2, htmlz, lit, lrf, mobi, pml, prc, snb, tcr |
+
 
 ### Archives
 
-| Engine | `config.ini` | Default extensions |
+
+| Engine                                              | `config.ini` | Default extensions                                                                                                                                                                                                                                                                                |
 | --- | --- | --- |
-| This app, from each archive's own table of contents | `[archive]` | 7z, apk, jar, rar, tar, tar.gz, tgz, xpi, zip, zipx |
-| [PeaZip](#optional-enable-niche-archives-peazip) | `[peazip]` | 001, apfs, ar, arc, arj, bcm, br, bz2, bzip2, cab, chm, cpio, cramfs, deb, dmg, esd, gz, gzip, hfs, hfsx, hxs, iso, lha, lpaq8, lzh, lzma, msi, msp, pkg, ppkg, qcow, qcow2, rpm, squashfs, swm, taz, tbz, tbz2, tpz, txz, tzst, udf, udeb, vdi, vhd, vhdx, vmdk, wim, xar, xip, xz, z, zpaq, zst |
+| This app, from each archive's own table of contents | `[archive]`  | 7z, apk, jar, rar, tar, tar.gz, tgz, xpi, zip, zipx                                                                                                                                                                                                                                               |
+| [PeaZip](#optional-enable-niche-archives-peazip)    | `[peazip]`   | 001, apfs, ar, arc, arj, bcm, br, bz2, bzip2, cab, chm, cpio, cramfs, deb, dmg, esd, gz, gzip, hfs, hfsx, hxs, iso, lha, lpaq8, lzh, lzma, msi, msp, pkg, ppkg, qcow, qcow2, rpm, squashfs, swm, taz, tbz, tbz2, tpz, txz, tzst, udf, udeb, vdi, vhd, vhdx, vmdk, wim, xar, xip, xz, z, zpaq, zst |
+
 
 ### Document
 
-| Engine | `config.ini` | Default extensions |
+
+| Engine                                                                                                                             | `config.ini` | Default extensions                                                                                                                                                                                                                                                                                                                                                                                                              |
 | --- | --- | --- |
-| Microsoft Office, falling back to [LibreOffice](#optional-enable-coreldraw-and-other-documents-libreoffice) where Office is absent | `[office]` | doc, docm, docx, dot, dotm, dotx, pot, potm, potx, pps, ppsm, ppsx, ppt, pptm, pptx, xls, xlsb, xlsm, xlsx, xlt, xltm, xltx |
-| [LibreOffice](#optional-enable-coreldraw-and-other-documents-libreoffice) | `[libre]` | 123, 602, abw, cdr, cgm, cmx, cwk, dbf, dif, dxf, fodg, fodp, fodt, gnm, gnumeric, hwp, key, lwp, mcw, met, mw, numbers, odb, odc, odf, odg, odm, odp, ods, odt, oth, otg, otm, otp, ots, ott, pages, pcd, pct, pcx, pdb, pm6, pmd, psw, pub, ras, sda, sdc, sdd, sdw, slk, stc, std, sti, stw, svm, sxd, sxg, sxi, sxm, sxw, vdx, vsd, vsdm, vsdx, vstx, wb2, wk1, wk3, wk4, wks, wpg, wq1, wq2, wpd, wps, wri, xlw, zabw, zmf |
+| Microsoft Office, falling back to [LibreOffice](#optional-enable-coreldraw-and-other-documents-libreoffice) where Office is absent | `[office]`   | doc, docm, docx, dot, dotm, dotx, pot, potm, potx, pps, ppsm, ppsx, ppt, pptm, pptx, xls, xlsb, xlsm, xlsx, xlt, xltm, xltx                                                                                                                                                                                                                                                                                                     |
+| [LibreOffice](#optional-enable-coreldraw-and-other-documents-libreoffice)                                                          | `[libre]`    | 123, 602, abw, cdr, cgm, cmx, cwk, dbf, dif, dxf, fodg, fodp, fodt, gnm, gnumeric, hwp, key, lwp, mcw, met, mw, numbers, odb, odc, odf, odg, odm, odp, ods, odt, oth, otg, otm, otp, ots, ott, pages, pcd, pct, pcx, pdb, pm6, pmd, psw, pub, ras, sda, sdc, sdd, sdw, slk, stc, std, sti, stw, svm, sxd, sxg, sxi, sxm, sxw, vdx, vsd, vsdm, vsdx, vstx, wb2, wk1, wk3, wk4, wks, wpg, wq1, wq2, wpd, wps, wri, xlw, zabw, zmf |
+
 
 ### Vector
 
-| Engine | `config.ini` | Default extensions |
+
+| Engine                                                                                                    | `config.ini` | Default extensions                                         |
 | --- | --- | --- |
-| WebView2 for `svg` and `svgz`; the drawing layer for the metafiles and the preview picture an EPS carries | `[vector]` | emf, epi, eps, epsf, epsi, ept, ept2, ept3, svg, svgz, wmf |
+| WebView2 for `svg` and `svgz`; the drawing layer for the metafiles and the preview picture an EPS carries | `[vector]`   | emf, epi, eps, epsf, epsi, ept, ept2, ept3, svg, svgz, wmf |
+
 
 ### Fonts
 
-| Engine | `config.ini` | Default extensions |
+
+| Engine                                         | `config.ini` | Default extensions         |
 | --- | --- | --- |
-| WebView2 — a specimen page with the font in it | `[font]` | otf, ttc, ttf, woff, woff2 |
+| WebView2 — a specimen page with the font in it | `[font]`     | otf, ttc, ttf, woff, woff2 |
+
 
 ### Design
 
-| Engine | `config.ini` | Default extensions |
+
+| Engine                                                                       | `config.ini` | Default extensions                                 |
 | --- | --- | --- |
-| This app, from the flattened picture each format keeps of the whole document | `[design]` | ai, fig, kra, ora, procreate, psb, psd, sketch, xd |
+| This app, from the flattened picture each format keeps of the whole document | `[design]`   | ai, fig, kra, ora, procreate, psb, psd, sketch, xd |
+
 
 ## Installation
 
@@ -103,7 +123,7 @@ No Rust toolchain is needed.
 
 ### Optional: Enable Video Preview with mpv
 
-For smoother playback and a better picture, install mpv: videos then play through it automatically, using your graphics card, with subtitles just working — including any `.srt` file beside the video. Without mpv everything works as before.
+For smoother playback and a better picture, install mpv: videos then play through it automatically, using your graphics card, with subtitles just working — including any `.srt` file beside the video. 
 
 The app finds `mpv.exe` beside itself, in your `PATH`, in `MPV Player` under Program Files, and in SVP 4's `mpv64`; where more than one is found, **Codecs → Videos → MPV** lets you pick which one plays.
 
@@ -127,7 +147,7 @@ Verify either way:
 mpv --version
 ```
 
-### Optional: Enable Video Preview with FFmpeg
+### Optional: Enable Video Preview and Advanced Audio Processing with FFmpeg
 
 FFmpeg adds the video formats and the audio ones Windows does not decode — the `[ffmpeg]` list, and the `[audio]` names Windows' own decoders do not reach. It also plays any `[video]` name the media engine turns down, or every video there is, where **Engine → Video Engine** names FFmpeg. `ffplay` and `ffprobe` need to be in your `PATH`.
 
@@ -154,13 +174,15 @@ ffprobe -version
 
 The media engine decodes H.264, MPEG-4, and WMV out of the box; each codec below is a separate free extension from the Microsoft Store, and none of them is needed while FFmpeg is installed.
 
+
 | Codec                                  | Needs                                                                    |
-| -------------------------------------- | ------------------------------------------------------------------------ |
+| --- | --- |
 | HEVC (H.265)                           | [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ)  |
 | VP9                                    | [VP9 Video Extensions](https://apps.microsoft.com/detail/9N4D0MSMP0PT)   |
 | AV1                                    | [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)    |
 | MPEG-1 and MPEG-2                      | [MPEG-2 Video Extension](https://apps.microsoft.com/detail/9N95Q1ZZPMH4) |
 | Theora, Vorbis and Opus in an Ogg file | [Web Media Extensions](https://apps.microsoft.com/detail/9N5TDP8VCMHS)   |
+
 
 All are free, official from Microsoft. Windows 11 usually has HEVC, VP9, and AV1 already. Installing one takes effect the next time the tray's **Codecs** menu is opened — no restart, nothing to configure.
 
@@ -168,12 +190,14 @@ All are free, official from Microsoft. Windows 11 usually has HEVC, VP9, and AV1
 
 A **still** `heic`, `heif`, `avif`, `jxl`, and still `webp` is decoded by a codec Windows provides rather than one shipped with the app. Each still needs its extension installed once from the Microsoft Store:
 
-| Still format | Needs                                                                                                                                           |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+
+| Still format   | Needs                                                                                                                                            |
+| --- | --- |
 | `heic`, `heif` | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [HEVC Video Extensions](https://apps.microsoft.com/detail/9N4WGH0Z6VHQ) |
 | `avif`         | [HEIF Image Extension](https://apps.microsoft.com/detail/9PMMSR1CGPWG) + [AV1 Video Extension](https://apps.microsoft.com/detail/9MVZQVXJBQ9V)   |
 | `jxl`          | [JPEG XL Image Extension](https://apps.microsoft.com/detail/9MZPRTH5C0TB), or the **JXL support** optional feature on Windows 11 24H2            |
 | `webp`         | [WebP Image Extension](https://apps.microsoft.com/detail/9PG2DK419DRG) — optional: the app decodes WebP without it                               |
+
 
 All are free, official from Microsoft. Windows 11 often has HEIF, AV1, and WebP already. Where one is missing, hovering such a file shows no preview rather than an error.
 
@@ -219,7 +243,7 @@ Or download the official installer from [https://peazip.github.io/peazip-64bit.h
 winget install -e --id calibre.calibre
 ```
 
-Or download the official installer from [https://calibre-ebook.com/download\_windows](https://calibre-ebook.com/download_windows) and run the suggested file (`calibre-*-64bit.msi`).
+Or download the official installer from [https://calibre-ebook.com/download_windows](https://calibre-ebook.com/download_windows) and run the suggested file (`calibre-*-64bit.msi`).
 
 > [!WARNING]
 > If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
@@ -231,7 +255,8 @@ Or download the official installer from [https://calibre-ebook.com/download\_win
 1. Start the app — a tray icon appears.
 2. Hover media files in Explorer to preview them.
 3. Or navigate with the keyboard — arrow keys, Tab, or a file's name typed to jump to it — to preview the focused item.
-4. Right-click the tray icon to configure behavior.
+4. Use SPACE (by default) to pin the preview.
+5. Right-click the tray icon to configure behavior.
 
 Pin mode works like Quick Look: pressing `Space` (`pin_key`, watched while `pin_enabled`)
 turns the settled preview into an always-on-top window. `Space` in a focused pin pauses and
