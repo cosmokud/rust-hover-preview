@@ -951,6 +951,11 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         })
     });
 
+    // A pin collapsed into its bubble is collapsed whatever file is installed in it: the bubble is
+    // a fact about the *window* rather than about the file, and the walk this take-up serves is the
+    // one road that reaches here with one up (see `pin_update_plan` and `show_pinned_window`).
+    let collapsed = pin_is_collapsed();
+
     // The two facts that have to be read before the pin's own lock is
     // taken, because each of them is a read of the machine rather than of
     // the state in hand: `pin_keeps_its_box` is
@@ -1038,7 +1043,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
                 }
             }
         },
-        collapsed: false,
+        collapsed,
         bubble_pause: None,
         hovered: None,
         pressed: None,

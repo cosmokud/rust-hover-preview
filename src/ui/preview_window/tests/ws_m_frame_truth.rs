@@ -1036,3 +1036,56 @@ fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
         *current = previous_media;
     }
 }
+
+/// A walk that lands while the pin is a bubble: the next file is taken up behind the bubble, and
+/// the take-up leaves the window where the collapse left it.
+///
+/// The automatic advance a pinned file's own jump switch makes is the road here, and it is the one
+/// a collapse must not end: a window raised with the file it reaches is a second window standing
+/// beside the bubble standing in for it, and what the restore afterwards brings up is the file the
+/// bubble was standing for only if the walk wrote it there (see `take_up_pinned_window`,
+/// `show_pinned_window`).
+#[test]
+fn a_walk_while_the_pin_is_a_bubble_leaves_the_window_a_bubble_on_the_next_file() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_media = stand_a_video(640, 360);
+    clean_slate();
+
+    take_up_a_video_pin();
+
+    // The hand's minimize, written where a collapse writes it: the window is off the screen and a
+    // bubble stands in for it (see `collapse_pin`, whose own road hides real windows).
+    with_pin(|pin| pin.collapsed = true);
+
+    // The walk's own swap of the next file, taken up at the box the bubble's window keeps: the
+    // player is published by name rather than begun, as the walk's own step does (see
+    // `step_the_pin_to_another_file`), and nothing arms a cover — a collapsed pin has no band for
+    // one (see `cover_step_swap_for_video`).
+    let box_ = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+        .expect("a pin up");
+    VIDEO_PID.store(102, Ordering::SeqCst);
+    let next = PathBuf::from("ws-m-frame-truth-second.mkv");
+    install(take_up_pinned_window(&next, box_));
+
+    let dump = pin_state_dump();
+    assert_eq!(
+        dump.get("pin.collapsed").map(String::as_str),
+        Some("true"),
+        "a file a walk lands on is swapped in behind the bubble rather than shown: the window is \
+         off the screen, and a take-up that put it up is the double window the bubble refuses"
+    );
+    assert_eq!(
+        dump.get("pin.path"),
+        Some(&format!("{next:?}")),
+        "and what the bubble stands for is the file the walk reached, so the restore brings up the \
+         next file rather than the one the walk left"
+    );
+
+    stand_pin(None);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}

@@ -754,7 +754,16 @@ pub(super) fn pinned_window() -> HWND {
 /// Put a pinned window up at the box its state says, painted before it is shown: what a layered
 /// window shows between one paint and the next is the surface it already has, stretched into
 /// whatever box the window has (see `show_loading_spinner`).
+///
+/// A pin that is still a bubble has no window to put up. What is behind the bubble is the file the
+/// walk reached, installed there *because* the window is away: raising it here would stand a second
+/// window beside the bubble standing in for it, and the restore that takes the collapse down is what
+/// puts the window up on that file (see `take_up_pinned_window`).
 pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
+    if pin_is_collapsed() {
+        return;
+    }
+
     let Some((window, width, height)) = pinned_window_box() else {
         return;
     };
