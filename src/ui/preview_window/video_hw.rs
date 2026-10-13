@@ -535,25 +535,42 @@ pub(super) fn video_loop_tick(playing: bool, loops: bool) -> bool {
             if video_route(&path) == VideoRoute::Mpv
                 && mpv_ipc::seek_absolute(loop_.pid, seconds)
             {
-                // **And it is set going in the same breath, which is the half a seek cannot do.**
-                // A film that has reached its end is *paused* there (`--keep-open=yes`, see
-                // `mpv_args`), and a seek is a position for that player rather than a new pass: mpv
-                // keeps the pause, and says so in its own log — `playback restart complete @
-                // 0.000000, audio=playing, video=playing (paused)` (measured on mpv 0.41.0 down
-                // this app's own pipe). So a wrap that lands a moment after the pass has ended is a
-                // film standing at its first frame, silent and going nowhere, until the user presses
-                // pause and play at it. The tick only rewinds a film that is playing (see
-                // `video_loop_action`), so playing is what it is owed back.
-                mpv_ipc::set_paused(loop_.pid, false);
+                // **And the pass is begun again, or the film is left standing where it was taken to.**
+                // `End of File → Loop` sets it going; `End of File → Pause` holds it at its first
+                // frame — the same `set_property pause` the bar's own button writes, written at the
+                // end of the pass rather than by the press over one that is over (see
+                // `pin_video_pauses_at_the_top`). Two commands because a seek is a position and not
+                // a pause: mpv keeps whatever pause it holds across one, so which of the two the
+                // film is left in is the second line's to say.
+                //
+                // **And that is what keeps the press clean**, which is the whole reason the hold is
+                // written here: a film left standing at its own end would have to be taken to the
+                // top *by* the press, and a seek written against a player that has stopped at the
+                // end of its file is a restart of the film's whole chain — mpv 0.41.0's own log has
+                // the decoder reinitialised and the first frame shown again (`hr-seek, skipping to
+                // 0.000000`, `Reinit context to 320x240`, `first video frame after restart shown`,
+                // measured in mpv 0.41.0's own log) — and the window that chain owns comes down and goes
+                // back up with it, which is the band showing the desktop for the moment in between.
+                // A film taken back to the top by this tick is held there instead, and the press
+                // resumes it with one command and no seek at all.
+                let at_the_top = pin_video_pauses_at_the_top(&path);
+                mpv_ipc::set_paused(loop_.pid, at_the_top);
                 loop_.from = seconds;
                 loop_.at = Instant::now();
-                // **And the pin's own bar is moved onto that second with the clock.** A wrap is
-                // not a relaunch on this road — no player is begun again, so `transport.begun`
-                // never runs and nothing else writes the second the pass now runs from — and a bar
-                // left counting from the launch it was taken up at stands a whole pass away from
-                // the picture after the first wrap (see `rebase_video_loop_clock_to`).
+                // **And the pin's own bar is moved onto that second with the clock**, held there
+                // where the film was: a wrap is not a relaunch on this road — no player is begun
+                // again, so `transport.begun` never runs and nothing else writes the second the pass
+                // now runs from — and a bar left counting from the launch it was taken up at stands a
+                // whole pass away from the picture after the first wrap (see
+                // `rebase_video_loop_clock_to`).
                 if pinned_path().as_deref() == Some(path.as_path()) {
-                    update_pin_transport(|transport| transport.released(seconds));
+                    update_pin_transport(|transport| {
+                        if at_the_top {
+                            transport.held(seconds)
+                        } else {
+                            transport.released(seconds)
+                        }
+                    });
                 }
                 return true;
             }

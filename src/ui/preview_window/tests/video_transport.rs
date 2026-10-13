@@ -1030,6 +1030,11 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     let content = (0, 0, 320, 240);
     let film = PathBuf::from("live-loop-film.mkv");
     stand_pin(Some(a_playing_pin(&film, content)));
+    // The pin's end of file is the wrap this test is about: the hover's own loop is off, so what the
+    // film does at the end of its pass is the pin's answer alone (see `pin_video_loops`), and the
+    // tick reads whether that answer holds the rewind or plays it (see
+    // `pin_video_pauses_at_the_top`).
+    let _jumps = VideoJumps::set(false, PinEndOfFile::Loop);
     clear_restart_count();
     mpv_ipc::clear_noted();
 
@@ -1336,6 +1341,16 @@ fn a_pass_that_has_run_out(reached: Duration) {
     });
 }
 
+/// The same, for the loop's own clock: the record a tick rewinds by stands `reached` seconds into
+/// the pass, so the rewind is due (see `video_launch::rewind_due`).
+fn a_loop_that_has_run_out(reached: f64) {
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        if let Some(loop_) = slot.as_mut() {
+            loop_.at = Instant::now() - Duration::from_secs_f64(reached);
+        }
+    }
+}
+
 /// A pass that is still being played ends at the length of its file and not five seconds before it.
 ///
 /// The five seconds `player_end` allows are for a player that has *gone*, whose going has to be read
@@ -1363,16 +1378,16 @@ fn a_pass_still_being_played_ends_at_the_length_of_its_file() {
     );
 }
 
-/// The end of file that pauses, with the player still up: the film stops where it ended and the bar
-/// is left holding it with a play button.
+/// The end of file that pauses, with the player still up: the tick's own rewind takes the film back
+/// to its first frame and holds it there, with a play button over it.
 ///
-/// This is the end that never used to arrive. A player that exits is reconciled by
-/// `settle_pinned_transport`, which finds nothing behind the bar and writes the film down as held —
-/// but mpv holds its last frame instead of going, so nothing was ever reconciled: the clock counted
-/// past the end for as long as the pin was up, the bar swept round, and the button claimed a film
-/// that was playing.
+/// **Held at the top and not at the end**, which is the whole of what keeps the press that plays it
+/// again a clean one: a film held at the top is resumed by that press with a single command, while a
+/// film standing at its own end has to be taken to the top *by* the press — and a seek written
+/// against a player that has stopped at the end of its file is answered by mpv as a restart of the
+/// film's whole chain, window and all (see `pin_video_pauses_at_the_top`).
 #[test]
-fn the_end_of_file_that_pauses_holds_a_live_film_at_its_end() {
+fn the_end_of_file_that_pauses_takes_a_live_film_to_the_top_and_holds_it() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -1381,30 +1396,54 @@ fn the_end_of_file_that_pauses_holds_a_live_film_at_its_end() {
     let previous_media = stand_live_video_media();
 
     let content = (100, 80, 420, 320);
-    let film = PathBuf::from("live-end-film.mkv");
+    let film = PathBuf::from("live-pause-film.mkv");
     stand_mpv_in(Some(true));
     stand_ffplay_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     stand_pin(Some(a_playing_pin(&film, content)));
     let _jumps = VideoJumps::set(false, PinEndOfFile::Pause);
+    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::clear_noted();
 
     assert!(
         is_video_process_running(),
         "the film's player is the one thing this reading is about, and this test stood one up"
     );
 
-    // The film has run out, and nothing has settled it: mpv is still there, holding its last frame.
-    a_pass_that_has_run_out(Duration::from_secs(200));
+    // A pass that has run out, with the player still up: mpv standing on the last frame, the clock
+    // the bar is drawn from at the film's length, and the clock a pass is measured by past it.
+    a_pass_that_has_run_out(Duration::from_secs(201));
+    note_video_loop(101, &film, content, 0.0, Some(200.0));
+    a_loop_that_has_run_out(201.0);
 
+    // The end of file reading writes nothing for it: the rewind is the tick's, and it is asked
+    // straight after — a seek to the top written from the reading would be a seek against a player
+    // that has stopped at the end of its file, which is the restart the rewind exists to avoid.
     let mut wait = None;
     assert!(
-        loop_ended_pinned_player(None, &mut wait, false),
-        "the end of a film whose player stays up is answered by this tick, which nothing else in \
-         the tick would do"
+        !loop_ended_pinned_player(None, &mut wait, false),
+        "an end of file that pauses leaves the film to the tick's own rewind"
     );
+    assert!(wait.is_none(), "and asks for no walk");
+
     assert!(
-        wait.is_none(),
-        "an end of file that pauses asks for no walk, and no player begun again"
+        video_loop_tick(true, pin_video_loops(&film) || pin_video_pauses_at_the_top(&film)),
+        "the tick's rewind is what the end of a pass the pin holds at the top is answered by"
+    );
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![
+            format!(
+                "{}\n",
+                r#"{"command":["seek",0.000,"absolute"],"async":true}"#
+            ),
+            format!(
+                "{}\n",
+                r#"{"command":["set_property","pause",true],"async":true}"#
+            ),
+        ],
+        "the film is taken to its first frame and held there, and nothing else is told to the \
+         player"
     );
 
     let transport = pin_state()
@@ -1412,19 +1451,34 @@ fn the_end_of_file_that_pauses_holds_a_live_film_at_its_end() {
         .expect("the pin is up");
     assert_eq!(
         transport.paused_at,
-        Some(200.0),
-        "the bar stands at the film's own end"
+        Some(0.0),
+        "the bar stands at the film's own beginning"
     );
+    assert_eq!(pin_playhead(&transport), Some(0.0));
     assert!(
-        transport.started.is_none(),
-        "and the clock that swept past it is stopped"
+        transport.started.is_some(),
+        "the player behind the bar is still the one that ran, so the clock it is held from is kept"
     );
-    assert_eq!(pin_playhead(&transport), Some(200.0));
     assert!(
         !pin_is_playing(&transport),
-        "so the button drawn over it is the play button a finished film is owed, not a pause"
+        "so the button drawn over it is a play button, and the press that answers it is a resume"
     );
 
+    // And the clock a pass is measured by stands at the top with the picture, so the pass the press
+    // begins is measured from where it starts rather than from where the last one ended.
+    let from = VIDEO_LOOP
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|loop_| loop_.from));
+    assert_eq!(
+        from,
+        Some(0.0),
+        "the pass the next press begins is measured from the first frame"
+    );
+
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        *slot = None;
+    }
     mpv_ipc::forget_pipe(101);
     mpv_ipc::clear_noted();
     stand_mpv_in(None);
@@ -1659,11 +1713,84 @@ fn an_mpv_seek_moves_the_loops_clock_onto_the_second() {
     }
 }
 
+/// A press on the play button over a film the end of file paused at its first frame plays it with
+/// one command: the resume every held film already has, and no seek at all.
+///
+/// This is the press the whole arrangement exists for. The film is standing at its own beginning
+/// because the tick's rewind put it there (see `pin_video_pauses_at_the_top`), so playing it again
+/// is `set pause false` and nothing else — where a press over a film standing at its own *end* would
+/// have to seek first, against a player that has stopped at the end of its file.
+#[test]
+fn a_press_over_a_film_held_at_the_top_plays_it_with_one_command() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_live_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("live-held-at-the-top-film.mkv");
+    stand_mpv_in(Some(true));
+    stand_ffplay_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    stand_pin(Some(a_playing_pin(&film, content)));
+    let _jumps = VideoJumps::set(false, PinEndOfFile::Pause);
+    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::clear_noted();
+    note_video_loop(101, &film, content, 0.0, Some(200.0));
+
+    // The state the tick's rewind leaves behind: the film held at its own first frame.
+    update_pin_transport(|transport| transport.held(0.0));
+
+    let (path, content, transport, _) = pinned_playback_state().expect("the pin is up");
+    toggle_pinned_playback(&path, content, transport);
+
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![format!(
+            "{}\n",
+            r#"{"command":["set_property","pause",false],"async":true}"#
+        )],
+        "the press is a resume and nothing else: no seek is written, which is the whole of what a \
+         press over a film held at its *end* has to write"
+    );
+
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("the pin is up");
+    assert!(
+        transport.paused_at.is_none(),
+        "the film is playing again, from the frame it was held at"
+    );
+    assert_eq!(
+        transport.started.map(|(_, from)| from),
+        Some(0.0),
+        "and its clock is at the top with the picture"
+    );
+
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        *slot = None;
+    }
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
 /// A press on the play button over a film held at its own end begins the film from the top.
 ///
-/// mpv is standing on the last frame, and a player set going from the last frame plays it and ends
-/// the pass again at once — so the film is taken to the beginning *before* it is set going, and both
-/// clocks are written at the second it is now played from.
+/// **The fallback road**, and the one a film that nothing rewound is left on: a pin taken up on a
+/// film already standing at its end, or an `End of File` switched to `Pause` after the pass was
+/// over. mpv is standing on the last frame, and a player set going from the last frame plays it and
+/// ends the pass again at once — so the film is taken to the beginning *before* it is set going, and
+/// both clocks are written at the second it is now played from.
 #[test]
 fn a_film_held_at_its_end_plays_again_from_the_top() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
