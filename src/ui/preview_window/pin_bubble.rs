@@ -138,7 +138,7 @@ pub(super) fn bubble_menu_row_label(row: BubbleMenuRow, playing: bool) -> &'stat
     match row {
         BubbleMenuRow::Toggle if playing => "Pause",
         BubbleMenuRow::Toggle => "Play",
-        BubbleMenuRow::ToTaskbar => "Minimize to Taskbar",
+        BubbleMenuRow::ToTaskbar => "To Taskbar",
         BubbleMenuRow::Close => "Close",
     }
 }
@@ -174,6 +174,20 @@ pub(super) struct BubbleMenu {
 pub(super) static BUBBLE_MENU: Lazy<Mutex<Option<BubbleMenu>>> =
     Lazy::new(|| Mutex::new(None));
 
+/// Place the bubble's menu panel at a point in the window: the shared placement, with the flyout
+/// arrow cleared — no flyout hangs off this menu, so its last row carries none (see `MenuArrow`).
+pub(super) fn bubble_menu_popup(
+    point: (i32, i32),
+    width: i32,
+    height: i32,
+    dpi: u32,
+    rows: &[pin_chrome::MenuRow],
+) -> pin_chrome::MenuPopup {
+    let mut popup = pin_chrome::menu_popup_from_point(point, width, height, dpi, rows);
+    popup.arrow = pin_chrome::MenuArrow::None;
+    popup
+}
+
 /// Whether the bubble's menu is up.
 pub(super) fn bubble_menu_is_open() -> bool {
     BUBBLE_MENU
@@ -201,7 +215,7 @@ pub(super) unsafe fn open_bubble_menu(hwnd: HWND) {
 
     // The panel's natural size first, so the window grows only as big as the circle and the
     // panel beneath it: measured with room to spare, then held inside the grown window below.
-    let natural = pin_chrome::menu_popup_from_point((0, side), 10_000, 10_000, dpi, &rows);
+    let natural = bubble_menu_popup((0, side), 10_000, 10_000, dpi, &rows);
     let width = side.max(natural.panel.right);
     let height = natural.panel.bottom.max(side);
     let grown = clamp_pinned_box(
@@ -211,13 +225,7 @@ pub(super) unsafe fn open_bubble_menu(hwnd: HWND) {
     );
     let (x, y) = (grown.0, grown.1);
     let (width, height) = (grown.2 - grown.0, grown.3 - grown.1);
-    let popup = pin_chrome::menu_popup_from_point(
-        (cursor.0 - x, cursor.1 - y),
-        width,
-        height,
-        dpi,
-        &rows,
-    );
+    let popup = bubble_menu_popup((cursor.0 - x, cursor.1 - y), width, height, dpi, &rows);
 
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
         *menu = Some(BubbleMenu {
