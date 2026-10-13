@@ -60,11 +60,13 @@ pub(super) struct Session {
     /// It is only set where the engine was asked *not* to loop — a looping
     /// engine never ends, so the flag stays down and nothing reads it — and
     /// it is what a sound's card is advanced by when the pin's own loop
-    /// switch is off (see [`audio_ended`](super::playback::audio_ended)).
+    /// switch is off (see [`audio_ended`](super::playback::audio_ended)), and
+    /// what stops a film that has finished being asked for frames it has
+    /// none of (see [`copy_into`](Session::copy_into)).
     ///
     /// A word about a *pass*, which is why it goes down where the film is taken to another second:
-    /// a flag left up over a film that has been sent back to the top is a finished film read on
-    /// every tick after it (see [`seek`](Session::seek)).
+    /// a flag left up over a film that has been sent back to the top is a film whose frames nothing
+    /// asks for again (see [`seek`](Session::seek)).
     pub(super) ended: Arc<AtomicBool>,
     /// Whether a frame of the file has been handed over at all: a session is not a promise that
     /// a picture will come of it, since the engine accepts a file whose decoder and converter
@@ -94,10 +96,6 @@ pub(super) struct Session {
     /// answers before the header is there, so the position is kept and made on the first tick
     /// that finds the engine loaded (see `apply_seek`).
     pending_seek: Option<f64>,
-    /// The loop mode the engine was last handed, kept because it is not a question the engine
-    /// answers: an engine that is loading, playing or stopped is asked for the same answer sixty
-    /// times a second, and only a disagreement is worth a call (see `set_loop`).
-    loop_wanted: bool,
     /// When the session was started, which bounds the wait for a pending seek: an engine that
     /// has not read the header of its file in this long is not going to, and a seek left
     /// standing is a seek made on every read of the clock after it.
@@ -230,7 +228,6 @@ impl Session {
             // first frame already on its clock.
             drawn: None,
             pending_seek: None,
-            loop_wanted: loop_,
             began: Instant::now(),
         };
 
@@ -254,30 +251,13 @@ impl Session {
         }
 
         // **A film taken to another second is not a film that has reached its end**, and the engine's
-        // word for an end is a flag rather than a session's state: without this, a pass that ended and
-        // a pass begun again from the top answer the same way, and a film the press had taken back to
-        // its beginning would be read as a finished one on every tick after it (see `video_ended`).
+        // word for an end is a flag rather than a session's state: without this, the frames of the
+        // second pass are never asked for at all, and a film the press had taken back to its beginning
+        // would stand on its first frame for good (see `Session::copy_into`).
         self.ended.store(false, Ordering::Release);
 
         self.pending_seek = Some(seconds.max(0.0));
         self.take_pending();
-    }
-
-    /// Tell the engine what to do at the end of the file, where that disagrees with what it was
-    /// begun with.
-    ///
-    /// `SetLoop` is a property of a running engine rather than a fact of the load, which is the whole
-    /// of what lets the end of file *on screen* govern a session another film began: a pin adopts a
-    /// hover's session rather than beginning one of its own, and the answer only ever changes where
-    /// the pin's own end of file differs from the loop the hover launched it with (see
-    /// [`apply_loop`](super::playback::apply_loop)).
-    pub(super) fn set_loop(&mut self, loops: bool) {
-        if self.loop_wanted == loops {
-            return;
-        }
-
-        self.loop_wanted = loops;
-        let _ = unsafe { self.engine.SetLoop(loops) };
     }
 
     /// The seek this session is still owed, made where the engine is ready for one.
@@ -342,6 +322,24 @@ impl Session {
 
         if self.failed.load(Ordering::Acquire) {
             return Take::Failed;
+        }
+
+        // **A pass the engine has said is over is not asked for another frame.** An engine hands a
+        // frame over per tick while a film plays, and at the end of a film it was asked to play once
+        // it has none — and what an engine with nothing to hand over does to a transfer asked for
+        // anyway is refuse it, which is the run `engine_is_failing` reads as a file this side cannot
+        // draw. That is the right reading of an engine that has *stuck* and the wrong one of a film
+        // that has *finished*: a pinned film that ended was marked a file nothing can play, and the
+        // pin's own liveness — which is this session playing — went down with it, so the window came
+        // down over a film that had simply reached its end (see `pin_media_is_alive` and
+        // `pin_is_playing`, and `answer_native_pass_end` for the ends of file that are answered
+        // before this is reached at all).
+        //
+        // The frame the engine wrote last is the one the caller is holding, and nothing outside this
+        // thread can take it away, so what is on screen stays on it. A seek puts the word down again,
+        // so a film taken to another second is asked for frames again (see `Session::seek`).
+        if self.ended.load(Ordering::Acquire) {
+            return Take::Nothing;
         }
 
         // A frame is only there to be taken once the engine has current data.

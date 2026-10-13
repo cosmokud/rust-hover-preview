@@ -653,6 +653,25 @@ pub(super) fn loop_ended_pinned_player(
         return false;
     }
 
+    // **A pass whose end of file is `Pause` is taken home before it reaches its own end**, which is
+    // the road mpv's film goes home by (see `video_loop_tick`) written for the route that has no pipe:
+    // a player this app began cannot be taken anywhere by a key, so the film is begun again at its
+    // first frame and left standing there, with the hold written down as owed for the tick that finds
+    // the new player's window up (see `settle_pending_hold`). Left to reach its end instead, such a
+    // film plays the last frames of its file out of a player that is standing at it, and closes its
+    // own window — which is a band showing the desktop, and a press that has nothing to play.
+    //
+    // **And it is written before the end is read rather than after it**, which is the whole of what
+    // makes it the same move mpv's rewind is: the rewind is due a tenth of a second early, on a film
+    // that is still playing (see `video_launch::rewind_due`).
+    if end_of_file == PinEndOfFile::Pause
+        && video_route(&path) == VideoRoute::Ffplay
+        && video_launch::rewind_due(true, transport.duration, reached)
+    {
+        restart_pinned_player(&path, content, video_launch::rewind_launch_seconds(), true);
+        return true;
+    }
+
     // **Where the rewind can take the film home, `Pause` is that rewind's to answer and not this
     // reading's.** A film the rewind holds at its top is a film whose pass never reaches its end at
     // all, and one whose end this reading *did* catch — a tick that landed after the film had already
@@ -771,32 +790,20 @@ pub(super) fn answer_native_pass_end(
             true
         }
         NativePassEnd::Hold => {
-            // **The engine stands on the last frame of a film it was told to play once and says
-            // nothing more**, so this is the bar's only way of hearing that the film is over: the
-            // second it is held at is the film's own length, and a hold is what stops the clock and
-            // turns the button into the play button a finished film is owed (see `pin_playhead` and
-            // `pin_is_playing`). The press takes a film held here back to its top (see
+            // **The film is taken to its first frame and left standing there**, which is the road mpv's
+            // film goes home by (see `pin_video_pauses_at_the_top`) written for the one player that has
+            // no pipe: the seek is posted a tenth of a second before the end, so it lands on a film that
+            // is still playing, and the hold beside it is what keeps the film standing on the frame the
+            // press would have put there. The press is then the plain resume of a held film — one call,
+            // no seek — and the bar is held at the top the picture is standing on (see
             // `toggle_pinned_playback`).
             //
-            // Nothing is written where the bar already says the film is held, which is every tick
-            // after the first: the hold is a transition, and a film whose length nothing has read has
-            // no second for one — the same corner the reading of a film mpv stands on is left with
-            // (see `loop_ended_pinned_player`).
-            //
-            // shortcut: the clock half of the reading this answer comes from can go on saying the film
-            // is at its end for a moment after this app has taken it to another second, so a press over
-            // a finished film can leave the bar held over a film that is playing again until the press
-            // after it; upgrade when the engine's own seeked event is watched (see `video_ended`).
-            let Some((_, _, transport, _)) = pinned_playback_state() else {
-                return false;
-            };
-            if transport.paused_at.is_some() {
-                return false;
-            }
-            let Some(at) = pin_duration(&transport) else {
-                return false;
-            };
-            update_pin_transport(|transport| transport.held(at));
+            // It is asked of the engine rather than written from here, so it is the same "take it
+            // home" the loop's wrap is, one tick's worth of margin wide.
+            let top = video_launch::rewind_launch_seconds();
+            video_player::seek(top);
+            video_player::set_paused(true);
+            update_pin_transport(|transport| transport.held(top));
             true
         }
     }
@@ -805,26 +812,33 @@ pub(super) fn answer_native_pass_end(
 /// What the end of a pass of the film the media engine plays asks of the pin.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum NativePassEnd {
-    /// Nothing: a pass that is still being played, and a film the engine is looping itself — which
-    /// reports no end of one at all (see `apply_native_video_loop`).
+    /// Nothing: a pass that is still being played, and a film whose end of file is left to the
+    /// engine itself — which runs a film it was asked to loop round without ever saying an end of one.
     Nothing,
     /// The walk's next file, which is the ask the caption's own **Next** button makes.
     Walk,
-    /// The bar held on the film the engine has stopped on, which is `Pause` left where it stands.
+    /// The film taken back to its first frame and held there, which is `Pause` left at its top.
     Hold,
 }
 
-/// What the film the media engine is playing for the pin asks at the end of its pass, from the two
-/// facts that decide it.
+/// What the film the media engine is playing asks of the pin, from the three facts that decide it.
 ///
-/// The engine was handed the end of file the film on screen is played under, so its end is its own
-/// to report: the engine's word for it, or its clock at the length of the file, is the end of the
-/// film (see `video_player::video_ended` and `apply_native_video_loop`).
+/// The engine is the one player whose loop is *its* own rather than this app's — `Video → Loop` is
+/// the switch a film begun for a hover is given, and the engine plays such a film round itself (see
+/// `pin_video_loops`) — so `Loop` is nothing for this app to answer. The other two are the ask the
+/// tick's own rewind already makes of a film mpv is drawing, written for the route that has no pipe:
+/// the film is due home a tenth of a second before the end of its pass, while it is still playing,
+/// because a seek written against a player that has stopped at its end is a different thing entirely
+/// (see `video_launch::rewind_due` and `pin_video_pauses_at_the_top`).
 ///
-/// It is a function of its two facts rather than of a session because a session is a thread-local
-/// nothing but the running app holds (see `pinned_native_video_end`, which is the reading itself).
-pub(super) fn native_pass_end(end_of_file: PinEndOfFile, ended: bool) -> NativePassEnd {
-    if !ended {
+/// It is a function of its three facts rather than of a session for the reason every decision here
+/// is: a session is a thread-local nothing but the running app holds (see `pinned_native_video_end`).
+pub(super) fn native_pass_end(
+    end_of_file: PinEndOfFile,
+    playing: bool,
+    due_home: bool,
+) -> NativePassEnd {
+    if !playing || !due_home {
         return NativePassEnd::Nothing;
     }
 
@@ -836,11 +850,13 @@ pub(super) fn native_pass_end(end_of_file: PinEndOfFile, ended: bool) -> NativeP
 }
 
 /// What the pass of the film the media engine is playing for the pin asks of the pin now, read where
-/// the end is answered.
+/// the end of file is answered.
 ///
 /// A path is part of the question because the engine holds one film at a time — a file the engine is
-/// not playing has not ended, whatever the clock of the file on screen says (see
-/// `video_player::playing_path`).
+/// not playing has no pass to be near the end of (see `video_player::playing_path`). The clock is the
+/// engine's own rather than this app's, and has to be: a pin taken up on a film the hover had already
+/// been playing for a while starts this app's clock at the take-up while the engine's stands where
+/// the film actually is.
 pub(super) fn pinned_native_video_end(path: &Path) -> NativePassEnd {
     if !(pinned() && pinned_path().as_deref() == Some(path))
         || video_player::playing_path().as_deref() != Some(path)
@@ -848,9 +864,20 @@ pub(super) fn pinned_native_video_end(path: &Path) -> NativePassEnd {
         return NativePassEnd::Nothing;
     }
 
+    let Some((_, _, transport, _)) = pinned_playback_state() else {
+        return NativePassEnd::Nothing;
+    };
+
     native_pass_end(
         current_pin_mode_video_end_of_file(),
-        video_player::video_ended(),
+        // A film this app is holding is not one to be taken home or stepped on from: the hold is the
+        // press's to let go of, and the engine's own position stands still while it is held.
+        transport.paused_at.is_none() && video_player::is_playing(),
+        video_launch::rewind_due(
+            true,
+            video_player::duration(),
+            video_player::position().unwrap_or(0.0),
+        ),
     )
 }
 
