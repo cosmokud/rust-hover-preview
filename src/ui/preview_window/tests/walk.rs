@@ -1009,6 +1009,135 @@ fn a_press_after_a_sound_keeps_the_first_files_anchor() {
     );
 }
 
+/// A press from the keyboard walks the same anchored walk as a press of the caption:
+/// every key road — the window's own arrows, the hook's arrows behind a player — ends
+/// in `ask_pin`, which the loop drains through `pin_command_request` with the held
+/// walk's anchor. This drives that whole chain twice: the second job must carry the
+/// first answer's anchor, and the walk it is answered with must still be the first
+/// file's (`Others → All`), not the sound's (`Audio → Same Category`).
+#[test]
+fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    // The planner's slot is emptied first, so the job taken below is this test's own:
+    // nothing else runs the planner in a test, but a press from another test left
+    // standing would be taken here as this one's.
+    if let Ok(mut pending) = PIN_JOBS.0.lock() {
+        *pending = None;
+    }
+
+    // The nav switches this chain is read under: `ask_pin_walk` clones the global
+    // configuration, so the test says what it wants walked and puts it back (see
+    // `WalkEveryFile`).
+    let was = {
+        let mut config = CONFIG.lock().expect("the configuration");
+        let was = (
+            config.pin_nav_video,
+            config.pin_nav_audio,
+            config.pin_nav_others,
+        );
+        config.pin_nav_video = PinNavFileTypes::Category;
+        config.pin_nav_audio = PinNavFileTypes::Category;
+        config.pin_nav_others = PinNavFileTypes::All;
+        was
+    };
+
+    let folder = sounded_folder("key-press");
+    let take_job = || {
+        PIN_JOBS
+            .0
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.take())
+    };
+    // One press through the loop's own drain: `navigating` is true — a walk is the
+    // thing being asked for — so the liveness read does not take the pin down for
+    // standing over a file with no media behind it in a test.
+    let press = |anchor: Option<crate::formats::routing::NavCategory>| {
+        let mut request = None;
+        let mut wait = None;
+        let mut started = None;
+        let mut offset = 0.0;
+        let mut paused = None;
+        ask_pin(PinCommand::Next);
+        pin_command_request(
+            &mut request,
+            &mut wait,
+            &mut started,
+            &mut offset,
+            &mut paused,
+            true,
+            anchor,
+        );
+        assert!(request.is_none(), "a walk press asks the planner, not for an end");
+        assert!(wait.is_some(), "and the pin waits on the folder read");
+    };
+
+    // The first press, standing on a picture with no walk held: the job carries no
+    // anchor, so the planner anchors on the file itself.
+    let mut pin = overlay_pin((0, 0, 100, 100), PinChrome::always());
+    pin.path = folder.join("a.png");
+    stand_pin(Some(pin));
+    press(None);
+    let Some(PinJob::Walk { at, step, anchor, config }) = take_job() else {
+        panic!("a key press asks the planner for a walk");
+    };
+    assert_eq!(at, folder.join("a.png"));
+    assert_eq!(anchor, None, "a first press anchors on the file it stands on");
+    let job = PinJob::Walk { at, step, anchor, config };
+    let Some(PinPlanned::Walk(first_walk)) = answer_pin_job(&job) else {
+        panic!("a walk is always answered");
+    };
+    assert!(first_walk.anchor.is_some(), "and the answer keeps the anchor");
+    assert_eq!(
+        first_walk.at,
+        folder.join("b.mp3"),
+        "stepping onto the sound beside the picture"
+    );
+
+    // The second press, standing on that sound with the first walk held as the walk
+    // of the file on screen: the job must carry the first answer's anchor.
+    let mut pin = overlay_pin((0, 0, 100, 100), PinChrome::always());
+    pin.path = first_walk.at.clone();
+    stand_pin(Some(pin));
+    let held: Option<PinStep> = Some(first_walk.clone());
+    press(pin_walk_anchor(&None, &held));
+    let Some(PinJob::Walk { anchor, config, .. }) = take_job() else {
+        panic!("a second key press asks the planner for a walk");
+    };
+    assert_eq!(
+        anchor, first_walk.anchor,
+        "a key press reuses the first file's anchor rather than the sound's"
+    );
+    let job = PinJob::Walk {
+        at: first_walk.at.clone(),
+        anchor,
+        step: 1,
+        config,
+    };
+    let Some(PinPlanned::Walk(second_walk)) = answer_pin_job(&job) else {
+        panic!("a walk is always answered");
+    };
+    assert!(
+        second_walk
+            .list
+            .iter()
+            .any(|path| path.extension().is_some_and(|ext| ext == "png")),
+        "so the walk stays end to end after landing on a sound: {:?}",
+        second_walk.list
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_nav_video = was.0;
+        config.pin_nav_audio = was.1;
+        config.pin_nav_others = was.2;
+    }
+    stand_pin(previous_pin);
+}
+
 /// The mirror: a walk taken up on a sound (`Audio → Same Category`) stays sounds-only
 /// across presses, even where the folder holds pictures beside the sounds.
 #[test]
