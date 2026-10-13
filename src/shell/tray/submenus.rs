@@ -308,10 +308,11 @@ pub(super) fn append_seek_menu_renamed(parent: HMENU, title: PCWSTR, seek: Audio
     append_seek_menu(parent, title, ID_TRAY_AUDIO_SEEK_BASE, audio_seek_label, seek);
 }
 
-/// The `Audio Preview → Pin Mode Seek` submenu: where in a file a *pinned* sound starts
+/// The `Audio Preview → Pin Mode → Seek` submenu: where in a file a *pinned* sound starts
 /// playing — the same four ways the old `Volume → Pin Mode Audio Seek` offered, in the
-/// same order. Renamed because it sits under `Audio Preview` now rather than under
-/// `Volume` (see `pin_mode_audio_seek_label`).
+/// same order. Renamed to plain `Seek` because it hangs under `Pin Mode`, beside `Shuffle`
+/// and `End of File`, where the question is where a pinned file starts rather than which
+/// sound is being played (see `pin_mode_audio_seek_label`).
 pub(super) fn append_pin_seek_menu_renamed(parent: HMENU, title: PCWSTR, seek: AudioSeek) {
     append_seek_menu(
         parent,
@@ -435,11 +436,12 @@ pub(super) fn append_loop_item(menu: HMENU, loop_id: u16, looping: bool, default
     );
 }
 
-/// The `Video Preview → Shuffle` / `Audio Preview → Shuffle` row: whether the next file a
-/// *pinned* preview steps on to — the end of a file its `End of File` row calls `Continue`, a
-/// caption's next press, a forward key — is a random file of the same kind rather than the one
-/// beside it, carrying its check. A hover has no next file, so the row is the pin's own, and a
-/// step back is the file before it either way (see `set_pin_shuffle`).
+/// The `Video Preview → Pin Mode → Shuffle` / `Audio Preview → Pin Mode → Shuffle` row:
+/// whether the next file a *pinned* preview steps on to — the end of a file its `End of
+/// File` row calls `Jump`, a caption's next press, a forward key — is a random file of the
+/// same kind rather than the one beside it, carrying its check. A hover has no next file,
+/// so the row is the pin's own, and a step back is the file before it either way (see
+/// `set_pin_shuffle`).
 pub(super) fn append_shuffle_item(menu: HMENU, shuffle_id: u16, shuffle: bool, default: bool) {
     append_labeled_item(
         menu,
@@ -449,13 +451,13 @@ pub(super) fn append_shuffle_item(menu: HMENU, shuffle_id: u16, shuffle: bool, d
     );
 }
 
-/// The `Video Preview → End of File` / `Audio Preview → End of File` submenu: the three things
-/// a pinned film or sound can do at the end of its file, with the one in force carrying its
-/// mark.
+/// The `Video Preview → Pin Mode → End of File` / `Audio Preview → Pin Mode → End of File`
+/// submenu: the three things a pinned film or sound can do at the end of its file, with the
+/// one in force carrying its mark.
 ///
 /// The three are one radio group rather than a switch over a list: exactly one of them is in
 /// force, and they are the three answers there are — the file left where it ended (`Pause`),
-/// the same file again (`Loop`), and the walk's next one (`Continue`, which the kind's own
+/// the same file again (`Loop`), and the walk's next one (`Jump`, which the kind's own
 /// `Shuffle` row decides between the file beside it and a random one of the same kind). One
 /// builder serves both kinds because the two are the same question asked twice — once of the
 /// film's end and once of the sound's — and each range is what says which setting the click
@@ -512,13 +514,44 @@ pub(super) fn append_end_of_file_menu(
     };
 }
 
+/// The `Video Preview → Pin Mode` / `Audio Preview → Pin Mode` submenu: the rows that are a
+/// *pinned* preview's own — whether its forward steps shuffle, and what its end of file does
+/// — with the sound's own seek row hung under it last. One builder serves both kinds because
+/// the two ask the same questions of a film and of a sound (see `append_shuffle_item`,
+/// `append_end_of_file_menu` and `append_pin_seek_menu_renamed`).
+///
+/// The menu is handed back because the sound hangs one more row inside it: the caller that
+/// asked for the submenu is the one that knows whether there is a seek to put in it.
+pub(super) fn append_pin_mode_menu(
+    parent: HMENU,
+    shuffle_id: u16,
+    shuffle: bool,
+    shuffle_default: bool,
+    end_of_file_base: u16,
+    end_of_file: PinEndOfFile,
+    end_of_file_default: PinEndOfFile,
+) -> HMENU {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+    append_shuffle_item(menu, shuffle_id, shuffle, shuffle_default);
+    append_end_of_file_menu(menu, end_of_file_base, end_of_file, end_of_file_default);
+    let _ = unsafe {
+        AppendMenuW(
+            parent,
+            MF_STRING | MF_POPUP,
+            menu.0 as usize,
+            w!("Pin Mode"),
+        )
+    };
+    menu
+}
+
 /// What an end of file is called in the menu: the words the tray lists it under, with the way
 /// the setting starts at marked as the default.
 pub(super) fn end_of_file_label(end_of_file: PinEndOfFile, default: PinEndOfFile) -> String {
     let label = match end_of_file {
         PinEndOfFile::Pause => "Pause",
         PinEndOfFile::Loop => "Loop",
-        PinEndOfFile::Continue => "Continue",
+        PinEndOfFile::Continue => "Jump",
     };
 
     default_label(label, end_of_file == default)
