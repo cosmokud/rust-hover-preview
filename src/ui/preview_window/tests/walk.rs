@@ -327,13 +327,13 @@ fn sounded_folder(name: &str) -> PathBuf {
 /// guard is dropped, for the same reason `WalkEveryFile` is: the walk is
 /// read under the app's own configuration, so a test says what it wants
 /// walked rather than taking whatever the machine it runs on has set.
-struct ShuffleThePin(PinJumpMode);
+struct ShuffleThePin(bool);
 
 impl ShuffleThePin {
     fn set() -> Self {
         let mut config = CONFIG.lock().expect("the configuration");
-        let was = config.pin_mode_audio_jump;
-        config.pin_mode_audio_jump = PinJumpMode::Shuffle;
+        let was = config.pin_mode_audio_shuffle;
+        config.pin_mode_audio_shuffle = true;
 
         ShuffleThePin(was)
     }
@@ -342,7 +342,7 @@ impl ShuffleThePin {
 impl Drop for ShuffleThePin {
     fn drop(&mut self) {
         if let Ok(mut config) = CONFIG.lock() {
-            config.pin_mode_audio_jump = self.0;
+            config.pin_mode_audio_shuffle = self.0;
         }
     }
 }
@@ -449,7 +449,7 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
     // And a walk that does not shuffle carries no sounds to pick from,
     // which is the walk every step of a pin's was before the setting.
     let mut config = CONFIG.lock().expect("the configuration");
-    config.pin_mode_audio_jump = PinJumpMode::ToNext;
+    config.pin_mode_audio_shuffle = false;
     let answer = answer_pin_job(&PinJob::Walk {
         at: folder.join("b.mp3"),
         step: 1,

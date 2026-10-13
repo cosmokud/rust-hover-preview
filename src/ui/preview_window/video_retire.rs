@@ -588,11 +588,12 @@ pub(super) fn loop_ended_pinned_player(
         return false;
     };
 
-    // The pin's own jump, read where the end is answered: a switch that is off is a film
-    // that stops at its end — neither begun again nor stepped on — and any other jump
-    // but a loop is the next file of the folder rather than the same film again.
-    let (enabled, jump) = current_pin_mode_video_jump();
-    if !enabled {
+    // The pin's own end of file, read where the end is answered: `Pause` is a film that
+    // stops at its end — neither begun again nor stepped on — `Loop` is the same film again,
+    // and `Continue` is the walk's next file, taken in the folder's own order or at random
+    // where the pin's shuffle says so (see `ask_pin_walk`).
+    let end_of_file = current_pin_mode_video_end_of_file();
+    if end_of_file == PinEndOfFile::Pause {
         return false;
     }
 
@@ -610,10 +611,10 @@ pub(super) fn loop_ended_pinned_player(
         return false;
     }
 
-    if jump != PinJumpMode::Loop {
-        // The film played through and the jump is a step, not a loop: the next file of
-        // the folder is asked for — the same ask the caption's own **Next** button makes,
-        // with the same wait for its answer. A lingering player (mpv paused on its last
+    if end_of_file != PinEndOfFile::Loop {
+        // The film played through and the end of file is a step on, not a loop: the walk's
+        // next file is asked for — the same ask the caption's own **Next** button makes, with
+        // the same wait for its answer. A lingering player (mpv paused on its last
         // frame, where FFmpeg's has exited) is left for the swap the walk lands to take
         // down, the way a walk over a playing film is.
         if ask_pin_walk(path.clone(), 1, anchor) {
@@ -635,7 +636,7 @@ pub(super) fn loop_ended_pinned_player(
 }
 
 /// Whether the film the media engine is playing for the pin has ended, which is the
-/// one thing a pinned film whose jump is on and not a loop is advanced by.
+/// one thing a pinned film whose end of file is a step on is advanced by.
 ///
 /// The engine was asked not to loop when the session was started (see
 /// `video_player::play`), so its end is its own to report: the engine's word for it,
@@ -647,9 +648,7 @@ pub(super) fn pinned_native_video_ended(path: &Path) -> bool {
     if !(pinned() && pinned_path().as_deref() == Some(path)) {
         return false;
     }
-    let (enabled, jump) = current_pin_mode_video_jump();
-    enabled
-        && jump != PinJumpMode::Loop
+    current_pin_mode_video_end_of_file() == PinEndOfFile::Continue
         && video_player::playing_path().as_deref() == Some(path)
         && video_player::video_ended()
 }

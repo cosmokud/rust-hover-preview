@@ -1182,24 +1182,22 @@ fn the_loop_clock_is_moved_onto_the_moment_the_film_began_playing() {
     }
 }
 
-/// The two jumps a film on screen is played under, put back when the guard is dropped.
+/// The two ends of file a film on screen is played under — the hover's loop and the pin's end —
+/// put back when the guard is dropped.
 struct VideoJumps {
     hover: bool,
-    pin_enabled: bool,
-    pin: PinJumpMode,
+    pin: PinEndOfFile,
 }
 
 impl VideoJumps {
-    fn set(hover: bool, pin_enabled: bool, pin: PinJumpMode) -> Self {
+    fn set(hover: bool, pin: PinEndOfFile) -> Self {
         let mut config = CONFIG.lock().expect("the configuration");
         let was = VideoJumps {
-            hover: config.video_jump_enabled,
-            pin_enabled: config.pin_mode_video_jump_enabled,
-            pin: config.pin_mode_video_jump,
+            hover: config.video_loop,
+            pin: config.pin_mode_video_end_of_file,
         };
-        config.video_jump_enabled = hover;
-        config.pin_mode_video_jump_enabled = pin_enabled;
-        config.pin_mode_video_jump = pin;
+        config.video_loop = hover;
+        config.pin_mode_video_end_of_file = pin;
         was
     }
 }
@@ -1207,25 +1205,24 @@ impl VideoJumps {
 impl Drop for VideoJumps {
     fn drop(&mut self) {
         if let Ok(mut config) = CONFIG.lock() {
-            config.video_jump_enabled = self.hover;
-            config.pin_mode_video_jump_enabled = self.pin_enabled;
-            config.pin_mode_video_jump = self.pin;
+            config.video_loop = self.hover;
+            config.pin_mode_video_end_of_file = self.pin;
         }
     }
 }
 
-/// A pinned film's loop is the *pin's* jump rather than the hover's, which is the one thing a
+/// A pinned film's loop is the *pin's* end of file rather than the hover's, which is the one thing a
 /// take-up has to settle for mpv.
 ///
 /// The clock a pass is measured by is made where a player is begun, and mpv is the only player a
-/// take-up does not begin again — so the film was begun by the *hover*, under the hover's jump, and
-/// that answer was carried into the pin with it. `Pin Mode Jump → Loop` with the hover's jump off
-/// was then a pinned film no rewind ever reached, and a pin's step with the hover's jump on was a
-/// rewind that undid the step. What fixes both is that the jump is asked of the film on screen when
+/// take-up does not begin again — so the film was begun by the *hover*, under the hover's loop, and
+/// that answer was carried into the pin with it. `End of File → Loop` with the hover's loop off
+/// was then a pinned film no rewind ever reached, and a pin's step with the hover's loop on was a
+/// rewind that undid the step. What fixes both is that the end of file is asked of the film on screen when
 /// the end comes rather than remembered with the clock (see `pin_video_loops` and
 /// `video_loop_action`).
 #[test]
-fn a_pinned_films_loop_is_the_pins_own_jump_and_not_the_hovers() {
+fn a_pinned_films_loop_is_the_pins_own_end_of_file_and_not_the_hovers() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -1253,12 +1250,12 @@ fn a_pinned_films_loop_is_the_pins_own_jump_and_not_the_hovers() {
         }
     };
 
-    // A hover whose jump is off and a pin whose jump is a loop: the film on screen is the pin's, so
-    // it goes round.
-    let _jumps = VideoJumps::set(false, true, PinJumpMode::Loop);
+    // A hover whose loop is off and a pin whose end of file is a loop: the film on screen is the
+    // pin's, so it goes round.
+    let _jumps = VideoJumps::set(false, PinEndOfFile::Loop);
     assert!(
         pin_video_loops(&film),
-        "the jump of the film on screen is the pin's rather than the hover's, which is what a \
+        "the end of file of the film on screen is the pin's rather than the hover's, which is what a \
          record made for the hover's player has to be read by"
     );
     note_video_loop(101, &film, content, 0.0, Some(8.0));
@@ -1279,10 +1276,10 @@ fn a_pinned_films_loop_is_the_pins_own_jump_and_not_the_hovers() {
 
     // And the other way round: a pin's step is not undone by a clock the hover made while looping.
     drop(_jumps);
-    let _jumps = VideoJumps::set(true, true, PinJumpMode::ToNext);
+    let _jumps = VideoJumps::set(true, PinEndOfFile::Continue);
     assert!(
         !pin_video_loops(&film),
-        "a pinned film the pin's jump steps on rather than loops is not one this app gives a loop to"
+        "a pinned film the pin's end of file steps on rather than loops is not one this app gives a loop to"
     );
     note_video_loop(101, &film, content, 0.0, Some(8.0));
     a_pass_has_run();

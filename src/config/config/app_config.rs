@@ -20,18 +20,18 @@ use super::defaults::{
     DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use super::setting_types::{
-    AudioSeek, AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinJumpMode, PinMinimizeTo,
+    AudioSeek, AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile, PinMinimizeTo,
     PinNavFileTypes, PreviewScale, TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine,
-    DEFAULT_AUDIO_JUMP_ENABLED, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
+    DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
     DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
     DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_JUMP, DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED,
-    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_VIDEO_JUMP, DEFAULT_PIN_MODE_VIDEO_JUMP_ENABLED,
+    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
     DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_TEXT_SCALE, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND,
-    DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_JUMP_ENABLED,
+    DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_LOOP,
 };
 
 #[derive(Debug, Clone)]
@@ -229,22 +229,23 @@ pub struct AppConfig {
     /// where a hover left it is not moved by a change to either (see
     /// `AudioSeek`).
     pub pin_mode_audio_seek: AudioSeek,
-    /// What a *pinned* sound does at the end of its file — go round, step to the next
-    /// sound, or step to a random one — the pin's own answer to what the end of a file
-    /// is (see `PinJumpMode`).
-    pub pin_mode_audio_jump: PinJumpMode,
-    /// Whether that answer is acted on at all: off, a pinned sound stops at the end of
-    /// its file rather than looping or stepping on.
-    pub pin_mode_audio_jump_enabled: bool,
+    /// What a *pinned* sound does at the end of its file: stop there, go round, or step
+    /// on to the next sound — the pin's own answer to what the end of a file is (see
+    /// `PinEndOfFile`).
+    pub pin_mode_audio_end_of_file: PinEndOfFile,
+    /// What the *next* file of a pinned sound's walk is: a random sound of the folder
+    /// rather than the one beside it, which is a question the pin's end of file and its
+    /// own next key and button both ask (see `pin_walk`).
+    pub pin_mode_audio_shuffle: bool,
     /// What a *pinned* film does at the end of it — the film's own answer to the same
-    /// question (see `PinJumpMode`).
-    pub pin_mode_video_jump: PinJumpMode,
-    /// Whether that answer is acted on at all: off, a pinned film stops at the end.
-    pub pin_mode_video_jump_enabled: bool,
+    /// question (see `PinEndOfFile`).
+    pub pin_mode_video_end_of_file: PinEndOfFile,
+    /// The same shuffle for a pinned film's walk.
+    pub pin_mode_video_shuffle: bool,
     /// Whether a hovered film loops: on, it goes round; off, it stops at the end.
-    pub video_jump_enabled: bool,
+    pub video_loop: bool,
     /// Whether a hovered sound loops: on, it goes round; off, it stops at the end.
-    pub audio_jump_enabled: bool,
+    pub audio_loop: bool,
     /// Whether a sound's loudness is measured and brought to one level before it is played —
     /// the one thing that asks a file to be as loud as the next rather than as loud as it was
     /// recorded.
@@ -670,12 +671,12 @@ impl Default for AppConfig {
             audio_volume: DEFAULT_AUDIO_VOLUME,
             audio_seek: DEFAULT_AUDIO_SEEK,
             pin_mode_audio_seek: DEFAULT_PIN_MODE_AUDIO_SEEK,
-            pin_mode_audio_jump: DEFAULT_PIN_MODE_AUDIO_JUMP,
-            pin_mode_audio_jump_enabled: DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED,
-            pin_mode_video_jump: DEFAULT_PIN_MODE_VIDEO_JUMP,
-            pin_mode_video_jump_enabled: DEFAULT_PIN_MODE_VIDEO_JUMP_ENABLED,
-            video_jump_enabled: DEFAULT_VIDEO_JUMP_ENABLED,
-            audio_jump_enabled: DEFAULT_AUDIO_JUMP_ENABLED,
+            pin_mode_audio_end_of_file: DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+            pin_mode_audio_shuffle: DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+            pin_mode_video_end_of_file: DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
+            pin_mode_video_shuffle: DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
+            video_loop: DEFAULT_VIDEO_LOOP,
+            audio_loop: DEFAULT_AUDIO_LOOP,
             normalize_volume: DEFAULT_NORMALIZE_VOLUME,
             normalize_video_volume: DEFAULT_NORMALIZE_VIDEO_VOLUME,
             remember_audio_volume: DEFAULT_REMEMBER_AUDIO_VOLUME,

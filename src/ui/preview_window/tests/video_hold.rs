@@ -260,39 +260,27 @@ fn a_player_that_has_stopped_is_read_as_the_end_of_its_file_or_not() {
 }
 
 /// The end of a pinned sound's pass is the one rule both of the pin's players' ends are
-/// read by, and it is the pin's own `Pin Mode Jump` that decides it: a sound whose switch
-/// is off stops where it is and is left held — the card standing at the beginning of the
+/// read by, and it is the pin's own `End of File` that decides it: a `Pause` leaves the sound
+/// where its file ended and the card held — the card standing at the beginning of the
 /// file with its play button up, since a card held at the end would be a press that played
-/// the last moment and stopped again — a looping jump goes round, and either of the other
-/// two jumps asks for the next file of the folder. A sound whose switch is off is held
-/// whatever the jump it names is: the jump is not read at all until the switch is on.
+/// the last moment and stopped again — a `Loop` goes round, and a `Continue` asks the walk
+/// for the next file, in the order the pin's own shuffle says.
 #[test]
-fn a_pinned_pass_ends_by_the_pin_jump_and_its_own_switch_alone() {
+fn a_pinned_pass_ends_by_the_pins_own_end_of_file() {
     assert_eq!(
-        pinned_pass_end(false, PinJumpMode::Loop),
+        pinned_pass_end(PinEndOfFile::Pause),
         PinPassEnd::Held,
-        "a sound whose jump switch is off stops where it ends, whatever jump it names"
+        "a sound left where its file ended is held with nothing playing"
     );
     assert_eq!(
-        pinned_pass_end(false, PinJumpMode::ToNext),
-        PinPassEnd::Held,
-        "and one whose jump is a move to the next file is held just the same"
-    );
-
-    assert_eq!(
-        pinned_pass_end(true, PinJumpMode::Loop),
+        pinned_pass_end(PinEndOfFile::Loop),
         PinPassEnd::Wrap,
-        "a looping jump is the pass gone round again"
+        "a looping end of file is the pass gone round again"
     );
     assert_eq!(
-        pinned_pass_end(true, PinJumpMode::ToNext),
+        pinned_pass_end(PinEndOfFile::Continue),
         PinPassEnd::Walk,
-        "and either other jump is the next file of the folder"
-    );
-    assert_eq!(
-        pinned_pass_end(true, PinJumpMode::Shuffle),
-        PinPassEnd::Walk,
-        "which the walk is the one that chooses"
+        "and a step on is the next file of the folder, which the walk is the one that picks"
     );
 }
 

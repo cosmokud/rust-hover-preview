@@ -32,12 +32,12 @@ pub(super) use setters::{
     set_font_background, set_font_scale, set_general_disk_cache_mb, set_hover_delay,
     set_html_background, set_image_background, set_image_cache_mb, set_image_disk_cache_mb,
     set_libreoffice_idle, set_markdown_mode, set_mpv_path, set_office_engine, set_office_engine_idle,
-    set_pin_minimize_to, set_pin_jump_mode, set_pin_nav_audio, set_pin_nav_others, set_pin_nav_video,
+    set_pin_minimize_to, set_pin_end_of_file, set_pin_nav_audio, set_pin_nav_others, set_pin_nav_video,
     set_pin_mode_audio_seek, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
     set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
     set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
-    set_video_scale, set_video_volume, set_webview_idle, toggle_jump_enabled,
-    toggle_pin_jump_enabled,
+    set_video_scale, set_video_volume, set_webview_idle, toggle_loop,
+    toggle_pin_shuffle,
 };
 pub(super) use toggles::{
     toggle_check_for_updates, toggle_engine_persistent, toggle_normalize_video_volume,

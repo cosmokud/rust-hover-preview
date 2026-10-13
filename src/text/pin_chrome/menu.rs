@@ -11,7 +11,7 @@
 //!
 //! The rows are whatever the window asks for ([`MenuRow`]): the geometry holds
 //! a row count and the kinds the marks name — a row that opens a panel beside
-//! this one, a row that answers, a rule between two groups of them — so the one
+//! this one, a row that answers — so the one
 //! panel carries the mode toggles and the seek choices without either knowing
 //! about the other. What a press on a row means is the window's question and
 //! not this module's; where a point answers a row is ([`menu_row_at`]).
@@ -139,31 +139,26 @@ pub(crate) struct MenuPopup {
     /// The bands the panel's rows were laid out in, one per row and in the rows'
     /// own order: what a point answers (`menu_row_at`), what each row is painted
     /// in, and the top a flyout hung from a row is placed at
-    /// (`menu_flyout_from_menu`). They are not all one height — a separator's
-    /// band is the narrower of the two (see `menu_bands`) — which is why the
-    /// layout is carried rather than worked out again from `row_height` wherever
-    /// it is wanted.
+    /// (`menu_flyout_from_menu`). Every band is the panel's own row height, in the rows'
+    /// own order, which is why the layout is carried rather than worked out again from
+    /// `row_height` wherever it is wanted.
     pub(crate) bands: Vec<MenuRowBand>,
 }
 
 /// The band one row of a panel was laid out in, in the window's own coordinates:
 /// where it begins, how tall it is, and which of the rows a hand counts it as.
 ///
-/// A band answers a row where that row is one a hand does something with. The
-/// count skips the separators, so the nth row a hand answers is answered by
-/// `Some(n)` whatever rules sit above it, and a band that is a rule answers
-/// nothing at all (see `MenuMark::Separator`).
+/// Every band of a card's menu is a row a hand answers: the panel is its rows, one after
+/// another, and what a point in a band means is the number it carries.
 #[derive(Clone, Copy)]
 pub(crate) struct MenuRowBand {
     /// The top of the band. The first band begins at the panel's own `rows_top`,
     /// and every band after it begins where the one before it ended.
     pub(crate) top: i32,
-    /// How tall the band is: the panel's own `row_height` for a row a hand
-    /// answers, and the narrower band of a separator for one that is a rule.
+    /// How tall the band is: the panel's own `row_height`.
     pub(crate) height: i32,
-    /// Which row a hand answers the band as, or nothing where the band is a rule
-    /// between two groups of rows rather than a row.
-    pub(crate) answers: Option<usize>,
+    /// Which row a hand answers the band as.
+    pub(crate) answers: usize,
 }
 
 /// The mark a row of a card's menu carries, which is what says
@@ -185,22 +180,13 @@ pub(crate) enum MenuMark {
     /// all in the marker column, and what says it is a door is the arrow at its
     /// own right (`MenuPopup::arrow`).
     Door,
-    /// The row is a rule between two groups of rows rather than a row of its own:
-    /// nothing is written in it, nothing is drawn at its marker, it is never
-    /// washed under the pointer, and it is the one band a press and a hover are
-    /// not answered by (`menu_row_at`). Its band is half a row's
-    /// (`menu_separator_height`), the way the separator of a menu the shell draws
-    /// is a rule with a little room either side of it rather than a row of its
-    /// own.
-    Separator,
 }
 
 /// One row of a card's menu: the label it is written with, and
 /// the mark it carries, which is what says what the row is — a
 /// check for a mode that is on or off, a disc for the seek
-/// that is the one the pin plays by, a door for a row that
-/// opens another panel rather than answering, and a rule for a
-/// row that is a separator rather than a row at all.
+/// that is the one the pin plays by, and a door for a row that
+/// opens another panel rather than answering.
 pub(crate) struct MenuRow {
     pub(crate) label: String,
     pub(crate) mark: MenuMark,
@@ -273,27 +259,11 @@ fn menu_main_panel_width(rows: &[MenuRow], dpi: u32, width: i32) -> i32 {
         .min(width.max(8))
 }
 
-/// How tall the band a separator takes is: half a row's own, so that a rule
-/// between two groups of rows is a rule with a little room either side of it
-/// rather than an empty row with a line drawn through the middle of it (see
-/// `MenuMark::Separator`).
-fn menu_separator_height(row_height: i32) -> i32 {
-    (row_height / 2).max(1)
-}
-
-/// The room a panel's rows take: a row's own height each, but for the narrower
-/// band of a separator (see `MenuMark::Separator`). It is what a panel's own
-/// height is measured from and what its bands are laid out by, so the two cannot
-/// disagree about how tall a panel of these rows is.
+/// The room a panel's rows take: a row's own height each. It is what a panel's own height is
+/// measured from and what its bands are laid out by, so the two cannot disagree about how tall
+/// a panel of these rows is.
 fn menu_rows_room(rows: &[MenuRow], row_height: i32) -> i32 {
-    let separator_height = menu_separator_height(row_height);
-
-    rows.iter()
-        .map(|row| match row.mark {
-            MenuMark::Separator => separator_height,
-            _ => row_height,
-        })
-        .sum()
+    rows.len() as i32 * row_height
 }
 
 /// The height of a panel that holds these rows: the pad the panel holds its rows
@@ -304,32 +274,21 @@ fn menu_panel_height(rows: &[MenuRow], row_height: i32, pad: i32) -> i32 {
 }
 
 /// The bands a panel of these rows lays them out in, from the panel's own rows'
-/// top: each row's own band, one after another (`menu_rows_room`), with the rows
-/// a hand answers numbered in the order a hand counts them — the separators
-/// between them are not counted, because they are not rows a hand does anything
-/// with (see `MenuRowBand`).
+/// top: each row's own band, one after another, numbered in the order a hand
+/// counts them (see `MenuRowBand`).
 fn menu_bands(rows: &[MenuRow], rows_top: i32, row_height: i32) -> Vec<MenuRowBand> {
-    let separator_height = menu_separator_height(row_height);
     let mut top = rows_top;
-    let mut answers = 0;
 
     rows.iter()
-        .map(|row| {
-            let separator = matches!(row.mark, MenuMark::Separator);
-            let height = match separator {
-                true => separator_height,
-                false => row_height,
-            };
+        .enumerate()
+        .map(|(index, _)| {
             let band = MenuRowBand {
                 top,
-                height,
-                answers: (!separator).then_some(answers),
+                height: row_height,
+                answers: index,
             };
 
-            top += height;
-            if !separator {
-                answers += 1;
-            }
+            top += row_height;
 
             band
         })
@@ -487,16 +446,15 @@ fn menu_flyout_tier(
     }
 }
 
-/// The flyout a row of the menu opens — the Jump row's list of jumps, or the
+/// The flyout a row of the menu opens — the End of File row's list of ends, or the
 /// Seek row's list of seeks — placed from the main menu the row belongs to: a
 /// small gap right of the main menu's own right edge, top-aligned with the row
 /// it was opened from, so the menu the
 /// flyout came from stays wholly visible beside it and the panel sits beside
 /// the row a hand pressed rather than beside the panel's last one.
 ///
-/// `hang_row` is that row: the row a hand counts, among the rows a hand answers
-/// — the separators between them are not rows a hand counts (see
-/// `MenuRowBand`) — and its own band is what the flyout's top is aligned with.
+/// `hang_row` is that row — the row a hand counts — and its own band is what the flyout's
+/// top is aligned with (see `MenuRowBand`).
 ///
 /// Where the flyout does not fit to the right of the menu,
 /// it flips to the menu's left, a small gap left of the
@@ -539,7 +497,7 @@ pub(crate) fn menu_flyout_from_menu(
     let hang_top = menu
         .bands
         .iter()
-        .find(|band| band.answers == Some(hang_row))
+        .find(|band| band.answers == hang_row)
         .map(|band| band.top)
         .unwrap_or(menu.rows_top);
     let top = hang_top
@@ -620,7 +578,7 @@ pub(crate) fn menu_flyout_gap_holds(
     let (hang_top, hang_bottom) = menu
         .bands
         .iter()
-        .find(|band| band.answers == Some(hang_row))
+        .find(|band| band.answers == hang_row)
         .map(|band| (band.top, band.top + band.height))
         .unwrap_or((menu.rows_top, menu.rows_top));
     let top = flyout.panel.top.min(hang_top);
@@ -630,16 +588,9 @@ pub(crate) fn menu_flyout_gap_holds(
 }
 
 /// Which row of a menu a point answers, or nothing at all where the point is not
-/// a row: the pad the panel holds its rows in is no row, neither is anywhere
+/// a row: the pad the panel holds its rows in is no row, and neither is anywhere
 /// outside the panel, above it or below it — a press there is
-/// a press outside the menu, which is what closes it — and neither is the band of
-/// a separator, which is a rule between two groups of rows rather than one a hand
-/// does anything with.
-///
-/// The row answered is the row a hand counts, so the rows below a separator keep
-/// the numbers they are counted by and a press is mapped to its choice by the
-/// same arithmetic whether the panel carries a rule or not (see `MenuRowBand` and
-/// `pinned_menu_press`).
+/// a press outside the menu, which is what closes it.
 pub(crate) fn menu_row_at(popup: &MenuPopup, x: i32, y: i32) -> Option<usize> {
     if x < popup.panel.left || x >= popup.panel.right {
         return None;
@@ -649,7 +600,7 @@ pub(crate) fn menu_row_at(popup: &MenuPopup, x: i32, y: i32) -> Option<usize> {
         .bands
         .iter()
         .find(|band| y >= band.top && y < band.top + band.height)
-        .and_then(|band| band.answers)
+        .map(|band| band.answers)
 }
 
 /// Paint a card's menu into the window's own pixels, over what is behind it:
@@ -663,9 +614,8 @@ pub(crate) fn menu_row_at(popup: &MenuPopup, x: i32, y: i32) -> Option<usize> {
 /// keeps blanked between paints, and then carried across the panel they were
 /// written over, which is the only place they are wanted (`composite_text_into`).
 /// It is the same road a tool tip's name takes, because a menu's labels are
-/// the same kind of thing a tool tip's name is. A separator's rule and a door's
-/// arrow are drawn the way the panel is rather than the way a label is, because
-/// they are shapes and not letters.
+/// the same kind of thing a tool tip's name is. A door's arrow is drawn the way the panel is
+/// rather than the way a label is, because it is a shape and not letters.
 ///
 /// `hover` is the row the pointer is on, if it is on one, which is painted
 /// under a wash of the theme's own: it is the same tick that decides where
@@ -754,27 +704,15 @@ pub(crate) fn paint_menu_popup(
     // Each row's own box, which its label is drawn in: the label is centred
     // in the row's own band, held to the room the marker leaves it and to
     // the panel's own far pad, so a label longer than the room is cut by the
-    // box it is drawn in rather than running past the panel's edge. A separator's
-    // band carries no box at all: what is drawn in it is the rule, and nothing is
-    // written in it.
+    // box it is drawn in rather than running past the panel's edge.
     let mut boxes = Vec::with_capacity(rows.len());
     let mut painter = text_paint::RunPainter::new(surface, scale);
     for (row, band) in rows.iter().zip(&popup.bands) {
-        // A separator is a rule between two groups of rows rather than a row a hand
-        // does anything with: nothing is written in it, nothing is drawn at its
-        // marker, it is never washed — no pointer is ever on it (see `menu_row_at`)
-        // — and the hairline is the whole of what its band carries.
-        if matches!(row.mark, MenuMark::Separator) {
-            paint_menu_separator(buffer, width, panel, pad, band, scale, palette);
-            continue;
-        }
-
         // The row under the pointer is washed before anything is drawn in
         // it, so that its label, its mark and its arrow are all read over
         // the wash rather than under it. It is the row a hand counts that is
-        // compared, so a rule above a row does not move the wash onto the row
-        // beside it (see `MenuRowBand`).
-        let washed = hover == band.answers;
+        // compared (see `MenuRowBand`).
+        let washed = hover == Some(band.answers);
         if washed {
             fill_box(
                 buffer,
@@ -834,10 +772,9 @@ pub(crate) fn paint_menu_popup(
                 palette.foreground,
                 1.0,
             ),
-            // A door carries nothing in the marker column, and a separator's band
-            // is not reached here at all: what says a door is a door is the arrow
-            // at its own right, drawn below.
-            MenuMark::Door | MenuMark::Separator => {}
+            // A door carries nothing in the marker column: what says a door is a door is the
+            // arrow at its own right, drawn below.
+            MenuMark::Door => {}
         }
 
         boxes.push(box_);
@@ -901,33 +838,6 @@ pub(crate) fn paint_menu_popup(
     // size of the whole window and the rest of it is blank memory, which over
     // the media would be a sheet of nothing.
     composite_text_into(surface, buffer, width, panel);
-}
-
-/// The rule a separator row is drawn with: a hairline across the panel, held in
-/// from the panel's own edges by the pad its rows are held in, drawn in the colour
-/// the panel's own hairline is drawn in — so that a rule between two groups of rows
-/// reads as part of the panel rather than as a row of it (see
-/// `MenuMark::Separator`).
-fn paint_menu_separator(
-    buffer: &mut [u8],
-    width: i32,
-    panel: RECT,
-    pad: i32,
-    band: &MenuRowBand,
-    scale: f32,
-    palette: &ChromePalette,
-) {
-    let y = band.top as f32 + band.height as f32 / 2.0;
-
-    stroke_segment(
-        buffer,
-        width,
-        ((panel.left + pad) as f32, y),
-        ((panel.right - pad) as f32, y),
-        (1.0 * scale).round().max(1.0),
-        palette.hover(0.15),
-        1.0,
-    );
 }
 
 /// The check a check row is marked with: a small check mark at the

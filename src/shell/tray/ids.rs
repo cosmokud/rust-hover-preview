@@ -12,7 +12,7 @@
 //! handle, the message Explorer sends when it restarts, and the themes the menu last listed.
 
 use crate::config::config::{
-    AudioSeek, AvoidMode, EngineIdle, PinJumpMode, PreviewScale, TextTheme, TransparentBackground,
+    AudioSeek, AvoidMode, EngineIdle, PinEndOfFile, PreviewScale, TextTheme, TransparentBackground,
     VideoEngine,
 };
 use once_cell::sync::Lazy;
@@ -274,31 +274,34 @@ pub(super) const ID_TRAY_TICK_BASE: u16 = 1500;
 /// shown with nothing checked rather than rounded to the nearest.
 pub(super) const TICK_CHOICES_MS: [u64; 5] = [15, 31, 47, 63, 78];
 pub(super) const ID_TRAY_OPEN_CONFIG: u16 = 1040;
-/// The jump master switches: whether a hovered film or sound loops at all, and
-/// whether a pinned film or sound acts on its own jump mode at all. Four singles,
-/// beside the config row, in the slack the engine-idle ranges leave.
-pub(super) const ID_TRAY_VIDEO_JUMP_ENABLED: u16 = 1041;
-pub(super) const ID_TRAY_AUDIO_JUMP_ENABLED: u16 = 1042;
-pub(super) const ID_TRAY_PIN_MODE_VIDEO_JUMP_ENABLED: u16 = 1043;
-pub(super) const ID_TRAY_PIN_MODE_AUDIO_JUMP_ENABLED: u16 = 1044;
-/// The `Video Preview → Jump` submenu: one command per way a hovered film can end.
-/// It is a single-check menu — the `Enabled` row — so it takes one id rather than a
-/// range, beside the master switches above (see `append_jump_menu`).
-/// The `Audio Preview → Jump` submenu's own row, the same switch asked about a
-/// hovered sound.
-/// The `Video Preview → Pin Mode Jump` and `Audio Preview → Pin Mode Jump` submenus:
-/// one command per way a pinned film or sound can end, in the order they list them.
-/// Each is a base plus the position the choice was listed at, against the table of
-/// jumps below, and each range is exactly as wide as the choices it lists — which is
-/// what keeps a jump of one from being read as a jump of the other. They sit in the
-/// slack the font sizes leave, past the `theme` folder's own items: 1576 to 1581,
-/// checked against the theme cap, the codec rows and the MPV range (see `tray::tests`).
-pub(super) const ID_TRAY_PIN_MODE_VIDEO_JUMP_BASE: u16 = 1576;
-pub(super) const ID_TRAY_PIN_MODE_AUDIO_JUMP_BASE: u16 = 1579;
-/// What a preview does at the end of its file, in the order the jump submenus list
-/// them: go round, step to the next file, or step to a random one of the same kind.
-pub(super) const PIN_JUMP_CHOICES: [PinJumpMode; 3] =
-    [PinJumpMode::Loop, PinJumpMode::ToNext, PinJumpMode::Shuffle];
+/// The previews' own switches: whether a hovered film or sound loops at all, and whether a
+/// pinned walk shuffles the file it steps on to. Four singles, beside the config row, in the
+/// slack the engine-idle ranges leave.
+///
+/// Both kinds carry both: a film's loop and a sound's are two settings, and a pinned film's
+/// walk and a pinned sound's are two more — the same question asked of each kind rather than
+/// one answer shared between them.
+pub(super) const ID_TRAY_VIDEO_LOOP: u16 = 1041;
+pub(super) const ID_TRAY_AUDIO_LOOP: u16 = 1042;
+pub(super) const ID_TRAY_VIDEO_SHUFFLE: u16 = 1043;
+pub(super) const ID_TRAY_AUDIO_SHUFFLE: u16 = 1044;
+/// The `Video Preview → End of File` and `Audio Preview → End of File` submenus: one command
+/// per way a pinned film or sound can end, in the order they list them — `Pause`, `Loop` and
+/// `Continue`.
+///
+/// Each is a base plus the position the choice was listed at, against the table of ends below,
+/// and each range is exactly as wide as the choices it lists — which is what keeps an end of
+/// one kind from being read as an end of the other. They sit in the slack the font sizes
+/// leave, past the `theme` folder's own items: 1576 to 1581, checked against the theme cap,
+/// the codec rows and the MPV range (see `tray::tests`).
+pub(super) const ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE: u16 = 1576;
+pub(super) const ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE: u16 = 1579;
+/// What a pinned preview does at the end of its file, in the order the `End of File` submenus
+/// list them: stop there, go round the same file, or step on to the next one — which the
+/// kind's own `Shuffle` row decides between the file beside it and a random one of the same
+/// kind.
+pub(super) const PIN_END_OF_FILE_CHOICES: [PinEndOfFile; 3] =
+    [PinEndOfFile::Pause, PinEndOfFile::Loop, PinEndOfFile::Continue];
 /// The two rows inside the `System` submenu, beside the one that opens the config file:
 /// the first puts every setting back at what this build recommends and leaves the extension
 /// lists alone, the second puts the lists back and leaves every other setting alone.

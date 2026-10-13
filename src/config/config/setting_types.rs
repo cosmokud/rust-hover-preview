@@ -1009,34 +1009,42 @@ impl PinMinimizeTo {
 /// the app out of the taskbar altogether.
 pub const DEFAULT_PIN_MINIMIZE_TO: PinMinimizeTo = PinMinimizeTo::Bubble;
 
-/// What a preview does at the end of its file in pin mode or on hover: go round to the
-/// start of the same file, step to the next file, or step to a random one. `Loop` replays
-/// the file, `To Next` is the sequential step a caption's next button takes, and `Shuffle`
-/// is a random file of the same kind — a sound shuffles sounds, a film shuffles films.
+/// What a *pinned* preview does at the end of its file: stop there, go round to the start of
+/// the same file, or step on to the next file. `Pause` is the file left where it ended, the
+/// card holding it with a play button; `Loop` replays it; and `Continue` is the next file of
+/// the folder, which the pin's own shuffle setting decides between the file beside it and a
+/// random one of the same kind — a sound steps on to a sound, a film to a film.
+///
+/// It is the end of a *playing* file and nothing else: which file a next key or a caption's
+/// next press goes to is the walk's own question, asked of the shuffle alone (see
+/// `pin_walk`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PinJumpMode {
+pub enum PinEndOfFile {
+    /// Stop at the end of the file, the pin left holding it.
+    Pause,
     /// Go round to the start of the same file.
     Loop,
-    /// Step to the next file.
-    ToNext,
-    /// Step to a random file of the same kind.
-    Shuffle,
+    /// Step to the next file of the folder.
+    Continue,
 }
 
-impl PinJumpMode {
+impl PinEndOfFile {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Pause => "pause",
             Self::Loop => "loop",
-            Self::ToNext => "to_next",
-            Self::Shuffle => "shuffle",
+            Self::Continue => "continue",
         }
     }
 
+    /// The way a `config.ini` value names, or `None` for one that names no end of file. The
+    /// words a step was once named by are read as `Continue`, which is the same answer on the
+    /// shuffled walk the setting beside it decides (see `ini_mapping`).
     pub(super) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
+            "pause" | "paused" | "stop" | "hold" => Some(Self::Pause),
             "loop" => Some(Self::Loop),
-            "next" | "to_next" | "to next" | "tonext" => Some(Self::ToNext),
-            "shuffle" | "random" => Some(Self::Shuffle),
+            "continue" | "next" | "to_next" | "to next" | "tonext" => Some(Self::Continue),
             _ => None,
         }
     }
@@ -1044,15 +1052,16 @@ impl PinJumpMode {
 
 /// What a pinned film does at the end of it unless the configuration says otherwise:
 /// go round again, which is what a pinned preview did before there was a setting.
-pub const DEFAULT_PIN_MODE_VIDEO_JUMP: PinJumpMode = PinJumpMode::Loop;
+pub const DEFAULT_PIN_MODE_VIDEO_END_OF_FILE: PinEndOfFile = PinEndOfFile::Loop;
 /// The same for a pinned sound: go round again.
-pub const DEFAULT_PIN_MODE_AUDIO_JUMP: PinJumpMode = PinJumpMode::Loop;
-/// Whether a pinned film's end is answered at all: on, the mode above decides; off, the
-/// player stops at the end of the file rather than looping or stepping on.
-pub const DEFAULT_PIN_MODE_VIDEO_JUMP_ENABLED: bool = true;
-/// The same master switch for a pinned sound.
-pub const DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED: bool = true;
+pub const DEFAULT_PIN_MODE_AUDIO_END_OF_FILE: PinEndOfFile = PinEndOfFile::Loop;
+/// Whether a pinned film's walk takes the *next* file at random instead of the one beside
+/// it: off, where the app starts, is the folder's own order — the order a caption's next
+/// button and a forward key have always stepped in.
+pub const DEFAULT_PIN_MODE_VIDEO_SHUFFLE: bool = false;
+/// The same for a pinned sound's walk.
+pub const DEFAULT_PIN_MODE_AUDIO_SHUFFLE: bool = false;
 /// Whether a hovered film loops: on, a hover goes round; off, it stops at the end.
-pub const DEFAULT_VIDEO_JUMP_ENABLED: bool = true;
+pub const DEFAULT_VIDEO_LOOP: bool = true;
 /// The same for a hovered sound.
-pub const DEFAULT_AUDIO_JUMP_ENABLED: bool = true;
+pub const DEFAULT_AUDIO_LOOP: bool = true;

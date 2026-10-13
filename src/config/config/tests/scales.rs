@@ -744,39 +744,42 @@ fn reads_where_a_pinned_sound_starts_from_its_own_key() {
     assert_eq!(config.pin_mode_audio_seek, AudioSeek::Middle);
 }
 
-/// What a pinned sound does at the end of its file, and whether that answer is acted on
-/// at all, are two of the pin's own keys: the jump mode names loop, next or shuffle, and
-/// the switch says whether the end is answered. Both are answers a fresh configuration
-/// already gives — a loop that is on, which is what a pinned sound did before there was a
-/// setting — so a file that names neither is a file a fresh one answers, and a value the
-/// mode key names that is none of the three is left where it was rather than guessed at.
+/// What a pinned sound does at the end of its file, and whether its forward steps shuffle,
+/// are two of the pin's own keys: the end of file names pause, loop or continue, and the
+/// shuffle is a yes-or-no one. Both are answers a fresh configuration already gives — a loop
+/// at the end of a file, and the folder's own order beside it, which is what a pinned sound
+/// did before there was a setting — so a file that names neither is a file a fresh one
+/// answers, and a value the end-of-file key names that is none of the three is left where it
+/// was rather than guessed at.
 #[test]
 fn reads_how_a_pinned_sound_steps_and_ends_from_their_own_keys() {
     assert_eq!(
-        AppConfig::default().pin_mode_audio_jump,
-        DEFAULT_PIN_MODE_AUDIO_JUMP,
+        AppConfig::default().pin_mode_audio_end_of_file,
+        DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
         "a pinned sound goes round at the end of its file unless the file says otherwise"
     );
-    assert_eq!(DEFAULT_PIN_MODE_AUDIO_JUMP, PinJumpMode::Loop, "which is a loop on");
     assert_eq!(
-        AppConfig::default().pin_mode_audio_jump_enabled,
-        DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED,
-        "and the answer is acted on unless the file says otherwise"
+        DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+        PinEndOfFile::Loop,
+        "which is a loop"
     );
-    assert!(DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED, "which is an answer on");
+    assert!(
+        !AppConfig::default().pin_mode_audio_shuffle,
+        "and its forward steps take the file beside it unless the file says otherwise"
+    );
 
-    // What the menu writes is what the file reads back: the mode is a named choice and
-    // the switch a yes-or-no one, so a choice made here is still the choice after a restart.
+    // What the menu writes is what the file reads back: the end of file is a named choice and
+    // the shuffle a yes-or-no one, so a choice made here is still the choice after a restart.
     let mut changed = Ini::new();
     changed.set(
         CONFIG_SECTION,
-        "pin_mode_audio_jump",
-        Some("shuffle".to_string()),
+        "pin_mode_audio_end_of_file",
+        Some("continue".to_string()),
     );
     changed.set(
         CONFIG_SECTION,
-        "pin_mode_audio_jump_enabled",
-        Some("false".to_string()),
+        "pin_mode_audio_shuffle",
+        Some("true".to_string()),
     );
 
     let mut written = Ini::new();
@@ -785,59 +788,177 @@ fn reads_how_a_pinned_sound_steps_and_ends_from_their_own_keys() {
         .expect("a file this app wrote is one it can read");
     let config = read_file(&mut written);
     assert_eq!(
-        config.pin_mode_audio_jump,
-        PinJumpMode::Shuffle,
-        "a shuffle is a shuffle after a restart"
+        config.pin_mode_audio_end_of_file,
+        PinEndOfFile::Continue,
+        "a step on is a step on after a restart"
     );
     assert!(
-        !config.pin_mode_audio_jump_enabled,
-        "and an answer off is an answer off after one"
+        config.pin_mode_audio_shuffle,
+        "and a shuffle is a shuffle after one"
     );
 
     let mut older = Ini::new();
     older.set(CONFIG_SECTION, "audio_seek", Some("random".to_string()));
     let config = read_file(&mut older);
     assert_eq!(
-        config.pin_mode_audio_jump, DEFAULT_PIN_MODE_AUDIO_JUMP,
-        "a file written before the jump existed steps a pinned sound the way a \
+        config.pin_mode_audio_end_of_file, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+        "a file written before the setting existed ends a pinned sound the way a \
          fresh one does, whatever the hover's own setting is"
     );
-    assert_eq!(
-        config.pin_mode_audio_jump_enabled, DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED,
-        "and the switch the same way"
+    assert!(
+        !config.pin_mode_audio_shuffle,
+        "and its walk is the folder's own order the same way"
     );
 
     let mut unknown = Ini::new();
     unknown.set(
         CONFIG_SECTION,
-        "pin_mode_audio_jump",
+        "pin_mode_audio_end_of_file",
         Some("sideways".to_string()),
     );
     let config = read_file(&mut unknown);
     assert_eq!(
-        config.pin_mode_audio_jump, DEFAULT_PIN_MODE_AUDIO_JUMP,
-        "a value that names no jump is answered with the way a fresh \
-         configuration steps rather than guessed at"
+        config.pin_mode_audio_end_of_file, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+        "a value that names no end of file is answered with the way a fresh \
+         configuration ends rather than guessed at"
     );
 
-    // A file that still names the retired shuffle/loop pair seeds the mode once where the
-    // new key is absent: a loop left on is the sound beginning again, a loop off with a
-    // shuffle on is a random sound, and anything else is the file beside it.
+    // A file that still names one of the keys these replaced seeds the setting once, where the
+    // name this build writes is absent — and is not written back, so the seeding happens once
+    // (see `differs`). `to_next` was the file beside the sound, which is `Continue` with the
+    // shuffle off; `shuffle` was a random one at the end of a file, which is `Continue` with
+    // the shuffle switch turned on beside it.
+    let mut retired = Ini::new();
+    retired.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_jump",
+        Some("to_next".to_string()),
+    );
+    let config = read_file(&mut retired);
+    assert_eq!(
+        config.pin_mode_audio_end_of_file,
+        PinEndOfFile::Continue,
+        "a step to the next file seeds a step on"
+    );
+    assert!(
+        !config.pin_mode_audio_shuffle,
+        "and the file beside it is not a shuffled one"
+    );
+
+    let mut retired = Ini::new();
+    retired.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_jump",
+        Some("shuffle".to_string()),
+    );
+    let config = read_file(&mut retired);
+    assert_eq!(
+        config.pin_mode_audio_end_of_file,
+        PinEndOfFile::Continue,
+        "a shuffle at the end of a file is a step on too"
+    );
+    assert!(
+        config.pin_mode_audio_shuffle,
+        "with the shuffle switch turned on beside it"
+    );
+
+    // The master switch of that era is the sound left where it ended, whatever the jump key
+    // beside it said — and the walk it shuffled is still shuffled, because the switch never
+    // governed a next press or the end of a file alike.
+    let mut retired = Ini::new();
+    retired.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_jump",
+        Some("shuffle".to_string()),
+    );
+    retired.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_jump_enabled",
+        Some("false".to_string()),
+    );
+    let config = read_file(&mut retired);
+    assert_eq!(
+        config.pin_mode_audio_end_of_file,
+        PinEndOfFile::Pause,
+        "a switch that was off leaves the sound where its file ended"
+    );
+    assert!(
+        config.pin_mode_audio_shuffle,
+        "and the shuffled walk it described is the walk it still gets"
+    );
+
+    // A file from the era of the retired shuffle/loop pair seeds the end of file once: a loop
+    // left on is the sound beginning again, and a loop left off is the file beside it.
     let mut legacy = Ini::new();
     legacy.set(CONFIG_SECTION, "pin_mode_audio_loop", Some("false".to_string()));
-    legacy.set(CONFIG_SECTION, "pin_mode_audio_shuffle", Some("true".to_string()));
     assert_eq!(
-        read_file(&mut legacy).pin_mode_audio_jump,
-        PinJumpMode::Shuffle,
-        "a loop off with a shuffle on seeds a shuffle"
+        read_file(&mut legacy).pin_mode_audio_end_of_file,
+        PinEndOfFile::Continue,
+        "a loop off seeds the file beside it"
     );
 
     let mut legacy = Ini::new();
-    legacy.set(CONFIG_SECTION, "pin_mode_audio_loop", Some("false".to_string()));
+    legacy.set(CONFIG_SECTION, "pin_mode_audio_loop", Some("true".to_string()));
     assert_eq!(
-        read_file(&mut legacy).pin_mode_audio_jump,
-        PinJumpMode::ToNext,
-        "and a loop off alone seeds the file beside it"
+        read_file(&mut legacy).pin_mode_audio_end_of_file,
+        PinEndOfFile::Loop,
+        "and a loop on seeds a sound that goes round"
+    );
+}
+
+/// The hover's own loop and a film's end of file are the same two questions asked of the
+/// film: the loop's key has been renamed once, and the name it had is read so that a file
+/// written before the rename keeps its answer; the film's end of file is seeded from the
+/// retired key it shares with the sound.
+#[test]
+fn reads_the_hover_loop_and_a_films_end_of_file_from_their_own_keys() {
+    assert_eq!(
+        AppConfig::default().video_loop,
+        DEFAULT_VIDEO_LOOP,
+        "a hovered film goes round unless the file says otherwise"
+    );
+    assert!(DEFAULT_VIDEO_LOOP, "which is a loop on");
+    assert_eq!(
+        AppConfig::default().pin_mode_video_end_of_file,
+        DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
+        "and a pinned film ends the way a pinned sound does unless the file says otherwise"
+    );
+    assert!(
+        !AppConfig::default().pin_mode_video_shuffle,
+        "with its walk the folder's own order"
+    );
+
+    let mut renamed = Ini::new();
+    renamed.set(CONFIG_SECTION, "video_jump_enabled", Some("false".to_string()));
+    renamed.set(CONFIG_SECTION, "audio_jump_enabled", Some("false".to_string()));
+    let config = read_file(&mut renamed);
+    assert!(!config.video_loop, "the retired name of the hover's loop is still read");
+    assert!(!config.audio_loop, "and so is the sound's");
+
+    let mut both = Ini::new();
+    both.set(CONFIG_SECTION, "video_jump_enabled", Some("false".to_string()));
+    both.set(CONFIG_SECTION, "video_loop", Some("true".to_string()));
+    let config = read_file(&mut both);
+    assert!(
+        config.video_loop,
+        "and the name this build writes is the one that answers where a file holds both"
+    );
+
+    let mut retired = Ini::new();
+    retired.set(
+        CONFIG_SECTION,
+        "pin_mode_video_jump",
+        Some("to_next".to_string()),
+    );
+    let config = read_file(&mut retired);
+    assert_eq!(
+        config.pin_mode_video_end_of_file,
+        PinEndOfFile::Continue,
+        "a pinned film's retired jump key seeds its end of file"
+    );
+    assert!(
+        !config.pin_mode_video_shuffle,
+        "and leaves the shuffle where a fresh configuration has it"
     );
 }
 

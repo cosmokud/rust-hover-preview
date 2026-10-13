@@ -22,13 +22,13 @@ use super::ids::{
     ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_AUDIO_CATEGORY,
     ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL,
     ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK,
-    PIN_JUMP_CHOICES,
+    PIN_END_OF_FILE_CHOICES,
     TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
 };
 
 use crate::app::dialogs;
 use crate::config::config::{
-    AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinJumpMode, PinMinimizeTo, PinNavFileTypes,
+    AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinEndOfFile, PinMinimizeTo, PinNavFileTypes,
     PreviewScale,
     TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
     DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE,
@@ -421,56 +421,57 @@ pub(super) fn pin_mode_audio_seek_label(seek: AudioSeek) -> String {
     seek_label(seek, DEFAULT_PIN_MODE_AUDIO_SEEK)
 }
 
-/// The `Video Preview → Jump` / `Audio Preview → Jump` submenu: the one row that says
-/// whether the hovered film or sound goes round at the end of its file, carrying its
-/// check. It is a single-check menu rather than a radio group — `Enabled (Loop)` is
-/// the one answer this app offers for a hover's end — so it takes the id it is handed
-/// rather than a range (see `ID_TRAY_VIDEO_JUMP_ENABLED`).
-pub(super) fn append_jump_menu(parent: HMENU, jump_id: u16, enabled: bool) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
-    let _ = unsafe {
-        AppendMenuW(
-            menu,
-            MF_STRING | if enabled { MF_CHECKED } else { MF_UNCHECKED },
-            jump_id as usize,
-            w!("Enabled (Loop)"),
-        )
-    };
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Jump")) };
+/// The `Video Preview → Loop` / `Audio Preview → Loop` row: the one row that says whether the
+/// hovered film or sound goes round at the end of its file, carrying its check. It is a row of
+/// the kind's own submenu rather than a submenu of its own — `Loop` is the one answer this app
+/// offers for a hover's end — and it takes the id it is handed rather than a range (see
+/// `ID_TRAY_VIDEO_LOOP`).
+pub(super) fn append_loop_item(menu: HMENU, loop_id: u16, looping: bool, default: bool) {
+    append_labeled_item(
+        menu,
+        MF_STRING | if looping { MF_CHECKED } else { MF_UNCHECKED },
+        loop_id,
+        &default_label("Loop", default),
+    );
 }
 
-/// The `Video Preview → Pin Mode Jump` / `Audio Preview → Pin Mode Jump` submenu: the
-/// master switch first, then the three jumps the pin's end can be, with the one in
-/// force carrying its mark.
+/// The `Video Preview → Shuffle` / `Audio Preview → Shuffle` row: whether the next file a
+/// *pinned* preview steps on to — the end of a file its `End of File` row calls `Continue`, a
+/// caption's next press, a forward key — is a random file of the same kind rather than the one
+/// beside it, carrying its check. A hover has no next file, so the row is the pin's own, and a
+/// step back is the file before it either way (see `set_pin_shuffle`).
+pub(super) fn append_shuffle_item(menu: HMENU, shuffle_id: u16, shuffle: bool, default: bool) {
+    append_labeled_item(
+        menu,
+        MF_STRING | if shuffle { MF_CHECKED } else { MF_UNCHECKED },
+        shuffle_id,
+        &default_label("Shuffle", default),
+    );
+}
+
+/// The `Video Preview → End of File` / `Audio Preview → End of File` submenu: the three things
+/// a pinned film or sound can do at the end of its file, with the one in force carrying its
+/// mark.
 ///
-/// The switch is a check and the jumps are a radio group: only one jump is in force,
-/// and a switch that is off stops the film or the sound at the end of it rather than
-/// any of the three (see `PinJumpMode`). One builder serves both halves because the
-/// two are the same question asked twice — once of the film's jump and once of the
-/// sound's — and each range is what says which setting the click was meant for.
-pub(super) fn append_pin_jump_menu(
+/// The three are one radio group rather than a switch over a list: exactly one of them is in
+/// force, and they are the three answers there are — the file left where it ended (`Pause`),
+/// the same file again (`Loop`), and the walk's next one (`Continue`, which the kind's own
+/// `Shuffle` row decides between the file beside it and a random one of the same kind). One
+/// builder serves both kinds because the two are the same question asked twice — once of the
+/// film's end and once of the sound's — and each range is what says which setting the click
+/// was meant for.
+pub(super) fn append_end_of_file_menu(
     parent: HMENU,
-    enabled_id: u16,
     base: u16,
-    enabled: bool,
-    jump: PinJumpMode,
-    default: PinJumpMode,
+    end_of_file: PinEndOfFile,
+    default: PinEndOfFile,
 ) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
-    let _ = unsafe {
-        AppendMenuW(
-            menu,
-            MF_STRING | if enabled { MF_CHECKED } else { MF_UNCHECKED },
-            enabled_id as usize,
-            w!("Enabled"),
-        )
-    };
-    let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
 
-    let labels: Vec<Vec<u16>> = PIN_JUMP_CHOICES
+    let labels: Vec<Vec<u16>> = PIN_END_OF_FILE_CHOICES
         .iter()
         .map(|choice| {
-            pin_jump_label(*choice, default)
+            end_of_file_label(*choice, default)
                 .encode_utf16()
                 .chain(std::iter::once(0))
                 .collect()
@@ -486,12 +487,15 @@ pub(super) fn append_pin_jump_menu(
             )
         };
     }
-    if let Some(index) = PIN_JUMP_CHOICES.iter().position(|choice| *choice == jump) {
+    if let Some(index) = PIN_END_OF_FILE_CHOICES
+        .iter()
+        .position(|choice| *choice == end_of_file)
+    {
         let _ = unsafe {
             CheckMenuRadioItem(
                 menu,
                 base as u32,
-                (base + PIN_JUMP_CHOICES.len() as u16 - 1) as u32,
+                (base + PIN_END_OF_FILE_CHOICES.len() as u16 - 1) as u32,
                 (base + index as u16) as u32,
                 MF_BYCOMMAND.0,
             )
@@ -503,27 +507,27 @@ pub(super) fn append_pin_jump_menu(
             parent,
             MF_STRING | MF_POPUP,
             menu.0 as usize,
-            w!("Pin Mode Jump"),
+            w!("End of File"),
         )
     };
 }
 
-/// What a jump is called in the menu: the words the tray lists it under, with the way the
-/// setting starts at marked as the default.
-pub(super) fn pin_jump_label(jump: PinJumpMode, default: PinJumpMode) -> String {
-    let label = match jump {
-        PinJumpMode::Loop => "Loop",
-        PinJumpMode::ToNext => "To Next",
-        PinJumpMode::Shuffle => "Shuffle",
+/// What an end of file is called in the menu: the words the tray lists it under, with the way
+/// the setting starts at marked as the default.
+pub(super) fn end_of_file_label(end_of_file: PinEndOfFile, default: PinEndOfFile) -> String {
+    let label = match end_of_file {
+        PinEndOfFile::Pause => "Pause",
+        PinEndOfFile::Loop => "Loop",
+        PinEndOfFile::Continue => "Continue",
     };
 
-    default_label(label, jump == default)
+    default_label(label, end_of_file == default)
 }
 
-/// The jump an item of a `Pin Mode Jump` submenu stands for, by the position it was
+/// The end of file an item of an `End of File` submenu stands for, by the position it was
 /// listed at. An id past the last choice the menu offered is one that is not there.
-pub(super) fn pin_jump_at(index: u16) -> Option<PinJumpMode> {
-    PIN_JUMP_CHOICES.get(index as usize).copied()
+pub(super) fn end_of_file_at(index: u16) -> Option<PinEndOfFile> {
+    PIN_END_OF_FILE_CHOICES.get(index as usize).copied()
 }
 
 /// The `Explorer Poll` submenu — the loop's own tick: how often the
