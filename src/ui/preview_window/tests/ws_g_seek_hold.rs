@@ -282,7 +282,7 @@ fn the_release_relaunch_re_arms_the_swap_bound() {
         .unwrap_or_else(|e| e.into_inner());
     let previous_pin = take_pin_for_a_test();
 
-    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    let pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
     stand_pin(Some(pin));
     forget_pin_park_swap();
 

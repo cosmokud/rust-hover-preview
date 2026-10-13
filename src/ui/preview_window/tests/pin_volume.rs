@@ -75,6 +75,12 @@ fn a_level_moved_on_a_pin_is_the_pins_and_not_the_setting() {
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let previous_pin = take_pin_for_a_test();
 
+    // The `Remember` rows are the test's subject by negation: with them off, a level moved
+    // on the pin is the pin's own and the settings are left where they were, whatever the
+    // machine the test runs on remembers (see `PinLevels::remembering`).
+    let mut _levels = PinLevels::set(100, 100);
+    _levels.remembering(false, false);
+
     let mut video = create_loading_media(320, 240);
     video.media_type = MediaType::NativeVideo;
     if let Ok(mut media) = CURRENT_MEDIA.lock() {

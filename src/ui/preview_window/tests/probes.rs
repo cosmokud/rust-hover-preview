@@ -722,8 +722,15 @@ fn audio_probe() {
 unsafe fn stand_a_player_window(box_: ScreenRegion) -> HWND {
     use windows::core::w;
 
+    // The pin's own creation style, which is what puts a window in the topmost band on a
+    // machine that is refusing raises: the shell answers `HWND_TOPMOST` in `SetWindowPos`
+    // only to a window that owns the foreground, and a stand-in raised that way — a plain
+    // popup — is left in the ordinary band with the bit set but the order refused, so two
+    // stand-ins never stand in any order at all. Born topmost, both are in the band from the
+    // first placement on, the way the pin and the film it stands over are (see
+    // `show_pinned_window`).
     CreateWindowExW(
-        WS_EX_TOOLWINDOW,
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         w!("STATIC"),
         w!(""),
         WS_POPUP,

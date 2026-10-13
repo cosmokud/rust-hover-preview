@@ -741,13 +741,13 @@ pub(super) enum PlayerOrder {
     Leave,
 }
 
-/// The placement decision the last call to `player_order` on this thread came to.
-///
-/// A test run has no screen to read a z-order off, and the answer a raiser acts on is the whole of
-/// what it can be asked here — so this is the record a test reads to know that every raiser asked
-/// the question at all (see `last_player_order`). It is the thread's own because the suite runs in
-/// parallel and a raiser on another test's thread must not answer for this one's. The release
-/// binary carries no part of it.
+// The placement decision the last call to `player_order` on this thread came to.
+//
+// A test run has no screen to read a z-order off, and the answer a raiser acts on is the whole of
+// what it can be asked here — so this is the record a test reads to know that every raiser asked
+// the question at all (see `last_player_order`). It is the thread's own because the suite runs in
+// parallel and a raiser on another test's thread must not answer for this one's. The release
+// binary carries no part of it.
 #[cfg(test)]
 thread_local! {
     static LAST_PLAYER_ORDER: std::cell::Cell<Option<PlayerOrder>> =
@@ -768,13 +768,13 @@ fn note_player_order(order: PlayerOrder) {
     LAST_PLAYER_ORDER.with(|held| held.set(Some(order)));
 }
 
-/// How many times a placement on this thread has put the pin back over the film it raised.
-///
-/// The other half of the same invariant, and the half `LAST_PLAYER_ORDER` cannot carry: the answer
-/// is one fact and what a placement does with it is two — a window raised, and the pin put back
-/// over it — so a test that read only the answer could not tell a raise that leaves the pin under
-/// the film from one that does not. It is read and cleared together, so what a test asks is what
-/// the placement it caused did rather than what an earlier one did (see `take_pin_re_raises`).
+// How many times a placement on this thread has put the pin back over the film it raised.
+//
+// The other half of the same invariant, and the half `LAST_PLAYER_ORDER` cannot carry: the answer
+// is one fact and what a placement does with it is two — a window raised, and the pin put back
+// over it — so a test that read only the answer could not tell a raise that leaves the pin under
+// the film from one that does not. It is read and cleared together, so what a test asks is what
+// the placement it caused did rather than what an earlier one did (see `take_pin_re_raises`).
 #[cfg(test)]
 thread_local! {
     static PIN_RE_RAISES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
