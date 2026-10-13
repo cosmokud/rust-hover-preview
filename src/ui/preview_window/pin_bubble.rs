@@ -132,60 +132,198 @@ pub(super) fn bubble_menu_rows(kind: Option<MediaType>) -> Vec<BubbleMenuRow> {
     rows
 }
 
-/// The menu's own commands, as the popup numbers them (see `show_text_preview_menu`).
-pub(super) const ID_BUBBLE_MENU_TOGGLE: usize = 1;
-pub(super) const ID_BUBBLE_MENU_TO_TASKBAR: usize = 2;
-pub(super) const ID_BUBBLE_MENU_CLOSE: usize = 3;
+/// What a row of the bubble's menu says: the hold named for what it will do, and the two ways
+/// out spelled the way the tray spells them.
+pub(super) fn bubble_menu_row_label(row: BubbleMenuRow, playing: bool) -> &'static str {
+    match row {
+        BubbleMenuRow::Toggle if playing => "Pause",
+        BubbleMenuRow::Toggle => "Play",
+        BubbleMenuRow::ToTaskbar => "Minimize to Taskbar",
+        BubbleMenuRow::Close => "Close",
+    }
+}
 
-/// Show the bubble's menu at the pointer and act on what it returns: the hold for a film or a
-/// sound — named for what it will do — and the two ways out of any bubble.
+/// The rows the bubble's menu is painted with: the same panel a pinned sound's card opens, so a
+/// bubble's menu reads as the same menu (see `pin_chrome::paint_menu_popup`).
+pub(super) fn bubble_menu_chrome_rows(
+    kind: Option<MediaType>,
+    playing: bool,
+) -> Vec<pin_chrome::MenuRow> {
+    bubble_menu_rows(kind)
+        .iter()
+        .map(|row| pin_chrome::MenuRow {
+            label: bubble_menu_row_label(*row, playing).to_string(),
+            mark: pin_chrome::MenuMark::None,
+        })
+        .collect()
+}
+
+/// The bubble's menu while it is up: the rows it holds, the panel they were placed in, the row
+/// the pointer is on, and the scale both were worked out at.
 ///
-/// The menu is asked for its command rather than posting one, so it needs no message loop of its
-/// own (see `show_text_preview_menu`).
-pub(super) unsafe fn show_bubble_menu(hwnd: HWND) {
-    let rows = bubble_menu_rows(current_media_type());
-    let Ok(menu) = CreatePopupMenu() else {
+/// It is a slot beside the bubble rather than a part of the pin for the reason the bubble's
+/// frame is (see `BUBBLE_FRAME`): it belongs to the collapsed window, and a pin put back up has
+/// no menu for it to be shown in.
+pub(super) struct BubbleMenu {
+    pub(super) rows: Vec<pin_chrome::MenuRow>,
+    pub(super) popup: pin_chrome::MenuPopup,
+    pub(super) hover: Option<usize>,
+    pub(super) dpi: u32,
+}
+
+pub(super) static BUBBLE_MENU: Lazy<Mutex<Option<BubbleMenu>>> =
+    Lazy::new(|| Mutex::new(None));
+
+/// Whether the bubble's menu is up.
+pub(super) fn bubble_menu_is_open() -> bool {
+    BUBBLE_MENU
+        .lock()
+        .map(|menu| menu.is_some())
+        .unwrap_or(false)
+}
+
+/// Open the bubble's menu at the pointer: the window grows down to hold the circle and the panel
+/// beneath it, so the menu is painted with the theme's own panel the way a card's menu is
+/// rather than with a menu of the Shell's (see `paint_menu_popup`).
+///
+/// A second right-click while the panel is up moves it to the new point rather than putting it
+/// away, the way a card's menu does (see `open_pin_menu`).
+pub(super) unsafe fn open_bubble_menu(hwnd: HWND) {
+    let Some(cursor) = cursor_screen_point() else {
         return;
     };
-
-    for row in &rows {
-        let (id, label) = match row {
-            BubbleMenuRow::Toggle if bubble_is_playing() => (ID_BUBBLE_MENU_TOGGLE, w!("Pause")),
-            BubbleMenuRow::Toggle => (ID_BUBBLE_MENU_TOGGLE, w!("Play")),
-            BubbleMenuRow::ToTaskbar => (ID_BUBBLE_MENU_TO_TASKBAR, w!("Minimize to Tray")),
-            BubbleMenuRow::Close => (ID_BUBBLE_MENU_CLOSE, w!("Close")),
-        };
-        let _ = AppendMenuW(menu, MF_STRING, id, label);
-    }
-
-    let mut point = POINT::default();
-    if GetCursorPos(&mut point).is_err() {
-        let _ = DestroyMenu(menu);
+    let Some(origin) = window_origin(hwnd).map(|rect| (rect.0, rect.1)) else {
         return;
-    }
+    };
+    let dpi = dpi_at(cursor.0, cursor.1);
+    let side = logical_px(dpi, PIN_BUBBLE_PIXELS).max(16);
+    let rows = bubble_menu_chrome_rows(current_media_type(), bubble_is_playing());
 
-    // A menu belongs to the window in front of it: asking for the foreground is what lets the
-    // menu see the click that chooses from it (see `show_text_preview_menu`).
-    let _ = SetForegroundWindow(hwnd);
-
-    let command = TrackPopupMenu(
-        menu,
-        TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
-        point.x,
-        point.y,
-        0,
-        hwnd,
-        None,
+    // The panel's natural size first, so the window grows only as big as the circle and the
+    // panel beneath it: measured with room to spare, then held inside the grown window below.
+    let natural = pin_chrome::menu_popup_from_point((0, side), 10_000, 10_000, dpi, &rows);
+    let width = side.max(natural.panel.right);
+    let height = natural.panel.bottom.max(side);
+    let grown = clamp_pinned_box(
+        (origin.0, origin.1, origin.0 + width, origin.1 + height),
+        dpi,
+        &DESKTOPS,
+    );
+    let (x, y) = (grown.0, grown.1);
+    let (width, height) = (grown.2 - grown.0, grown.3 - grown.1);
+    let popup = pin_chrome::menu_popup_from_point(
+        (cursor.0 - x, cursor.1 - y),
+        width,
+        height,
+        dpi,
+        &rows,
     );
 
-    let _ = DestroyMenu(menu);
-
-    match command.0 as usize {
-        ID_BUBBLE_MENU_TOGGLE => ask_pin(PinCommand::TogglePlayback),
-        ID_BUBBLE_MENU_TO_TASKBAR => bubble_to_taskbar(),
-        ID_BUBBLE_MENU_CLOSE => ask_pin(PinCommand::Close),
-        _ => {}
+    if let Ok(mut menu) = BUBBLE_MENU.lock() {
+        *menu = Some(BubbleMenu {
+            rows,
+            popup,
+            hover: None,
+            dpi,
+        });
     }
+    // A press the menu answers is not a press on the bubble: the focusing click it could have
+    // been is spent opening the menu instead.
+    BUBBLE_PRESS_FOCUSED.store(false, Ordering::Release);
+    let _ = MoveWindow(hwnd, x, y, width, height, true);
+    // The menu is this window's own, so the window takes the pointer while it is up: a press
+    // anywhere else arrives here first, and the first one puts the menu away rather than reaching
+    // through to whatever was aimed at (see `open_pin_menu`).
+    let _ = SetCapture(hwnd);
+    render_pin_bubble(hwnd);
+}
+
+/// Put the bubble's menu away where it is up, answering whether it came down: the window shrinks
+/// back to the circle, and the pointer with it, while the bubble itself is left standing.
+pub(super) unsafe fn close_bubble_menu(hwnd: HWND) -> bool {
+    let was_up = BUBBLE_MENU
+        .lock()
+        .map(|mut menu| menu.take().is_some())
+        .unwrap_or(false);
+    if !was_up {
+        return false;
+    }
+
+    let (x, y) = window_origin(hwnd).map(|rect| (rect.0, rect.1)).unwrap_or((0, 0));
+    let dpi = dpi_at(x, y);
+    let side = logical_px(dpi, PIN_BUBBLE_PIXELS).max(16);
+    release_pin_capture(hwnd);
+    let _ = MoveWindow(hwnd, x, y, side, side, true);
+    render_pin_bubble(hwnd);
+    true
+}
+
+/// A press with the bubble's menu up, answering whether it was the menu's: a press on a row is
+/// that row's own and the menu goes away with the answer, while a press anywhere else is a press
+/// that has left the menu, which puts it away (see `pinned_menu_press`).
+///
+/// Nothing is held, because a menu is a thing a hand reads rather than a thing it carries: the
+/// press is answered where it landed, and the panel is one paint away from being gone.
+pub(super) unsafe fn bubble_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
+    if !bubble_menu_is_open() {
+        return false;
+    }
+
+    // The row the press landed on, read before the menu goes: the panel a press is answered
+    // against is the panel that is drawn, and closing first is what takes the answer away.
+    let row = BUBBLE_MENU.lock().ok().and_then(|menu| {
+        let menu = menu.as_ref()?;
+        let index = pin_chrome::menu_row_at(&menu.popup, x, y)?;
+        bubble_menu_rows(current_media_type()).get(index).copied()
+    });
+
+    // The chrome rows above are built from the same list in the same order, so an index into the
+    // panel is an index into the rows the menu holds.
+    close_bubble_menu(hwnd);
+    match row {
+        Some(BubbleMenuRow::Toggle) => ask_pin(PinCommand::TogglePlayback),
+        Some(BubbleMenuRow::ToTaskbar) => bubble_to_taskbar(),
+        Some(BubbleMenuRow::Close) => ask_pin(PinCommand::Close),
+        // A press outside both the rows and the circle is a press that has left the menu.
+        None => {}
+    }
+    true
+}
+
+/// Ask what the bubble's menu is saying about the pointer, answering whether anything about it
+/// changed — which is whether the bubble owes a repaint for it.
+///
+/// The pointer is read as a place on the screen and taken against the window's own box, because a
+/// pointer that has left the bubble sends it nothing more, so a wash left up under one is a mark
+/// on a hand that is gone (see `refresh_pin_menu`).
+pub(super) unsafe fn bubble_menu_hover(hwnd: HWND) -> bool {
+    let Some(cursor) = cursor_screen_point() else {
+        return false;
+    };
+    let Some(origin) = window_origin(hwnd).map(|rect| (rect.0, rect.1)) else {
+        return false;
+    };
+    let (x, y) = (cursor.0 - origin.0, cursor.1 - origin.1);
+
+    let changed = BUBBLE_MENU
+        .lock()
+        .map(|mut menu| {
+            let Some(menu) = menu.as_mut() else {
+                return false;
+            };
+            let hover = pin_chrome::menu_row_at(&menu.popup, x, y);
+            if hover == menu.hover {
+                return false;
+            }
+            menu.hover = hover;
+            true
+        })
+        .unwrap_or(false);
+
+    if changed {
+        render_pin_bubble(hwnd);
+    }
+    changed
 }
 
 /// Put the pin away into the taskbar rather than the bubble: the bubble goes, the stand-in comes
@@ -822,6 +960,11 @@ unsafe extern "system" fn hide_player_windows_callback(
 
 /// Take the round bubble down, if one is up.
 pub(super) fn hide_pin_bubble() {
+    // No bubble carries a menu: a pin put back up or taken down has no menu for one to be shown
+    // in, and the next bubble starts without one.
+    if let Ok(mut menu) = BUBBLE_MENU.lock() {
+        *menu = None;
+    }
     let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
     if hwnd == 0 {
         return;
@@ -841,6 +984,10 @@ pub(super) fn hide_pin_bubble() {
 /// to go. It is painted before it is shown, for the reason every other layered window of this app's
 /// is: what one shows between two paints is the surface it already has.
 pub(super) unsafe fn show_pin_bubble(anchor: ScreenRegion) {
+    // A bubble that goes up goes up without a menu, whatever the one before it held.
+    if let Ok(mut menu) = BUBBLE_MENU.lock() {
+        *menu = None;
+    }
     let dpi = dpi_at(anchor.0, anchor.1);
     let side = logical_px(dpi, PIN_BUBBLE_PIXELS).max(16);
 
@@ -925,7 +1072,15 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
         return;
     };
 
-    let (art, mark) = bubble_art(width);
+    // The circle keeps its own size whatever the window has grown into: the menu below it owns
+    // the extra room, and a circle painted across the whole of it would sit in the middle of its
+    // own window rather than where the bubble stood.
+    let side = (logical_px(dpi_at(rect.left, rect.top), PIN_BUBBLE_PIXELS).max(16) as u32)
+        .min(width)
+        .min(height)
+        .max(1);
+
+    let (art, mark) = bubble_art(side);
     let phase = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_secs_f32() * BUBBLE_PHASE_RADIANS_PER_SECOND)
@@ -947,7 +1102,57 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
         BubbleArtOwned::None => pin_chrome::BubbleArt::None,
     };
 
-    pin_chrome::paint_bubble(out, width, height, &palette, art, mark);
+    out.fill(0);
+
+    // The circle is painted at its own size and carried into the top of the window: the chrome
+    // paints a circle that fills whatever buffer it is handed, so handing it the whole window
+    // would centre it over the menu (see `paint_bubble`).
+    let mut circle = vec![0u8; side as usize * side as usize * 4];
+    pin_chrome::paint_bubble(&mut circle, side, side, &palette, art, mark);
+    for (row, chunk) in circle.chunks(side as usize * 4).enumerate() {
+        let start = row * width as usize * 4;
+        out[start..start + chunk.len()].copy_from_slice(chunk);
+    }
+
+    // The menu, below the circle: the theme's own panel, washed under the row the pointer is on,
+    // the way a card's menu is (see `paint_menu_popup`).
+    if let Ok(menu) = BUBBLE_MENU.lock() {
+        if let Some(menu) = menu.as_ref() {
+            // A surface of the window's own size, because the rows' labels are measured and drawn
+            // through GDI and GDI needs a device context of its own — kept between paints and
+            // blanked before each use, the way the pin's own menu surface is (see `MENU_SURFACE`).
+            let wanted = (width.max(1), height.max(1));
+            MENU_SURFACE.with(|cell| {
+                let mut surface = cell.borrow_mut();
+                if surface.as_ref().map(|surface| (surface.width, surface.height)) != Some(wanted)
+                {
+                    *surface = DibSurface::create(wanted.0, wanted.1);
+                }
+                let Some(surface) = surface.as_ref() else {
+                    return;
+                };
+
+                let blanked = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        surface.bits(),
+                        surface.width as usize * surface.height as usize * 4,
+                    )
+                };
+                blanked.fill(0);
+
+                pin_chrome::paint_menu_popup(
+                    out,
+                    width as i32,
+                    &palette,
+                    &menu.popup,
+                    &menu.rows,
+                    menu.hover,
+                    surface,
+                    menu.dpi as f32 / 96.0,
+                );
+            });
+        }
+    }
 
     let dst_point = POINT {
         x: rect.left,
@@ -1156,6 +1361,17 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
 ) -> LRESULT {
     match msg {
         WM_LBUTTONDOWN => {
+            // With the menu up a press is the menu's before it is anything else's, and the drag
+            // below never starts under one (see `bubble_menu_press`).
+            if bubble_menu_is_open() {
+                if let (Some(cursor), Some(origin)) = (
+                    cursor_screen_point(),
+                    window_origin(hwnd).map(|rect| (rect.0, rect.1)),
+                ) {
+                    bubble_menu_press(hwnd, cursor.0 - origin.0, cursor.1 - origin.1);
+                }
+                return LRESULT(0);
+            }
             // Whether the bubble already had the keyboard when the hand landed: the first click
             // focuses a bubble nothing is in, and only a click on one already focused puts the
             // window back up — so a focused bubble stays up for the SPACE below to hold.
@@ -1190,12 +1406,24 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            // Where the pointer is *now*, read from the cursor rather than from the message: the
-            // coordinates a mouse message carries are measured in the window this drag moves.
-            drag_pin_bubble(hwnd);
-            LRESULT(0)
+            // The wash follows the pointer while the menu is up; a drag never starts under one.
+            if bubble_menu_is_open() {
+                bubble_menu_hover(hwnd);
+                LRESULT(0)
+            } else {
+                // Where the pointer is *now*, read from the cursor rather than from the message: the
+                // coordinates a mouse message carries are measured in the window this drag moves.
+                drag_pin_bubble(hwnd);
+                LRESULT(0)
+            }
         }
         WM_LBUTTONUP => {
+            // A release with the menu up ends no drag: the press it answers was the menu's, and
+            // the pointer the menu took stays taken until the menu goes.
+            if bubble_menu_is_open() {
+                drop_bubble_drag();
+                return LRESULT(0);
+            }
             let dragging = PIN_BUBBLE_DRAG
                 .lock()
                 .map(|mut drag| drag.take().is_some())
@@ -1219,14 +1447,16 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
         windows::Win32::UI::WindowsAndMessaging::WM_CAPTURECHANGED => {
             // A capture taken away is a drag that is over wherever the bubble stood: a window
             // that is not holding the pointer is not being carried by it, and the state is what
-            // the drag's own wait is ended by (see `carry_bubble_drag`).
+            // the drag's own wait is ended by (see `carry_bubble_drag`). A menu that held the
+            // pointer goes with it, or it would stand past the hand that left it.
             drop_bubble_drag();
+            close_bubble_menu(hwnd);
             LRESULT(0)
         }
         WM_RBUTTONUP => {
             // The bubble's own menu rather than an immediate close: what the hand chose is what
-            // the loop answers, the way a caption button is (see `show_bubble_menu`).
-            show_bubble_menu(hwnd);
+            // the loop answers, the way a caption button is (see `open_bubble_menu`).
+            open_bubble_menu(hwnd);
             LRESULT(0)
         }
         windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => {
@@ -1238,7 +1468,11 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
             // keyboard rather than by a press on it — the same hold a pin's own window answers
             // (see `toggle_pinned_by_key`). Only a film or a sound has one, and a repeat is a hand
             // resting on the key rather than another hold.
-            if wparam.0 as i32 == VK_SPACE.0 as i32 {
+            // Escape puts the menu away where it is up, and is nothing at all elsewhere.
+            if wparam.0 as i32 == VK_ESCAPE.0 as i32 && bubble_menu_is_open() {
+                close_bubble_menu(hwnd);
+                LRESULT(0)
+            } else if wparam.0 as i32 == VK_SPACE.0 as i32 {
                 if lparam.0 & KEY_REPEAT == 0 && bubble_space_toggles(current_media_type()) {
                     ask_pin(PinCommand::TogglePlayback);
                 }

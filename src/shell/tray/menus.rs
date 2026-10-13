@@ -391,7 +391,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Preview Types"),
     );
 
-    // Add the "Text Preview" submenu: the theme, size and Markdown mode a text preview is
+    // Add the "Text Preview" submenu: the size and Markdown mode a text preview is
     // painted with. What a text preview *is* rather than what it shows — the scrollbar, the
     // selection and the keys that copy it — is the pin's business rather than a setting's: a
     // text preview pinned with the key becomes one to work in (see the pin in `preview_window`).
@@ -462,13 +462,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     if let Ok(mut items) = TRAY_CUSTOM_THEMES.lock() {
         *items = listed;
     }
-
-    let _ = AppendMenuW(
-        text_menu,
-        MF_STRING | MF_POPUP,
-        theme_menu.0 as usize,
-        w!("Theme"),
-    );
 
     // Add the Font Size submenu, largest first: the steps a size can be picked
     // from, from the largest down to the smallest. A hand-edited size between these
@@ -573,6 +566,15 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         text_menu.0 as usize,
         w!("Text Preview"),
+    );
+
+    // The theme sits on the top menu rather than inside Text Preview: it is
+    // the chrome's own look rather than a text setting, beside what it themes.
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        theme_menu.0 as usize,
+        w!("Theme"),
     );
 
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
