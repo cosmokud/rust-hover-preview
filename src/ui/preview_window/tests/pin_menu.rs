@@ -140,7 +140,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
 
     let ends = end_of_file_rows();
     let labels: Vec<&str> = ends.iter().map(|row| row.label.as_str()).collect();
-    assert_eq!(labels, ["Pause", "Loop", "Continue"]);
+    assert_eq!(labels, ["Pause", "Loop", "Jump"]);
     let marked = ends
         .iter()
         .position(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet));
@@ -525,16 +525,16 @@ fn a_press_on_an_end_of_file_choice_sets_it_and_puts_the_menu_away() {
         panic!("the end-of-file flyout is up")
     };
 
-    // The middle of the flyout's `Continue` row, which is the end the pin is not
-    // playing by: Loop is on, so the press chooses Continue. The row is named by what it
+    // The middle of the flyout's `Jump` row, which is the end the pin is not
+    // playing by: Loop is on, so the press chooses Jump. The row is named by what it
     // says, and the band it is aimed with is the one it was laid out in (see
     // `flyout_row_point`).
-    let continue_row = flyout
+    let jump_row = flyout
         .rows
         .iter()
-        .position(|row| row.label == "Continue")
-        .expect("the end-of-file flyout lists Continue");
-    let (x, y) = flyout_row_point(flyout, continue_row);
+        .position(|row| row.label == "Jump")
+        .expect("the end-of-file flyout lists Jump");
+    let (x, y) = flyout_row_point(flyout, jump_row);
     assert!(
         unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
         "a hand on a row of the flyout is the menu's own"
@@ -543,7 +543,7 @@ fn a_press_on_an_end_of_file_choice_sets_it_and_puts_the_menu_away() {
     assert_eq!(
         CONFIG.lock().expect("the configuration").pin_mode_audio_end_of_file,
         PinEndOfFile::Continue,
-        "the press chose Continue, so the pin steps on at the end of a file now"
+        "the press chose Jump, so the pin steps on at the end of a file now"
     );
     if crate::config::config::AppConfig::config_path().is_some() {
         assert_eq!(
@@ -561,8 +561,8 @@ fn a_press_on_an_end_of_file_choice_sets_it_and_puts_the_menu_away() {
         marked
             .and_then(|index| rows.get(index))
             .map(|row| row.label.as_str()),
-        Some("Continue"),
-        "Continue is the end of file in force now"
+        Some("Jump"),
+        "Jump is the end of file in force now"
     );
     assert!(
         pinned_menu_geometry().is_none(),

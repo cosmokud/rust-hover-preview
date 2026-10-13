@@ -607,11 +607,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Video Preview"),
     );
 
-    // And the sound kind's own: the same `Loop` and `Pin Mode` rows, with a second `Seek`
-    // under `Pin Mode` beside them — where in a file a hovered sound starts as the `Seek`
-    // row of its own says, and where a *pinned* one does. Both are renamed from the old
-    // `Volume` menu's `Audio Seek` and `Pin Mode Audio Seek` because they sit under `Audio
-    // Preview` now rather than under `Volume` (see `pin_mode_audio_seek`).
+    // And the sound kind's own: the same `Loop` row and a `Seek` row of its own, with the
+    // `Pin Mode` submenu below them — where in a file a hovered sound starts as the `Seek`
+    // row says, and where a *pinned* one does, under `Pin Mode` beside the rest of a pinned
+    // sound's own rows. Both are renamed from the old `Volume` menu's `Audio Seek` and `Pin
+    // Mode Audio Seek` because they sit under `Audio Preview` now rather than under `Volume`
+    // (see `pin_mode_audio_seek`). `Pin Mode` is listed below the kind's own rows, so the
+    // settings a hovered sound plays by come before the ones only a pinned sound has.
     let audio_preview = CreatePopupMenu().unwrap();
     let _ = AppendMenuW(
         audio_preview,
@@ -625,6 +627,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         audio_loop,
         DEFAULT_AUDIO_LOOP,
     );
+    append_seek_menu_renamed(audio_preview, w!("Seek"), audio_seek);
     let audio_pin_mode = append_pin_mode_menu(
         audio_preview,
         ID_TRAY_AUDIO_SHUFFLE,
@@ -635,7 +638,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
     );
     append_pin_seek_menu_renamed(audio_pin_mode, w!("Seek"), pin_mode_audio_seek);
-    append_seek_menu_renamed(audio_preview, w!("Seek"), audio_seek);
     let _ = AppendMenuW(
         menu,
         MF_STRING | MF_POPUP,

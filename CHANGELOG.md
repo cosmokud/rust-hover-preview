@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **The pinned sound card's `End of File` choice is called `Jump`** — the word the tray's own `End of File` submenu lists the walk's next file under, so the card and the tray name the one choice alike; the setting in `config.ini` is unchanged (`continue`).
+- **`Audio Preview → Pin Mode` sits below the `Seek` row** — the rows a *hovered* sound plays by (`Volume`, `Loop`, `Seek`) come first, and the submenu holding a *pinned* sound's own rows comes after them, rather than standing between `Loop` and `Seek`.
+
+### Fixed
+
+- **A flyout that opens to the left of the pinned sound card's menu stands tight against it** — the flyout's panel is measured from its own rows, but the side it was placed on was answered in the room the placement reserves, so a panel narrower than that reserve stood a whole reserve of empty space between itself and the menu it came from. It now stands the same few pixels off the menu's own left edge that a flyout to its right stands off its right.
+
 ## [0.4.1] - 2026-10-14
 
 ### Added

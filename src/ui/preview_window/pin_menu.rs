@@ -178,7 +178,7 @@ const END_OF_FILE_CHOICES: [PinEndOfFile; 3] = [
 /// What each of the end-of-file choices is listed as: the words the tray lists
 /// the same three under, without the mark that menu puts on the default — the
 /// card's menu marks the one in force instead (see `end_of_file_rows`).
-const END_OF_FILE_LABELS: [&str; 3] = ["Pause", "Loop", "Continue"];
+const END_OF_FILE_LABELS: [&str; 3] = ["Pause", "Loop", "Jump"];
 
 /// The rows the End of File row's flyout holds: the three ends the pin can have, in the order
 /// the tray lists them in, with the one the pin plays by carrying its disc.
