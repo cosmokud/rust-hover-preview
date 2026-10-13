@@ -557,31 +557,16 @@ pub(super) fn toggle_pinned_playback(
 
     match current_media_type() {
         Some(MediaType::NativeVideo) => {
-            // **A film the engine has stopped at the end of is a film that has finished**, and
-            // playing on from the last frame it stands on plays that frame and ends the pass again at
-            // once — so the press takes it to its top first, which is what a play button over a
-            // finished film is for (see `answer_native_pass_end`).
-            //
-            // What says the film finished is this side's own hold at the film's own length, and not a
-            // reading of the engine: an engine's clock can go on reading the position a film was at
-            // for a moment after it has been taken to another second, and a press that read the end
-            // there would take a film it had just begun again back to its top a second time. The hold
-            // is the app's own word, and it cannot lag.
-            let held = transport.paused_at.unwrap_or(playhead);
-            let finished =
-                pin_duration(&transport).is_some_and(|length| length > 0.0 && held >= length);
-            if !playing && finished {
-                video_player::seek(0.0);
-            }
             video_player::set_paused(playing);
             update_pin_transport(|state| {
                 if playing {
                     state.held(playhead);
                 } else {
-                    // The engine's own position is what the bar is drawn at next, and a film this press
-                    // has taken home is drawn at the beginning it is at now: the second the hold was let
-                    // go of would otherwise be the end the film no longer stands at.
-                    state.released(if finished { 0.0 } else { playhead });
+                    // The engine reports its own position, so the second the hold began at is
+                    // only what the *bar* was drawn at and not what the file is at; re-basing
+                    // onto it is a no-op for the engine's own reading and is the whole of the
+                    // correction for the clock a player of this app's is measured by.
+                    state.released(playhead);
                 }
             });
         }
@@ -625,7 +610,16 @@ pub(super) fn toggle_pinned_playback(
                     // it for a player a press had paused, which a seek leaves paused.
                     mpv_ipc::seek_absolute(VIDEO_PID.load(Ordering::SeqCst), from);
                 }
-                if hold_the_player(false) {
+                // **A finished film on the route mpv is not is a player begun again rather than one
+                // told to go on**, and that is the whole of what a finished film leaves this press to
+                // decide: a key cannot take FFmpeg's player anywhere, so resuming the film that is
+                // standing at its own end plays the last frames of the file out of it and lets it
+                // close its own window — measured, and the band is a hole the player's window is the
+                // picture through. The pass the press asks for is therefore a new player at the top,
+                // which is the same relaunch a seek on that route is (see `restart_pinned_player`).
+                if finished && !mpv {
+                    restart_pinned_player(path, content, from, false);
+                } else if hold_the_player(false) {
                     update_pin_transport(|state| state.released(from));
                     // And the clock a pass is measured by moves onto the second the film is played
                     // from: a resumed film is a pass with its whole length still to run, and a

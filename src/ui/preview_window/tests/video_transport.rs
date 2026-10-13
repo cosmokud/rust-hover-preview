@@ -1016,6 +1016,73 @@ fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume()
     clear_restart_count();
 }
 
+/// The press over a film standing at its own end starts it again at the top on the route mpv is not.
+///
+/// FFmpeg's player can be told nothing by a key, so a press that resumed a film held at its own end
+/// would play the last frames of the file out of a player standing there and let it close its own
+/// window: the band is a hole that window is the picture through, so what is left is the desktop and
+/// a play button with nothing behind it (measured on the machine this was written on). The pass the
+/// press asks for on that route is therefore a player begun again at the top, which is the same
+/// relaunch a seek is for it (see `restart_pinned_player`).
+#[test]
+fn a_press_over_a_finished_ffplay_film_begins_it_again_at_the_top() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("finished-film.mkv");
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    clear_restart_count();
+    ffplay_window::clear_pause_posts();
+
+    // A film held at its own end, which is where the end of file that pauses leaves one the rewind
+    // could not take home (see `loop_ended_pinned_player`).
+    let mut finished = a_playing_pin(&film, content);
+    finished.transport.held(200.0);
+    finished.transport.started = None;
+    stand_pin(Some(finished));
+    let transport = pinned_playback_state().expect("a pin is up").2;
+    toggle_pinned_playback(&film, content, transport);
+
+    assert_eq!(
+        restart_count(),
+        1,
+        "the film is begun again rather than resumed where it stands"
+    );
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        0,
+        "and the player is never told to hold: a resume at the end of the file is the last frames of \
+         it played out of a player that then closes its own window"
+    );
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("the pin is up");
+    assert_eq!(
+        transport.started.map(|(_, from)| from),
+        Some(0.0),
+        "and the second it is begun at is the top of the file"
+    );
+    assert_eq!(transport.paused_at, None);
+    assert!(pin_is_playing(&transport));
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
 /// A wrap of a film this app is looping: mpv is sent back to the second down its pipe and set going
 /// there, and FFmpeg's film is begun again at it (see `video_loop_tick`).
 #[test]
@@ -1561,16 +1628,17 @@ fn the_end_of_file_that_pauses_is_left_to_the_rewind_where_it_can_take_the_film(
     }
 }
 
-/// The answer to a native film's end of pass, and the once-only writing of a hold.
+/// The answer to a native film's end of pass: the film taken home and held, or the walk asked for.
 ///
-/// The engine stops on the last frame of a film it was told to play once and says nothing more about
-/// it, so the bar is the only place a film that has finished can be told apart from one that is
-/// playing — `pin_playhead` and `pin_is_playing` read the hold rather than the engine. What must not
-/// happen is the hold being written again on every tick after it: a transition rewritten sixty times
-/// a second is a lock taken and an assertion re-asserted for as long as the pin is up, and a film
-/// whose length nothing has read has no second to be held at at all.
+/// The engine is the one player whose loop is its own — a film begun for a hover is given `Video →
+/// Loop` and the engine plays it round itself — so `End of File → Pause` on that route is the road
+/// mpv's film goes home by (see `pin_video_pauses_at_the_top`) written for a player with no pipe: the
+/// film is taken to its first frame and left standing there, and the press that plays it again is the
+/// plain resume of a held film rather than a seek against one that has stopped at the end of its
+/// file. `Continue` is the walk's next file, on the same margin, and the walk's own wait is what keeps
+/// the pin up while it is out.
 #[test]
-fn a_native_pass_that_ends_in_a_hold_writes_the_bar_down_once() {
+fn a_native_pass_end_takes_its_film_home_or_asks_for_the_next_one() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -1583,7 +1651,7 @@ fn a_native_pass_that_ends_in_a_hold_writes_the_bar_down_once() {
     let mut wait = None;
     assert!(
         answer_native_pass_end(NativePassEnd::Hold, &film, None, &mut wait),
-        "the end of a pass that pauses is answered where the film's own end is read"
+        "the end of a pass that pauses is answered here"
     );
     assert!(wait.is_none(), "a pause asks for no walk");
 
@@ -1592,30 +1660,14 @@ fn a_native_pass_that_ends_in_a_hold_writes_the_bar_down_once() {
         .expect("the pin is up");
     assert_eq!(
         transport.paused_at,
-        Some(200.0),
-        "the bar is held at the film's own length, which is where the engine stopped"
+        Some(0.0),
+        "with the bar held at the top the film has been taken to rather than at the end of the file"
     );
     assert!(!pin_is_playing(&transport));
-
     assert!(
-        !answer_native_pass_end(NativePassEnd::Hold, &film, None, &mut wait),
-        "and a tick after it has nothing left to write"
-    );
-
-    // A film whose length nothing has read has no second to be held at, and the button goes on
-    // claiming it — the corner the media engine's own reading is left with rather than a bar held
-    // somewhere arbitrary.
-    update_pin_transport(|transport| {
-        transport.paused_at = None;
-        transport.duration = None;
-    });
-    assert!(
-        !answer_native_pass_end(NativePassEnd::Hold, &film, None, &mut wait),
-        "and a film of no known length is not held at all"
-    );
-    assert_eq!(
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.transport.paused_at)),
-        Some(None)
+        transport.started.is_some(),
+        "and the clock a pass is measured by is left where it was: the engine's own position is what \
+         this bar is read from while the film is held"
     );
 
     // The end that steps on is the walk's: the session let go and the next file of the folder asked
@@ -1639,107 +1691,55 @@ fn a_native_pass_that_ends_in_a_hold_writes_the_bar_down_once() {
     stand_pin(previous_pin);
 }
 
-/// What a native film's own end of pass asks of the pin, from the two facts that decide it.
+/// What a native film's own pass asks of the pin, from the three facts that decide it.
 ///
-/// The engine is the one player that loops a film because it was told to, and it reports no end of
-/// one it is looping at all — so an ended pass is never a `Loop`'s: `Loop` is the engine playing the
-/// film round, `Continue` is the walk's next file, and `Pause` is the bar held on the film the engine
-/// has stopped on, which is the only thing that tells the bar the film is over (see
-/// `pinned_native_video_end`).
+/// The engine is the one player whose loop is its own (`Video → Loop` is what a film begun for a
+/// hover is given), so a `Loop` end of file is not this app's to answer at all; the other two are the
+/// ask the tick's own rewind makes of a film mpv is drawing, written for the route with no pipe — a
+/// film due home a tenth of a second before the end of its pass, while it is still playing, and no
+/// film this app is holding asked for anything.
 #[test]
-fn a_native_films_end_of_file_is_read_from_the_engines_own_end() {
+fn a_native_films_end_of_file_is_read_off_the_engines_own_clock() {
     assert_eq!(
-        native_pass_end(PinEndOfFile::Loop, true),
+        native_pass_end(PinEndOfFile::Loop, true, true),
         NativePassEnd::Nothing,
-        "a film the engine is looping never ends, so the end of file is not this reading's"
+        "a film the engine loops itself is not one this app answers the end of"
     );
     assert_eq!(
-        native_pass_end(PinEndOfFile::Continue, true),
+        native_pass_end(PinEndOfFile::Continue, true, true),
         NativePassEnd::Walk,
         "an end that steps on is the walk's next file"
     );
     assert_eq!(
-        native_pass_end(PinEndOfFile::Pause, true),
+        native_pass_end(PinEndOfFile::Pause, true, true),
         NativePassEnd::Hold,
-        "and an end that pauses is the bar held on the film the engine has stopped on"
+        "and an end that pauses is the film taken home and held there"
     );
     assert_eq!(
-        native_pass_end(PinEndOfFile::Continue, false),
+        native_pass_end(PinEndOfFile::Continue, true, false),
         NativePassEnd::Nothing,
-        "a pass that is still being played is not one whose end is answered"
+        "a pass with its margin still to run asks for nothing"
     );
-    assert_eq!(native_pass_end(PinEndOfFile::Pause, false), NativePassEnd::Nothing);
+    assert_eq!(native_pass_end(PinEndOfFile::Pause, true, false), NativePassEnd::Nothing);
+    assert_eq!(
+        native_pass_end(PinEndOfFile::Pause, false, true),
+        NativePassEnd::Nothing,
+        "and a film this app is holding is not taken home again"
+    );
 }
 
-/// The end of file the media engine is playing the film on screen under is the one that is on
-/// screen *now*, and not the one its session was begun with.
+/// The end of file that pauses takes an FFmpeg film home before it reaches its own end, on the same
+/// margin the loop's wrap and mpv's rewind are posted on.
 ///
-/// The engine is the one player this app can tell while its film runs, which is what it has to be:
-/// a film begun for a hover carries the hover's own answer — `Video → Loop`, on by default — and a
-/// pin adopts that session rather than beginning one of its own, so a pinned film whose end of file
-/// is a step on, or a stop, went on looping itself. The engine reported no end, `Continue` never
-/// reached its walk, and `Pause` had nothing to stop but a film that was already going round.
+/// The route under mpv is a player nothing of this app's can be told once it is going — a film a
+/// hover began carries FFmpeg's own `-loop 0`, because a pin begins no player of its own over one
+/// that is already there — so the road mpv's film goes home by is written for it as the one move it
+/// has: the player begun again at the film's first frame, *held* there, with the hold owed to the
+/// tick that finds the new window up (see `settle_pending_hold`). Left to reach its own end instead,
+/// such a film plays the last frames of its file out of a player standing at the end and closes its
+/// own window — measured, and the band is a hole that window is the picture through.
 #[test]
-fn a_pinned_native_films_loop_is_the_end_of_file_on_screen_now() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pin = take_pin_for_a_test();
-
-    let film = PathBuf::from("native-loop-film.mkv");
-    // The switch the film's session was begun under, which is the answer a hover gives it.
-    let _jumps = VideoJumps::set(true, PinEndOfFile::Continue);
-    stand_pin(Some(a_playing_pin(&film, (0, 0, 320, 240))));
-    clear_native_loop_told();
-
-    apply_native_video_loop(&film);
-    assert_eq!(
-        native_loop_told(),
-        Some(false),
-        "a pin that steps on at the end of a film is not one the engine may loop it for"
-    );
-
-    let _loops = VideoJumps::set(true, PinEndOfFile::Loop);
-    apply_native_video_loop(&film);
-    assert_eq!(
-        native_loop_told(),
-        Some(true),
-        "while a pin whose end of file is a loop is one the engine loops the film for"
-    );
-
-    // And a film with no pin in front of it is still played under the hover's own switch.
-    stand_pin(None);
-    apply_native_video_loop(&film);
-    assert_eq!(
-        native_loop_told(),
-        Some(true),
-        "a hovered film loops where the hover's own switch says so"
-    );
-    let _hover_off = VideoJumps::set(false, PinEndOfFile::Loop);
-    apply_native_video_loop(&film);
-    assert_eq!(
-        native_loop_told(),
-        Some(false),
-        "and plays its pass once where the switch is off"
-    );
-
-    stand_pin(previous_pin);
-}
-
-/// The end of file that pauses stops the film where it stands on every route the tick's rewind
-/// cannot take home, rather than beginning it again.
-///
-/// mpv alone is a player this app can take back to the first frame while it runs (see
-/// `pin_video_pauses_at_the_top`), and the route under it is a player nothing can be told once it is
-/// going: FFmpeg's player wraps to the beginning by itself where it was given FFmpeg's own `-loop 0`,
-/// which is what a *hover's* film is begun with and the pin keeps, because a pin does not begin a
-/// player of its own over a hover's. So a pass that ends in a hold is a hold of that player — the
-/// pause key the play button already posts, with the same fallback for a player with no window to
-/// post one through — and never a rewind: the tick's rewind answers a player it cannot command by
-/// ending it and beginning another one *playing* from zero (see `video_loop_tick`), which is a
-/// `Pause` that plays the film again, pass after pass.
-#[test]
-fn the_end_of_file_that_pauses_stops_a_players_film_where_it_stands() {
+fn the_end_of_file_that_pauses_takes_a_ffplay_film_home_and_holds_it() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -1754,7 +1754,6 @@ fn the_end_of_file_that_pauses_stops_a_players_film_where_it_stands() {
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     stand_pin(Some(a_playing_pin(&film, content)));
     let _jumps = VideoJumps::set(true, PinEndOfFile::Pause);
-    ffplay_window::clear_pause_posts();
     clear_restart_count();
 
     assert!(
@@ -1763,7 +1762,8 @@ fn the_end_of_file_that_pauses_stops_a_players_film_where_it_stands() {
     );
 
     // A film the pin took over from the hover is a player this app is looping itself — its clock is
-    // a record, and the tick reads it as a wrap that is due.
+    // a record, and the tick reads it as a wrap that is due — and the same record must be left
+    // exactly where it is: the pausing rewind is not this route's to give (see `video_loop_tick`).
     note_video_loop(101, &film, content, 0.0, Some(200.0));
     if let Ok(mut slot) = VIDEO_LOOP.lock() {
         if let Some(loop_) = slot.as_mut() {
@@ -1779,18 +1779,103 @@ fn the_end_of_file_that_pauses_stops_a_players_film_where_it_stands() {
         0,
         "which is the whole of the fault: a rewind here is a player begun again, playing"
     );
-
     if let Ok(mut slot) = VIDEO_LOOP.lock() {
         *slot = None;
     }
 
-    // And the end of the pass itself stops the film that is standing there, at the film's own end,
-    // with the bar held on it and the button turned back into a play button.
+    // A film with its margin still to run is not due home yet: a tenth of a second before the end of
+    // the file is where the move is made, and no earlier.
+    a_pass_that_has_run_out(Duration::from_secs(199));
+    let mut wait = None;
+    assert!(
+        !loop_ended_pinned_player(None, &mut wait, false),
+        "a film with a second of its pass still to run is left alone"
+    );
+    assert_eq!(restart_count(), 0, "and nothing is begun for it");
+
+    // And at the margin it is begun again at its first frame, held there.
     a_pass_that_has_run_out(Duration::from_secs(200));
+    assert!(
+        loop_ended_pinned_player(None, &mut wait, false),
+        "the last tenth of a second is where the film is taken home"
+    );
+    assert!(wait.is_none(), "a pause asks for no walk");
+    assert_eq!(
+        restart_count(),
+        1,
+        "FFmpeg's player cannot be taken anywhere while it runs: the film comes home as a player \
+         begun again at the top"
+    );
+
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("the pin is up");
+    assert_eq!(
+        transport.paused_at,
+        Some(0.0),
+        "with the bar held at the top the film was taken to rather than at the end it was at"
+    );
+    assert!(
+        transport.pending_hold,
+        "and the hold owed to the player whose window is not up yet, which the tick delivers"
+    );
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
+/// The end of file that pauses holds a film the rewind can never take home at the end it has already
+/// reached, rather than leaving the bar sweeping over it.
+///
+/// The road home is a tenth of a second wide, and a film shorter than that is never due home at all —
+/// every second of it is inside the margin, so a rewind asked for it would be posted the instant it
+/// began (see `video_launch::rewind_due`). What such a film is left with is `Pause`'s other half, the
+/// one this reading answers: the film has run out, the player is still up — FFmpeg's player wraps to
+/// the beginning by itself where it was given FFmpeg's own `-loop 0`, which is what a *hover's* film
+/// is begun with and the pin keeps, because a pin does not begin a player of its own over a hover's —
+/// so the player is held where it stands by the pause key the play button already posts, with the
+/// fallback for a player with no window to post one through, and the bar is held at the film's end
+/// with the play button a finished film is owed.
+#[test]
+fn the_end_of_file_that_pauses_stops_a_film_the_rewind_cannot_take_home() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_live_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("live-pausing-film.mkv");
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    let mut tiny = a_playing_pin(&film, content);
+    tiny.transport.duration = Some(0.05);
+    stand_pin(Some(tiny));
+    let _jumps = VideoJumps::set(true, PinEndOfFile::Pause);
+    ffplay_window::clear_pause_posts();
+    clear_restart_count();
+
+    assert!(
+        !pin_video_pauses_at_the_top(&film),
+        "a rewind this app can only answer with a player begun again at zero is not this route's"
+    );
+
+    // The pass has run out, and the film is one no rewind can be posted for: the hold is this
+    // reading's, and the player is told what to hold by the key the play button posts.
+    a_pass_that_has_run_out(Duration::from_millis(50));
     let mut wait = None;
     assert!(
         loop_ended_pinned_player(None, &mut wait, false),
-        "the end of a film whose player cannot be told to pause is answered here"
+        "the end of a film whose player cannot be taken home is answered here"
     );
     assert!(wait.is_none(), "a pause asks for no walk");
     assert_eq!(
@@ -1804,7 +1889,7 @@ fn the_end_of_file_that_pauses_stops_a_players_film_where_it_stands() {
         .expect("the pin is up");
     assert_eq!(
         transport.paused_at,
-        Some(200.0),
+        Some(0.05),
         "the bar stands at the film's own end rather than sweeping past it"
     );
     assert!(!pin_is_playing(&transport));

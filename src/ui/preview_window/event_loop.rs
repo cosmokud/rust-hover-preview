@@ -573,17 +573,29 @@ pub fn run_preview_window() {
                     }
                 }
 
+                // Whether a file is already on its way into the pin, which is what says the media
+                // behind the window is not a window onto nothing (see `pin_media_is_alive`), and what
+                // says an end of file has already been answered (see `loop_ended_pinned_player`).
+                //
+                // **The wait for a walk's answer is an advance in flight like any other**, and leaving
+                // it out is what closed the pin of a film the media engine had just stopped at its end:
+                // the session is let go when the walk is asked for, the swap that replaces it is a
+                // folder read away, and a pin whose media is read as *gone* in between is a window that
+                // comes down before the next file can land.
+                let a_file_is_on_its_way = pin_walk.is_some()
+                    || pin_load.is_some()
+                    || pin_walk_wait.is_some()
+                    || pin_swap_hold.is_some()
+                    || pin_awaiting_box.is_some()
+                    || pin_held_pick.is_some();
+
                 if let Some(walk) = pin_command_request(
                     &mut pin_request,
                     &mut pin_walk_wait,
                     &mut audio_started,
                     &mut audio_start_offset,
                     &mut audio_paused,
-                    pin_walk.is_some()
-                        || pin_load.is_some()
-                        || pin_swap_hold.is_some()
-                        || pin_awaiting_box.is_some()
-                        || pin_held_pick.is_some(),
+                    a_file_is_on_its_way,
                     pin_walk_anchor(&pin_walk, &pin_walk_of_current),
                 ) {
                     pin_walk = Some(walk);
@@ -1089,19 +1101,13 @@ pub fn run_preview_window() {
                             engine_failed = Some(failing);
                         }
                     }
-                    // A film the media engine plays for the pin ends the same way a sound the engine
-                    // plays does, and one place reads its end because the readings are one reading:
-                    // the walk's next file where the end of file steps on, or the bar held where a
-                    // film the engine has stopped on stands (see `pinned_native_video_end`).
+                    // A film the media engine plays for the pin ends the way a sound the engine plays
+                    // does, and one place reads its end because the readings are one reading: the
+                    // walk's next file where the end of file steps on, or the film taken home and held
+                    // where it pauses — both of them a tenth of a second before the end of the pass,
+                    // off the engine's own clock (see `pinned_native_video_end`).
                     if media.media_type.is_native_video() {
                         if let Some(path) = current_show.as_ref().and_then(self::show_path) {
-                            // The engine is the one player this app can tell what to do at the end of
-                            // the film while it runs, and the film on screen is the one the answer
-                            // is about: a pin adopts a hover's session rather than beginning one of
-                            // its own, so a pin's end of file has to be handed over here rather than
-                            // settled at a launch (see `apply_native_video_loop`).
-                            apply_native_video_loop(path);
-
                             answer_native_pass_end(
                                 pinned_native_video_end(path),
                                 path,
