@@ -15,9 +15,9 @@ That read happens locally, only for the hovered item, and only for preview
 types you leave enabled:
 
 - **Images:** decoded on your PC.
-- **Videos:** measured and played on your PC. Where you have installed FFmpeg,
-  that is the FFmpeg tools (`ffprobe`, `ffmpeg`, `ffplay`), and the file path is
-  passed to those local programs as a command-line argument. Where you have not,
+- **Videos:** measured and played on your PC. Where you have installed mpv it plays through mpv, and where you have installed FFmpeg it is measured with
+  `ffprobe` and played with `ffplay`; the file path is passed to those local
+  programs as a command-line argument. Where you have neither,
   it is the media engine built into Windows, which decodes the video inside this
   app's own process — nothing is started and no path leaves the app.
 - **PDFs:** first page rendered with the PDF engine built into Windows.
@@ -105,9 +105,7 @@ here, and **Cancel** does nothing at all. A download that does not arrive, or th
 is not a whole program, is deleted and reported; nothing is installed without
 **Auto**.
 
-A run makes one check as it starts, and at most one more an hour after that, so a
-session you leave alone asks nothing beyond that first check. There is no
-separate switch for the check yet.
+A run makes one check as it starts; further checks happen when the menu is opened, at most once every six hours, so a session you leave alone asks nothing beyond that first check. Turning **Check for Updates** off stops all of it.
 
 ## What is stored on your PC
 
@@ -119,6 +117,8 @@ separate switch for the check yet.
 | `%TEMP%\rust-hover-preview\` | Transient renders — one scratch file an Office export is written to before it is read back, one copy of a long-path or downloaded document, the folder a conversion is staged in — and the installer of an update you clicked, while it installs. Each is deleted the moment it is read, and leftovers are deleted on the next launch. | Delete the folder; exit the app first. |
 | `%TEMP%\rust-hover-preview\document\` | The page an engine has drawn for each document you hovered that an engine had to draw: the PDF Office exported, a slide's image, a picture of a workbook, or the PDF a conversion produced. Each is named for the document, the version of it and the engine — so it holds a page of that document's own **content**, and is worth treating the way you would the file. Kept so the document is not drawn again, given up oldest-read first past the **Cache → Document** size, and never removed at startup. | Set **Cache → Document** to `0 MB`, which keeps nothing between hovers; or delete the folder. Windows may clear the temp folder itself at any time. |
 | `%TEMP%\rust-hover-preview\image\` | The picture an installed image converter (ImageMagick) developed for each raw or picture you hovered that it had to develop, at the preview size it was developed for. Each is named for the file, the version of it and the engine — so it holds a picture of that file's own **content**, and is worth treating the way you would the file. Kept so the file is not developed again, given up oldest-read first past the **Cache → Image (Disk)** size, and never removed at startup. | Set **Cache → Image (Disk)** to `0 MB`, which keeps nothing between hovers; or delete the folder. Windows may clear the temp folder itself at any time. |
+| `%TEMP%\rust-hover-preview\audio\` | Where each sound was last left, for **Volume → Audio Seek → Remember**: one line a sound holding a hash of its path, the seconds it had played, and when it was left — positions only, no names and no audio. Survives a restart, which is the point of it; nothing is written in any other seek mode. | Pick another Audio Seek mode to stop adding positions, or delete the folder. Windows may clear the temp folder itself at any time. |
+| `%TEMP%\rust-hover-preview\general\` | Copies of a film's text subtitle tracks and the fonts they name, made so the player draws them without streaming the whole container — subtitle text of films you hovered, worth treating the way you would the film. Given up least-recently-used first past the **Cache → General (Disk)** size. | Set **Cache → General (Disk)** to `0 MB`, which extracts nothing (embedded-subtitle films play without them); or delete the folder. Windows may clear the temp folder itself at any time. |
 | `%LOCALAPPDATA%\rust-hover-preview\` | Aside from the pages above, everything the engines need to run: the browser profile a run draws font and SVG previews in — which includes the small HTML page the preview is drawn in, and, for a face lifted out of a font collection, the one face written out for the browser to read — the records of the engine processes a run started, and the LibreOffice profile and one-paragraph stub document the app's own engine runs under. The profile of a run that is over is deleted by the next launch. | Delete the folder; exit the app first. |
 | RAM only (never written to disk) | Decoded image frames (default 64 MB), archive listings, failure latches, the size a drawn page is placed by, the parsed text of a document and its styled lines. All keyed by path plus file version, evicted when full, gone on exit. | Set **Cache → Image (RAM)** to `0 MB` to keep nothing between hovers; quit to drop everything. |
 
@@ -146,8 +146,8 @@ run during normal use.
   sheet via `CopyPicture`, reads that bitmap, then clears the clipboard so
   Excel can quit cleanly. That means hovering a spreadsheet can replace
   whatever you had copied — expected side effect, local only.
-- **External processes:** only `ffplay`/`ffprobe`/`ffmpeg` (your install, and
-  only when it is installed), your Office apps (`WINWORD`/`EXCEL`/`POWERPNT`),
+- **External processes:** only `mpv` and `ffplay`/`ffprobe`/`ffmpeg` (your installs, and
+  only when installed), your Office apps (`WINWORD`/`EXCEL`/`POWERPNT`),
   and the WebView2 browser Windows ships with (`msedgewebview2.exe`) for SVG
   previews and, under **Render HTML**, for running a `.html` page. Office is
   started hidden unless you already had that app open — your open instance is
@@ -167,7 +167,7 @@ run during normal use.
 ## Third parties on your machine
 
 Your file content is handed to these local programs only, never over a
-network: your Microsoft Office (Office previews), your FFmpeg binaries (video
+network: your Microsoft Office (Office previews), mpv and your FFmpeg binaries (video
 previews, if you have them), the Windows media engine and the Windows PDF engine
 (video and PDF previews), and the WebView2 runtime (SVG previews, and a `.html`
 page under **Render HTML** — given with all network access denied: every
