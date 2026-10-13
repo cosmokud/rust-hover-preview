@@ -236,10 +236,20 @@ pub(super) fn mpv_args(
         args.push("--sub-auto=no".to_string());
     }
 
-    // The film pauses on its last frame rather than exiting, which is what the app's own loop is
+    // The film stops on its last frame rather than exiting, which is what the app's own loop is
     // for: nothing this app can observe would say a pass had ended otherwise, so the tick that
     // measures the film off its own clock is what begins it again (see `video_loop_tick`).
     args.push("--keep-open=yes".to_string());
+
+    // **And it *stops* there rather than pausing there.** mpv's default end of file sets `pause`,
+    // which makes the press that plays a finished film again a seek *and* an unpause: the seek is
+    // answered against a player that is paused, and the picture blinks out for the moment the
+    // restart takes before the film is playing again. That is the one visible difference between
+    // that press and the loop's wrap, which seeks a film that is playing (see
+    // `toggle_pinned_playback` and `video_loop_tick`). A film that is stopped and not paused is
+    // resumed by the seek alone — mpv's own answer for this option — and the end of a pass is read
+    // off this app's clock either way, so nothing here wants the player paused (see `pass_ended`).
+    args.push("--keep-open-pause=no".to_string());
 
     // A player begun at the beginning is given no `--start` rather than `--start=0`, so that
     // nothing is asked for that would be answered with the position it is already at.
@@ -1373,6 +1383,7 @@ mod tests {
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
+                "--keep-open-pause=no",
                 "--volume=80",
                 IPC_ARG,
             ],
@@ -1452,6 +1463,7 @@ mod tests {
                 "--sid=no",
                 "--sub-auto=no",
                 "--keep-open=yes",
+                "--keep-open-pause=no",
                 "--volume=100",
                 IPC_ARG,
             ],
@@ -1492,6 +1504,7 @@ mod tests {
                 "--hwdec=no",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
+                "--keep-open-pause=no",
                 "--volume=50",
                 IPC_ARG,
             ],
@@ -1532,6 +1545,7 @@ mod tests {
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
+                "--keep-open-pause=no",
                 "--aid=no",
                 IPC_ARG,
             ],
@@ -1581,6 +1595,7 @@ mod tests {
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
+                "--keep-open-pause=no",
                 "--volume=100",
                 "--af=lavfi=[volume=2.5000]",
                 IPC_ARG,
@@ -1620,6 +1635,7 @@ mod tests {
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
+                "--keep-open-pause=no",
                 "--start=12.500",
                 "--volume=100",
                 IPC_ARG,
@@ -1671,6 +1687,7 @@ mod tests {
                     "--hwdec=auto",
                     "--sub-auto=fuzzy",
                     "--keep-open=yes",
+                    "--keep-open-pause=no",
                     "--volume=100",
                     IPC_ARG,
                 ],
@@ -1754,6 +1771,7 @@ mod tests {
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
+                "--keep-open-pause=no",
                 "--volume=100",
                 IPC_ARG,
             ],
@@ -1816,6 +1834,7 @@ mod tests {
                 "--hwdec=auto",
                 "--sub-auto=fuzzy",
                 "--keep-open=yes",
+                "--keep-open-pause=no",
                 "--volume=100",
                 IPC_ARG,
             ],
