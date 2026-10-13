@@ -366,6 +366,27 @@ pub(super) fn forget_video_loop(pid: u32) {
     }
 }
 
+/// Move the loop's clock onto the moment the player's window came up, which is when the film began
+/// playing rather than when its process was spawned.
+///
+/// The clock is started at the spawn because that is the one fact a launch has, and the film is a
+/// good part of a second behind it: the file is opened, the first frame is decoded and the window is
+/// made (measured: mpv 0.41.0 on this machine is 0.2–0.4s from the process to its first frame with
+/// `--hwdec=auto`, and that is before there is any window to put up at all). A clock running ahead
+/// of the picture reaches the end of the pass early, and the rewind is posted a tenth of a second
+/// before the end *it* measures — so the film pays that startup time off its tail on every pass (see
+/// `rewind_due`).
+///
+/// The pid guard is this file's usual one: a window coming up for a player that has already been
+/// replaced is not a clock for the player that took its place.
+pub(super) fn rebase_video_loop_clock(pid: u32) {
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        if let Some(loop_) = slot.as_mut().filter(|loop_| loop_.pid == pid) {
+            loop_.at = Instant::now();
+        }
+    }
+}
+
 /// What a tick does about the loop of a player this app is looping itself.
 pub(super) enum VideoLoopAction {
     /// The film is playing on and is nowhere near its end.
@@ -457,6 +478,16 @@ pub(super) fn video_loop_tick(playing: bool) -> bool {
             if video_route(&path) == VideoRoute::Mpv
                 && mpv_ipc::seek_absolute(loop_.pid, seconds)
             {
+                // **And it is set going in the same breath, which is the half a seek cannot do.**
+                // A film that has reached its end is *paused* there (`--keep-open=yes`, see
+                // `mpv_args`), and a seek is a position for that player rather than a new pass: mpv
+                // keeps the pause, and says so in its own log — `playback restart complete @
+                // 0.000000, audio=playing, video=playing (paused)` (measured on mpv 0.41.0 down
+                // this app's own pipe). So a wrap that lands a moment after the pass has ended is a
+                // film standing at its first frame, silent and going nowhere, until the user presses
+                // pause and play at it. The tick only rewinds a film that is playing (see
+                // `video_loop_action`), so playing is what it is owed back.
+                mpv_ipc::set_paused(loop_.pid, false);
                 loop_.from = seconds;
                 loop_.at = Instant::now();
                 return true;
