@@ -695,7 +695,7 @@ fn a_loop_is_begun_again_from_the_beginning_and_carries_what_the_relaunch_needs(
             path,
             content,
             seconds,
-        } = video_loop_action(&looped, true)
+        } = video_loop_action(&looped, true, true)
         else {
             panic!(
                 "a film of {duration}s within a tenth of a second of its end has to be begun \
@@ -746,7 +746,7 @@ fn a_held_film_is_neither_begun_again_nor_left_with_a_clock_that_ran_on() {
 
     assert!(
         matches!(
-            video_loop_action(&looped, false),
+            video_loop_action(&looped, false, true),
             VideoLoopAction::Held
         ),
         "a film a twentieth of a second from its end, held, must not be begun again underneath \
@@ -756,11 +756,40 @@ fn a_held_film_is_neither_begun_again_nor_left_with_a_clock_that_ran_on() {
 
     assert!(
         matches!(
-            video_loop_action(&looped, true),
+            video_loop_action(&looped, true, true),
             VideoLoopAction::Rewind { .. }
         ),
         "and the very same film playing *is* due, so the refusal above is about the hold and not \
              about a decision that always says no"
+    );
+}
+
+/// A film the jump on screen says is not to go round is not begun again, whatever the clock under
+/// it says — which is the half of a pinned loop mpv has no other road for.
+///
+/// The jump is asked at the tick rather than remembered with the record, and it has to be, because
+/// the record is made where a player is begun: mpv is begun once by the *hover* and kept when the
+/// film is pinned, so a film the hover played once under its own jump is one the pin's jump has to
+/// be able to loop — and one the hover was looping is one a pin's step, or a switch that is off,
+/// has to be able to leave alone at the end (see `pin_video_loops`).
+#[test]
+fn a_film_the_jump_does_not_loop_is_left_to_its_own_end() {
+    let looped = VideoLoop {
+        pid: 1,
+        path: PathBuf::from("film.mkv"),
+        content: (10, 20, 410, 320),
+        from: 7.95,
+        duration: Some(8.0),
+        at: Instant::now() - Duration::from_millis(95),
+    };
+
+    assert!(
+        matches!(
+            video_loop_action(&looped, true, false),
+            VideoLoopAction::CarryOn
+        ),
+        "a film within a tenth of a second of its end, whose own jump is a step or off, is left \
+         where it is: beginning it again would undo the jump the film on screen is played under"
     );
 }
 

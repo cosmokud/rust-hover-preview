@@ -416,7 +416,7 @@ pub(super) fn start_video_playback(
             player,
             (x, y, x + width, y + height),
             start,
-            video_launch::loop_is_ours(seeked) && loop_,
+            video_launch::loop_is_ours(seeked),
         );
     }
 
@@ -504,11 +504,11 @@ fn start_mpv_video_playback(
         &child,
         (x, y, x + width, y + height),
         start,
-        // mpv's loop is always this app's to give — it pauses on its last frame rather
-        // than exiting — so the clock is kept only where the jump says the film goes
-        // round: a film that is not to be looped is left paused at its end (see
-        // `video_loop_tick`).
-        pin_video_loops(path),
+        // mpv's loop is always this app's to give — it pauses on its last frame rather than
+        // exiting — so the clock is kept for every film mpv is begun with, whatever the jump says
+        // at the launch: the jump is asked when the end comes, which is the only way a film the
+        // *hover* played once can be looped by the pin it becomes (see `video_loop_action`).
+        true,
     );
 
     Some(child)
@@ -524,6 +524,12 @@ fn start_mpv_video_playback(
 /// ending, and a tier being let go of is not its to receive (see `engine_processes`) — and the
 /// loop is clocked from here, where the loop is this app's to give rather than the player's own.
 ///
+/// **`our_loop` is whether the loop of this player is this app's to give, and not whether it is
+/// going round.** The jump is read at the tick instead, which is what lets a film begun for a hover
+/// be looped — or stopped — by the pin it becomes: mpv is begun once and kept, while FFmpeg's
+/// player wraps to the beginning by itself only where it was begun at one, so that half stays a
+/// fact of the launch (see `loop_is_ours` and `pin_video_loops`).
+///
 /// The clock starts at the second the player was actually begun at and not at the moment the
 /// process appeared: the header is read before the window is up, and a film of a few hundred
 /// megabytes spends a good part of a second in there. The box goes in beside it because a rewind
@@ -536,13 +542,13 @@ fn note_player_started(
     player: &PlayerProcess,
     content: ScreenRegion,
     start: f64,
-    own_loop: bool,
+    our_loop: bool,
 ) {
     let pid = player.id();
     set_noactivate_for_process(pid, image);
     engine_processes::record_player(image, pid);
 
-    if own_loop {
+    if our_loop {
         note_video_loop(pid, path, content, start, video_duration(path));
     } else {
         forget_video_loop(pid);

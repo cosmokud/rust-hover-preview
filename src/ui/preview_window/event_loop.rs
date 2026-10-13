@@ -938,8 +938,16 @@ pub fn run_preview_window() {
             // clock would keep counting up under the hand, and a film held for a minute near its end
             // would be past its end — and so rewound — the instant it was let go of (see
             // `video_loop_action`).
-            if current_video_path.is_some() {
-                let _ = video_loop_tick(pin_is_playing_current());
+            //
+            // **And it is asked of a pinned film as well as of a hovered one, and of the jump that
+            // film is played under rather than the one it was begun under.** A pin's file is a film
+            // this app gives the loop to just as a hover's is, and for mpv — the one player a
+            // take-up does not begin again — this tick is the only road its loop has: the clock was
+            // noted for the player the *hover* began, so reading the jump here is what lets
+            // `Pin Mode Jump → Loop` loop a film the hover was playing once, and a pin's step or a
+            // switch that is off stop one the hover was looping (see `pin_video_loops`).
+            if let Some(film) = current_video_path.clone().or_else(pinned_path) {
+                let _ = video_loop_tick(pin_is_playing_current(), pin_video_loops(&film));
             }
 
             // A pin that still believes it holds the keyboard, and that Windows says does not, is
