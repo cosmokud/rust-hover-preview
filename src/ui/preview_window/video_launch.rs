@@ -242,13 +242,12 @@ pub(super) fn mpv_args(
     args.push("--keep-open=yes".to_string());
 
     // **And it *stops* there rather than pausing there.** mpv's default end of file sets `pause`,
-    // which makes the press that plays a finished film again a seek *and* an unpause: the seek is
-    // answered against a player that is paused, and the picture blinks out for the moment the
-    // restart takes before the film is playing again. That is the one visible difference between
-    // that press and the loop's wrap, which seeks a film that is playing (see
-    // `toggle_pinned_playback` and `video_loop_tick`). A film that is stopped and not paused is
-    // resumed by the seek alone — mpv's own answer for this option — and the end of a pass is read
-    // off this app's clock either way, so nothing here wants the player paused (see `pass_ended`).
+    // and a pause is not a state a seek clears: the rewind this app gives its own loop is a seek and
+    // the line that settles it (`video_loop_tick`), so both lines would have to land for a pass to be
+    // taken back and left in the state its end of file asks for. A film that stops instead of pausing
+    // is begun again by the seek alone — mpv's own answer for this option — which leaves that second
+    // line a settling rather than the only thing that decides; the end of a pass is read off this
+    // app's clock either way (see `pass_ended`).
     args.push("--keep-open-pause=no".to_string());
 
     // A player begun at the beginning is given no `--start` rather than `--start=0`, so that
