@@ -44,10 +44,11 @@ use super::ids::{
 use super::submenus::{
     append_afk_timer_menu, append_audio_scale_menu, append_avoid_menu,
     append_background_menu, append_bitmap_scale_menu, append_codecs_menu,
-    append_document_scale_menu, append_end_of_file_menu, append_engine_idle_menu,
+    append_document_scale_menu, append_engine_idle_menu,
     append_labeled_item, append_loop_item,
-    append_office_engine_menu, append_shuffle_item,
-    append_pin_nav_menu, append_pin_seek_menu_renamed, append_seek_menu_renamed, append_tick_menu,
+    append_office_engine_menu,
+    append_pin_mode_menu, append_pin_nav_menu, append_pin_seek_menu_renamed,
+    append_seek_menu_renamed, append_tick_menu,
     append_video_engine_menu, cache_size_label,
     decode_budget_label, default_label, pin_minimize_label, pin_update_label,
     remember_volume_label,
@@ -368,6 +369,278 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         types_menu.0 as usize,
         w!("Preview Types"),
+    );
+
+    // Add the "Video Preview" and "Audio Preview" submenus above `Text Preview`: each
+    // kind's own place for what its previews are like — the level it is heard at, whether a
+    // hovered one goes round, what a *pinned* one does, and where in a file a sound starts —
+    // so a film's settings and a sound's are two menus rather than one (see
+    // `append_loop_item` and `append_pin_mode_menu`).
+    //
+    // The `Video` and `Audio` halves the old `Volume` menu held are the `Volume` rows
+    // inside these: the video's old rows renamed `Volume`, the sound's the same, with
+    // the sound's `Audio Seek` renamed `Seek` and its `Pin Mode Audio Seek` renamed `Seek`
+    // too, inside `Pin Mode` beside the rest of a pinned sound's own rows.
+    let (
+        video_volume,
+        audio_volume,
+        audio_seek,
+        pin_mode_audio_seek,
+        video_loop,
+        audio_loop,
+        video_shuffle,
+        audio_shuffle,
+        pin_video_end_of_file,
+        pin_audio_end_of_file,
+    ) = CONFIG
+        .lock()
+        .map(|c| {
+            (
+                c.video_volume,
+                c.audio_volume,
+                c.audio_seek,
+                c.pin_mode_audio_seek,
+                c.video_loop,
+                c.audio_loop,
+                c.pin_mode_video_shuffle,
+                c.pin_mode_audio_shuffle,
+                c.pin_mode_video_end_of_file,
+                c.pin_mode_audio_end_of_file,
+            )
+        })
+        .unwrap_or((
+            DEFAULT_VIDEO_VOLUME,
+            DEFAULT_AUDIO_VOLUME,
+            DEFAULT_AUDIO_SEEK,
+            DEFAULT_PIN_MODE_AUDIO_SEEK,
+            DEFAULT_VIDEO_LOOP,
+            DEFAULT_AUDIO_LOOP,
+            DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
+            DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+            DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
+            DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+        ));
+
+    let volume_menu = CreatePopupMenu().unwrap();
+    let append_levels = |levels: HMENU, current: u32, base: u16, default: u32| {
+        // Largest first, which is the order a level is looked for in: a pointer crossing a folder
+        // of sounds is most often turning one down, and the whole of the scale standing at the top
+        // is what the rest of the list is read against. The id a level is listed at stays the
+        // table's own position — only the order the items are appended in is turned round — so a
+        // click still names its level by the position it holds in `VOLUME_CHOICES` (see
+        // `set_audio_volume`).
+        for (index, level) in VOLUME_CHOICES.iter().enumerate().rev() {
+            let flags = MF_STRING
+                | if current == *level {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                };
+
+            append_labeled_item(
+                levels,
+                flags,
+                base + index as u16,
+                &default_label(&format!("{level}%"), *level == default),
+            );
+        }
+    };
+
+    // Each half carries one row the levels do not answer, and it sits above them: the loudness a file's
+    // playing is measured to. A level is asked of the hover and this is asked of the file, and the
+    // two are scaled into one another — what the file's own measured loudness is brought to is one
+    // level, and the level under it is how much of that is heard (see `Normalize`). Both halves are
+    // offered it because both can be heard; they start where they start, the way their levels do.
+    let (normalize_audio, normalize_video) = CONFIG
+        .lock()
+        .map(|config| (config.normalize_volume, config.normalize_video_volume))
+        .unwrap_or((DEFAULT_NORMALIZE_VOLUME, DEFAULT_NORMALIZE_VIDEO_VOLUME));
+    // Whether a level turned on a pin is kept, asked of the configuration rather than kept beside
+    // the switch that reads it: the two rows above the levels are one about the file and one about
+    // the level, and neither is a level (see `remember_audio_volume`).
+    let (remember_audio, remember_video) = CONFIG
+        .lock()
+        .map(|config| (config.remember_audio_volume, config.remember_video_volume))
+        .unwrap_or((DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME));
+    // Whether a film's own subtitle tracks are probed for and copied out at all,
+    // read the same way the two switches above the levels are: a switch about a
+    // film's picture rather than a level of the list under it, so it is a row of
+    // the `Video` half, at its top (see `video_subtitles`).
+    let video_subtitles = CONFIG
+        .lock()
+        .map(|config| config.video_subtitles)
+        .unwrap_or(DEFAULT_VIDEO_SUBTITLES);
+    // And the engine that row is named for: the configured pick, since the tray is never handed a
+    // file to ask a route about, and the menu is built again on every open, so the pick read here
+    // is the pick in force (see `subtitles_label`).
+    let video_engine = CONFIG
+        .lock()
+        .map(|config| config.video_engine)
+        .unwrap_or(DEFAULT_VIDEO_ENGINE);
+    // Asked again here for the reason the `Codecs` rows are asked again: a machine that has just
+    // been given FFmpeg is answered from the machine rather than from the hover that cached it
+    // (see `codecs::refresh`).
+    refresh_codecs();
+    let normalize_available = codecs::normalize_available();
+
+    // The two rows the levels do not answer, above them: the loudness a file's playing is measured to,
+    // and whether a level turned on a pin is kept. The second is never greyed — it asks about this
+    // app's own knob rather than about FFmpeg, so it acts on a machine that has no FFmpeg at all.
+    let append_switches =
+        |levels: HMENU, normalize: bool, normalize_id: u16, remember: bool, remember_id: u16| {
+            let _ = AppendMenuW(
+                levels,
+                MF_STRING
+                    | if normalize && normalize_available {
+                        MF_CHECKED
+                    } else {
+                        MF_UNCHECKED
+                    }
+                    | if normalize_available {
+                        MF_UNCHECKED
+                    } else {
+                        // A machine without FFmpeg has nothing that measures a loudness or applies
+                        // one: the
+                        // row is shown as what it is there — a switch that cannot act — rather than as a
+                        // click that would do nothing (see `codecs::normalize_available`).
+                        MF_GRAYED
+                    },
+                normalize_id as usize,
+                w!("Normalize (Expensive)"),
+            );
+            append_labeled_item(
+                levels,
+                MF_STRING | if remember { MF_CHECKED } else { MF_UNCHECKED },
+                remember_id,
+                remember_volume_label(),
+            );
+        };
+
+    let video_levels = CreatePopupMenu().unwrap();
+    // The film's own row, at the top of the half: whether its own subtitle
+    // tracks are probed for and copied out at all — a switch about a film's
+    // picture rather than a level of the list under it, which is why it is a
+    // row of the `Video` half alone and not the sound's (see `video_subtitles`). What it is
+    // called is the engine's business rather than one cost for all three (see
+    // `subtitles_label`).
+    append_labeled_item(
+        video_levels,
+        MF_STRING | if video_subtitles { MF_CHECKED } else { MF_UNCHECKED },
+        ID_TRAY_VIDEO_SUBTITLES,
+        &subtitles_label(video_engine, VideoEngine::Mpv.installed()),
+    );
+    append_switches(
+        video_levels,
+        normalize_video,
+        ID_TRAY_NORMALIZE_VIDEO_VOLUME,
+        remember_video,
+        ID_TRAY_REMEMBER_VIDEO_VOLUME,
+    );
+    let _ = AppendMenuW(video_levels, MF_SEPARATOR, 0, PCWSTR::null());
+    append_levels(
+        video_levels,
+        video_volume,
+        ID_TRAY_VIDEO_VOLUME_BASE,
+        DEFAULT_VIDEO_VOLUME,
+    );
+
+    let audio_levels = CreatePopupMenu().unwrap();
+    append_switches(
+        audio_levels,
+        normalize_audio,
+        ID_TRAY_NORMALIZE_VOLUME,
+        remember_audio,
+        ID_TRAY_REMEMBER_VOLUME,
+    );
+    let _ = AppendMenuW(audio_levels, MF_SEPARATOR, 0, PCWSTR::null());
+    append_levels(
+        audio_levels,
+        audio_volume,
+        ID_TRAY_AUDIO_VOLUME_BASE,
+        DEFAULT_AUDIO_VOLUME,
+    );
+
+    let _ = AppendMenuW(
+        volume_menu,
+        MF_STRING | MF_POPUP,
+        video_levels.0 as usize,
+        w!("Volume"),
+    );
+    let _ = AppendMenuW(
+        volume_menu,
+        MF_STRING | MF_POPUP,
+        audio_levels.0 as usize,
+        w!("Volume"),
+    );
+
+    // The film kind's own rows, below its `Volume`: whether a hovered film goes round at the end
+    // of it, and what a *pinned* one does — whether its forward steps shuffle, and what its end
+    // does, which is stop there, go round, or step on to the next file that the `Shuffle` row
+    // decides between the file beside it and a random one (see `append_loop_item` and
+    // `append_pin_mode_menu`).
+    let video_preview = CreatePopupMenu().unwrap();
+    let _ = AppendMenuW(
+        video_preview,
+        MF_STRING | MF_POPUP,
+        video_levels.0 as usize,
+        w!("Volume"),
+    );
+    append_loop_item(
+        video_preview,
+        ID_TRAY_VIDEO_LOOP,
+        video_loop,
+        DEFAULT_VIDEO_LOOP,
+    );
+    append_pin_mode_menu(
+        video_preview,
+        ID_TRAY_VIDEO_SHUFFLE,
+        video_shuffle,
+        DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
+        ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
+        pin_video_end_of_file,
+        DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
+    );
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        video_preview.0 as usize,
+        w!("Video Preview"),
+    );
+
+    // And the sound kind's own: the same `Loop` and `Pin Mode` rows, with a second `Seek`
+    // under `Pin Mode` beside them — where in a file a hovered sound starts as the `Seek`
+    // row of its own says, and where a *pinned* one does. Both are renamed from the old
+    // `Volume` menu's `Audio Seek` and `Pin Mode Audio Seek` because they sit under `Audio
+    // Preview` now rather than under `Volume` (see `pin_mode_audio_seek`).
+    let audio_preview = CreatePopupMenu().unwrap();
+    let _ = AppendMenuW(
+        audio_preview,
+        MF_STRING | MF_POPUP,
+        audio_levels.0 as usize,
+        w!("Volume"),
+    );
+    append_loop_item(
+        audio_preview,
+        ID_TRAY_AUDIO_LOOP,
+        audio_loop,
+        DEFAULT_AUDIO_LOOP,
+    );
+    let audio_pin_mode = append_pin_mode_menu(
+        audio_preview,
+        ID_TRAY_AUDIO_SHUFFLE,
+        audio_shuffle,
+        DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+        ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
+        pin_audio_end_of_file,
+        DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+    );
+    append_pin_seek_menu_renamed(audio_pin_mode, w!("Seek"), pin_mode_audio_seek);
+    append_seek_menu_renamed(audio_preview, w!("Seek"), audio_seek);
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        audio_preview.0 as usize,
+        w!("Audio Preview"),
     );
 
     // Add the "Text Preview" submenu: the size and Markdown mode a text preview is
@@ -1025,285 +1298,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         background_menu.0 as usize,
         w!("Background"),
-    );
-
-    // Add the "Video Preview" and "Audio Preview" submenus below `Preview Types`: each
-    // kind's own place for what its previews are like — the level it is heard at, where
-    // in the file it starts, and what its end does — so a film's settings and a sound's
-    // are two menus rather than one (see `append_loop_item`, `append_shuffle_item` and
-    // `append_end_of_file_menu`).
-    //
-    // The `Video` and `Audio` halves the old `Volume` menu held are the `Volume` rows
-    // inside these: the video's old rows renamed `Volume`, the sound's the same, with
-    // the sound's `Audio Seek` renamed `Seek` and its `Pin Mode Audio Seek` renamed `Pin
-    // Mode Seek`. What follows each `Volume` is the kind's own `Loop`, `Shuffle` and `End of File`.
-    let (
-        video_volume,
-        audio_volume,
-        audio_seek,
-        pin_mode_audio_seek,
-        video_loop,
-        audio_loop,
-        video_shuffle,
-        audio_shuffle,
-        pin_video_end_of_file,
-        pin_audio_end_of_file,
-    ) = CONFIG
-        .lock()
-        .map(|c| {
-            (
-                c.video_volume,
-                c.audio_volume,
-                c.audio_seek,
-                c.pin_mode_audio_seek,
-                c.video_loop,
-                c.audio_loop,
-                c.pin_mode_video_shuffle,
-                c.pin_mode_audio_shuffle,
-                c.pin_mode_video_end_of_file,
-                c.pin_mode_audio_end_of_file,
-            )
-        })
-        .unwrap_or((
-            DEFAULT_VIDEO_VOLUME,
-            DEFAULT_AUDIO_VOLUME,
-            DEFAULT_AUDIO_SEEK,
-            DEFAULT_PIN_MODE_AUDIO_SEEK,
-            DEFAULT_VIDEO_LOOP,
-            DEFAULT_AUDIO_LOOP,
-            DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
-            DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
-            DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
-            DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
-        ));
-
-    let volume_menu = CreatePopupMenu().unwrap();
-    let append_levels = |levels: HMENU, current: u32, base: u16, default: u32| {
-        // Largest first, which is the order a level is looked for in: a pointer crossing a folder
-        // of sounds is most often turning one down, and the whole of the scale standing at the top
-        // is what the rest of the list is read against. The id a level is listed at stays the
-        // table's own position — only the order the items are appended in is turned round — so a
-        // click still names its level by the position it holds in `VOLUME_CHOICES` (see
-        // `set_audio_volume`).
-        for (index, level) in VOLUME_CHOICES.iter().enumerate().rev() {
-            let flags = MF_STRING
-                | if current == *level {
-                    MF_CHECKED
-                } else {
-                    MF_UNCHECKED
-                };
-
-            append_labeled_item(
-                levels,
-                flags,
-                base + index as u16,
-                &default_label(&format!("{level}%"), *level == default),
-            );
-        }
-    };
-
-    // Each half carries one row the levels do not answer, and it sits above them: the loudness a file's
-    // playing is measured to. A level is asked of the hover and this is asked of the file, and the
-    // two are scaled into one another — what the file's own measured loudness is brought to is one
-    // level, and the level under it is how much of that is heard (see `Normalize`). Both halves are
-    // offered it because both can be heard; they start where they start, the way their levels do.
-    let (normalize_audio, normalize_video) = CONFIG
-        .lock()
-        .map(|config| (config.normalize_volume, config.normalize_video_volume))
-        .unwrap_or((DEFAULT_NORMALIZE_VOLUME, DEFAULT_NORMALIZE_VIDEO_VOLUME));
-    // Whether a level turned on a pin is kept, asked of the configuration rather than kept beside
-    // the switch that reads it: the two rows above the levels are one about the file and one about
-    // the level, and neither is a level (see `remember_audio_volume`).
-    let (remember_audio, remember_video) = CONFIG
-        .lock()
-        .map(|config| (config.remember_audio_volume, config.remember_video_volume))
-        .unwrap_or((DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME));
-    // Whether a film's own subtitle tracks are probed for and copied out at all,
-    // read the same way the two switches above the levels are: a switch about a
-    // film's picture rather than a level of the list under it, so it is a row of
-    // the `Video` half, at its top (see `video_subtitles`).
-    let video_subtitles = CONFIG
-        .lock()
-        .map(|config| config.video_subtitles)
-        .unwrap_or(DEFAULT_VIDEO_SUBTITLES);
-    // And the engine that row is named for: the configured pick, since the tray is never handed a
-    // file to ask a route about, and the menu is built again on every open, so the pick read here
-    // is the pick in force (see `subtitles_label`).
-    let video_engine = CONFIG
-        .lock()
-        .map(|config| config.video_engine)
-        .unwrap_or(DEFAULT_VIDEO_ENGINE);
-    // Asked again here for the reason the `Codecs` rows are asked again: a machine that has just
-    // been given FFmpeg is answered from the machine rather than from the hover that cached it
-    // (see `codecs::refresh`).
-    refresh_codecs();
-    let normalize_available = codecs::normalize_available();
-
-    // The two rows the levels do not answer, above them: the loudness a file's playing is measured to,
-    // and whether a level turned on a pin is kept. The second is never greyed — it asks about this
-    // app's own knob rather than about FFmpeg, so it acts on a machine that has no FFmpeg at all.
-    let append_switches =
-        |levels: HMENU, normalize: bool, normalize_id: u16, remember: bool, remember_id: u16| {
-            let _ = AppendMenuW(
-                levels,
-                MF_STRING
-                    | if normalize && normalize_available {
-                        MF_CHECKED
-                    } else {
-                        MF_UNCHECKED
-                    }
-                    | if normalize_available {
-                        MF_UNCHECKED
-                    } else {
-                        // A machine without FFmpeg has nothing that measures a loudness or applies
-                        // one: the
-                        // row is shown as what it is there — a switch that cannot act — rather than as a
-                        // click that would do nothing (see `codecs::normalize_available`).
-                        MF_GRAYED
-                    },
-                normalize_id as usize,
-                w!("Normalize (Expensive)"),
-            );
-            append_labeled_item(
-                levels,
-                MF_STRING | if remember { MF_CHECKED } else { MF_UNCHECKED },
-                remember_id,
-                remember_volume_label(),
-            );
-        };
-
-    let video_levels = CreatePopupMenu().unwrap();
-    // The film's own row, at the top of the half: whether its own subtitle
-    // tracks are probed for and copied out at all — a switch about a film's
-    // picture rather than a level of the list under it, which is why it is a
-    // row of the `Video` half alone and not the sound's (see `video_subtitles`). What it is
-    // called is the engine's business rather than one cost for all three (see
-    // `subtitles_label`).
-    append_labeled_item(
-        video_levels,
-        MF_STRING | if video_subtitles { MF_CHECKED } else { MF_UNCHECKED },
-        ID_TRAY_VIDEO_SUBTITLES,
-        &subtitles_label(video_engine, VideoEngine::Mpv.installed()),
-    );
-    append_switches(
-        video_levels,
-        normalize_video,
-        ID_TRAY_NORMALIZE_VIDEO_VOLUME,
-        remember_video,
-        ID_TRAY_REMEMBER_VIDEO_VOLUME,
-    );
-    let _ = AppendMenuW(video_levels, MF_SEPARATOR, 0, PCWSTR::null());
-    append_levels(
-        video_levels,
-        video_volume,
-        ID_TRAY_VIDEO_VOLUME_BASE,
-        DEFAULT_VIDEO_VOLUME,
-    );
-
-    let audio_levels = CreatePopupMenu().unwrap();
-    append_switches(
-        audio_levels,
-        normalize_audio,
-        ID_TRAY_NORMALIZE_VOLUME,
-        remember_audio,
-        ID_TRAY_REMEMBER_VOLUME,
-    );
-    let _ = AppendMenuW(audio_levels, MF_SEPARATOR, 0, PCWSTR::null());
-    append_levels(
-        audio_levels,
-        audio_volume,
-        ID_TRAY_AUDIO_VOLUME_BASE,
-        DEFAULT_AUDIO_VOLUME,
-    );
-
-    let _ = AppendMenuW(
-        volume_menu,
-        MF_STRING | MF_POPUP,
-        video_levels.0 as usize,
-        w!("Volume"),
-    );
-    let _ = AppendMenuW(
-        volume_menu,
-        MF_STRING | MF_POPUP,
-        audio_levels.0 as usize,
-        w!("Volume"),
-    );
-
-    // The film kind's own rows, below its `Volume`: whether a hovered film goes round at the
-    // end of it, whether a *pinned* film's forward steps shuffle, and what a pinned film's end
-    // does — stop there, go round, or step on to the next file, which the `Shuffle` row above
-    // decides between the file beside it and a random one (see `append_loop_item`,
-    // `append_shuffle_item` and `append_end_of_file_menu`).
-    let video_preview = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        video_preview,
-        MF_STRING | MF_POPUP,
-        video_levels.0 as usize,
-        w!("Volume"),
-    );
-    append_loop_item(
-        video_preview,
-        ID_TRAY_VIDEO_LOOP,
-        video_loop,
-        DEFAULT_VIDEO_LOOP,
-    );
-    append_shuffle_item(
-        video_preview,
-        ID_TRAY_VIDEO_SHUFFLE,
-        video_shuffle,
-        DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
-    );
-    append_end_of_file_menu(
-        video_preview,
-        ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
-        pin_video_end_of_file,
-        DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
-    );
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        video_preview.0 as usize,
-        w!("Video Preview"),
-    );
-
-    // And the sound kind's own: the same three rows, with the `Seek` and `Pin Mode Seek` the
-    // sound's `Volume` answers — where in a file a hovered sound starts, and where a *pinned*
-    // one does — the sound's setting's to decide in each case (see `pin_mode_audio_seek`). They
-    // are renamed from the old `Volume` menu's `Audio Seek` and `Pin Mode Audio Seek` because
-    // they sit under `Audio Preview` now rather than under `Volume`, and they follow the three
-    // rows that are the same question asked of a film.
-    let audio_preview = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        audio_preview,
-        MF_STRING | MF_POPUP,
-        audio_levels.0 as usize,
-        w!("Volume"),
-    );
-    append_loop_item(
-        audio_preview,
-        ID_TRAY_AUDIO_LOOP,
-        audio_loop,
-        DEFAULT_AUDIO_LOOP,
-    );
-    append_shuffle_item(
-        audio_preview,
-        ID_TRAY_AUDIO_SHUFFLE,
-        audio_shuffle,
-        DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
-    );
-    append_end_of_file_menu(
-        audio_preview,
-        ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
-        pin_audio_end_of_file,
-        DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
-    );
-    append_seek_menu_renamed(audio_preview, w!("Seek"), audio_seek);
-    append_pin_seek_menu_renamed(audio_preview, w!("Pin Mode Seek"), pin_mode_audio_seek);
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        audio_preview.0 as usize,
-        w!("Audio Preview"),
     );
 
     // Add the "Performance" submenu: what the app costs while it is working — the memory it

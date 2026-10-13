@@ -661,7 +661,7 @@ pub(in super::super) fn toggle_loop(video: bool) {
 /// Nothing on screen is rebuilt either: a walk already in hand carries the shuffle it was
 /// planned with, and what a click here changes is the walk the next step is planned as —
 /// whether that step is a caption's next press, a forward key, or the end of a file the
-/// kind's own `End of File` row calls `Continue`. A step back is the file before it either
+/// kind's own `End of File` row calls `Jump`. A step back is the file before it either
 /// way.
 pub(in super::super) fn toggle_pin_shuffle(video: bool) {
     if let Ok(mut config) = CONFIG.lock() {

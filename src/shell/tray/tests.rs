@@ -505,6 +505,27 @@ fn every_offered_way_of_starting_a_pinned_sound_is_one_the_setting_keeps() {
     }
 }
 
+/// The `Pin Mode → End of File` rows of both kinds say what the end does, in the order the
+/// submenus list them, and the walk's next file is called `Jump` — a step on to it is what the
+/// row offers whatever the setting's own name spells.
+#[test]
+fn every_end_of_a_pinned_file_says_what_it_does() {
+    assert_eq!(
+        PIN_END_OF_FILE_CHOICES
+            .map(|end| end_of_file_label(end, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE)),
+        [
+            "Pause".to_string(),
+            "Loop (Default)".to_string(),
+            "Jump".to_string(),
+        ]
+    );
+
+    assert_eq!(
+        DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+        "a film and a sound start at the same end of file, so the two rows are marked alike"
+    );
+}
+
 /// The three `Timing` submenus list the same delays, one range apiece, and a range
 /// that were wider than the items in it would take an id from the submenu below it —
 /// which is a click selecting a delay that was never listed, for a setting nobody

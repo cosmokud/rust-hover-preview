@@ -285,9 +285,9 @@ pub(super) const ID_TRAY_VIDEO_LOOP: u16 = 1041;
 pub(super) const ID_TRAY_AUDIO_LOOP: u16 = 1042;
 pub(super) const ID_TRAY_VIDEO_SHUFFLE: u16 = 1043;
 pub(super) const ID_TRAY_AUDIO_SHUFFLE: u16 = 1044;
-/// The `Video Preview → End of File` and `Audio Preview → End of File` submenus: one command
-/// per way a pinned film or sound can end, in the order they list them — `Pause`, `Loop` and
-/// `Continue`.
+/// The `Video Preview → Pin Mode → End of File` and `Audio Preview → Pin Mode → End of
+/// File` submenus: one command per way a pinned film or sound can end, in the order they list
+/// them — `Pause`, `Loop` and `Jump`.
 ///
 /// Each is a base plus the position the choice was listed at, against the table of ends below,
 /// and each range is exactly as wide as the choices it lists — which is what keeps an end of
