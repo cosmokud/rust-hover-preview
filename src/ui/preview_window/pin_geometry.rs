@@ -3,6 +3,8 @@
 
 use super::*;
 
+use crate::formats::routing::NavCategory;
+
 /// How far a press on a pinned window may wander before it is a drag rather than a click.
 pub(super) const PIN_DRAG_SLOP_PIXELS: f32 = 4.0;
 /// How much of a pinned window stays on a display. A window dragged past an edge leaves
@@ -410,6 +412,7 @@ pub(super) fn pin_command_request(
     audio_start_offset: &mut f64,
     audio_paused: &mut Option<f64>,
     navigating: bool,
+    anchor: Option<NavCategory>,
 ) -> Option<PinStep> {
     let step = match take_pin_command() {
         Some(PinCommand::Close) => {
@@ -428,8 +431,8 @@ pub(super) fn pin_command_request(
             toggle_pin_maximized(request);
             None
         }
-        Some(PinCommand::Previous) => step_pinned_file(-1, wait),
-        Some(PinCommand::Next) => step_pinned_file(1, wait),
+        Some(PinCommand::Previous) => step_pinned_file(-1, wait, anchor),
+        Some(PinCommand::Next) => step_pinned_file(1, wait, anchor),
         Some(PinCommand::TogglePlayback) => {
             toggle_pinned_by_key(audio_started, audio_start_offset, audio_paused);
             None

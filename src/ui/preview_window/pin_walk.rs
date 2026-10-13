@@ -4,6 +4,7 @@
 use super::*;
 
 use crate::formats::lists;
+use crate::formats::routing::NavCategory;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -120,6 +121,11 @@ pub(crate) struct PinStep {
     /// when spent it is rebuilt from `sounds` minus the file on screen. A deleted file
     /// is tried once then gone with the removal (see `shuffle_step`).
     pub(super) shuffle_bag: Vec<PathBuf>,
+    /// The category of the first file pinned, which is what `list` was filtered by and
+    /// what the next press reuses instead of recomputing from the file the pin is
+    /// standing on — or nothing where the walk was asked with no session behind it, in
+    /// which case the next press anchors on the file it stands on, as a first press does.
+    pub(super) anchor: Option<NavCategory>,
 }
 
 impl PinStep {
@@ -185,10 +191,14 @@ pub(super) type PinWait = PinArc;
 /// Nothing is lost by the round trip: a walk that lands is taken up by the answer, and a
 /// walk that does not is a walk with nowhere to step to, which is what this already
 /// answered with.
-pub(super) fn step_pinned_file(step: i32, wait: &mut Option<PinWait>) -> Option<PinStep> {
+pub(super) fn step_pinned_file(
+    step: i32,
+    wait: &mut Option<PinWait>,
+    anchor: Option<NavCategory>,
+) -> Option<PinStep> {
     let at = pinned_path()?;
 
-    if !ask_pin_walk(at, step) {
+    if !ask_pin_walk(at, step, anchor) {
         return None;
     }
 
@@ -197,6 +207,20 @@ pub(super) fn step_pinned_file(step: i32, wait: &mut Option<PinWait>) -> Option<
     *wait = Some(PinWait::new());
 
     None
+}
+
+/// The anchor a fresh press asks with: the category of the first file pinned, read off
+/// the walk that made the file on screen (or the one still held where that walk was
+/// taken back for a step-over) — or nothing where no walk is held, which is a first press
+/// or a press after a listing pick cleared the walks, and anchors on the file the pin is
+/// standing on. Read at press time rather than stored, so there is no session state to
+/// clear when the pin comes down: no walks held is no anchor, and a walk held is the one
+/// that made the file on screen (see `PinStep::anchor`).
+pub(super) fn pin_walk_anchor(
+    walk: &Option<PinStep>,
+    walk_of_current: &Option<PinStep>,
+) -> Option<NavCategory> {
+    walk_of_current.as_ref().or(walk.as_ref()).and_then(|walk| walk.anchor)
 }
 
 /// A question the pin asks that only a thread of its own may answer.
@@ -216,6 +240,11 @@ pub(super) enum PinJob {
     Walk {
         at: PathBuf,
         step: i32,
+        /// The category of the first file pinned, or nothing where the press had no walk
+        /// behind it — a first press, or one after a listing pick cleared the walks — in
+        /// which case the planner anchors on `at` itself. Carried rather than recomputed
+        /// so a press standing on a sound keeps the first file's walk (see `list_for`).
+        anchor: Option<NavCategory>,
         config: Box<AppConfig>,
     },
     /// The name of the program this file would open with, for the hand-off button.
@@ -243,7 +272,7 @@ pub(super) const PIN_JOB_GIVEUP: Duration = Duration::from_secs(15);
 /// The configuration is taken by copy and the lock let go before the job is queued: the
 /// walk reads a folder behind it, and a lock held across a folder read is a lock every
 /// other thread of the app waits on for as long as the disk takes.
-pub(super) fn ask_pin_walk(at: PathBuf, step: i32) -> bool {
+pub(super) fn ask_pin_walk(at: PathBuf, step: i32, anchor: Option<NavCategory>) -> bool {
     let Some(config) = CONFIG.lock().ok().map(|config| config.clone()) else {
         return false;
     };
@@ -251,6 +280,7 @@ pub(super) fn ask_pin_walk(at: PathBuf, step: i32) -> bool {
     queue_pin_job(PinJob::Walk {
         at,
         step,
+        anchor,
         config: Box::new(config),
     })
 }
@@ -354,11 +384,20 @@ pub(super) fn spawn_pin_planner() {
 /// so the loop has nothing to ask of it and the pin keeps what it is showing (see `PinStep`).
 pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
     match job {
-        PinJob::Walk { at, step, config } => {
+        PinJob::Walk {
+            at,
+            step,
+            anchor,
+            config,
+        } => {
             // A folder that cannot be walked is walked as a folder with nothing in it, so
             // that the answer below is the same shape whichever of the two it was.
             let empty = Vec::new();
-            let list = pin_navigation::list_for(at, config).unwrap_or_else(|| empty.clone());
+            // Anchored on the first file pinned: `anchor` is `None` only where the press
+            // had no walk behind it, in which case the walk anchors on `at` itself. The
+            // sounds below come out of this list, so they follow the same anchor.
+            let anchor = anchor.or_else(|| pin_navigation::wanted_category(at, config));
+            let list = pin_navigation::list_for(at, anchor, config).unwrap_or_else(|| empty.clone());
 
             // The sounds of the list, read where the list is: a walk that
             // shuffles steps through the folder's sounds one permutation at a time, and
@@ -397,6 +436,10 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
                 shuffle,
                 sounds,
                 shuffle_bag,
+                // Carried so the next press reuses it: the walk the pin lands on is kept
+                // as the walk of the file on screen, whose anchor this is (see
+                // `step_pinned_file`).
+                anchor,
             };
 
             // A step that lands is the walk; one that does not leaves it with nothing left

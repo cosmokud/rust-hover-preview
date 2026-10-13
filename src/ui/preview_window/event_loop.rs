@@ -571,6 +571,7 @@ pub fn run_preview_window() {
                         || pin_swap_hold.is_some()
                         || pin_awaiting_box.is_some()
                         || pin_held_pick.is_some(),
+                    pin_walk_anchor(&pin_walk, &pin_walk_of_current),
                 ) {
                     pin_walk = Some(walk);
                 }
@@ -1087,6 +1088,7 @@ pub fn run_preview_window() {
                                 &mut audio_started,
                                 &mut audio_start_offset,
                                 &mut pin_walk_wait,
+                                pin_walk_anchor(&pin_walk, &pin_walk_of_current),
                             );
 
                             // A sound the engine Windows has was asked to play the pinned
@@ -1099,7 +1101,11 @@ pub fn run_preview_window() {
                             // `pinned_native_audio_ended`).
                             if pinned_native_audio_ended(path) {
                                 video_player::stop();
-                                ask_pin_walk(path.to_path_buf(), 1);
+                                ask_pin_walk(
+                                    path.to_path_buf(),
+                                    1,
+                                    pin_walk_anchor(&pin_walk, &pin_walk_of_current),
+                                );
                                 pin_walk_wait = Some(PinWait::new());
                             }
                         }

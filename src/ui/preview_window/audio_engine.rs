@@ -4,6 +4,8 @@
 use super::dimensions::audio_font_scale_percent;
 use super::*;
 
+use crate::formats::routing::NavCategory;
+
 /// How loud a video is played, which is read when one is started rather than when the
 /// setting changes: a preview is a few seconds long, and the next one is played at
 /// whatever the volume is by then.
@@ -936,6 +938,7 @@ pub(super) fn wrap_audio_player(
     started: &mut Option<Instant>,
     offset: &mut f64,
     wait: &mut Option<PinWait>,
+    anchor: Option<NavCategory>,
 ) {
     let Some(process) = media.video_process.as_mut() else {
         return;
@@ -974,7 +977,7 @@ pub(super) fn wrap_audio_player(
         *started = None;
         AUDIO_CARD_DIRTY.store(true, Ordering::Release);
 
-        ask_pin_walk(path.to_path_buf(), 1);
+        ask_pin_walk(path.to_path_buf(), 1, anchor);
         *wait = Some(PinWait::new());
         return;
     }
