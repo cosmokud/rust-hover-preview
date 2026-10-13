@@ -55,12 +55,20 @@ struct NavEntry {
 /// The order is the listing's own where the listing has one to give (see [`ViewSort`]) and
 /// natural name order where it does not — which is also what an Explorer default view
 /// shows, since `Name` ascending *is* the natural comparison a file manager uses.
-pub fn list_for(current: &Path, config: &AppConfig) -> Option<Vec<PathBuf>> {
+pub fn list_for(
+    current: &Path,
+    anchor: Option<routing::NavCategory>,
+    config: &AppConfig,
+) -> Option<Vec<PathBuf>> {
     let folder = current.parent()?;
 
     let entries = entries_for(folder, config)?;
 
-    let wanted = wanted_category(current, config);
+    // The walk is anchored on the first file pinned, not on the file it stands on: a
+    // fresh press recomputing from `current` is what collapsed a PDF-anchored walk to
+    // sounds-only after stepping onto an MP3. `None` anchors on `current` itself, which
+    // is what a first press (and a walk with no session behind it) wants.
+    let wanted = anchor.or_else(|| wanted_category(current, config));
     let mode = nav_mode_for(wanted, config);
 
     Some(
@@ -73,8 +81,9 @@ pub fn list_for(current: &Path, config: &AppConfig) -> Option<Vec<PathBuf>> {
 }
 
 /// The category the walk is narrowed to for `current`, or `None` where nothing claims it — which
-/// is a file that is on no list of its own (see `walks`).
-fn wanted_category(current: &Path, config: &AppConfig) -> Option<routing::NavCategory> {
+/// is a file that is on no list of its own (see `walks`). The pin's walk resolves this once
+/// for the first file pinned and reuses it after, rather than recomputing it per press.
+pub(crate) fn wanted_category(current: &Path, config: &AppConfig) -> Option<routing::NavCategory> {
     routing::kind_of(current, config).map(routing::nav_category)
 }
 
@@ -783,7 +792,7 @@ mod tests {
         };
         let current = folder.join("a.txt");
 
-        let list = list_for(&current, &config)
+        let list = list_for(&current, None, &config)
             .map(|list| names(&list))
             .unwrap_or_default();
         assert_eq!(list, vec!["a.txt"], "a switched-off kind is not a step");

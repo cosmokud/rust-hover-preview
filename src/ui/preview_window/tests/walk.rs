@@ -74,6 +74,7 @@ fn a_walk_offers_every_other_file_of_the_folder_once_and_then_ends() {
         shuffle: false,
         sounds: Vec::new(),
         shuffle_bag: Vec::new(),
+        anchor: None,
     };
 
     // Every step, and the one that ends the walk: the end is part of what is being asked
@@ -117,6 +118,7 @@ fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
         shuffle: false,
         sounds: Vec::new(),
         shuffle_bag: Vec::new(),
+        anchor: None,
     };
 
     pin_step_off(Some(walk), &mut held);
@@ -422,6 +424,7 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
     let answer = answer_pin_job(&PinJob::Walk {
         at: folder.join("b.mp3"),
         step: 1,
+        anchor: None,
         config: Box::new(CONFIG.lock().expect("the configuration").clone()),
     });
     let Some(PinPlanned::Walk(walk)) = answer else {
@@ -446,6 +449,7 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
     let answer = answer_pin_job(&PinJob::Walk {
         at: folder.join("b.mp3"),
         step: 1,
+        anchor: None,
         config: Box::new(config.clone()),
     });
     let Some(PinPlanned::Walk(walk)) = answer else {
@@ -656,6 +660,7 @@ fn a_walk_the_planner_answers_carries_the_list_it_walked() {
         shuffle: false,
         sounds: Vec::new(),
         shuffle_bag: Vec::new(),
+        anchor: None,
     };
 
     assert_eq!(
@@ -716,6 +721,7 @@ fn a_walk_with_nowhere_to_go_is_answered_rather_than_left_outstanding() {
     let answered = answer_pin_job(&PinJob::Walk {
         at: folder.join("a.png"),
         step: 1,
+        anchor: None,
         config: Box::new(config.clone()),
     });
     let Some(PinPlanned::Walk(walk)) = answered else {
@@ -737,6 +743,7 @@ fn a_walk_with_nowhere_to_go_is_answered_rather_than_left_outstanding() {
     let gone = answer_pin_job(&PinJob::Walk {
         at: PathBuf::from("C:\\no-such-folder-here\\a.png"),
         step: 1,
+        anchor: None,
         config: Box::new(config),
     });
     let Some(PinPlanned::Walk(walk)) = gone else {
@@ -889,6 +896,7 @@ fn a_shuffled_walk_hears_every_sound_once_before_repeating() {
         shuffle: true,
         sounds: sounds.clone(),
         shuffle_bag: bag,
+        anchor: None,
     };
 
     let first = walk.step().expect("a bag of two has one to offer");
@@ -918,6 +926,7 @@ fn a_walk_is_anchored_on_the_first_file_pinned() {
     let from_sound = answer_pin_job(&PinJob::Walk {
         at: folder.join("b.mp3"),
         step: 1,
+        anchor: None,
         config: Box::new(config.clone()),
     });
     let Some(PinPlanned::Walk(sound_walk)) = from_sound else {
@@ -932,6 +941,7 @@ fn a_walk_is_anchored_on_the_first_file_pinned() {
     let from_other = answer_pin_job(&PinJob::Walk {
         at: folder.join("a.png"),
         step: 1,
+        anchor: None,
         config: Box::new(config),
     });
     let Some(PinPlanned::Walk(other_walk)) = from_other else {
@@ -942,5 +952,100 @@ fn a_walk_is_anchored_on_the_first_file_pinned() {
             && other_walk.list.iter().any(|path| path.extension().is_some_and(|ext| ext == "png")),
         "anchored elsewhere, the walk is end to end: {:?}",
         other_walk.list
+    );
+}
+
+/// A walk stays anchored on the first file pinned across presses: a pin taken up on a
+/// picture (`Others → All Files`) steps onto a sound, and the next press must still walk
+/// end to end — not collapse to `MP3 → MP3 → MP3`. (Repro: the second press re-anchored
+/// on the sound it was standing on instead of reusing the first file's anchor.)
+#[test]
+fn a_press_after_a_sound_keeps_the_first_files_anchor() {
+    let folder = sounded_folder("second-press");
+    let mut config = CONFIG.lock().expect("the configuration").clone();
+    config.pin_nav_video = PinNavFileTypes::Category;
+    config.pin_nav_audio = PinNavFileTypes::Category;
+    config.pin_nav_others = PinNavFileTypes::All;
+
+    // The first press, pinned on a picture: `Others → All`, so the walk is end to end
+    // and the step lands on the sound beside it (`a.png → b.mp3` in name order). The
+    // press carries no anchor — a first press anchors on the file it stands on — and
+    // the answer keeps it for the next press, the way the loop holds the walk that
+    // made the file on screen (see `pin_walk_anchor`).
+    let first = answer_pin_job(&PinJob::Walk {
+        at: folder.join("a.png"),
+        step: 1,
+        anchor: None,
+        config: Box::new(config.clone()),
+    });
+    let Some(PinPlanned::Walk(first_walk)) = first else {
+        panic!("a walk is always answered");
+    };
+    assert_eq!(
+        first_walk.at,
+        folder.join("b.mp3"),
+        "the first press steps onto the sound beside the picture"
+    );
+
+    // The second press, standing on that sound, reuses the first walk's anchor: the
+    // walk must still be the picture's.
+    let second = answer_pin_job(&PinJob::Walk {
+        at: first_walk.at.clone(),
+        step: 1,
+        anchor: first_walk.anchor,
+        config: Box::new(config),
+    });
+    let Some(PinPlanned::Walk(second_walk)) = second else {
+        panic!("a walk is always answered");
+    };
+    assert!(
+        second_walk
+            .list
+            .iter()
+            .any(|path| path.extension().is_some_and(|ext| ext == "png")),
+        "anchored on the first file pinned, the walk stays end to end after landing on a \
+         sound: {:?}",
+        second_walk.list
+    );
+}
+
+/// The mirror: a walk taken up on a sound (`Audio → Same Category`) stays sounds-only
+/// across presses, even where the folder holds pictures beside the sounds.
+#[test]
+fn a_press_after_a_sound_keeps_a_sound_anchor_sounds_only() {
+    let folder = sounded_folder("second-press-mirror");
+    let mut config = CONFIG.lock().expect("the configuration").clone();
+    config.pin_nav_video = PinNavFileTypes::Category;
+    config.pin_nav_audio = PinNavFileTypes::Category;
+    config.pin_nav_others = PinNavFileTypes::All;
+
+    let first = answer_pin_job(&PinJob::Walk {
+        at: folder.join("a.mp3"),
+        step: 1,
+        anchor: None,
+        config: Box::new(config.clone()),
+    });
+    let Some(PinPlanned::Walk(first_walk)) = first else {
+        panic!("a walk is always answered");
+    };
+    assert!(
+        first_walk.list.iter().all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
+        "anchored on a sound, the first press walks sounds only: {:?}",
+        first_walk.list
+    );
+
+    let second = answer_pin_job(&PinJob::Walk {
+        at: first_walk.at.clone(),
+        step: 1,
+        anchor: first_walk.anchor,
+        config: Box::new(config),
+    });
+    let Some(PinPlanned::Walk(second_walk)) = second else {
+        panic!("a walk is always answered");
+    };
+    assert!(
+        second_walk.list.iter().all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
+        "anchored on a sound, the second press still walks sounds only: {:?}",
+        second_walk.list
     );
 }

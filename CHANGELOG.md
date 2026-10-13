@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- **Pin walk stays anchored on the first file pinned** — every **Next**/**Previous** press reuses the first file's Navigation Files anchor instead of recomputing it from the file the pin is standing on, so a walk taken up on a document (`Others → All Files`) no longer collapses to sounds-only after stepping onto a sound (`PDF → MP3 → MP3` is `PDF → MP3 → DOCX → …` again), and the shuffle bag follows the same anchor. A listing pick (or anything else that clears the walks) re-anchors on the file then pinned.
 - **Same-file shuffle no longer leaves the seekbar standing** — a swap onto the file already playing restarts it at the swap's start instead of carrying on.
 - **Version bumped** — `0.4.1` in `Cargo.toml` and `Cargo.lock`.
 
