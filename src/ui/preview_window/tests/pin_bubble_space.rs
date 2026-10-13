@@ -103,7 +103,7 @@ fn the_bubble_menu_names_what_each_row_will_do() {
     );
     assert_eq!(
         bubble_menu_row_label(BubbleMenuRow::ToTaskbar, true),
-        "Minimize to Taskbar",
+        "To Taskbar",
         "the stand-in is the taskbar's, not the tray's"
     );
     assert_eq!(
@@ -123,7 +123,7 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         .collect();
     assert_eq!(
         painted,
-        vec!["Pause", "Minimize to Taskbar", "Close"],
+        vec!["Pause", "To Taskbar", "Close"],
         "a playing sound's menu pauses first"
     );
 
@@ -133,7 +133,7 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         .collect();
     assert_eq!(
         painted,
-        vec!["Play", "Minimize to Taskbar", "Close"],
+        vec!["Play", "To Taskbar", "Close"],
         "a held film's menu lets it go"
     );
 
@@ -143,7 +143,20 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         .collect();
     assert_eq!(
         painted,
-        vec!["Minimize to Taskbar", "Close"],
+        vec!["To Taskbar", "Close"],
         "a page's menu offers only the two ways out"
+    );
+}
+
+/// The bubble's menu carries no flyout arrow: the shared placement points one wherever a Seek
+/// row could open, and there is no Seek row here — so Close, the last row, stands unmarked.
+#[test]
+fn the_bubble_menu_points_no_arrow_at_any_row() {
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true);
+    let popup = bubble_menu_popup((0, 44), 500, 500, 96, &rows);
+    assert_eq!(
+        popup.arrow,
+        pin_chrome::MenuArrow::None,
+        "no row of the bubble's menu opens anything"
     );
 }
