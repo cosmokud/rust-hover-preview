@@ -938,6 +938,21 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
     // across either (see `cached_video_geometry`).
     let duration = video_duration(path);
 
+    // And the second the player has already got to, where this app has a clock for it: a pin
+    // taken up on a film the hover has been playing for a while is not a film at its beginning,
+    // and a bar — and every end of file read off its clock — started at zero would count the
+    // whole hover's stretch of the film again before the pass it is drawing was over. The clock
+    // is the loop's own, which is the one position a player that reports nothing can be read at
+    // (see `video_loop_playhead`), and it is clamped to the film's length so a film that has
+    // already ended takes the pin up at its end rather than somewhere past it.
+    let reached = video_loop_playhead(VIDEO_PID.load(Ordering::SeqCst), path)
+        .unwrap_or(0.0)
+        .max(0.0);
+    let reached = match duration {
+        Some(duration) if duration > 0.0 => reached.min(duration),
+        _ => reached,
+    };
+
     let carried = pin_state().and_then(|pinned| {
         pinned.pin().map(|pin| {
             (
@@ -1069,7 +1084,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
             // here — which is the best that can be said about a player
             // that reports nothing at all (see `PinTransport`).
             duration,
-            started: (kind == Some(MediaType::Video)).then_some((Instant::now(), 0.0)),
+            started: (kind == Some(MediaType::Video)).then_some((Instant::now(), reached)),
             // Which subtitle track this pin opens on, which is the
             // player's own choice for the file until a key says
             // otherwise — written down rather than left unnamed, so that

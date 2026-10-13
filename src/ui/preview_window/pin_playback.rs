@@ -507,6 +507,13 @@ pub(super) fn seek_pinned_playback(path: &PathBuf, content: ScreenRegion, second
                     // film to be dragged is answered with (see `PinTransport::drag_held`).
                     transport.drag_held = false;
                 });
+                // And the clock a *pass* is measured by is moved with the bar, because a seek
+                // down this road is a command to a player that goes on running rather than a
+                // relaunch with a fresh clock: left where it was, the loop's own reading of the
+                // film would still stand at the second the seek left behind, and a seek taken
+                // into the last moments of a film would be undone by the next tick, which wraps
+                // the film back to zero (see `rebase_video_loop_clock_to`).
+                video_hw::rebase_video_loop_clock_to(VIDEO_PID.load(Ordering::SeqCst), seconds);
             } else {
                 restart_pinned_player(path, content, seconds, pinned_is_held());
             }
@@ -586,13 +593,36 @@ pub(super) fn toggle_pinned_playback(
                 } else {
                     hold_pinned_player_without_a_key(playhead);
                 }
-            } else if hold_the_player(false) {
-                update_pin_transport(|state| state.released(transport.paused_at.unwrap_or(0.0)));
             } else {
-                // A player begun to resume a file is not one to be told to hold, or the press
-                // would arrive twice over: once here, and once as a hold the relaunch owed. So
-                // the relaunch is told, at its own call site, that this is a file being let go.
-                restart_pinned_player(path, content, transport.paused_at.unwrap_or(0.0), false);
+                // A film held at its own end is a film that has *finished* rather than one paused
+                // in the middle of itself (see `loop_ended_pinned_player`): the player stands on
+                // the last frame, and letting it go there plays that frame and ends the pass again
+                // at once. So the press begins the film from the top, which is what a play button
+                // over a finished film is for.
+                let held = transport.paused_at.unwrap_or(0.0);
+                let finished = transport
+                    .duration
+                    .is_some_and(|duration| duration > 0.0 && held >= duration);
+                let from = if finished { 0.0 } else { held };
+                if finished && mpv {
+                    // mpv is paused on its last frame and holds that pause across a seek, so it is
+                    // taken to the top *before* it is set going — the seek is what makes the press
+                    // a film begun again rather than a last frame played once more.
+                    mpv_ipc::seek_absolute(VIDEO_PID.load(Ordering::SeqCst), from);
+                }
+                if hold_the_player(false) {
+                    update_pin_transport(|state| state.released(from));
+                    // And the clock a pass is measured by moves onto the second the film is played
+                    // from: a resumed film is a pass with its whole length still to run, and a
+                    // clock left where the hold began would wrap it early (see
+                    // `rebase_video_loop_clock_to`).
+                    video_hw::rebase_video_loop_clock_to(VIDEO_PID.load(Ordering::SeqCst), from);
+                } else {
+                    // A player begun to resume a file is not one to be told to hold, or the press
+                    // would arrive twice over: once here, and once as a hold the relaunch owed. So
+                    // the relaunch is told, at its own call site, that this is a file being let go.
+                    restart_pinned_player(path, content, from, false);
+                }
             }
         }
         _ => {}

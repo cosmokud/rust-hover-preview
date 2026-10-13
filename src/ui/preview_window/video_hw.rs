@@ -387,6 +387,47 @@ pub(super) fn rebase_video_loop_clock(pid: u32) {
     }
 }
 
+/// Move the loop's clock onto a second the player was taken to while it ran, which is the same
+/// correction as the window's rebase above with the position named as well as the moment.
+///
+/// A seek is what asks this, and it is asked on the player's side of the same question: mpv's
+/// seek is a command rather than a relaunch (see `seek_pinned_playback`), so the clock a pass is
+/// measured by is not begun at the second the player was taken to the way a relaunch's is (see
+/// `note_video_loop`) — it goes on counting from where the pass began, and a seek taken while
+/// that count is near the film's end is then undone by the very next tick, which reads the film
+/// as having reached its end and wraps it back to the beginning. The second is named as well as
+/// the moment because it is where the pass is now played from, and a clock left at the old
+/// second would wrap the film early by the distance the seek moved it.
+///
+/// The pid guard is the same one every rebase keeps: a clock belonging to a player this app no
+/// longer holds is left where it stands.
+pub(super) fn rebase_video_loop_clock_to(pid: u32, seconds: f64) {
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        if let Some(loop_) = slot.as_mut().filter(|loop_| loop_.pid == pid) {
+            loop_.from = seconds;
+            loop_.at = Instant::now();
+        }
+    }
+}
+
+/// Where the player behind `pid` has got to in the file it is playing, off the loop's own clock.
+///
+/// It is the one position a player that reports nothing can be read at (see `mpv_ipc`), and the one
+/// a take-up needs: a pin taken up on a film the hover has been playing for a while is not a film at
+/// its beginning, and a bar — and every end of file read off its clock — started at zero would
+/// count the whole hover's stretch of the film again before the pass it is drawing was over.
+///
+/// Nothing for a player the record is not about, which is the answer a route that gives the loop to
+/// its player rather than to this app keeps (see `video_launch::loop_is_ours`), and what makes this
+/// safe to ask for any kind of player.
+pub(super) fn video_loop_playhead(pid: u32, path: &Path) -> Option<f64> {
+    VIDEO_LOOP.lock().ok().and_then(|slot| {
+        slot.as_ref()
+            .filter(|loop_| loop_.pid == pid && loop_.path == path)
+            .map(|loop_| loop_.position())
+    })
+}
+
 /// What a tick does about the loop of a player this app is looping itself.
 pub(super) enum VideoLoopAction {
     /// The film is playing on and is nowhere near its end.
@@ -506,6 +547,14 @@ pub(super) fn video_loop_tick(playing: bool, loops: bool) -> bool {
                 mpv_ipc::set_paused(loop_.pid, false);
                 loop_.from = seconds;
                 loop_.at = Instant::now();
+                // **And the pin's own bar is moved onto that second with the clock.** A wrap is
+                // not a relaunch on this road — no player is begun again, so `transport.begun`
+                // never runs and nothing else writes the second the pass now runs from — and a bar
+                // left counting from the launch it was taken up at stands a whole pass away from
+                // the picture after the first wrap (see `rebase_video_loop_clock_to`).
+                if pinned_path().as_deref() == Some(path.as_path()) {
+                    update_pin_transport(|transport| transport.released(seconds));
+                }
                 return true;
             }
 
