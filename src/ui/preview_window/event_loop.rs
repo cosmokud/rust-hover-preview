@@ -1097,6 +1097,13 @@ pub fn run_preview_window() {
                     // the same wait for its answer (see `pinned_native_video_ended`).
                     if media.media_type.is_native_video() {
                         if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                            // The engine is the one player this app can tell what to do at the end of
+                            // the film while it runs, and the film on screen is the one the answer
+                            // is about: a pin adopts a hover's session rather than beginning one of
+                            // its own, so a pin's end of file has to be handed over here rather than
+                            // settled at a launch (see `apply_native_video_loop`).
+                            apply_native_video_loop(path);
+
                             if pinned_native_video_ended(path) {
                                 video_player::stop();
                                 ask_pin_walk(

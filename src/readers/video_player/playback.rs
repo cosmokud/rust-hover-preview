@@ -406,6 +406,24 @@ pub fn set_volume(volume: u32) {
     });
 }
 
+/// Hand the running session the loop the film on screen is played under.
+///
+/// The engine is the one player of this app's that can be told this *while its film runs*, and that
+/// is the whole of what makes the end of file on screen able to govern a session another film
+/// began: a pin adopts a hover's session rather than beginning one of its own, and a loop is
+/// otherwise a fact of the launch (see `pin_video_loops` and `pin_video_pauses_at_the_top`).
+///
+/// Nothing is asked of a session's own answer, because the engine does not give one — what is
+/// remembered is the answer last handed over, and asking twice for the same one writes once (see
+/// `Session::set_loop`). It does nothing where nothing is playing, which is a film that is over.
+pub fn apply_loop(loops: bool) {
+    SESSION.with(|slot| {
+        if let Some(session) = slot.borrow_mut().as_mut() {
+            session.set_loop(loops);
+        }
+    });
+}
+
 /// Take the sound that is playing to `seconds` into its file, which is what a start position
 /// the probe could not work out asks for once the engine has said how long the file is.
 ///

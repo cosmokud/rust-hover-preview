@@ -90,6 +90,10 @@ pub(super) struct Session {
     /// answers before the header is there, so the position is kept and made on the first tick
     /// that finds the engine loaded (see `apply_seek`).
     pending_seek: Option<f64>,
+    /// The loop mode the engine was last handed, kept because it is not a question the engine
+    /// answers: an engine that is loading, playing or stopped is asked for the same answer sixty
+    /// times a second, and only a disagreement is worth a call (see `set_loop`).
+    loop_wanted: bool,
     /// When the session was started, which bounds the wait for a pending seek: an engine that
     /// has not read the header of its file in this long is not going to, and a seek left
     /// standing is a seek made on every read of the clock after it.
@@ -222,6 +226,7 @@ impl Session {
             // first frame already on its clock.
             drawn: None,
             pending_seek: None,
+            loop_wanted: loop_,
             began: Instant::now(),
         };
 
@@ -246,6 +251,23 @@ impl Session {
 
         self.pending_seek = Some(seconds.max(0.0));
         self.take_pending();
+    }
+
+    /// Tell the engine what to do at the end of the file, where that disagrees with what it was
+    /// begun with.
+    ///
+    /// `SetLoop` is a property of a running engine rather than a fact of the load, which is the whole
+    /// of what lets the end of file *on screen* govern a session another film began: a pin adopts a
+    /// hover's session rather than beginning one of its own, and the answer only ever changes where
+    /// the pin's own end of file differs from the loop the hover launched it with (see
+    /// [`apply_loop`](super::playback::apply_loop)).
+    pub(super) fn set_loop(&mut self, loops: bool) {
+        if self.loop_wanted == loops {
+            return;
+        }
+
+        self.loop_wanted = loops;
+        let _ = unsafe { self.engine.SetLoop(loops) };
     }
 
     /// The seek this session is still owed, made where the engine is ready for one.
