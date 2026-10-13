@@ -939,13 +939,13 @@ pub fn run_preview_window() {
             // would be past its end — and so rewound — the instant it was let go of (see
             // `video_loop_action`).
             //
-            // **And it is asked of a pinned film as well as of a hovered one, and of the jump that
+            // **And it is asked of a pinned film as well as of a hovered one, and of the end of file that
             // film is played under rather than the one it was begun under.** A pin's file is a film
             // this app gives the loop to just as a hover's is, and for mpv — the one player a
             // take-up does not begin again — this tick is the only road its loop has: the clock was
-            // noted for the player the *hover* began, so reading the jump here is what lets
-            // `Pin Mode Jump → Loop` loop a film the hover was playing once, and a pin's step or a
-            // switch that is off stop one the hover was looping (see `pin_video_loops`).
+            // noted for the player the *hover* began, so reading the end of file here is what lets
+            // `End of File → Loop` loop a film the hover was playing once, and a pin's step or an
+            // end of file that is `Pause` stop one the hover was looping (see `pin_video_loops`).
             if let Some(film) = current_video_path.clone().or_else(pinned_path) {
                 let _ = video_loop_tick(pin_is_playing_current(), pin_video_loops(&film));
             }
@@ -1081,7 +1081,7 @@ pub fn run_preview_window() {
                             engine_failed = Some(failing);
                         }
                     }
-                    // A film the media engine plays for the pin whose jump is on and not a
+                    // A film the media engine plays for the pin whose end of file is `Continue`
                     // loop ends the same way a sound the engine plays does: the session is
                     // let go — which is also what stops the end being read again on the
                     // sixty ticks a second this loop turns — and the next file of the folder
@@ -1123,10 +1123,10 @@ pub fn run_preview_window() {
                         // found rather than on the next card repaint a quarter of a second
                         // away: what stands between two passes is the time it takes to start
                         // a player, and nothing of this side is to be added to it (see
-                        // `wrap_audio_player`). A pinned sound whose jump is on and not a loop
+                        // `wrap_audio_player`). A pinned sound whose end of file is `Continue`
                         // is not put round at all — its end asks for the next file of the
-                        // folder there, with the walk's own wait — and one whose jump switch is
-                        // off stops where it is, the card left held at the beginning with its
+                        // folder there, with the walk's own wait — and one whose end of file is
+                        // `Pause` stops where it is, the card left held at the beginning with its
                         // play button up.
                         if let Some(path) = current_show.as_ref().and_then(self::show_path) {
                             wrap_audio_player(
@@ -1140,14 +1140,14 @@ pub fn run_preview_window() {
                             );
 
                             // A sound the engine Windows has was asked to play the pinned
-                            // file once where the pin's jump is not a loop, so the end
+                            // file once where the pin's end of file is not `Loop`, so the end
                             // the engine reports for it is the end of the sound. Where that
                             // end is the next file of the folder, the session is let go — which
                             // is also what stops the end being read again on
                             // the sixty ticks a second this loop turns — and the walk is asked
                             // for, the same ask the caption's own **Next** button makes and the
                             // same wait for its answer. Where it is the card held instead — the
-                            // jump switch is off — the session is let go for the same reason and
+                            // end of file is `Pause` — the session is let go for the same reason and
                             // the card is left standing at the beginning of the file, which is
                             // what its play button now shows and what the press on it starts
                             // the sound again from (see `pinned_native_audio_end`).

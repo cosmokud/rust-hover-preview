@@ -347,9 +347,9 @@ pub(super) fn start_video_playback(
     // `-loop 0` is asked for only where it is right. A player begun at the beginning wraps to the
     // beginning by itself and so never reaches its own end, which is what keeps a hover — which
     // begins at zero — from closing its own preview by reaching the last frame of the file.
-    // And only where the jump says the film goes round: a film that is not to be looped plays
+    // And only where the end of file says the film goes round: a film that is not to be looped plays
     // its pass once, and its exit is what the pin's end answers — with a pass begun again, the
-    // next file, or nothing, as the jump says (see `loop_ended_pinned_player`).
+    // next file, or nothing, as the end of file says (see `loop_ended_pinned_player`).
     if !video_launch::loop_is_ours(seeked) && loop_ {
         cmd.args(["-loop", "0"]);
     }
@@ -500,8 +500,8 @@ fn start_mpv_video_playback(
         (x, y, x + width, y + height),
         start,
         // mpv's loop is always this app's to give — it pauses on its last frame rather than
-        // exiting — so the clock is kept for every film mpv is begun with, whatever the jump says
-        // at the launch: the jump is asked when the end comes, which is the only way a film the
+        // exiting — so the clock is kept for every film mpv is begun with, whatever the end of file says
+        // at the launch: the end of file is asked when the end comes, which is the only way a film the
         // *hover* played once can be looped by the pin it becomes (see `video_loop_action`).
         true,
     );
@@ -520,7 +520,7 @@ fn start_mpv_video_playback(
 /// loop is clocked from here, where the loop is this app's to give rather than the player's own.
 ///
 /// **`our_loop` is whether the loop of this player is this app's to give, and not whether it is
-/// going round.** The jump is read at the tick instead, which is what lets a film begun for a hover
+/// going round.** The end of file is read at the tick instead, which is what lets a film begun for a hover
 /// be looped — or stopped — by the pin it becomes: mpv is begun once and kept, while FFmpeg's
 /// player wraps to the beginning by itself only where it was begun at one, so that half stays a
 /// fact of the launch (see `loop_is_ours` and `pin_video_loops`).

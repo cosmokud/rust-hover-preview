@@ -1030,12 +1030,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // Add the "Video Preview" and "Audio Preview" submenus below `Preview Types`: each
     // kind's own place for what its previews are like — the level it is heard at, where
     // in the file it starts, and what its end does — so a film's settings and a sound's
-    // are two menus rather than one (see `append_jump_menu` and `append_pin_jump_menu`).
+    // are two menus rather than one (see `append_loop_item`, `append_shuffle_item` and
+    // `append_end_of_file_menu`).
     //
     // The `Video` and `Audio` halves the old `Volume` menu held are the `Volume` rows
     // inside these: the video's old rows renamed `Volume`, the sound's the same, with
     // the sound's `Audio Seek` renamed `Seek` and its `Pin Mode Audio Seek` renamed `Pin
-    // Mode Seek`. What follows each `Volume` is the kind's own `Jump` and `Pin Mode Jump`.
+    // Mode Seek`. What follows each `Volume` is the kind's own `Loop`, `Shuffle` and `End of File`.
     let (
         video_volume,
         audio_volume,

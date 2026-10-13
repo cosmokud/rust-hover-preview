@@ -545,8 +545,8 @@ pub(super) fn a_sound_that_has_played_to_its_end(
 /// [`audio_ended`] answers for a sound, read the same way — the engine's own word for
 /// the end of a file it was asked to play once, or a clock that has run to the length
 /// the engine says the file is while the film is still going. Only a film asked not to
-/// loop ever ends, so this is the one answer a pinned film whose jump is on and not a
-/// loop is advanced by, and every other film answers no for as long as it is on screen.
+/// loop ever ends, so this is the one answer a pinned film whose end of file is `Continue`
+/// is advanced by, and every other film answers no for as long as it is on screen.
 pub fn video_ended() -> bool {
     SESSION.with(|slot| {
         let slot = slot.borrow();
@@ -566,7 +566,7 @@ pub fn video_ended() -> bool {
 /// Whether the sound being played has run to the end of its file.
 ///
 /// Only a sound asked not to loop ever ends: a looping engine reports no end, so this
-/// is the one answer a pinned sound whose jump is on and not a loop is advanced by (see
+/// is the one answer a pinned sound whose end of file is `Continue` is advanced by (see
 /// `pin_audio_loops`), and every other sound answers no for as long as it
 /// is on screen.
 ///

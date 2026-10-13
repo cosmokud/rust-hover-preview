@@ -838,7 +838,7 @@ pub(super) fn start_audio_player(
         // The whole file, looped by the player itself: with no position given to it, the
         // position its loop returns to is the beginning of the file. A pass that is not
         // to be looped is played once instead, and its exit is what the wrap answers —
-        // with another pass, the next file, or nothing, as the jump says (see
+        // with another pass, the next file, or nothing, as the end of file says (see
         // `wrap_audio_player`).
         command.args(["-loop", "0"]);
     }
@@ -954,7 +954,7 @@ pub(super) fn current_pin_pass_end() -> PinPassEnd {
 /// has reached the end of its file at all — nothing at all where it has not, which is also
 /// every sound the engine is not playing and every sound the pin is not showing.
 ///
-/// The engine was asked not to loop a sound whose jump is not a loop when the player was
+/// The engine was asked not to loop a sound whose end of file is not a loop when the player was
 /// started (see `start_audio_playback_at`), so its end is its own to report: the engine's
 /// word for it, or its clock at the length of the file, is the end of the
 /// sound. A path is part of the question because the engine holds one sound at
@@ -998,12 +998,12 @@ pub(super) fn pinned_native_audio_end(path: &Path) -> Option<PinPassEnd> {
 /// played anything — is not started again: the card is left with no clock rather than with
 /// another player, which is the answer a file this machine will not play gets.
 ///
-/// A pinned sound whose jump is on and not a loop is not wrapped at all: the end of
+/// A pinned sound whose end of file is `Continue` is not wrapped at all: the end of
 /// its file is the end of the sound, and what is asked for in the player's place is
 /// the next file of the folder, the same ask the caption's own **Next** button
 /// makes (see `ask_pin_walk`). The walk is the planner's work, so the wait for
 /// its answer is the pin's own — the same arc a **Next** press turns (see
-/// `PinWait`). One whose jump switch is off neither goes round nor moves the pin on:
+/// `PinWait`). One whose end of file is `Pause` neither goes round nor moves the pin on:
 /// the card is left *held*, the file standing at its beginning with the play button up,
 /// which is where the press that starts the sound again begins it (see `PinPassEnd` and
 /// `toggle_pinned_audio`).
@@ -1044,13 +1044,13 @@ pub(super) fn wrap_audio_player(
         return;
     }
 
-    // What the end of the pass means: a pinned sound whose jump switch is off stops
+    // What the end of the pass means: a pinned sound whose end of file is `Pause` stops
     // at the end of its file — the pass is not gone round, no file is asked for, and the
     // card is left held at the beginning of it, where the play button it now shows starts
-    // the sound again from — and any other jump but a loop is the next file of the folder,
+    // the sound again from — and a `Continue` is the next file of the folder,
     // the same ask the caption's own **Next** button makes, with the same wait for its
-    // answer. A hovered sound whose jump switch is off
-    // stops the same way; one whose switch is on is wrapped below.
+    // answer. A hovered sound whose loop is off
+    // stops the same way; one whose loop is on is wrapped below.
     if pinned() && pinned_path().as_deref() == Some(path) {
         match current_pin_pass_end() {
             PinPassEnd::Wrap => {}
@@ -1115,7 +1115,7 @@ pub(super) fn wrap_audio_player(
 /// has just begun.
 ///
 /// `paused_at` is what a key answered by holding a pinned sound has to say in its place, and
-/// what the end of a pinned sound's pass says where the pin's jump switch is off — a player
+/// what the end of a pinned sound's pass says where the pin's end of file is `Pause` — a player
 /// this app ended is a player that measures nothing either way, and a card with no clock at all
 /// is a card that has forgotten where in the file the sound was left. A sound the engine Windows
 /// has is not in this branch, because that engine holds where it is told to and keeps reporting
