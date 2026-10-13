@@ -103,13 +103,11 @@ No Rust toolchain is needed.
 
 ### Optional: Enable Video Preview with mpv
 
-Prefer mpv where both players are installed: it decodes on the graphics card by default, draws its own subtitles, and seeks more cheaply than `ffplay`.
+For smoother playback and a better picture, install mpv: videos then play through it automatically, using your graphics card, with subtitles just working — including any `.srt` file beside the video. Without mpv everything works as before.
 
-mpv is a third player beside the two above. Where it is installed, **Best** plays *every* video through mpv — whatever the file's size, and whether or not it could be measured — decoding on the graphics card by default and drawing its own subtitles: the track the film itself marks as its default, and any `.srt` file beside it, so the app extracts no subtitle copy for it. (A film whose own track is not marked default, as FFmpeg's muxer writes them, shows none — mpv follows the file, and that is deliberate.) Where it is not installed the app behaves exactly as it does today, and a machine without mpv reads `video_engine=mpv` as `best`.
+The app finds `mpv.exe` beside itself, in your `PATH`, in `MPV Player` under Program Files, and in SVP 4's `mpv64`; where more than one is found, **Codecs → Videos → MPV** lets you pick which one plays.
 
-`mpv.exe` is looked for beside the app, in your `PATH`, and in the two folders its installers use — `MPV Player` under Program Files, and SVP 4's own `mpv64`. Where more than one is found, **Codecs → Videos → MPV** lists them and lets you pick which one plays.
-
-mpv ships no installer of its own, so every Windows build is a third-party one — [mpv's own installation page](https://mpv.io/installation/) says so as it lists them.
+mpv ships no installer of its own, so grab a Windows build from [mpv's own installation page](https://mpv.io/installation/).
 
 **Option A: winget**
 
