@@ -394,12 +394,6 @@ A pinned sound the media engine Windows has is playing — `Volume → Audio →
 
 What a fix has to decide, and why it is not a one-line change: either the engine's own pause state is exposed (`IsPaused` is read inside `readers/video_player/playback.rs` for `audio_ended` and not published) and a native hold is written into `audio_paused` so the chrome and the press agree with it, or a native hold is reworked to let the session go and write the second it stood at, the way the FFmpeg route already does (`toggle_pinned_audio`'s `Ffmpeg` arm, `restart_pinned_audio`) — the same shape the end of a pass now leaves the card in. Either way the fix needs a real Media Foundation session, so no hermetic test covers it today; it wants a check by hand on a machine with `Normalize` off.
 
-## An mpv Loop's Clock And Bar After A Wrap Or A Seek
-
-mpv is the one player this app asks to do things *while* it runs, rather than ending it and beginning another, and two of the app's own clocks are left behind by that. **A wrap does not move the pin's transport.** `video_loop_tick`'s mpv branch rebases the loop's own clock and nothing else, so after the first wrap a pinned mpv film's seek bar counts a whole pass behind the picture — the FFmpeg and media-engine routes rebase it because their wrap is a relaunch through `restart_pinned_player` → `transport.begun`. **And a seek does not move the loop's clock.** `seek_pinned_playback`'s mpv branch takes the film to the second and rebases the transport, while `VIDEO_LOOP` goes on counting from where it was — so a seek taken while that clock's reckoning is near the end of the file is undone by the next tick, which wraps the film back to zero.
-
-Both want the call the player's window already makes (`video_hw::rebase_video_loop_clock`, or a form that also names the second the way the wrap's own rebase does) made from those two call sites. Neither is covered hermetically: each wants a pinned film on the mpv route, a hand on the bar near the end of a pass, and a look at what the bar and the picture do at the wrap.
-
 ## Configuration
 
 - The `*_BEFORE_*` lists `repair_older_lists` reads are there for files written before this build, and can go when a file that old can no longer be in use — a release or two away. Nothing else carries the history of a list, and the names this app once wrote are not read at all any more: a file that holds one loses the line and nothing else has to know about it.
