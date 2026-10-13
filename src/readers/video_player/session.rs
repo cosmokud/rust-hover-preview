@@ -61,6 +61,10 @@ pub(super) struct Session {
     /// engine never ends, so the flag stays down and nothing reads it — and
     /// it is what a sound's card is advanced by when the pin's own loop
     /// switch is off (see [`audio_ended`](super::playback::audio_ended)).
+    ///
+    /// A word about a *pass*, which is why it goes down where the film is taken to another second:
+    /// a flag left up over a film that has been sent back to the top is a finished film read on
+    /// every tick after it (see [`seek`](Session::seek)).
     pub(super) ended: Arc<AtomicBool>,
     /// Whether a frame of the file has been handed over at all: a session is not a promise that
     /// a picture will come of it, since the engine accepts a file whose decoder and converter
@@ -248,6 +252,12 @@ impl Session {
         if !seconds.is_finite() {
             return;
         }
+
+        // **A film taken to another second is not a film that has reached its end**, and the engine's
+        // word for an end is a flag rather than a session's state: without this, a pass that ended and
+        // a pass begun again from the top answer the same way, and a film the press had taken back to
+        // its beginning would be read as a finished one on every tick after it (see `video_ended`).
+        self.ended.store(false, Ordering::Release);
 
         self.pending_seek = Some(seconds.max(0.0));
         self.take_pending();

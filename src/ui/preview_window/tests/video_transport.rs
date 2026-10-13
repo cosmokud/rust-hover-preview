@@ -1561,6 +1561,116 @@ fn the_end_of_file_that_pauses_is_left_to_the_rewind_where_it_can_take_the_film(
     }
 }
 
+/// The answer to a native film's end of pass, and the once-only writing of a hold.
+///
+/// The engine stops on the last frame of a film it was told to play once and says nothing more about
+/// it, so the bar is the only place a film that has finished can be told apart from one that is
+/// playing — `pin_playhead` and `pin_is_playing` read the hold rather than the engine. What must not
+/// happen is the hold being written again on every tick after it: a transition rewritten sixty times
+/// a second is a lock taken and an assertion re-asserted for as long as the pin is up, and a film
+/// whose length nothing has read has no second to be held at at all.
+#[test]
+fn a_native_pass_that_ends_in_a_hold_writes_the_bar_down_once() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (0, 0, 320, 240);
+    let film = PathBuf::from("native-end-film.mkv");
+    stand_pin(Some(a_playing_pin(&film, content)));
+
+    let mut wait = None;
+    assert!(
+        answer_native_pass_end(NativePassEnd::Hold, &film, None, &mut wait),
+        "the end of a pass that pauses is answered where the film's own end is read"
+    );
+    assert!(wait.is_none(), "a pause asks for no walk");
+
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("the pin is up");
+    assert_eq!(
+        transport.paused_at,
+        Some(200.0),
+        "the bar is held at the film's own length, which is where the engine stopped"
+    );
+    assert!(!pin_is_playing(&transport));
+
+    assert!(
+        !answer_native_pass_end(NativePassEnd::Hold, &film, None, &mut wait),
+        "and a tick after it has nothing left to write"
+    );
+
+    // A film whose length nothing has read has no second to be held at, and the button goes on
+    // claiming it — the corner the media engine's own reading is left with rather than a bar held
+    // somewhere arbitrary.
+    update_pin_transport(|transport| {
+        transport.paused_at = None;
+        transport.duration = None;
+    });
+    assert!(
+        !answer_native_pass_end(NativePassEnd::Hold, &film, None, &mut wait),
+        "and a film of no known length is not held at all"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.transport.paused_at)),
+        Some(None)
+    );
+
+    // The end that steps on is the walk's: the session let go and the next file of the folder asked
+    // for, which is the same ask the caption's own **Next** button makes.
+    assert!(
+        answer_native_pass_end(NativePassEnd::Walk, &film, None, &mut wait),
+        "an end of file that steps on asks for the next file"
+    );
+    assert!(wait.is_some(), "and waits for the answer");
+    assert!(
+        !answer_native_pass_end(NativePassEnd::Nothing, &film, None, &mut wait),
+        "while an end of file that asks for nothing writes nothing at all"
+    );
+
+    // The walk the answer asked for is taken back out of the slot it was left in rather than left
+    // for another test's run to find.
+    if let Ok(mut pending) = PIN_JOBS.0.lock() {
+        *pending = None;
+    }
+
+    stand_pin(previous_pin);
+}
+
+/// What a native film's own end of pass asks of the pin, from the two facts that decide it.
+///
+/// The engine is the one player that loops a film because it was told to, and it reports no end of
+/// one it is looping at all — so an ended pass is never a `Loop`'s: `Loop` is the engine playing the
+/// film round, `Continue` is the walk's next file, and `Pause` is the bar held on the film the engine
+/// has stopped on, which is the only thing that tells the bar the film is over (see
+/// `pinned_native_video_end`).
+#[test]
+fn a_native_films_end_of_file_is_read_from_the_engines_own_end() {
+    assert_eq!(
+        native_pass_end(PinEndOfFile::Loop, true),
+        NativePassEnd::Nothing,
+        "a film the engine is looping never ends, so the end of file is not this reading's"
+    );
+    assert_eq!(
+        native_pass_end(PinEndOfFile::Continue, true),
+        NativePassEnd::Walk,
+        "an end that steps on is the walk's next file"
+    );
+    assert_eq!(
+        native_pass_end(PinEndOfFile::Pause, true),
+        NativePassEnd::Hold,
+        "and an end that pauses is the bar held on the film the engine has stopped on"
+    );
+    assert_eq!(
+        native_pass_end(PinEndOfFile::Continue, false),
+        NativePassEnd::Nothing,
+        "a pass that is still being played is not one whose end is answered"
+    );
+    assert_eq!(native_pass_end(PinEndOfFile::Pause, false), NativePassEnd::Nothing);
+}
+
 /// The end of file the media engine is playing the film on screen under is the one that is on
 /// screen *now*, and not the one its session was begun with.
 ///
