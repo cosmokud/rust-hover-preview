@@ -473,7 +473,20 @@ pub fn run_preview_window() {
                 // the film's end with no player behind it, and a loop begun at the beginning
                 // here would stack a second relaunch onto the replacement already on its way.
                 if !pin_park_covers_a_relaunch() {
-                    loop_ended_pinned_player();
+                    // An advance already on its way is not asked for again (see
+                    // `loop_ended_pinned_player`): the wait, the walk and the load are
+                    // what say one is.
+                    let advance_busy = pin_walk.is_some()
+                        || pin_load.is_some()
+                        || pin_walk_wait.is_some()
+                        || pin_swap_hold.is_some()
+                        || pin_awaiting_box.is_some()
+                        || pin_held_pick.is_some();
+                    loop_ended_pinned_player(
+                        pin_walk_anchor(&pin_walk, &pin_walk_of_current),
+                        &mut pin_walk_wait,
+                        advance_busy,
+                    );
                 }
 
                 // A press that landed on the window the engine draws a document in, which is the
@@ -1055,6 +1068,25 @@ pub fn run_preview_window() {
                             engine_failed = Some(failing);
                         }
                     }
+                    // A film the media engine plays for the pin whose jump is on and not a
+                    // loop ends the same way a sound the engine plays does: the session is
+                    // let go — which is also what stops the end being read again on the
+                    // sixty ticks a second this loop turns — and the next file of the folder
+                    // is asked for, the same ask the caption's own **Next** button makes and
+                    // the same wait for its answer (see `pinned_native_video_ended`).
+                    if media.media_type.is_native_video() {
+                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                            if pinned_native_video_ended(path) {
+                                video_player::stop();
+                                ask_pin_walk(
+                                    path.to_path_buf(),
+                                    1,
+                                    pin_walk_anchor(&pin_walk, &pin_walk_of_current),
+                                );
+                                pin_walk_wait = Some(PinWait::new());
+                            }
+                        }
+                    }
                     // A sound's card is the one painted preview that changes while it is on
                     // screen: the clock and the bar under it are drawn from a player that is
                     // running, and a name the card has no room for is scrolled across it. The
@@ -1078,9 +1110,10 @@ pub fn run_preview_window() {
                         // found rather than on the next card repaint a quarter of a second
                         // away: what stands between two passes is the time it takes to start
                         // a player, and nothing of this side is to be added to it (see
-                        // `wrap_audio_player`). A pinned sound whose loop switch is off
+                        // `wrap_audio_player`). A pinned sound whose jump is on and not a loop
                         // is not put round at all — its end asks for the next file of the
-                        // folder there, with the walk's own wait.
+                        // folder there, with the walk's own wait — and one whose jump switch is
+                        // off stops where it is.
                         if let Some(path) = current_show.as_ref().and_then(self::show_path) {
                             wrap_audio_player(
                                 media,
@@ -1092,8 +1125,8 @@ pub fn run_preview_window() {
                             );
 
                             // A sound the engine Windows has was asked to play the pinned
-                            // file once where the pin's loop switch is off, so the end the
-                            // engine reports for it is the end of the sound: the session is
+                            // file once where the pin's jump is on and not a loop, so the end
+                            // the engine reports for it is the end of the sound: the session is
                             // let go — which is also what stops the end being read again on
                             // the sixty ticks a second this loop turns — and the next file
                             // of the folder is asked for, the same ask the caption's own
@@ -1416,6 +1449,7 @@ pub fn run_preview_window() {
                                         height,
                                         current_video_volume(),
                                         probed_picture(&result.path, width, height),
+                                        pin_video_loops(&result.path),
                                     );
                                 }
 
@@ -2501,11 +2535,14 @@ pub fn run_preview_window() {
                 // (see `abandon_pin_swap`).
                 abandon_pin_swap(&mut pin_swap_hold);
                 pin_arc_set(None);
-                // A pin that is a bubble has no window to show this in, so the file is held for
-                // the key rather than swapped in: what the user is doing behind a bubble is
-                // picking, and a bubble that took the pin down on the first pick would be a
-                // window lost for a file they did not ask to see (see `pin_bubble_pick`).
-                if pinned() && pin_is_collapsed() {
+                // A pin that is a bubble holds the file it is showing for the key rather than
+                // swapping in a file picked in the listing — but a step of the pin's own walk
+                // is swapped in even while collapsed, so that an automatic advance (a loop-end
+                // step, a wrap, a caption press held) starts its player while minimized rather
+                // than stalling silent: what the user is doing behind a bubble is picking, and
+                // a bubble that took the pin down on the first pick would be a window lost for
+                // a file they did not ask to see (see `pin_bubble_pick`).
+                if pinned() && pin_is_collapsed() && walk.is_none() {
                     pin_bubble_pick = Some(path);
                 } else if pinned() && (pin_update_enabled() || walk.is_some()) {
                     if pending_load.is_some() {

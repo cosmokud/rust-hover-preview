@@ -19,12 +19,12 @@ use super::commands::{
     set_font_background, set_font_scale, set_general_disk_cache_mb, set_hover_delay,
     set_html_background, set_image_background, set_image_cache_mb, set_image_disk_cache_mb,
     set_libreoffice_idle, set_markdown_mode, set_mpv_path, set_office_engine, set_office_engine_idle,
-    set_pin_minimize_to, set_pin_nav_audio, set_pin_nav_others, set_pin_nav_video,
+    set_pin_minimize_to, set_pin_jump_mode, set_pin_nav_audio, set_pin_nav_others, set_pin_nav_video,
     set_pin_mode_audio_seek, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
     set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
     set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
     set_video_scale, set_video_volume, set_webview_idle, toggle_check_for_updates,
-    toggle_engine_persistent,
+    toggle_engine_persistent, toggle_jump_enabled, toggle_pin_jump_enabled,
     toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_enabled,
     toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
@@ -53,7 +53,10 @@ use super::ids::{
     ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
     ID_TRAY_MPV_BASE, MPV_COMMANDS,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
-    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
+    ID_TRAY_AUDIO_JUMP_ENABLED, ID_TRAY_VIDEO_JUMP_ENABLED,
+    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_JUMP_BASE,
+    ID_TRAY_PIN_MODE_AUDIO_JUMP_ENABLED, ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
+    ID_TRAY_PIN_MODE_VIDEO_JUMP_BASE, ID_TRAY_PIN_MODE_VIDEO_JUMP_ENABLED,
     ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_AUDIO_CATEGORY, ID_TRAY_PIN_NAV_OTHERS_ALL,
     ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_NAV_VIDEO_CATEGORY,
     ID_TRAY_PIN_PAUSE_AUDIO,
@@ -71,7 +74,7 @@ use super::ids::{
     ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SUBTITLES, ID_TRAY_VIDEO_VOLUME_BASE,
     ID_TRAY_WEBVIEW_IDLE_BASE,
     TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND,
-    VIDEO_ENGINE_CHOICES, WM_TRAYICON,
+    PIN_JUMP_CHOICES, VIDEO_ENGINE_CHOICES, WM_TRAYICON,
 };
 use super::menus::show_context_menu;
 use super::submenus::open_codec_page;
@@ -282,12 +285,35 @@ unsafe extern "system" fn tray_window_proc(
                     // player rather than by anything on screen.
                     ID_TRAY_REMEMBER_VOLUME => toggle_remember_audio_volume(),
                     ID_TRAY_REMEMBER_VIDEO_VOLUME => toggle_remember_video_volume(),
-                    // The row below the `Video` half of the `Volume` submenu: whether a
-                    // film's own subtitle tracks are probed for and copied out at all,
+                    // The row below the `Video` half's `Volume`: whether a film's own
+                    // subtitle tracks are probed for and copied out at all,
                     // which is read where a probe runs and where a player is started
                     // rather than by anything on screen.
                     ID_TRAY_VIDEO_SUBTITLES => toggle_video_subtitles(),
-                    // A level of either half of the `Volume` submenu, by the position it was
+                    // Whether a hovered film or sound goes round at the end of it: the
+                    // `Jump → Enabled (Loop)` rows, one per kind.
+                    ID_TRAY_VIDEO_JUMP_ENABLED => toggle_jump_enabled(true),
+                    ID_TRAY_AUDIO_JUMP_ENABLED => toggle_jump_enabled(false),
+                    // Whether a pinned film or sound acts on its own jump at all: the
+                    // `Pin Mode Jump → Enabled` rows, one per kind.
+                    ID_TRAY_PIN_MODE_VIDEO_JUMP_ENABLED => toggle_pin_jump_enabled(true),
+                    ID_TRAY_PIN_MODE_AUDIO_JUMP_ENABLED => toggle_pin_jump_enabled(false),
+                    // What a pinned film or sound does at the end of it, by the position
+                    // the jump was listed at — the film's own range and the sound's.
+                    cmd if (ID_TRAY_PIN_MODE_VIDEO_JUMP_BASE
+                        ..ID_TRAY_PIN_MODE_VIDEO_JUMP_BASE + PIN_JUMP_CHOICES.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_pin_jump_mode(cmd - ID_TRAY_PIN_MODE_VIDEO_JUMP_BASE, true)
+                    }
+                    cmd if (ID_TRAY_PIN_MODE_AUDIO_JUMP_BASE
+                        ..ID_TRAY_PIN_MODE_AUDIO_JUMP_BASE + PIN_JUMP_CHOICES.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_pin_jump_mode(cmd - ID_TRAY_PIN_MODE_AUDIO_JUMP_BASE, false)
+                    }
+                    // A level of either half of the `Volume` rows inside `Video Preview` and
+                    // `Audio Preview`, by the position it was
                     // listed at. The two halves offer the same levels, so one table answers for
                     // both and each range is what says which setting was meant.
                     cmd if (ID_TRAY_VIDEO_VOLUME_BASE

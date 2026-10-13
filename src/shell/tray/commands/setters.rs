@@ -21,11 +21,12 @@
 
 use super::super::ids::{
     AUDIO_SEEK_CHOICES, AVOID_CHOICES, BITMAP_SCALE_CHOICES, CACHE_SIZE_CHOICES_MB,
-    DECODE_BUDGET_CHOICES_GB, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CUSTOM_THEMES,
+    DECODE_BUDGET_CHOICES_GB, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS,
+    TRAY_CUSTOM_THEMES,
 };
 use super::super::submenus::{
     afk_timer_secs_at, audio_scale_at, background_at, dds_background_at, document_scale_at,
-    engine_idle_at, html_background_at,
+    engine_idle_at, html_background_at, pin_jump_at,
 };
 
 use crate::app::dialogs;
@@ -612,6 +613,61 @@ pub(in super::super) fn set_pin_mode_audio_seek(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_mode_audio_seek = seek;
+        config.save();
+    }
+}
+
+/// The jump an item of a `Pin Mode Jump` submenu stands for, by the position it was
+/// listed at: the film's own jump or the sound's, written into the pin's setting
+/// rather than the hover's.
+///
+/// Nothing on screen is rebuilt: a file already playing is left where it is, and what
+/// a click here changes is what the *next* end does — go round, step on, or shuffle —
+/// the same bargain the seek beside it makes.
+pub(in super::super) fn set_pin_jump_mode(index: u16, video: bool) {
+    let Some(jump) = pin_jump_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        if video {
+            config.pin_mode_video_jump = jump;
+        } else {
+            config.pin_mode_audio_jump = jump;
+        }
+        config.save();
+    }
+}
+
+/// Whether a hovered film or sound goes round at the end of it, which is what the
+/// `Jump → Enabled (Loop)` row throws the other way round.
+///
+/// Nothing on screen is rebuilt: a file already playing is left where it is, and what a
+/// click here changes is what the *next* end does.
+pub(in super::super) fn toggle_jump_enabled(video: bool) {
+    if let Ok(mut config) = CONFIG.lock() {
+        if video {
+            config.video_jump_enabled = !config.video_jump_enabled;
+        } else {
+            config.audio_jump_enabled = !config.audio_jump_enabled;
+        }
+        config.save();
+    }
+}
+
+/// Whether a pinned film or sound acts on its own jump mode at all, which is what the
+/// `Pin Mode Jump → Enabled` row throws the other way round.
+///
+/// Nothing on screen is rebuilt either: a file already playing is left where it is, and
+/// what a click here changes is what the *next* end does — a switch that is off stops
+/// the film or the sound at the end of it rather than any of the three jumps.
+pub(in super::super) fn toggle_pin_jump_enabled(video: bool) {
+    if let Ok(mut config) = CONFIG.lock() {
+        if video {
+            config.pin_mode_video_jump_enabled = !config.pin_mode_video_jump_enabled;
+        } else {
+            config.pin_mode_audio_jump_enabled = !config.pin_mode_audio_jump_enabled;
+        }
         config.save();
     }
 }

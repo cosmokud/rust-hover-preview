@@ -359,7 +359,7 @@ fn menu_flyout_tier(
 /// The seek flyout the menu's Seek row opens, placed from
 /// the main menu the row belongs to: a small gap right of
 /// the main menu's own right edge, top-aligned with the
-/// Seek row — the main menu's third row — so the menu the
+/// Seek row — the main menu's last row — so the menu the
 /// flyout came from stays wholly visible beside it.
 ///
 /// Where the flyout does not fit to the right of the menu,
@@ -391,13 +391,14 @@ pub(crate) fn menu_flyout_from_menu(
     let (panel_width, row_height, pad, _gap) = menu_panel_sizes(width, dpi);
 
     // The flyout hangs from the Seek row, which is the
-    // main menu's third row: its top is that row's own
+    // main menu's last row: its top is that row's own
     // top, moved up only as far as the window's own
     // bottom makes it and never past the top — the holding
     // the menu's own panel has, because a flyout off the
     // bottom is rows a hand cannot read.
     let flyout_height = (pad * 2 + flyout_rows.len() as i32 * row_height).max(1);
-    let top = (menu.rows_top + 2 * menu.row_height)
+    let hang = (menu.rows - 1).max(0);
+    let top = (menu.rows_top + hang * menu.row_height)
         .min(height.saturating_sub(flyout_height).max(0))
         .max(0);
 

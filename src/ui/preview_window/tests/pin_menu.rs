@@ -6,21 +6,21 @@ use super::*;
 /// pattern: `SeekSettings` in `pin_audio_seek`).
 struct MenuSettings {
     seek: AudioSeek,
-    shuffle: bool,
-    loop_: bool,
+    enabled: bool,
+    jump: PinJumpMode,
 }
 
 impl MenuSettings {
-    fn put(seek: AudioSeek, shuffle: bool, loop_: bool) -> Self {
+    fn put(seek: AudioSeek, enabled: bool, jump: PinJumpMode) -> Self {
         let mut config = CONFIG.lock().expect("the configuration");
         let was = MenuSettings {
             seek: config.pin_mode_audio_seek,
-            shuffle: config.pin_mode_audio_shuffle,
-            loop_: config.pin_mode_audio_loop,
+            enabled: config.pin_mode_audio_jump_enabled,
+            jump: config.pin_mode_audio_jump,
         };
         config.pin_mode_audio_seek = seek;
-        config.pin_mode_audio_shuffle = shuffle;
-        config.pin_mode_audio_loop = loop_;
+        config.pin_mode_audio_jump_enabled = enabled;
+        config.pin_mode_audio_jump = jump;
 
         was
     }
@@ -30,8 +30,8 @@ impl Drop for MenuSettings {
     fn drop(&mut self) {
         if let Ok(mut config) = CONFIG.lock() {
             config.pin_mode_audio_seek = self.seek;
-            config.pin_mode_audio_shuffle = self.shuffle;
-            config.pin_mode_audio_loop = self.loop_;
+            config.pin_mode_audio_jump_enabled = self.enabled;
+            config.pin_mode_audio_jump = self.jump;
         }
     }
 }
@@ -107,34 +107,46 @@ impl Drop for PutBack {
 }
 
 /// The rows the menu holds are the settings it is the face of:
-/// the first page is the two mode toggles — each carrying the
-/// checkbox of the setting it stands for, checked where the
-/// setting is on and empty where it is off — and the row that
-/// opens the seek choices, and the seek page is the four
-/// choices, in the order the tray lists them in, with the one
-/// the pin plays by carrying its disc.
+/// the main page is the two doors — the row that opens the jump
+/// choices and the row that opens the seek choices, neither carrying
+/// a mark — the jump flyout is the master switch with its check and
+/// the three jumps with the one the pin plays by carrying its disc,
+/// and the seek flyout is the four choices, in the order the tray
+/// lists them in, with the one the pin plays by carrying its disc.
 #[test]
 fn the_menu_holds_the_settings_it_is_the_face_of() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Middle, true, false);
+    let _settings = MenuSettings::put(AudioSeek::Middle, true, PinJumpMode::Shuffle);
 
     let top = menu_rows();
     let labels: Vec<&str> = top.iter().map(|row| row.label.as_str()).collect();
-    assert_eq!(labels, ["Shuffle", "Loop", "Seek"]);
+    assert_eq!(labels, ["Jump", "Seek"]);
     assert!(
-        matches!(top[0].mark, pin_chrome::MenuMark::Check(true)),
-        "shuffle is on, so its row is checked"
+        matches!(top[0].mark, pin_chrome::MenuMark::None),
+        "the jump row opens the choices, so it carries no mark"
     );
     assert!(
-        matches!(top[1].mark, pin_chrome::MenuMark::Check(false)),
-        "loop is off, so its row is an empty box"
-    );
-    assert!(
-        matches!(top[2].mark, pin_chrome::MenuMark::None),
+        matches!(top[1].mark, pin_chrome::MenuMark::None),
         "the seek row opens the choices, so it carries no mark"
+    );
+
+    let jumps = jump_rows();
+    let labels: Vec<&str> = jumps.iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(labels, ["Enabled", "Loop", "To Next", "Shuffle"]);
+    assert!(
+        matches!(jumps[0].mark, pin_chrome::MenuMark::Check(true)),
+        "jump is on, so its row is checked"
+    );
+    let marked = jumps
+        .iter()
+        .position(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet));
+    assert_eq!(
+        marked,
+        Some(3),
+        "the pin shuffles, so that choice is the one marked"
     );
 
     let choices = seek_rows();
@@ -153,21 +165,25 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
     );
 
     // A configuration that names the defaults is a menu that
-    // marks the defaults: shuffle off, loop on, and the
+    // marks the defaults: jump on and looping, and the
     // beginning the way a pinned sound starts.
     let _settings = MenuSettings::put(
         DEFAULT_PIN_MODE_AUDIO_SEEK,
-        DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
-        DEFAULT_PIN_MODE_AUDIO_LOOP,
+        DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED,
+        DEFAULT_PIN_MODE_AUDIO_JUMP,
     );
-    let top = menu_rows();
+    let jumps = jump_rows();
     assert!(
-        matches!(top[0].mark, pin_chrome::MenuMark::Check(false)),
-        "shuffle starts off, so its row is an empty box"
+        matches!(jumps[0].mark, pin_chrome::MenuMark::Check(true)),
+        "jump starts on, so its row is checked"
     );
-    assert!(
-        matches!(top[1].mark, pin_chrome::MenuMark::Check(true)),
-        "loop starts on, so its row is checked"
+    let marked = jumps
+        .iter()
+        .position(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet));
+    assert_eq!(
+        marked,
+        Some(1),
+        "a pinned sound loops, so that choice is the one marked"
     );
     let choices = seek_rows();
     let marked = choices
@@ -191,7 +207,7 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -218,21 +234,20 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
         "the panel's top-left is the point the right-click landed"
     );
 
-    // It opens on its main page: the two toggles and the Seek row, each
-    // carrying the mark of the setting it stands for.
+    // It opens on its main page: the Jump and Seek doors, neither carrying a mark.
     let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
-    assert_eq!(labels, ["Shuffle", "Loop", "Seek"]);
+    assert_eq!(labels, ["Jump", "Seek"]);
     assert!(
-        matches!(paint.rows[0].mark, pin_chrome::MenuMark::Check(false)),
-        "shuffle is off, so its row is an empty box"
+        matches!(paint.rows[0].mark, pin_chrome::MenuMark::None),
+        "the jump row opens the choices, so it carries no mark"
     );
     assert!(
-        matches!(paint.rows[1].mark, pin_chrome::MenuMark::Check(true)),
-        "loop is on, so its row is checked"
+        matches!(paint.rows[1].mark, pin_chrome::MenuMark::None),
+        "the seek row opens the choices, so it carries no mark"
     );
     assert!(
         paint.flyout.is_none(),
-        "the main page is the menu's three rows"
+        "the main page is the menu's two rows"
     );
 
     // A second right-click moves the panel to the new point, and the menu
@@ -296,7 +311,7 @@ fn the_menu_carries_its_arrow_with_the_flyout_down() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -355,21 +370,17 @@ fn the_menu_carries_its_arrow_with_the_flyout_down() {
     }
 }
 
-/// A press on one of the two mode rows turns the setting it
-/// stands for over, writes it down, and puts the panel away:
-/// the row is a check toggle, so a press on it is an answer
-/// rather than a door. The setting is written to `config.ini`
-/// the way every setting this app's own menus write is, which
-/// is why the file the press writes is put back what it was
-/// when the test is done.
+/// A press on the Jump row is the door its flyout comes through: the
+/// flyout opens beside the menu, and the menu itself stays up, its
+/// two rows still showing. A hand that has come to press rather than
+/// wait for the hover does not have to.
 #[test]
-fn a_press_on_a_mode_row_turns_its_setting_over_and_writes_it_down() {
+fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _file = ConfigFilePutBack::take();
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -377,24 +388,69 @@ fn a_press_on_a_mode_row_turns_its_setting_over_and_writes_it_down() {
     let Some(paint) = pinned_menu_geometry() else {
         panic!("a menu that is up is painted");
     };
+    assert!(paint.flyout.is_none(), "the menu opens on its main page");
 
-    // The middle of the first row, which is the row the
-    // Shuffle setting is the face of.
+    // The middle of the Jump row, the main menu's first row.
     let x = (paint.popup.panel.left + paint.popup.panel.right) / 2;
     let y = paint.popup.rows_top + paint.popup.row_height / 2;
     assert!(
         unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
-        "a hand on a row of the menu is the menu's own"
+        "a hand on the Jump row is the menu's own"
+    );
+
+    // The menu is still up, on its two rows, with the flyout up beside it.
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("the menu is still up")
+    };
+    assert!(paint.flyout.is_some(), "the press opened the flyout");
+    let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(labels, ["Jump", "Seek"]);
+}
+
+/// A press on the Jump flyout's first row turns the master switch over, writes it
+/// down, and puts the panel away: the row is a check toggle, so a press on it is an
+/// answer rather than a door. The setting is written to `config.ini` the way every
+/// setting this app's own menus write is, which is why the file the press writes is
+/// put back what it was when the test is done.
+#[test]
+fn a_press_on_the_jump_enabled_row_turns_it_over_and_writes_it_down() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _file = ConfigFilePutBack::take();
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    with_pin(|pin| {
+        pin.menu.open = true;
+        pin.menu.jump = true;
+    });
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("a menu that is up is painted");
+    };
+    let Some(flyout) = paint.flyout.as_ref() else {
+        panic!("the jump flyout is up")
+    };
+
+    // The middle of the flyout's first row, which is the row the
+    // Enabled switch is the face of.
+    let x = (flyout.popup.panel.left + flyout.popup.panel.right) / 2;
+    let y = flyout.popup.rows_top + flyout.popup.row_height / 2;
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on a row of the flyout is the menu's own"
     );
 
     // The setting is the opposite of what it was, in the
     // configuration the press holds...
     assert!(
-        CONFIG
+        !CONFIG
             .lock()
             .expect("the configuration")
-            .pin_mode_audio_shuffle,
-        "shuffle was off, so the press turned it on"
+            .pin_mode_audio_jump_enabled,
+        "jump was on, so the press turned it off"
     );
     // ... and in the file the press wrote it down to, which
     // is what a read of the configuration from where it
@@ -402,17 +458,17 @@ fn a_press_on_a_mode_row_turns_its_setting_over_and_writes_it_down() {
     // all.
     if crate::config::config::AppConfig::config_path().is_some() {
         assert!(
-            crate::config::config::AppConfig::load().pin_mode_audio_shuffle,
+            !crate::config::config::AppConfig::load().pin_mode_audio_jump_enabled,
             "the file the press wrote holds the setting turned over"
         );
     }
 
-    // The rows show the setting as it now is: the box the
-    // first row carries is checked.
-    let rows = menu_rows();
+    // The rows show the setting as it now is: the switch row
+    // is unchecked.
+    let rows = jump_rows();
     assert!(
-        matches!(rows[0].mark, pin_chrome::MenuMark::Check(true)),
-        "the Shuffle row is checked now"
+        matches!(rows[0].mark, pin_chrome::MenuMark::Check(false)),
+        "the Enabled row is unchecked now"
     );
 
     // And the panel is away, because a toggle is an answer
@@ -423,57 +479,65 @@ fn a_press_on_a_mode_row_turns_its_setting_over_and_writes_it_down() {
     );
 }
 
-/// The second mode row turns its own setting over the same
-/// way: the Loop row is the checkbox of the loop setting,
-/// and a press on it is the press on the Shuffle row's
-/// own, asked of the other row.
+/// A press on one of the jump flyout's choice rows makes that jump the one the pin
+/// plays by from then on, and the menu goes away with the answer — the same bargain
+/// the seek flyout's rows make (see `the_flyout_s_rows_answer_presses`).
 #[test]
-fn a_press_on_the_loop_row_turns_the_loop_setting_over() {
+fn a_press_on_a_jump_choice_sets_the_jump_and_puts_the_menu_away() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
     let _file = ConfigFilePutBack::take();
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
-    with_pin(|pin| pin.menu.open = true);
+    with_pin(|pin| {
+        pin.menu.open = true;
+        pin.menu.jump = true;
+    });
     let Some(paint) = pinned_menu_geometry() else {
         panic!("a menu that is up is painted");
     };
+    let Some(flyout) = paint.flyout.as_ref() else {
+        panic!("the jump flyout is up")
+    };
 
-    // The middle of the second row, which is the row the
-    // Loop setting is the face of.
-    let x = (paint.popup.panel.left + paint.popup.panel.right) / 2;
-    let y = paint.popup.rows_top + paint.popup.row_height + paint.popup.row_height / 2;
+    // The middle of the flyout's `To Next` row, which is the jump the pin is not
+    // playing by: Loop is on, so the press chooses To Next.
+    let x = (flyout.popup.panel.left + flyout.popup.panel.right) / 2;
+    let y = flyout.popup.rows_top + 2 * flyout.popup.row_height + flyout.popup.row_height / 2;
     assert!(
         unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
-        "a hand on a row of the menu is the menu's own"
+        "a hand on a row of the flyout is the menu's own"
     );
 
-    assert!(
-        !CONFIG
-            .lock()
-            .expect("the configuration")
-            .pin_mode_audio_loop,
-        "loop was on, so the press turned it off"
+    assert_eq!(
+        CONFIG.lock().expect("the configuration").pin_mode_audio_jump,
+        PinJumpMode::ToNext,
+        "the press chose To Next, so the pin plays To Next now"
     );
     if crate::config::config::AppConfig::config_path().is_some() {
-        assert!(
-            !crate::config::config::AppConfig::load().pin_mode_audio_loop,
-            "the file the press wrote holds the setting turned over"
+        assert_eq!(
+            crate::config::config::AppConfig::load().pin_mode_audio_jump,
+            PinJumpMode::ToNext,
+            "the file the press wrote holds the choice made"
         );
     }
 
-    let rows = menu_rows();
-    assert!(
-        matches!(rows[1].mark, pin_chrome::MenuMark::Check(false)),
-        "the Loop row is an empty box now"
+    let rows = jump_rows();
+    let marked = rows
+        .iter()
+        .position(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet));
+    assert_eq!(
+        marked,
+        Some(2),
+        "To Next is the jump in force now"
     );
     assert!(
         pinned_menu_geometry().is_none(),
-        "and the panel is put away"
+        "and the whole menu goes away with the choice"
     );
 }
 
@@ -487,7 +551,7 @@ fn a_press_outside_the_panel_puts_it_away() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -524,7 +588,7 @@ fn the_seek_row_opens_its_flyout_beside_the_menu() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Middle, true, false);
+    let _settings = MenuSettings::put(AudioSeek::Middle, true, PinJumpMode::Shuffle);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -553,7 +617,7 @@ fn the_seek_row_opens_its_flyout_beside_the_menu() {
     );
     assert_eq!(
         flyout.popup.panel.top,
-        paint.popup.rows_top + 2 * paint.popup.row_height,
+        paint.popup.rows_top + paint.popup.row_height,
         "the flyout is top-aligned with the Seek row"
     );
 
@@ -598,7 +662,7 @@ fn the_flyout_s_rows_answer_presses() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Remember, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Remember, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -663,7 +727,7 @@ fn a_choice_made_in_the_flyout_is_written_down_and_puts_the_whole_menu_away() {
         .unwrap_or_else(|e| e.into_inner());
 
     let _file = ConfigFilePutBack::take();
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -721,7 +785,7 @@ fn a_choice_made_in_the_flyout_is_written_down_and_puts_the_whole_menu_away() {
 
 /// A press on the Seek row is the door the flyout comes through: the
 /// flyout opens beside the menu, and the menu itself stays up, its
-/// three rows still showing. A hand that has come to press rather than
+/// two rows still showing. A hand that has come to press rather than
 /// wait for the hover does not have to.
 #[test]
 fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
@@ -729,7 +793,7 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -740,24 +804,24 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
     assert!(paint.flyout.is_none(), "the menu opens on its main page");
 
     // The middle of the Seek row, the main menu's
-    // third row.
+    // last row.
     let x = (paint.popup.panel.left + paint.popup.panel.right) / 2;
     let y = paint.popup.rows_top
-        + 2 * paint.popup.row_height
+        + paint.popup.row_height
         + paint.popup.row_height / 2;
     assert!(
         unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
         "a hand on the Seek row is the menu's own"
     );
 
-    // The menu is still up, on its three rows, with the flyout up
+    // The menu is still up, on its two rows, with the flyout up
     // beside it.
     let Some(paint) = pinned_menu_geometry() else {
         panic!("the menu is still up")
     };
     assert!(paint.flyout.is_some(), "the press opened the flyout");
     let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
-    assert_eq!(labels, ["Shuffle", "Loop", "Seek"]);
+    assert_eq!(labels, ["Jump", "Seek"]);
 }
 
 /// A press outside both panels puts the whole menu
@@ -772,7 +836,7 @@ fn a_press_outside_both_panels_puts_the_whole_menu_away() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -861,7 +925,7 @@ fn hovering_the_seek_row_opens_the_flyout_after_a_short_delay() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -870,7 +934,7 @@ fn hovering_the_seek_row_opens_the_flyout_after_a_short_delay() {
         pin.menu.point = (20, 20);
     });
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek = on_screen(menu_row_point(&paint, 2));
+    let seek = on_screen(menu_row_point(&paint, 1));
 
     let t0 = Instant::now();
 
@@ -902,7 +966,7 @@ fn leaving_the_seek_row_before_the_delay_cancels_its_flyout() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -911,17 +975,17 @@ fn leaving_the_seek_row_before_the_delay_cancels_its_flyout() {
         pin.menu.point = (20, 20);
     });
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek = on_screen(menu_row_point(&paint, 2));
-    let shuffle = on_screen(menu_row_point(&paint, 0));
+    let seek = on_screen(menu_row_point(&paint, 1));
+    let jump = on_screen(menu_row_point(&paint, 0));
 
     let t0 = Instant::now();
     tick(Some(seek), t0);
     // The pointer leaves the row before the delay: the timer is cleared.
-    tick(Some(shuffle), t0 + Duration::from_millis(50));
+    tick(Some(jump), t0 + Duration::from_millis(50));
     assert!(!flyout_is_up(), "it did not open before the delay");
 
     // And it never opens on this rest, however long it lasts.
-    tick(Some(shuffle), t0 + Duration::from_millis(400));
+    tick(Some(jump), t0 + Duration::from_millis(400));
     assert!(
         !flyout_is_up(),
         "leaving the Seek row before the delay cancels the flyout"
@@ -937,7 +1001,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -948,7 +1012,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
 
     // Open the flyout by resting on the Seek row past the delay.
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek = on_screen(menu_row_point(&paint, 2));
+    let seek = on_screen(menu_row_point(&paint, 1));
     let t0 = Instant::now();
     tick(Some(seek), t0);
     tick(Some(seek), t0 + Duration::from_millis(200));
@@ -970,7 +1034,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
     let flyout = paint.flyout.as_ref().expect("the flyout is up");
     let gap = on_screen((
         (paint.popup.panel.right + flyout.popup.panel.left) / 2,
-        paint.popup.rows_top + 2 * paint.popup.row_height + paint.popup.row_height / 2,
+        paint.popup.rows_top + paint.popup.row_height + paint.popup.row_height / 2,
     ));
     tick(Some(gap), t0 + Duration::from_millis(400));
     assert!(
@@ -978,10 +1042,10 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
         "the flyout stays up while the pointer crosses the gap"
     );
 
-    // On the Shuffle row: it hides.
-    let shuffle = on_screen(menu_row_point(&paint, 0));
+    // On the Jump row: it hides.
+    let jump = on_screen(menu_row_point(&paint, 0));
     assert!(
-        tick(Some(shuffle), t0 + Duration::from_millis(500)),
+        tick(Some(jump), t0 + Duration::from_millis(500)),
         "the flyout going is a change worth a repaint"
     );
     assert!(
@@ -990,7 +1054,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
     );
 
     // Opened again, then the pointer leaves the menu entirely: it hides.
-    let seek = on_screen(menu_row_point(&paint, 2));
+    let seek = on_screen(menu_row_point(&paint, 1));
     tick(Some(seek), t0 + Duration::from_millis(600));
     tick(Some(seek), t0 + Duration::from_millis(800));
     assert!(flyout_is_up(), "the flyout opened again");
@@ -1010,7 +1074,7 @@ fn the_row_under_the_pointer_is_the_row_that_is_washed() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -1019,18 +1083,18 @@ fn the_row_under_the_pointer_is_the_row_that_is_washed() {
         pin.menu.point = (20, 20);
     });
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let loop_row = on_screen(menu_row_point(&paint, 1));
+    let seek_row = on_screen(menu_row_point(&paint, 1));
     let t0 = Instant::now();
 
     assert!(
-        tick(Some(loop_row), t0),
+        tick(Some(seek_row), t0),
         "the row under the pointer is a change worth a repaint"
     );
     let paint = pinned_menu_geometry().expect("the menu is up");
     assert_eq!(
         paint.hover,
         Some(1),
-        "the Loop row is the one the pointer is on"
+        "the Seek row is the one the pointer is on"
     );
     assert!(
         paint.flyout.is_none(),
@@ -1064,7 +1128,7 @@ fn the_loop_takes_a_foreign_press_ask_and_puts_the_menu_away() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 
@@ -1104,7 +1168,7 @@ fn closing_the_menu_from_the_window_side_puts_both_panels_away() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let _settings = MenuSettings::put(AudioSeek::Start, false, true);
+    let _settings = MenuSettings::put(AudioSeek::Start, true, PinJumpMode::Loop);
     let _put_back = PutBack(take_pin_for_a_test());
     stand_pin(Some(sound_pin()));
 

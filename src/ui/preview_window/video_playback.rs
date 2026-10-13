@@ -53,6 +53,46 @@ pub(super) fn player_draws_subtitles(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a hovered film loops, read when a player is started rather than when the
+/// setting changes: a preview is a few seconds long, and the next one is played at
+/// whatever the setting is by then.
+pub(super) fn current_video_jump_enabled() -> bool {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.video_jump_enabled)
+        .unwrap_or(DEFAULT_VIDEO_JUMP_ENABLED)
+}
+
+/// What a pinned film does at the end of it, and whether that answer is acted on at
+/// all — the film's own jump mode and its master switch, read the way the hover's
+/// loop is and at the same moment.
+///
+/// `Loop` is the film beginning again, `To Next` the file beside it, `Shuffle` a
+/// random film of the folder, and a switch that is off is the film stopping at the
+/// end of it rather than any of the three (see `loop_ended_pinned_player`).
+pub(super) fn current_pin_mode_video_jump() -> (bool, PinJumpMode) {
+    CONFIG
+        .lock()
+        .map(|cfg| (cfg.pin_mode_video_jump_enabled, cfg.pin_mode_video_jump))
+        .unwrap_or((
+            DEFAULT_PIN_MODE_VIDEO_JUMP_ENABLED,
+            DEFAULT_PIN_MODE_VIDEO_JUMP,
+        ))
+}
+
+/// Whether the film `path` is showing goes round on its own: a hovered film loops
+/// where its own jump switch says so, and a pinned one where the pin's jump is both
+/// on and a loop — every other film plays its pass once, and the end of it is what
+/// either moves the pin on or stops it (see `loop_ended_pinned_player`).
+pub(super) fn pin_video_loops(path: &Path) -> bool {
+    if pinned() && pinned_path().as_deref() == Some(path) {
+        let (enabled, jump) = current_pin_mode_video_jump();
+        enabled && jump == PinJumpMode::Loop
+    } else {
+        current_video_jump_enabled()
+    }
+}
+
 /// The player a preview holds: the process this app began, or — under test — the id one would
 /// have been given.
 ///
@@ -304,10 +344,18 @@ pub(super) fn start_video_playback(
     // instead (see `video_launch::loop_is_ours` and `video_loop_tick`).
     let seeked = start > 0.0;
 
+    // Whether the film goes round on its own, read here, at the launch, for the reason
+    // the volume beside it is: a film already playing was launched with the answer that
+    // stood then and is kept playing with it (see `pin_video_loops`).
+    let loop_ = pin_video_loops(path);
+
     // `-loop 0` is asked for only where it is right. A player begun at the beginning wraps to the
     // beginning by itself and so never reaches its own end, which is what keeps a hover — which
     // begins at zero — from closing its own preview by reaching the last frame of the file.
-    if !video_launch::loop_is_ours(seeked) {
+    // And only where the jump says the film goes round: a film that is not to be looped plays
+    // its pass once, and its exit is what the pin's end answers — with a pass begun again, the
+    // next file, or nothing, as the jump says (see `loop_ended_pinned_player`).
+    if !video_launch::loop_is_ours(seeked) && loop_ {
         cmd.args(["-loop", "0"]);
     }
 
@@ -368,7 +416,7 @@ pub(super) fn start_video_playback(
             player,
             (x, y, x + width, y + height),
             start,
-            video_launch::loop_is_ours(seeked),
+            video_launch::loop_is_ours(seeked) && loop_,
         );
     }
 
@@ -456,7 +504,11 @@ fn start_mpv_video_playback(
         &child,
         (x, y, x + width, y + height),
         start,
-        true,
+        // mpv's loop is always this app's to give — it pauses on its last frame rather
+        // than exiting — so the clock is kept only where the jump says the film goes
+        // round: a film that is not to be looped is left paused at its end (see
+        // `video_loop_tick`).
+        pin_video_loops(path),
     );
 
     Some(child)

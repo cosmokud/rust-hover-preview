@@ -19,8 +19,8 @@ use super::defaults::{
 };
 use super::setting_types::{
     sanitize_afk_timer_secs, sanitize_dds_background, sanitize_html_background, AudioSeek,
-    AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewScale,
-    TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine,
+    AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinJumpMode, PinMinimizeTo, PinNavFileTypes,
+    PreviewScale, TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine,
 };
 
 impl AppConfig {
@@ -211,13 +211,33 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
-            "pin_mode_audio_shuffle",
-            Some(self.pin_mode_audio_shuffle.to_string()),
+            "pin_mode_audio_jump",
+            Some(self.pin_mode_audio_jump.as_str().to_string()),
         );
         ini.set(
             CONFIG_SECTION,
-            "pin_mode_audio_loop",
-            Some(self.pin_mode_audio_loop.to_string()),
+            "pin_mode_audio_jump_enabled",
+            Some(self.pin_mode_audio_jump_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_mode_video_jump",
+            Some(self.pin_mode_video_jump.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_mode_video_jump_enabled",
+            Some(self.pin_mode_video_jump_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "video_jump_enabled",
+            Some(self.video_jump_enabled.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "audio_jump_enabled",
+            Some(self.audio_jump_enabled.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -722,17 +742,63 @@ impl AppConfig {
                 self.pin_mode_audio_seek = seek;
             }
         }
-        // Whether a pinned sound's next file is a random one of the
-        // folder's sounds, and whether it goes round at the end of its
-        // file, read the way every yes-or-no setting is: a file written
-        // before either setting existed has no key for it and leaves the
-        // setting where this build starts, and a value that is not a yes
-        // or a no is left there too.
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_shuffle") {
-            self.pin_mode_audio_shuffle = value;
+        // What a pinned sound does at the end of its file, and whether that
+        // answer is acted on at all — the pin's own jump mode and its master
+        // switch, read the way every named choice and yes-or-no setting is. A
+        // file written before either key existed leaves the setting where this
+        // build starts, and a value that names no jump is left there too. A
+        // file that still names the retired `pin_mode_audio_shuffle`/`loop`
+        // pair seeds the mode once where the new key is absent — a loop left
+        // on is the sound beginning again, a loop off with a shuffle on is a
+        // random sound, and anything else is the file beside it — and is not
+        // written back, so the seeding happens once (see `differs`).
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_mode_audio_jump") {
+            if let Some(jump) = PinJumpMode::from_str(&value) {
+                self.pin_mode_audio_jump = jump;
+            }
+        } else {
+            let looped = ini
+                .getboolcoerce(CONFIG_SECTION, "pin_mode_audio_loop")
+                .ok()
+                .flatten()
+                .unwrap_or(true);
+            let shuffled = ini
+                .getboolcoerce(CONFIG_SECTION, "pin_mode_audio_shuffle")
+                .ok()
+                .flatten()
+                .unwrap_or(false);
+            self.pin_mode_audio_jump = if looped {
+                PinJumpMode::Loop
+            } else if shuffled {
+                PinJumpMode::Shuffle
+            } else {
+                PinJumpMode::ToNext
+            };
         }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_loop") {
-            self.pin_mode_audio_loop = value;
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_jump_enabled")
+        {
+            self.pin_mode_audio_jump_enabled = value;
+        }
+        // The film's own answer to the same question, and its own master
+        // switch: a file that says nothing about either leaves both where
+        // this build starts.
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_mode_video_jump") {
+            if let Some(jump) = PinJumpMode::from_str(&value) {
+                self.pin_mode_video_jump = jump;
+            }
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_video_jump_enabled")
+        {
+            self.pin_mode_video_jump_enabled = value;
+        }
+        // Whether a hovered film or sound loops: on, it goes round; off, it
+        // stops at the end. A file that says nothing about either leaves both
+        // where this build starts.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_jump_enabled") {
+            self.video_jump_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "audio_jump_enabled") {
+            self.audio_jump_enabled = value;
         }
         // Whether a sound's loudness is measured and brought to one level, which a file
         // written before the setting existed has no key for: a fresh installation does not

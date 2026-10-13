@@ -92,9 +92,12 @@ pub(super) fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
 
 /// The plan for showing the pinned window another file, if there is one to be had.
 ///
-/// Nothing comes of a pin that is collapsed into its bubble — there is no media on screen to
-/// replace, and a swap taken up under one would be a window that came back from its bubble
-/// showing a file nobody picked in it. Nothing comes of the file the pin is already showing, which
+/// Nothing comes of a pin that is collapsed into its bubble for a file picked in the
+/// listing — there is no media on screen to replace, and a swap taken up under one would
+/// be a window that came back from its bubble showing a file nobody picked in it. A step
+/// of the pin's own walk is planned even while collapsed, so that an automatic advance
+/// starts its player while minimized rather than stalling silent (see the pick arm in
+/// `event_loop`). Nothing comes of the file the pin is already showing, which
 /// is what a second ask for one — a click and the focus that moved with it, a key pressed twice on
 /// one row — is: the work a swap costs is a decode, and it is not work to do twice for one file.
 /// Nothing comes of a file with no shape yet either, or of one this app has no preview for: a pin
@@ -106,13 +109,13 @@ pub(super) fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
 /// is every pin taken up on a file drawn to its own box that has not been shown a shape since (see
 /// `PinnedPreview::bound` and `pin_swap_room`).
 pub(super) fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
-    let (space, collapsed, showing) = {
+    let (space, showing) = {
         let pinned = pin_state()?;
         let pin = pinned.pin()?;
-        (pin_swap_space(pin), pin.collapsed, pin.path.clone())
+        (pin_swap_space(pin), pin.path.clone())
     };
 
-    if collapsed || showing == *path {
+    if showing == *path {
         return None;
     }
 

@@ -213,7 +213,7 @@ pub(crate) use frame_copy::{force_opaque, open_stream, unpack_pair};
 pub use playback::{
     apply_seek, audio_ended, copy_frame_into, dimensions, duration, failing_before_a_frame,
     failing_path, is_playing, mark_unplayable, play, play_audio, playing_path, plays, position,
-    resize, seek, set_paused, set_volume, stop, Crop, Picture,
+    resize, seek, set_paused, set_volume, stop, video_ended, Crop, Picture,
 };
 
 // Reached from the preview window's own tests rather than from the app, so it is only here

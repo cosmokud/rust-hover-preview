@@ -570,6 +570,7 @@ fn video_take_cost() {
             height: picture.1,
             crop: None,
         },
+        true,
     );
 
     assert!(is_playing(), "the engine took the file at all");

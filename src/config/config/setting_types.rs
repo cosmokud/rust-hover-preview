@@ -828,25 +828,6 @@ pub const DEFAULT_AUDIO_SEEK: AudioSeek = AudioSeek::Remember;
 /// the beginning rather than being picked up where a hover left it.
 pub const DEFAULT_PIN_MODE_AUDIO_SEEK: AudioSeek = AudioSeek::Start;
 
-/// Whether a pinned sound's next file is a random one of the folder's
-/// sounds unless the configuration says otherwise.
-///
-/// The pin's own answer to the question of where a step lands: a
-/// shuffle that is off is the file beside the one pinned, which is what
-/// a step was before there was a setting, so off is what a fresh
-/// configuration starts at.
-pub const DEFAULT_PIN_MODE_AUDIO_SHUFFLE: bool = false;
-
-/// Whether a pinned sound goes round to the start of its file at the end
-/// of it, unless the configuration says otherwise.
-///
-/// The pin's own answer to the question of what the end of a file is: a
-/// loop that is on is the sound beginning again, which is what a pinned
-/// sound did before there was a setting, so on is what a fresh
-/// configuration starts at. A loop that is off is an end that moves to
-/// the next file, which is the same step a next button takes.
-pub const DEFAULT_PIN_MODE_AUDIO_LOOP: bool = true;
-
 /// How far a preview is placed clear of the item it is about.
 ///
 /// A view draws an item's name, and the views that draw their items as rows draw the
@@ -1027,3 +1008,51 @@ impl PinMinimizeTo {
 /// bubble on the desktop, which is what this app has always done and is the answer that keeps
 /// the app out of the taskbar altogether.
 pub const DEFAULT_PIN_MINIMIZE_TO: PinMinimizeTo = PinMinimizeTo::Bubble;
+
+/// What a preview does at the end of its file in pin mode or on hover: go round to the
+/// start of the same file, step to the next file, or step to a random one. `Loop` replays
+/// the file, `To Next` is the sequential step a caption's next button takes, and `Shuffle`
+/// is a random file of the same kind — a sound shuffles sounds, a film shuffles films.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PinJumpMode {
+    /// Go round to the start of the same file.
+    Loop,
+    /// Step to the next file.
+    ToNext,
+    /// Step to a random file of the same kind.
+    Shuffle,
+}
+
+impl PinJumpMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Loop => "loop",
+            Self::ToNext => "to_next",
+            Self::Shuffle => "shuffle",
+        }
+    }
+
+    pub(super) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "loop" => Some(Self::Loop),
+            "next" | "to_next" | "to next" | "tonext" => Some(Self::ToNext),
+            "shuffle" | "random" => Some(Self::Shuffle),
+            _ => None,
+        }
+    }
+}
+
+/// What a pinned film does at the end of it unless the configuration says otherwise:
+/// go round again, which is what a pinned preview did before there was a setting.
+pub const DEFAULT_PIN_MODE_VIDEO_JUMP: PinJumpMode = PinJumpMode::Loop;
+/// The same for a pinned sound: go round again.
+pub const DEFAULT_PIN_MODE_AUDIO_JUMP: PinJumpMode = PinJumpMode::Loop;
+/// Whether a pinned film's end is answered at all: on, the mode above decides; off, the
+/// player stops at the end of the file rather than looping or stepping on.
+pub const DEFAULT_PIN_MODE_VIDEO_JUMP_ENABLED: bool = true;
+/// The same master switch for a pinned sound.
+pub const DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED: bool = true;
+/// Whether a hovered film loops: on, a hover goes round; off, it stops at the end.
+pub const DEFAULT_VIDEO_JUMP_ENABLED: bool = true;
+/// The same for a hovered sound.
+pub const DEFAULT_AUDIO_JUMP_ENABLED: bool = true;

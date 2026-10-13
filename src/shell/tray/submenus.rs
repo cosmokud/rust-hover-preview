@@ -16,19 +16,23 @@ use super::commands::open_link;
 use super::ids::{
     EngineIdleIds, AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
     BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES,
-    ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE,
+    ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE,
+    ID_TRAY_AUDIO_SEEK_BASE,
     ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_MPV_BASE,
     ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_AUDIO_CATEGORY,
     ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL,
     ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK,
+    PIN_JUMP_CHOICES,
     TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
 };
 
 use crate::app::dialogs;
 use crate::config::config::{
-    AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewScale,
+    AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinJumpMode, PinMinimizeTo, PinNavFileTypes,
+    PreviewScale,
     TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
-    DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MODE_AUDIO_SEEK,
+    DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE,
+    DEFAULT_PIN_MODE_AUDIO_SEEK,
     DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
     DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
 };
@@ -297,37 +301,21 @@ pub(super) fn system_menu_label(version: &str) -> String {
     format!("System (v{version})")
 }
 
-/// The `Volume → Audio Seek` submenu: where in a file a sound starts playing, with the way the
-/// setting is on marked.
-///
-/// It is listed under `Volume` rather than in a menu of its own because it is the same moment
-/// and the same question as the level above it — both are read as a player is started, and a
-/// change reaches the next hover rather than the sound on screen — and it is a submenu of its
-/// own inside that one because a sound's volume is not a video's and neither is a video's start
-/// position: a video is looked at from its beginning and nothing else is offered for one.
-pub(super) fn append_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
-    append_seek_menu(
-        parent,
-        w!("Audio Seek"),
-        ID_TRAY_AUDIO_SEEK_BASE,
-        audio_seek_label,
-        seek,
-    );
+/// The `Audio Preview → Seek` submenu: where in a file a sound starts playing — the same
+/// four ways the old `Volume → Audio Seek` offered, in the same order. Renamed because it
+/// sits under `Audio Preview` now rather than under `Volume` (see `audio_seek_label`).
+pub(super) fn append_seek_menu_renamed(parent: HMENU, title: PCWSTR, seek: AudioSeek) {
+    append_seek_menu(parent, title, ID_TRAY_AUDIO_SEEK_BASE, audio_seek_label, seek);
 }
 
-/// The `Volume → Pin Mode Audio Seek` submenu: where in a file a
-/// *pinned* sound starts playing, with the way the setting is on
-/// marked. The same four ways as the hover's own submenu above
-/// it, because the question is one question asked twice — once of
-/// the hover's setting and once of the pin's — and the two are
-/// menus of their own for the same reason the volume halves are:
-/// what a pin is started at is the pin's to decide, and a sound
-/// already playing where a hover left it is not moved by a change
-/// to either.
-pub(super) fn append_pin_mode_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
+/// The `Audio Preview → Pin Mode Seek` submenu: where in a file a *pinned* sound starts
+/// playing — the same four ways the old `Volume → Pin Mode Audio Seek` offered, in the
+/// same order. Renamed because it sits under `Audio Preview` now rather than under
+/// `Volume` (see `pin_mode_audio_seek_label`).
+pub(super) fn append_pin_seek_menu_renamed(parent: HMENU, title: PCWSTR, seek: AudioSeek) {
     append_seek_menu(
         parent,
-        w!("Pin Mode Audio Seek"),
+        title,
         ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
         pin_mode_audio_seek_label,
         seek,
@@ -339,8 +327,8 @@ pub(super) fn append_pin_mode_audio_seek_menu(parent: HMENU, seek: AudioSeek) {
 /// hands out, the one `seek` names marked, and the submenu hung from
 /// `parent`. The two submenus are the one question asked twice — once of the
 /// hover's setting and once of the pin's — so they differ in nothing but
-/// those three answers (see `append_audio_seek_menu` and
-/// `append_pin_mode_audio_seek_menu` for what each is).
+/// those three answers (see `append_seek_menu_renamed` and
+/// `append_pin_seek_menu_renamed` for what each is).
 fn append_seek_menu(
     parent: HMENU,
     title: PCWSTR,
@@ -431,6 +419,111 @@ pub(super) fn audio_seek_label(seek: AudioSeek) -> String {
 /// the one `audio_seek_label` puts on the same words.
 pub(super) fn pin_mode_audio_seek_label(seek: AudioSeek) -> String {
     seek_label(seek, DEFAULT_PIN_MODE_AUDIO_SEEK)
+}
+
+/// The `Video Preview → Jump` / `Audio Preview → Jump` submenu: the one row that says
+/// whether the hovered film or sound goes round at the end of its file, carrying its
+/// check. It is a single-check menu rather than a radio group — `Enabled (Loop)` is
+/// the one answer this app offers for a hover's end — so it takes the id it is handed
+/// rather than a range (see `ID_TRAY_VIDEO_JUMP_ENABLED`).
+pub(super) fn append_jump_menu(parent: HMENU, jump_id: u16, enabled: bool) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let _ = unsafe {
+        AppendMenuW(
+            menu,
+            MF_STRING | if enabled { MF_CHECKED } else { MF_UNCHECKED },
+            jump_id as usize,
+            w!("Enabled (Loop)"),
+        )
+    };
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Jump")) };
+}
+
+/// The `Video Preview → Pin Mode Jump` / `Audio Preview → Pin Mode Jump` submenu: the
+/// master switch first, then the three jumps the pin's end can be, with the one in
+/// force carrying its mark.
+///
+/// The switch is a check and the jumps are a radio group: only one jump is in force,
+/// and a switch that is off stops the film or the sound at the end of it rather than
+/// any of the three (see `PinJumpMode`). One builder serves both halves because the
+/// two are the same question asked twice — once of the film's jump and once of the
+/// sound's — and each range is what says which setting the click was meant for.
+pub(super) fn append_pin_jump_menu(
+    parent: HMENU,
+    enabled_id: u16,
+    base: u16,
+    enabled: bool,
+    jump: PinJumpMode,
+    default: PinJumpMode,
+) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let _ = unsafe {
+        AppendMenuW(
+            menu,
+            MF_STRING | if enabled { MF_CHECKED } else { MF_UNCHECKED },
+            enabled_id as usize,
+            w!("Enabled"),
+        )
+    };
+    let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
+
+    let labels: Vec<Vec<u16>> = PIN_JUMP_CHOICES
+        .iter()
+        .map(|choice| {
+            pin_jump_label(*choice, default)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+    for (index, label) in labels.iter().enumerate() {
+        let _ = unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                (base + index as u16) as usize,
+                PCWSTR(label.as_ptr()),
+            )
+        };
+    }
+    if let Some(index) = PIN_JUMP_CHOICES.iter().position(|choice| *choice == jump) {
+        let _ = unsafe {
+            CheckMenuRadioItem(
+                menu,
+                base as u32,
+                (base + PIN_JUMP_CHOICES.len() as u16 - 1) as u32,
+                (base + index as u16) as u32,
+                MF_BYCOMMAND.0,
+            )
+        };
+    }
+
+    let _ = unsafe {
+        AppendMenuW(
+            parent,
+            MF_STRING | MF_POPUP,
+            menu.0 as usize,
+            w!("Pin Mode Jump"),
+        )
+    };
+}
+
+/// What a jump is called in the menu: the words the tray lists it under, with the way the
+/// setting starts at marked as the default.
+pub(super) fn pin_jump_label(jump: PinJumpMode, default: PinJumpMode) -> String {
+    let label = match jump {
+        PinJumpMode::Loop => "Loop",
+        PinJumpMode::ToNext => "To Next",
+        PinJumpMode::Shuffle => "Shuffle",
+    };
+
+    default_label(label, jump == default)
+}
+
+/// The jump an item of a `Pin Mode Jump` submenu stands for, by the position it was
+/// listed at. An id past the last choice the menu offered is one that is not there.
+pub(super) fn pin_jump_at(index: u16) -> Option<PinJumpMode> {
+    PIN_JUMP_CHOICES.get(index as usize).copied()
 }
 
 /// The `Explorer Poll` submenu — the loop's own tick: how often the

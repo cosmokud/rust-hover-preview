@@ -2,6 +2,7 @@
 //! what the end of a pinned film means.
 
 use super::*;
+use crate::formats::routing::NavCategory;
 
 /// A player that has been begun to take the place of another, and the player being replaced.
 ///
@@ -558,16 +559,19 @@ pub(super) fn player_end(
 /// what it sees and wrong about what it means: a film that has finished looks exactly like one
 /// whose player has been killed. Answered after any of them, the loop would be restarting a pin
 /// that has already closed itself.
-pub(super) fn loop_ended_pinned_player() -> bool {
-    if current_media_type() != Some(MediaType::Video) {
+pub(super) fn loop_ended_pinned_player(
+    anchor: Option<NavCategory>,
+    wait: &mut Option<PinWait>,
+    busy: bool,
+) -> bool {
+    // An advance already on its way is not asked for again: the clock underneath keeps
+    // counting past the end while the walk is out, so without this every tick would ask
+    // another walk and the pin would step once per answer rather than once per end.
+    if busy {
         return false;
     }
 
-    // A player that is still running has not ended, whatever the clock says. The grace below is for
-    // a player that has *gone* and whose going is read as the film finishing; it is not a licence to
-    // cut the tail off a film that is still playing, and without this check a film shorter than the
-    // grace would be begun again on the tick after it began.
-    if is_video_process_running() {
+    if current_media_type() != Some(MediaType::Video) {
         return false;
     }
 
@@ -584,6 +588,14 @@ pub(super) fn loop_ended_pinned_player() -> bool {
         return false;
     };
 
+    // The pin's own jump, read where the end is answered: a switch that is off is a film
+    // that stops at its end — neither begun again nor stepped on — and any other jump
+    // but a loop is the next file of the folder rather than the same film again.
+    let (enabled, jump) = current_pin_mode_video_jump();
+    if !enabled {
+        return false;
+    }
+
     let retiring = VIDEO_RETIREMENT
         .lock()
         .is_ok_and(|pending| pending.is_some());
@@ -598,8 +610,48 @@ pub(super) fn loop_ended_pinned_player() -> bool {
         return false;
     }
 
+    if jump != PinJumpMode::Loop {
+        // The film played through and the jump is a step, not a loop: the next file of
+        // the folder is asked for — the same ask the caption's own **Next** button makes,
+        // with the same wait for its answer. A lingering player (mpv paused on its last
+        // frame, where FFmpeg's has exited) is left for the swap the walk lands to take
+        // down, the way a walk over a playing film is.
+        if ask_pin_walk(path.clone(), 1, anchor) {
+            *wait = Some(PinWait::new());
+        }
+        return true;
+    }
+
+    // A player that is still running has not ended, whatever the clock says. The grace below is for
+    // a player that has *gone* and whose going is read as the film finishing; it is not a licence to
+    // cut the tail off a film that is still playing, and without this check a film shorter than the
+    // grace would be begun again on the tick after it began.
+    if is_video_process_running() {
+        return false;
+    }
+
     restart_pinned_player(&path, content, 0.0, false);
     true
+}
+
+/// Whether the film the media engine is playing for the pin has ended, which is the
+/// one thing a pinned film whose jump is on and not a loop is advanced by.
+///
+/// The engine was asked not to loop when the session was started (see
+/// `video_player::play`), so its end is its own to report: the engine's word for it,
+/// or its clock at the length of the file, is the end of the film. A path is part of
+/// the question because the engine holds one film at a time — a file the engine is not
+/// playing has not ended, whatever the clock of the file on screen says (see
+/// `video_player::video_ended`).
+pub(super) fn pinned_native_video_ended(path: &Path) -> bool {
+    if !(pinned() && pinned_path().as_deref() == Some(path)) {
+        return false;
+    }
+    let (enabled, jump) = current_pin_mode_video_jump();
+    enabled
+        && jump != PinJumpMode::Loop
+        && video_player::playing_path().as_deref() == Some(path)
+        && video_player::video_ended()
 }
 
 /// Give a player that has been told nothing yet the hold that was written down for it.
