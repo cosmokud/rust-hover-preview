@@ -7,8 +7,13 @@
 - **`Pin Mode → Navigation Files → Video / Audio / Others`** — the single All/Same Category switch is now three anchors, one per kind of first file pinned: Video and Audio start at `Same Category`, Others at `All Files` (`pin_nav_video`, `pin_nav_audio`, `pin_nav_others` in `config.ini`; a file holding only the old `pin_nav_file_types` seeds all three). The walk is anchored on the first file pinned, so `PDF → MP3 → DOCX` walks end to end while `MP3 → FLAC` never reaches a document.
 - **Shuffle plays every sound once before repeating** — a shuffled walk draws from a bag and removes each pick, rebuilding minus the file on screen when spent, so one permutation is every sound in some order; a deleted file is tried once then gone.
 
+### Changed
+
+- **The pinned sound card's menu** — both of its rows that open a flyout carry the submenu arrow `▶` rather than the last row alone, a rule now separates **Jump → Enabled** from the **Loop / To Next / Shuffle** rows it turns on (the rule is not a row: it answers no press, and the rows either side of it keep the numbering a press is read by), and each flyout's panel is measured from its own labels instead of being held at one fixed width — so a flyout of short rows hugs them rather than carrying an empty side. The **Jump** flyout also opens beside the **Jump** row it was opened from, where it used to hang off the **Seek** row.
+
 ### Fixed
 
+- **A pinned sound shows a play button again when it finishes** — with `Pin Mode → Jump` switched off, a sound that plays to the end of its file now stops there: the card reads `0:00` with its seek bar empty and the button a play button, and pressing it plays the file again from the beginning. Until now the button stayed on pause for a sound that had already ended, on both players. The file is also left at its beginning for `Volume → Audio Seek → Remember`, rather than remembered at the end it stopped at.
 - **Pin walk stays anchored on the first file pinned** — every **Next**/**Previous** press reuses the first file's Navigation Files anchor instead of recomputing it from the file the pin is standing on, so a walk taken up on a document (`Others → All Files`) no longer collapses to sounds-only after stepping onto a sound (`PDF → MP3 → MP3` is `PDF → MP3 → DOCX → …` again), and the shuffle bag follows the same anchor. A listing pick (or anything else that clears the walks) re-anchors on the file then pinned.
 - **Same-file shuffle no longer leaves the seekbar standing** — a swap onto the file already playing restarts it at the swap's start instead of carrying on.
 - **Version bumped** — `0.4.1` in `Cargo.toml` and `Cargo.lock`.
