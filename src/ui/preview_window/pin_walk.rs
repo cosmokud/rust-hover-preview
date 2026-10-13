@@ -115,6 +115,11 @@ pub(crate) struct PinStep {
     /// of what a shuffle is limited to: no file of another kind is one
     /// a shuffled step ever lands on.
     pub(super) sounds: Vec<PathBuf>,
+    /// The sounds not yet played in this shuffle permutation. Each shuffled step is
+    /// drawn from here and removed, so every sound is heard once before any repeats;
+    /// when spent it is rebuilt from `sounds` minus the file on screen. A deleted file
+    /// is tried once then gone with the removal (see `shuffle_step`).
+    pub(super) shuffle_bag: Vec<PathBuf>,
 }
 
 impl PinStep {
@@ -133,11 +138,26 @@ impl PinStep {
 
         // The list is already in hand — the planner read it off the preview thread — so a
         // step costs a position in a vector rather than a walk of the folder behind it.
+        // A shuffled step is drawn from the bag and removed, so the permutation is heard
+        // once through before anything repeats; a spent bag is rebuilt minus the file on
+        // screen rather than ending the walk.
         let path = if self.shuffle && self.step > 0 {
-            shuffle_step(&self.at, &self.sounds, roll())
+            let mut pick = shuffle_step(&self.at, &self.shuffle_bag, roll());
+            if pick.is_none() {
+                self.shuffle_bag = self
+                    .sounds
+                    .iter()
+                    .filter(|sound| !pin_navigation::same_file(sound, &self.at))
+                    .cloned()
+                    .collect();
+                pick = shuffle_step(&self.at, &self.shuffle_bag, roll());
+            }
+            let path = pick?;
+            self.shuffle_bag.retain(|sound| !pin_navigation::same_file(sound, &path));
+            path
         } else {
-            pin_navigation::step_to(&self.at, &self.list, self.step)
-        }?;
+            pin_navigation::step_to(&self.at, &self.list, self.step)?
+        };
 
         self.at = path.clone();
 
@@ -341,20 +361,25 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             let list = pin_navigation::list_for(at, config).unwrap_or_else(|| empty.clone());
 
             // The sounds of the list, read where the list is: a walk that
-            // shuffles steps to a random one of the folder's sounds, and
+            // shuffles steps through the folder's sounds one permutation at a time, and
             // which files those are is a question of the `[audio]` list of
             // the file the walk was asked with, so it is answered here once
-            // rather than on every step (see `PinStep::step`).
-            let (shuffle, sounds) = if config.pin_mode_audio_shuffle {
-                (
-                    true,
-                    list.iter()
-                        .filter(|path| lists::AUDIO.claims(path, config))
-                        .cloned()
-                        .collect(),
-                )
+            // rather than on every step (see `PinStep::step`). The bag starts as every
+            // sound but the one on screen, since that one is already heard.
+            let (shuffle, sounds, shuffle_bag) = if config.pin_mode_audio_shuffle {
+                let sounds: Vec<PathBuf> = list
+                    .iter()
+                    .filter(|path| lists::AUDIO.claims(path, config))
+                    .cloned()
+                    .collect();
+                let bag = sounds
+                    .iter()
+                    .filter(|sound| !pin_navigation::same_file(sound, at))
+                    .cloned()
+                    .collect();
+                (true, sounds, bag)
             } else {
-                (false, Vec::new())
+                (false, Vec::new(), Vec::new())
             };
 
             // The walk is the list asked one file at a time, so it is bounded by the list:
@@ -371,6 +396,7 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
                 list,
                 shuffle,
                 sounds,
+                shuffle_bag,
             };
 
             // A step that lands is the walk; one that does not leaves it with nothing left

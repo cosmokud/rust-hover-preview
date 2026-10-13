@@ -22,22 +22,30 @@ fn walkable_folder(name: &str) -> PathBuf {
 /// so a walk test says what it wants walked rather than taking whatever the machine it runs
 /// on has set. Only that switch is touched, and it is put back when the guard is dropped,
 /// so a test running beside this one is not answered with this one's setting.
-struct WalkEveryFile(PinNavFileTypes);
+struct WalkEveryFile(PinNavFileTypes, PinNavFileTypes, PinNavFileTypes);
 
 impl WalkEveryFile {
     fn set() -> Self {
         let mut config = CONFIG.lock().expect("the configuration");
-        let was = config.pin_nav_file_types;
-        config.pin_nav_file_types = PinNavFileTypes::All;
+        let was = (
+            config.pin_nav_video,
+            config.pin_nav_audio,
+            config.pin_nav_others,
+        );
+        config.pin_nav_video = PinNavFileTypes::All;
+        config.pin_nav_audio = PinNavFileTypes::All;
+        config.pin_nav_others = PinNavFileTypes::All;
 
-        WalkEveryFile(was)
+        WalkEveryFile(was.0, was.1, was.2)
     }
 }
 
 impl Drop for WalkEveryFile {
     fn drop(&mut self) {
         if let Ok(mut config) = CONFIG.lock() {
-            config.pin_nav_file_types = self.0;
+            config.pin_nav_video = self.0;
+            config.pin_nav_audio = self.1;
+            config.pin_nav_others = self.2;
         }
     }
 }
@@ -65,6 +73,7 @@ fn a_walk_offers_every_other_file_of_the_folder_once_and_then_ends() {
         list: list.clone(),
         shuffle: false,
         sounds: Vec::new(),
+        shuffle_bag: Vec::new(),
     };
 
     // Every step, and the one that ends the walk: the end is part of what is being asked
@@ -107,6 +116,7 @@ fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
         list: vec![folder.join("a.png"), folder.join("b.png")],
         shuffle: false,
         sounds: Vec::new(),
+        shuffle_bag: Vec::new(),
     };
 
     pin_step_off(Some(walk), &mut held);
@@ -645,6 +655,7 @@ fn a_walk_the_planner_answers_carries_the_list_it_walked() {
         list: list.clone(),
         shuffle: false,
         sounds: Vec::new(),
+        shuffle_bag: Vec::new(),
     };
 
     assert_eq!(
@@ -853,4 +864,83 @@ fn the_open_with_carry_leaves_a_moved_list_where_it_is() {
     );
     assert!(centre_on_display((1720, 720), primary), "still where the system put it");
     assert!(!centre_on_display((4400, -1620), primary), "carried by the user stays carried");
+}
+
+/// A shuffled walk hears every sound once before any repeats: each step is drawn from the
+/// bag and removed, so one permutation is the sounds minus the file on screen in some
+/// order, and a spent bag is rebuilt minus the file it stands on rather than ending.
+#[test]
+fn a_shuffled_walk_hears_every_sound_once_before_repeating() {
+    let folder = sounded_folder("shuffle-bag");
+    let sounds = vec![
+        folder.join("a.mp3"),
+        folder.join("b.mp3"),
+        folder.join("c.mp3"),
+    ];
+    let at = folder.join("b.mp3");
+    let bag = sounds.iter().filter(|sound| *sound != &at).cloned().collect::<Vec<_>>();
+
+    let mut walk = PinStep {
+        at: at.clone(),
+        from: at.clone(),
+        step: 1,
+        left: 10,
+        list: sounds.clone(),
+        shuffle: true,
+        sounds: sounds.clone(),
+        shuffle_bag: bag,
+    };
+
+    let first = walk.step().expect("a bag of two has one to offer");
+    let second = walk.step().expect("and then the other");
+    assert_ne!(first, second, "one permutation has no repeats");
+    assert!(sounds.contains(&first) && sounds.contains(&second));
+    assert_ne!(first, at, "the file on screen is not a step");
+    assert_ne!(second, at, "neither the first time nor the second");
+    assert!(walk.shuffle_bag.is_empty(), "the permutation is spent");
+
+    let third = walk.step().expect("a spent bag is rebuilt, not ended");
+    assert!(sounds.contains(&third), "still only sounds");
+    assert_ne!(third, second, "rebuilt minus the file it stands on");
+}
+
+/// The walk is anchored on the first file pinned: a sound walks sounds while an
+/// `Others` file walks end to end under the same settings, so `MP3 -> FLAC` never reaches
+/// a document while `PDF -> MP3 -> DOCX` does.
+#[test]
+fn a_walk_is_anchored_on_the_first_file_pinned() {
+    let folder = sounded_folder("shuffle-anchor");
+    let mut config = CONFIG.lock().expect("the configuration").clone();
+    config.pin_nav_video = PinNavFileTypes::Category;
+    config.pin_nav_audio = PinNavFileTypes::Category;
+    config.pin_nav_others = PinNavFileTypes::All;
+
+    let from_sound = answer_pin_job(&PinJob::Walk {
+        at: folder.join("b.mp3"),
+        step: 1,
+        config: Box::new(config.clone()),
+    });
+    let Some(PinPlanned::Walk(sound_walk)) = from_sound else {
+        panic!("a walk is always answered");
+    };
+    assert!(
+        sound_walk.list.iter().all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
+        "anchored on a sound, the walk is sounds only: {:?}",
+        sound_walk.list
+    );
+
+    let from_other = answer_pin_job(&PinJob::Walk {
+        at: folder.join("a.png"),
+        step: 1,
+        config: Box::new(config),
+    });
+    let Some(PinPlanned::Walk(other_walk)) = from_other else {
+        panic!("a walk is always answered");
+    };
+    assert!(
+        other_walk.list.iter().any(|path| path.extension().is_some_and(|ext| ext == "mp3"))
+            && other_walk.list.iter().any(|path| path.extension().is_some_and(|ext| ext == "png")),
+        "anchored elsewhere, the walk is end to end: {:?}",
+        other_walk.list
+    );
 }

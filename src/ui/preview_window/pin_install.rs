@@ -237,6 +237,13 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             };
         }
 
+        // A same-file swap through the native engine keeps its session (see the fast path
+        // in `start_audio_playback_at`): move it to this swap's start so the bar restarts
+        // rather than carrying on from where the old pass was.
+        if file.media.video_process.is_none() {
+            video_player::seek(start);
+        }
+
         // What the loop's clock is written down from, read before the media is handed on: a sound
         // is timed from the player this app started, and there is one to time from exactly where
         // one was started — a file nothing would play, at any level, gets none, and a card whose
