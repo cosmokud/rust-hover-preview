@@ -259,6 +259,43 @@ fn a_player_that_has_stopped_is_read_as_the_end_of_its_file_or_not() {
     );
 }
 
+/// The end of a pinned sound's pass is the one rule both of the pin's players' ends are
+/// read by, and it is the pin's own `Pin Mode Jump` that decides it: a sound whose switch
+/// is off stops where it is and is left held — the card standing at the beginning of the
+/// file with its play button up, since a card held at the end would be a press that played
+/// the last moment and stopped again — a looping jump goes round, and either of the other
+/// two jumps asks for the next file of the folder. A sound whose switch is off is held
+/// whatever the jump it names is: the jump is not read at all until the switch is on.
+#[test]
+fn a_pinned_pass_ends_by_the_pin_jump_and_its_own_switch_alone() {
+    assert_eq!(
+        pinned_pass_end(false, PinJumpMode::Loop),
+        PinPassEnd::Held,
+        "a sound whose jump switch is off stops where it ends, whatever jump it names"
+    );
+    assert_eq!(
+        pinned_pass_end(false, PinJumpMode::ToNext),
+        PinPassEnd::Held,
+        "and one whose jump is a move to the next file is held just the same"
+    );
+
+    assert_eq!(
+        pinned_pass_end(true, PinJumpMode::Loop),
+        PinPassEnd::Wrap,
+        "a looping jump is the pass gone round again"
+    );
+    assert_eq!(
+        pinned_pass_end(true, PinJumpMode::ToNext),
+        PinPassEnd::Walk,
+        "and either other jump is the next file of the folder"
+    );
+    assert_eq!(
+        pinned_pass_end(true, PinJumpMode::Shuffle),
+        PinPassEnd::Walk,
+        "which the walk is the one that chooses"
+    );
+}
+
 /// A probe's child is waited for with a deadline, and what a child that has outrun it
 /// leaves behind is an answer of its own rather than a wait that goes on: the process is
 /// ended where it stands and the caller is told there is nothing from this one, which is

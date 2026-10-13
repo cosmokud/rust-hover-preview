@@ -1113,33 +1113,50 @@ pub fn run_preview_window() {
                         // `wrap_audio_player`). A pinned sound whose jump is on and not a loop
                         // is not put round at all — its end asks for the next file of the
                         // folder there, with the walk's own wait — and one whose jump switch is
-                        // off stops where it is.
+                        // off stops where it is, the card left held at the beginning with its
+                        // play button up.
                         if let Some(path) = current_show.as_ref().and_then(self::show_path) {
                             wrap_audio_player(
                                 media,
                                 path,
                                 &mut audio_started,
                                 &mut audio_start_offset,
+                                &mut audio_paused,
                                 &mut pin_walk_wait,
                                 pin_walk_anchor(&pin_walk, &pin_walk_of_current),
                             );
 
                             // A sound the engine Windows has was asked to play the pinned
-                            // file once where the pin's jump is on and not a loop, so the end
-                            // the engine reports for it is the end of the sound: the session is
-                            // let go — which is also what stops the end being read again on
-                            // the sixty ticks a second this loop turns — and the next file
-                            // of the folder is asked for, the same ask the caption's own
-                            // **Next** button makes and the same wait for its answer (see
-                            // `pinned_native_audio_ended`).
-                            if pinned_native_audio_ended(path) {
-                                video_player::stop();
-                                ask_pin_walk(
-                                    path.to_path_buf(),
-                                    1,
-                                    pin_walk_anchor(&pin_walk, &pin_walk_of_current),
-                                );
-                                pin_walk_wait = Some(PinWait::new());
+                            // file once where the pin's jump is not a loop, so the end
+                            // the engine reports for it is the end of the sound. Where that
+                            // end is the next file of the folder, the session is let go — which
+                            // is also what stops the end being read again on
+                            // the sixty ticks a second this loop turns — and the walk is asked
+                            // for, the same ask the caption's own **Next** button makes and the
+                            // same wait for its answer. Where it is the card held instead — the
+                            // jump switch is off — the session is let go for the same reason and
+                            // the card is left standing at the beginning of the file, which is
+                            // what its play button now shows and what the press on it starts
+                            // the sound again from (see `pinned_native_audio_end`).
+                            match pinned_native_audio_end(path) {
+                                Some(PinPassEnd::Walk) => {
+                                    video_player::stop();
+                                    ask_pin_walk(
+                                        path.to_path_buf(),
+                                        1,
+                                        pin_walk_anchor(&pin_walk, &pin_walk_of_current),
+                                    );
+                                    pin_walk_wait = Some(PinWait::new());
+                                }
+                                Some(PinPassEnd::Held) => {
+                                    video_player::stop();
+                                    audio_paused = Some(0.0);
+                                    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+                                }
+                                // Nothing at all is what a sound that has not ended gets,
+                                // and a sound the engine was asked to loop has no end to read
+                                // here either (see `pinned_native_audio_end`).
+                                Some(PinPassEnd::Wrap) | None => {}
                             }
                         }
 
