@@ -486,7 +486,7 @@ pub(crate) fn menu_flyout_from_menu(
     hang_row: usize,
     flyout_rows: &[MenuRow],
 ) -> MenuFlyout {
-    let (_room, row_height, pad, _gap) = menu_panel_sizes(width, dpi);
+    let (_room, row_height, pad, gap) = menu_panel_sizes(width, dpi);
 
     // The flyout hangs from the row it was opened from: its top is that row's own
     // band top, moved up only as far as the window's own
@@ -517,6 +517,17 @@ pub(crate) fn menu_flyout_from_menu(
     // it, which is the panel's own measured width everywhere but the
     // narrowed pair, where it is the half the window leaves.
     let flyout_width = (width - flyout_left).min(menu_main_panel_width(flyout_rows, dpi, width));
+    // A flyout the tier sent to the menu's left stands the same small gap off the menu's own
+    // left edge that a right-hand one stands off its right, rather than where the tier
+    // answered in the fixed room: that room is what lets the menu's own placement carry the
+    // same arrow with no flyout rows of its own, and a panel measured from short rows is
+    // narrower than it — so the tier's own place would stand a room of empty space between
+    // the two panels. A flyout too wide for the room to the menu's left is held to the
+    // window's own left edge, where it covers the menu it came from either way.
+    let flyout_left = match arrow {
+        MenuArrow::Left => (menu_left - gap - flyout_width).max(0),
+        _ => flyout_left,
+    };
 
     MenuFlyout {
         menu: MenuPopup {
