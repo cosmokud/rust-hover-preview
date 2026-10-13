@@ -81,6 +81,122 @@ pub(super) const PIN_BUBBLE_DRAG_CARRY_MS: u64 = 2_000;
 /// the window back up — from a hand that was carrying it somewhere.
 pub(super) static PIN_BUBBLE_MOVED: AtomicBool = AtomicBool::new(false);
 
+/// Whether the press that is down landed on a bubble already holding the keyboard: the first
+/// click focuses, the second restores (see `pin_bubble_proc`).
+pub(super) static BUBBLE_PRESS_FOCUSED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the bubble is the window the user is in: the gate on the SPACE below, so a SPACE typed
+/// into whatever is behind the bubble stays that window's key.
+pub(super) fn bubble_is_focused() -> bool {
+    let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    if hwnd == 0 {
+        return false;
+    }
+    unsafe { GetFocus() == HWND(hwnd as *mut _) }
+}
+
+/// Whether a SPACE with the bubble focused holds anything: a film or a sound, and nothing else.
+pub(super) fn bubble_space_toggles(kind: Option<MediaType>) -> bool {
+    matches!(
+        kind,
+        Some(MediaType::Video) | Some(MediaType::NativeVideo) | Some(MediaType::Audio)
+    )
+}
+
+/// Whether a press that is up puts the window back: a click — no move — on a bubble the hand was
+/// already in. The focusing click stays a bubble, so the SPACE below has a window to hold.
+pub(super) fn bubble_click_restores(was_focused: bool, moved: bool) -> bool {
+    was_focused && !moved
+}
+
+/// One row of the bubble's right-click menu.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum BubbleMenuRow {
+    /// Hold what is playing where it stands, or set it going again.
+    Toggle,
+    /// Put the pin away into the taskbar rather than the bubble.
+    ToTaskbar,
+    /// Take the pin down.
+    Close,
+}
+
+/// The rows the bubble's menu holds: the hold for a film or a sound, and the two ways out of any
+/// bubble. The hold is only a row where there is playback for it to hold.
+pub(super) fn bubble_menu_rows(kind: Option<MediaType>) -> Vec<BubbleMenuRow> {
+    let mut rows = Vec::with_capacity(3);
+    if bubble_space_toggles(kind) {
+        rows.push(BubbleMenuRow::Toggle);
+    }
+    rows.push(BubbleMenuRow::ToTaskbar);
+    rows.push(BubbleMenuRow::Close);
+    rows
+}
+
+/// The menu's own commands, as the popup numbers them (see `show_text_preview_menu`).
+pub(super) const ID_BUBBLE_MENU_TOGGLE: usize = 1;
+pub(super) const ID_BUBBLE_MENU_TO_TASKBAR: usize = 2;
+pub(super) const ID_BUBBLE_MENU_CLOSE: usize = 3;
+
+/// Show the bubble's menu at the pointer and act on what it returns: the hold for a film or a
+/// sound — named for what it will do — and the two ways out of any bubble.
+///
+/// The menu is asked for its command rather than posting one, so it needs no message loop of its
+/// own (see `show_text_preview_menu`).
+pub(super) unsafe fn show_bubble_menu(hwnd: HWND) {
+    let rows = bubble_menu_rows(current_media_type());
+    let Ok(menu) = CreatePopupMenu() else {
+        return;
+    };
+
+    for row in &rows {
+        let (id, label) = match row {
+            BubbleMenuRow::Toggle if bubble_is_playing() => (ID_BUBBLE_MENU_TOGGLE, w!("Pause")),
+            BubbleMenuRow::Toggle => (ID_BUBBLE_MENU_TOGGLE, w!("Play")),
+            BubbleMenuRow::ToTaskbar => (ID_BUBBLE_MENU_TO_TASKBAR, w!("Minimize to Tray")),
+            BubbleMenuRow::Close => (ID_BUBBLE_MENU_CLOSE, w!("Close")),
+        };
+        let _ = AppendMenuW(menu, MF_STRING, id, label);
+    }
+
+    let mut point = POINT::default();
+    if GetCursorPos(&mut point).is_err() {
+        let _ = DestroyMenu(menu);
+        return;
+    }
+
+    // A menu belongs to the window in front of it: asking for the foreground is what lets the
+    // menu see the click that chooses from it (see `show_text_preview_menu`).
+    let _ = SetForegroundWindow(hwnd);
+
+    let command = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
+        point.x,
+        point.y,
+        0,
+        hwnd,
+        None,
+    );
+
+    let _ = DestroyMenu(menu);
+
+    match command.0 as usize {
+        ID_BUBBLE_MENU_TOGGLE => ask_pin(PinCommand::TogglePlayback),
+        ID_BUBBLE_MENU_TO_TASKBAR => bubble_to_taskbar(),
+        ID_BUBBLE_MENU_CLOSE => ask_pin(PinCommand::Close),
+        _ => {}
+    }
+}
+
+/// Put the pin away into the taskbar rather than the bubble: the bubble goes, the stand-in comes
+/// up, and the pin stays collapsed until it is brought back (see `show_pin_taskbar`).
+pub(super) fn bubble_to_taskbar() {
+    hide_pin_bubble();
+    unsafe {
+        show_pin_taskbar();
+    }
+}
+
 /// Collapse a pinned window into the round bubble it leaves: the window and everything standing
 /// in it come off the screen, and a small circle takes their place. A collapsed pin is still a
 /// pin — previews are still held back until it is restored or closed, and what it is playing is
@@ -1028,9 +1144,10 @@ pub(super) fn bubble_thumbnail(media: &MediaData, side: u32) -> Option<Vec<u8>> 
     Some(out)
 }
 
-/// The bubble's own window procedure: a click puts the pinned window back, a drag carries the
-/// bubble anywhere on the desktop, and a right click takes the pin down — the three things a
-/// collapsed pin can be asked for, on the one piece of it that is still on screen.
+/// The bubble's own window procedure: a click focuses it and a second one puts the pinned window
+/// back, a drag carries it anywhere on the desktop, SPACE holds a film or a sound while the bubble
+/// holds the keyboard, and a right click opens its menu — the things a collapsed pin can be asked
+/// for, on the one piece of it that is still on screen.
 pub(super) unsafe extern "system" fn pin_bubble_proc(
     hwnd: HWND,
     msg: u32,
@@ -1039,6 +1156,19 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
 ) -> LRESULT {
     match msg {
         WM_LBUTTONDOWN => {
+            // Whether the bubble already had the keyboard when the hand landed: the first click
+            // focuses a bubble nothing is in, and only a click on one already focused puts the
+            // window back up — so a focused bubble stays up for the SPACE below to hold.
+            let was_focused = bubble_is_focused();
+            BUBBLE_PRESS_FOCUSED.store(was_focused, Ordering::Release);
+            if !was_focused {
+                // One way: a bubble is shown non-activating and keeps refusing the keyboard until
+                // the hand presses it, exactly as a pin does (see `pin_take_focus`).
+                pin_set_focusable(hwnd, true);
+                let _ = SetForegroundWindow(hwnd);
+                let _ = SetFocus(hwnd);
+            }
+
             let cursor = cursor_screen_point();
             let origin = window_origin(hwnd).map(|rect| (rect.0, rect.1));
 
@@ -1073,9 +1203,14 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
 
             if dragging {
                 let _ = ReleaseCapture();
-                if !PIN_BUBBLE_MOVED.load(Ordering::Acquire) {
-                    // A press that did not move is a click, and a click on the bubble is what
-                    // puts the window back up.
+                let was_focused = BUBBLE_PRESS_FOCUSED.swap(false, Ordering::AcqRel);
+                if bubble_click_restores(
+                    was_focused,
+                    PIN_BUBBLE_MOVED.load(Ordering::Acquire),
+                ) {
+                    // A press that did not move is a click, and a click on a bubble the hand is
+                    // already in is what puts the window back up. The focusing click stays a
+                    // bubble, so the SPACE below has a window to hold.
                     ask_pin(PinCommand::Restore);
                 }
             }
@@ -1089,11 +1224,32 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
             LRESULT(0)
         }
         WM_RBUTTONUP => {
-            ask_pin(PinCommand::Close);
+            // The bubble's own menu rather than an immediate close: what the hand chose is what
+            // the loop answers, the way a caption button is (see `show_bubble_menu`).
+            show_bubble_menu(hwnd);
             LRESULT(0)
         }
         windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => {
             ask_pin(PinCommand::Restore);
+            LRESULT(0)
+        }
+        WM_KEYDOWN | WM_SYSKEYDOWN => {
+            // A SPACE the bubble holds the keyboard for is the pause its bar offers, asked by the
+            // keyboard rather than by a press on it — the same hold a pin's own window answers
+            // (see `toggle_pinned_by_key`). Only a film or a sound has one, and a repeat is a hand
+            // resting on the key rather than another hold.
+            if wparam.0 as i32 == VK_SPACE.0 as i32 {
+                if lparam.0 & KEY_REPEAT == 0 && bubble_space_toggles(current_media_type()) {
+                    ask_pin(PinCommand::TogglePlayback);
+                }
+                LRESULT(0)
+            } else {
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+        }
+        WM_CHAR => {
+            // The character the SPACE above was already answered as: swallowed so the default
+            // procedure does not beep for a key the bubble holds (see the pin's own `WM_CHAR`).
             LRESULT(0)
         }
         windows::Win32::UI::WindowsAndMessaging::WM_PAINT => {
