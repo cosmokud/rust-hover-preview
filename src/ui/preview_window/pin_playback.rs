@@ -605,9 +605,9 @@ pub(super) fn toggle_pinned_playback(
                     .is_some_and(|duration| duration > 0.0 && held >= duration);
                 let from = if finished { 0.0 } else { held };
                 if finished && mpv {
-                    // mpv is paused on its last frame and holds that pause across a seek, so it is
-                    // taken to the top *before* it is set going — the seek is what makes the press
-                    // a film begun again rather than a last frame played once more.
+                    // mpv stops on its last frame rather than pausing there (see `mpv_args`), so
+                    // the seek to the top is what begins the film again; the play below goes with
+                    // it for a player a press had paused, which a seek leaves paused.
                     mpv_ipc::seek_absolute(VIDEO_PID.load(Ordering::SeqCst), from);
                 }
                 if hold_the_player(false) {
