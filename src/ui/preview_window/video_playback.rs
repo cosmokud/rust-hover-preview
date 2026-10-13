@@ -119,6 +119,58 @@ pub(super) fn pin_video_pauses_at_the_top(path: &Path) -> bool {
         && video_route(path) == VideoRoute::Mpv
 }
 
+/// Hand the media engine the end of file the film on screen is played under.
+///
+/// **This is asked at the tick rather than left to the launch, because the engine is the one player
+/// this app can tell while its film runs.** The other two take their loop as a fact of the launch
+/// and keep it — FFmpeg's player its own `-loop 0`, mpv this app's own wrap (see `loop_is_ours` and
+/// `video_loop_tick`) — and for those the answer a pin needs is asked at the tick too, of the film on
+/// screen, which is what lets a film begun for a hover be stepped on or stopped by the pin it becomes.
+///
+/// The engine cannot be asked that way, so it is told: a film begun for a hover carries the hover's
+/// answer — `Video → Loop`, on by default — and the pin adopts that very session rather than beginning
+/// one of its own, so without this a pinned film whose end of file is a step on, or a stop, went on
+/// looping itself. The engine reported no end of file at all, `Continue` never reached its walk, and
+/// `Pause` had nothing to stop but a film that was already going round.
+///
+/// A hover is covered by the same telling rather than by a road of its own, which is the switch it was
+/// launched under anyway (see `current_video_loop`).
+pub(super) fn apply_native_video_loop(path: &Path) {
+    let loops = pin_video_loops(path);
+
+    #[cfg(test)]
+    {
+        if let Ok(mut told) = NATIVE_LOOP_TOLD.lock() {
+            *told = Some(loops);
+        }
+    }
+
+    video_player::apply_loop(loops);
+}
+
+/// The loop the media engine was last told to play the film on screen under, and nothing where it has
+/// been told nothing.
+///
+/// A test's own reading of a call that reaches an engine this run has none of — `video_player::apply_loop`
+/// writes to a session a test never begins (see `spawn_player`) — and a test's alone: the release
+/// binary carries no part of it.
+#[cfg(test)]
+static NATIVE_LOOP_TOLD: Mutex<Option<bool>> = Mutex::new(None);
+
+/// What the media engine was last told (see `NATIVE_LOOP_TOLD`).
+#[cfg(test)]
+pub(super) fn native_loop_told() -> Option<bool> {
+    NATIVE_LOOP_TOLD.lock().ok().and_then(|told| *told)
+}
+
+/// Forget what the media engine was told, so each test reads its own telling (see `NATIVE_LOOP_TOLD`).
+#[cfg(test)]
+pub(super) fn clear_native_loop_told() {
+    if let Ok(mut told) = NATIVE_LOOP_TOLD.lock() {
+        *told = None;
+    }
+}
+
 /// The player a preview holds: the process this app began, or — under test — the id one would
 /// have been given.
 ///

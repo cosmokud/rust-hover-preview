@@ -1561,6 +1561,61 @@ fn the_end_of_file_that_pauses_is_left_to_the_rewind_where_it_can_take_the_film(
     }
 }
 
+/// The end of file the media engine is playing the film on screen under is the one that is on
+/// screen *now*, and not the one its session was begun with.
+///
+/// The engine is the one player this app can tell while its film runs, which is what it has to be:
+/// a film begun for a hover carries the hover's own answer — `Video → Loop`, on by default — and a
+/// pin adopts that session rather than beginning one of its own, so a pinned film whose end of file
+/// is a step on, or a stop, went on looping itself. The engine reported no end, `Continue` never
+/// reached its walk, and `Pause` had nothing to stop but a film that was already going round.
+#[test]
+fn a_pinned_native_films_loop_is_the_end_of_file_on_screen_now() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+
+    let film = PathBuf::from("native-loop-film.mkv");
+    // The switch the film's session was begun under, which is the answer a hover gives it.
+    let _jumps = VideoJumps::set(true, PinEndOfFile::Continue);
+    stand_pin(Some(a_playing_pin(&film, (0, 0, 320, 240))));
+    clear_native_loop_told();
+
+    apply_native_video_loop(&film);
+    assert_eq!(
+        native_loop_told(),
+        Some(false),
+        "a pin that steps on at the end of a film is not one the engine may loop it for"
+    );
+
+    let _loops = VideoJumps::set(true, PinEndOfFile::Loop);
+    apply_native_video_loop(&film);
+    assert_eq!(
+        native_loop_told(),
+        Some(true),
+        "while a pin whose end of file is a loop is one the engine loops the film for"
+    );
+
+    // And a film with no pin in front of it is still played under the hover's own switch.
+    stand_pin(None);
+    apply_native_video_loop(&film);
+    assert_eq!(
+        native_loop_told(),
+        Some(true),
+        "a hovered film loops where the hover's own switch says so"
+    );
+    let _hover_off = VideoJumps::set(false, PinEndOfFile::Loop);
+    apply_native_video_loop(&film);
+    assert_eq!(
+        native_loop_told(),
+        Some(false),
+        "and plays its pass once where the switch is off"
+    );
+
+    stand_pin(previous_pin);
+}
+
 /// The end of file that pauses stops the film where it stands on every route the tick's rewind
 /// cannot take home, rather than beginning it again.
 ///
