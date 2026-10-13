@@ -175,7 +175,8 @@ pub(super) static BUBBLE_MENU: Lazy<Mutex<Option<BubbleMenu>>> =
     Lazy::new(|| Mutex::new(None));
 
 /// Place the bubble's menu panel at a point in the window: the shared placement, with the flyout
-/// arrow cleared — no flyout hangs off this menu, so its last row carries none (see `MenuArrow`).
+/// arrow cleared — no flyout hangs off this menu, and none of its rows is a door, so no row of it
+/// carries an arrow (see `MenuArrow`).
 pub(super) fn bubble_menu_popup(
     point: (i32, i32),
     width: i32,

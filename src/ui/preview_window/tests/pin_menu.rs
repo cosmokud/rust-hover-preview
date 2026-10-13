@@ -109,8 +109,9 @@ impl Drop for PutBack {
 /// The rows the menu holds are the settings it is the face of:
 /// the main page is the two doors — the row that opens the jump
 /// choices and the row that opens the seek choices, neither carrying
-/// a mark — the jump flyout is the master switch with its check and
-/// the three jumps with the one the pin plays by carrying its disc,
+/// a mark and both carrying the arrow a door carries — the jump
+/// flyout is the master switch with its check, a rule, and the three
+/// jumps with the one the pin plays by carrying its disc,
 /// and the seek flyout is the four choices, in the order the tray
 /// lists them in, with the one the pin plays by carrying its disc.
 #[test]
@@ -125,27 +126,31 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
     let labels: Vec<&str> = top.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, ["Jump", "Seek"]);
     assert!(
-        matches!(top[0].mark, pin_chrome::MenuMark::None),
-        "the jump row opens the choices, so it carries no mark"
+        matches!(top[0].mark, pin_chrome::MenuMark::Door),
+        "the jump row opens the choices, so it is a door rather than an answer"
     );
     assert!(
-        matches!(top[1].mark, pin_chrome::MenuMark::None),
-        "the seek row opens the choices, so it carries no mark"
+        matches!(top[1].mark, pin_chrome::MenuMark::Door),
+        "and so is the seek row"
     );
 
     let jumps = jump_rows();
     let labels: Vec<&str> = jumps.iter().map(|row| row.label.as_str()).collect();
-    assert_eq!(labels, ["Enabled", "Loop", "To Next", "Shuffle"]);
+    assert_eq!(labels, ["Enabled", "", "Loop", "To Next", "Shuffle"]);
     assert!(
         matches!(jumps[0].mark, pin_chrome::MenuMark::Check(true)),
         "jump is on, so its row is checked"
+    );
+    assert!(
+        matches!(jumps[1].mark, pin_chrome::MenuMark::Separator),
+        "and a rule between the switch and the jumps it turns on"
     );
     let marked = jumps
         .iter()
         .position(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet));
     assert_eq!(
         marked,
-        Some(3),
+        Some(4),
         "the pin shuffles, so that choice is the one marked"
     );
 
@@ -182,7 +187,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         .position(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet));
     assert_eq!(
         marked,
-        Some(1),
+        Some(2),
         "a pinned sound loops, so that choice is the one marked"
     );
     let choices = seek_rows();
@@ -238,12 +243,12 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, ["Jump", "Seek"]);
     assert!(
-        matches!(paint.rows[0].mark, pin_chrome::MenuMark::None),
-        "the jump row opens the choices, so it carries no mark"
+        matches!(paint.rows[0].mark, pin_chrome::MenuMark::Door),
+        "the jump row opens the choices, so it is a door rather than an answer"
     );
     assert!(
-        matches!(paint.rows[1].mark, pin_chrome::MenuMark::None),
-        "the seek row opens the choices, so it carries no mark"
+        matches!(paint.rows[1].mark, pin_chrome::MenuMark::Door),
+        "and so is the seek row"
     );
     assert!(
         paint.flyout.is_none(),
@@ -398,11 +403,28 @@ fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
         "a hand on the Jump row is the menu's own"
     );
 
-    // The menu is still up, on its two rows, with the flyout up beside it.
+    // The menu is still up, on its two rows, with the flyout up beside it and hung on
+    // the row the press landed on.
     let Some(paint) = pinned_menu_geometry() else {
         panic!("the menu is still up")
     };
-    assert!(paint.flyout.is_some(), "the press opened the flyout");
+    let Some(flyout) = paint.flyout.as_ref() else {
+        panic!("the press opened the flyout")
+    };
+    assert_eq!(
+        flyout.popup.panel.top, paint.popup.bands[0].top,
+        "the Jump flyout is top-aligned with the Jump row it was opened from"
+    );
+    assert_eq!(
+        flyout.popup.panel.left,
+        paint.popup.panel.right + 4,
+        "and it sits beside the menu it came from"
+    );
+    assert_ne!(
+        paint.popup.arrow,
+        pin_chrome::MenuArrow::None,
+        "the Jump row carries the arrow a door carries, whether the flyout is up or not"
+    );
     let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(labels, ["Jump", "Seek"]);
 }
@@ -436,8 +458,7 @@ fn a_press_on_the_jump_enabled_row_turns_it_over_and_writes_it_down() {
 
     // The middle of the flyout's first row, which is the row the
     // Enabled switch is the face of.
-    let x = (flyout.popup.panel.left + flyout.popup.panel.right) / 2;
-    let y = flyout.popup.rows_top + flyout.popup.row_height / 2;
+    let (x, y) = flyout_row_point(flyout, 0);
     assert!(
         unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
         "a hand on a row of the flyout is the menu's own"
@@ -505,9 +526,21 @@ fn a_press_on_a_jump_choice_sets_the_jump_and_puts_the_menu_away() {
     };
 
     // The middle of the flyout's `To Next` row, which is the jump the pin is not
-    // playing by: Loop is on, so the press chooses To Next.
-    let x = (flyout.popup.panel.left + flyout.popup.panel.right) / 2;
-    let y = flyout.popup.rows_top + 2 * flyout.popup.row_height + flyout.popup.row_height / 2;
+    // playing by: Loop is on, so the press chooses To Next. The row is named by what it
+    // says, and the band it is aimed with is the one it was laid out in — the rule above
+    // the jumps is a band of the panel too, so counting bands would be counting it (see
+    // `flyout_row_band`).
+    let to_next = flyout
+        .rows
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.label == "To Next")
+        .map(|(index, _)| flyout.popup.bands[index])
+        .expect("the jump flyout lists To Next");
+    let (x, y) = (
+        (flyout.popup.panel.left + flyout.popup.panel.right) / 2,
+        to_next.top + to_next.height / 2,
+    );
     assert!(
         unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
         "a hand on a row of the flyout is the menu's own"
@@ -531,8 +564,10 @@ fn a_press_on_a_jump_choice_sets_the_jump_and_puts_the_menu_away() {
         .iter()
         .position(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet));
     assert_eq!(
-        marked,
-        Some(2),
+        marked
+            .and_then(|index| rows.get(index))
+            .map(|row| row.label.as_str()),
+        Some("To Next"),
         "To Next is the jump in force now"
     );
     assert!(
@@ -894,6 +929,25 @@ fn menu_row_point(paint: &PinMenuPaint, index: usize) -> (i32, i32) {
         paint.popup.rows_top
             + index as i32 * paint.popup.row_height
             + paint.popup.row_height / 2,
+    )
+}
+
+/// A point in the middle of one of a flyout's rows, in the window's own coordinates: what
+/// a press or a hover on that row is aimed with. It is taken from the band the panel laid
+/// the row out in rather than from arithmetic on the row height, because a panel that
+/// carries a rule between two groups of rows is not all one height (see
+/// `pin_chrome::MenuRowBand`).
+fn flyout_row_point(flyout: &PinMenuFlyout, index: usize) -> (i32, i32) {
+    let band = flyout
+        .popup
+        .bands
+        .iter()
+        .find(|band| band.answers == Some(index))
+        .unwrap_or_else(|| panic!("the flyout lays the row a hand counts {index} out in a band"));
+
+    (
+        (flyout.popup.panel.left + flyout.popup.panel.right) / 2,
+        band.top + band.height / 2,
     )
 }
 

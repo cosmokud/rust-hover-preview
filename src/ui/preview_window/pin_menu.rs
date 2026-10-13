@@ -95,6 +95,18 @@ pub(super) struct PinMenuFlyout {
 /// `refresh_pin_menu`).
 const PIN_MENU_HOVER_DELAY: Duration = Duration::from_millis(150);
 
+/// The row of the card's menu that opens the jump choices, and the row that opens the
+/// seeks: the main menu is two rows, and the rows its flyouts hang from are the first of
+/// them and the last (see `menu_rows`). The same two rows are what the hover timers watch
+/// and what a press on either opens (see `refresh_pin_menu` and `pinned_menu_press`).
+const JUMP_ROW: usize = 0;
+
+/// The row of the card's menu that opens the seek choices: the last of its rows, whatever
+/// the panel holds (see `menu_rows`).
+fn seek_row_of(rows: &[pin_chrome::MenuRow]) -> usize {
+    rows.len().saturating_sub(1)
+}
+
 /// The ways a pinned sound can start, in the order the menu lists them:
 /// the same four, in the same order, the tray's own
 /// `Volume → Pin Mode Audio Seek` submenu offers (see
@@ -125,18 +137,22 @@ const SEEK_LABELS: [&str; 4] = [
 /// The main menu is always these two rows — the choices are the flyouts' own rows,
 /// beside the menu's rather than in place of them (see `jump_rows` and `seek_rows`).
 ///
-/// The rows are doors rather than answers, so neither carries a mark: what each
-/// choice is, is the flyout's to say (see `menu_rows` before the jump, which marked
-/// two toggles here instead).
+/// The rows are doors rather than answers, so neither carries a mark of its own: what
+/// each choice is, is the flyout's to say, and what says a row opens one is the arrow at
+/// its own right (see `pin_chrome::MenuMark::Door`).
+///
+/// The rows a hand counts here are the rows themselves, with no rule between them: the
+/// rows the flyouts hang from are the first and the last of these (see
+/// `pinned_menu_paint`).
 pub(super) fn menu_rows() -> Vec<pin_chrome::MenuRow> {
     vec![
         pin_chrome::MenuRow {
             label: "Jump".to_string(),
-            mark: pin_chrome::MenuMark::None,
+            mark: pin_chrome::MenuMark::Door,
         },
         pin_chrome::MenuRow {
             label: "Seek".to_string(),
-            mark: pin_chrome::MenuMark::None,
+            mark: pin_chrome::MenuMark::Door,
         },
     ]
 }
@@ -157,17 +173,30 @@ const JUMP_LABELS: [&str; 3] = ["Loop", "To Next", "Shuffle"];
 
 /// The rows the Jump row's flyout holds: the master switch first, then the three
 /// jumps, in the order the tray lists them in — the switch carrying its check, and
-/// the jump the pin plays by carrying its disc.
+/// the jump the pin plays by carrying its disc — with a rule between the switch and
+/// the jumps, because the switch is the whole of the feature rather than one of the
+/// three answers under it.
+///
+/// The rule is a separator row rather than a row of its own: nothing is written in it
+/// and no press or hover is answered by it, so the switch is still the first row a hand
+/// counts and the jumps the ones after it (see `pin_chrome::MenuMark::Separator` and
+/// `pinned_menu_press`).
 ///
 /// Read out of the configuration at the paint rather than remembered, so that a
 /// change to the setting shows the moment it is made, from wherever it was made —
 /// the same setting the tray's own `Pin Mode Jump` submenu writes (see `menu_rows`).
 pub(super) fn jump_rows() -> Vec<pin_chrome::MenuRow> {
     let (enabled, current) = pin_audio_jump();
-    let mut rows = vec![pin_chrome::MenuRow {
-        label: "Enabled".to_string(),
-        mark: pin_chrome::MenuMark::Check(enabled),
-    }];
+    let mut rows = vec![
+        pin_chrome::MenuRow {
+            label: "Enabled".to_string(),
+            mark: pin_chrome::MenuMark::Check(enabled),
+        },
+        pin_chrome::MenuRow {
+            label: String::new(),
+            mark: pin_chrome::MenuMark::Separator,
+        },
+    ];
     rows.extend(JUMP_CHOICES.iter().zip(JUMP_LABELS).map(|(choice, label)| {
         pin_chrome::MenuRow {
             label: label.to_string(),
@@ -271,8 +300,7 @@ pub(super) fn pinned_menu_geometry() -> Option<PinMenuPaint> {
 /// The menu as it is painted: the rows the main
 /// page holds, the panel anchored at the point the
 /// right-click that opened it landed, and the
-/// Seek row's flyout beside it when the flyout is
-/// up.
+/// flyout the row under the hand opens beside it.
 ///
 /// The panel is anchored at the pin's own remembered click point, in
 /// the window's own coordinates, and held inside the window by the
@@ -293,6 +321,13 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     } else {
         None
     };
+    // Which row of the main menu the flyout hangs from: the row the hand opened it from,
+    // which is the main menu's first for the Jump list and its last for the seeks (see
+    // `menu_rows`).
+    let hang_row = match pin.menu.jump {
+        true => JUMP_ROW,
+        false => seek_row_of(&rows),
+    };
     let (width, height) = pin.window_size();
 
     // The flyout's own placement is what says where the main
@@ -310,6 +345,7 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
                 width,
                 height,
                 pin.dpi,
+                hang_row,
                 &choices,
             );
             (
@@ -378,11 +414,19 @@ pub(super) fn refresh_pin_menu(
         .and_then(|flyout| at.and_then(|(x, y)| pin_chrome::menu_row_at(&flyout.popup, x, y)));
 
     // The Jump row is the main menu's first and the Seek row its last: the rows the
-    // flyouts hang from, whatever the panel holds (see `menu_rows`).
-    let jump_row = 0usize;
-    let seek_row = (paint.rows.len() as i32 - 1).max(0) as usize;
+    // flyouts hang from, whatever the panel holds (see `menu_rows`). The rows counted here
+    // are the rows a hand counts, which for this panel is every row of it — the rule the
+    // Jump flyout carries is not a row of the menu (see `pin_chrome::MenuRowBand`).
+    let jump_row = JUMP_ROW;
+    let seek_row = seek_row_of(&paint.rows);
     let on_jump = hover_main == Some(jump_row);
     let on_seek = hover_main == Some(seek_row);
+    // And the row the flyout that is up hangs from, which is the row the crossing between
+    // the two panels is measured at (see `pinned_menu_paint`).
+    let hang_row = match pin.menu.jump {
+        true => jump_row,
+        false => seek_row,
+    };
 
     // The timers: each starts when the pointer comes onto its row and is
     // cleared the moment it leaves, so a crossing opens nothing.
@@ -404,7 +448,7 @@ pub(super) fn refresh_pin_menu(
     let in_flyout = hover_flyout.is_some()
         || paint.flyout.as_ref().is_some_and(|flyout| {
             at.is_some_and(|(x, y)| {
-                pin_chrome::menu_flyout_gap_holds(&paint.popup, &flyout.popup, x, y)
+                pin_chrome::menu_flyout_gap_holds(&paint.popup, &flyout.popup, hang_row, x, y)
             })
         });
     let kept_jump = on_jump || (pin.menu.jump && in_flyout);
@@ -442,6 +486,12 @@ pub(super) fn refresh_pin_menu(
 /// of the flyout is the choice the pin plays by from then on and the
 /// whole menu goes away with it — while a press anywhere else is a press
 /// that has left the menu, which puts both panels away.
+///
+/// The rows a hand counts are what a press is answered against, and a door row of the
+/// main menu is the panel's first or its last (see `menu_rows`); a rule inside a flyout
+/// is not counted at all, so the flyout's first row is the master switch and the rows after
+/// it are the jumps whatever rules sit between them (see
+/// `pin_chrome::menu_row_at`).
 ///
 /// Nothing is held, because a menu is a thing a
 /// hand reads rather than a thing it carries: the press is answered

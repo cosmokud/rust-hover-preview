@@ -5,8 +5,9 @@ use super::super::menu::{
 };
 
 /// The rows the card's menu carries: the two that turn a mode
-/// on and off, and the one that opens the seek choices. Which
-/// of them is the one in force is what the marks say.
+/// on and off, and the one that opens the seek choices — a door,
+/// the way the card's own Seek row is. Which of them is the one in
+/// force is what the marks say.
 fn three_rows() -> Vec<MenuRow> {
     vec![
         MenuRow {
@@ -19,7 +20,27 @@ fn three_rows() -> Vec<MenuRow> {
         },
         MenuRow {
             label: "Seek".to_string(),
-            mark: MenuMark::None,
+            mark: MenuMark::Door,
+        },
+    ]
+}
+
+/// The rows of a menu whose first and last rows are doors and whose middle row answers:
+/// the shape a card's own menu has, where both rows that open a flyout carry the arrow a
+/// door carries and the row between them carries none (see `pin_menu::menu_rows`).
+fn two_doors() -> Vec<MenuRow> {
+    vec![
+        MenuRow {
+            label: "Jump".to_string(),
+            mark: MenuMark::Door,
+        },
+        MenuRow {
+            label: "Shuffle".to_string(),
+            mark: MenuMark::Check(true),
+        },
+        MenuRow {
+            label: "Seek".to_string(),
+            mark: MenuMark::Door,
         },
     ]
 }
@@ -29,6 +50,14 @@ fn three_rows() -> Vec<MenuRow> {
 /// the widths the flyout cases are asked of.
 fn a_point() -> (i32, i32) {
     (300, 40)
+}
+
+/// The row a card's flyout is opened from and hung on, counted the way a hand counts the
+/// rows of a menu: the menu's last row here, which is the row its Seek row is. The rows
+/// these tests hand over carry no rules between them, so the row a hand counts is the row
+/// itself (see `pin_chrome::MenuRowBand`).
+fn last_row(rows: &[MenuRow]) -> usize {
+    rows.len() - 1
 }
 
 /// The menu opens with its top-left at the point the right-click landed,
@@ -254,30 +283,75 @@ fn a_menu_of_one_character_rows_does_not_collapse_below_the_floor() {
     );
 }
 
-/// The seek flyout's panel keeps its fixed width, whoever its
-/// rows are and whatever the display's own scale: the four
-/// choices and a set whose longest row is longer than any of
-/// them, at two scales, are all the one fixed width — the
-/// main menu's own panel is the one that is measured.
+/// Every panel is measured from its own rows, the flyout's as well as the main menu's: the
+/// seek flyout's panel is its longest row's own measurement plus the marks' room and the
+/// pads, so a flyout of short rows is a panel that hugs them rather than one with an empty
+/// side of it — and a longer row is a wider panel at the same display's own scale, the way
+/// the main menu's own panel is. The room the two panels are placed in is still the fixed
+/// one, which is what the arrows' side is answered from (see `menu_flyout_tier`).
 #[test]
-fn the_seek_flyout_keeps_its_fixed_panel_width() {
-    for (dpi, scale) in [(96u32, 1.0f32), (144, 1.5)] {
+fn every_flyout_panel_is_measured_from_its_own_rows() {
+    let menu_rows = three_rows();
+
+    /// The width a panel of these rows measures to: the longest of their labels as the
+    /// theme draws it at the display's own scale, plus the room the marks stand in, the pad
+    /// the panel holds its rows in and the room it holds to the right of its longest row —
+    /// the arithmetic the main menu's own width is (see `menu_main_panel_width`).
+    fn measured_width(rows: &[MenuRow], dpi: u32) -> i32 {
+        let scale = dpi as f32 / 96.0;
+        let surface = DibSurface::create(1, 1).expect("a surface");
+        let style = caption_style([0, 0, 0]);
+        let longest = rows
+            .iter()
+            .map(|row| measure_text(&surface, &style, &row.label, scale))
+            .max()
+            .expect("the flyout holds rows");
+
+        longest
+            + text_paint::scaled(MENU_MARKER_ROOM_PIXELS as i32, scale)
+            + text_paint::scaled(MENU_PAD_PIXELS as i32, scale)
+            + text_paint::scaled(MENU_PANEL_RIGHT_ROOM_PIXELS as i32, scale)
+    }
+
+    for dpi in [96u32, 144] {
         for choices in [four_choices(), longer_flyout_rows()] {
-            let menu = menu_popup_from_point(a_point(), 900, 300, dpi, &three_rows());
-            let placed = menu_flyout_from_menu(&menu, 900, 300, dpi, &choices);
+            let menu = menu_popup_from_point(a_point(), 900, 300, dpi, &menu_rows);
+            let placed =
+                menu_flyout_from_menu(&menu, 900, 300, dpi, last_row(&menu_rows), &choices);
+
             assert_eq!(
                 placed.popup.panel.right - placed.popup.panel.left,
-                text_paint::scaled(MENU_PANEL_WIDTH_PIXELS as i32, scale),
-                "the flyout's panel is the fixed width at {} DPI",
+                measured_width(&choices, dpi),
+                "the flyout's panel is its own longest row plus the marks and the rooms, at {} DPI",
                 dpi
             );
         }
     }
+
+    // The panel follows the rows it holds rather than being one size for every flyout: a
+    // longer row is a wider panel.
+    let width_of = |choices: &[MenuRow], dpi: u32| {
+        let menu = menu_popup_from_point(a_point(), 900, 300, dpi, &menu_rows);
+        let placed = menu_flyout_from_menu(&menu, 900, 300, dpi, last_row(&menu_rows), choices);
+        placed.popup.panel.right - placed.popup.panel.left
+    };
+    assert!(
+        width_of(&longer_flyout_rows(), 96) > width_of(&four_choices(), 96),
+        "a longer row is a wider flyout panel at the same scale"
+    );
+
+    // And the room the tier gives a flyout is the room a flyout panel measures inside of,
+    // which is what lets the tier place the two panels before either is measured: the four
+    // seeks' own panel is narrower than it.
+    assert!(
+        width_of(&four_choices(), 96) < text_paint::scaled(MENU_PANEL_WIDTH_PIXELS as i32, 1.0),
+        "the flyout's own rows measure inside the fixed room the tier places them in"
+    );
 }
 
 /// Both panels stay inside a window narrower than either of
 /// them: the main menu's measured width is held to the
-/// window's own — and the flyout's fixed one is narrowed
+/// window's own — and the flyout's own panel is narrowed
 /// beside it — so a window too narrow for the panels is
 /// still a window they are painted wholly inside, the paint
 /// held to the window's bounds wherever a panel would run
@@ -296,12 +370,14 @@ fn both_panels_stay_painted_inside_a_window_narrower_than_they_are() {
     let menu_rows = three_rows();
     let flyout_rows = four_choices();
     let menu = menu_popup_from_point((50, 40), width, height, 96, &menu_rows);
-    let placed = menu_flyout_from_menu(&menu, width, height, 96, &flyout_rows);
+    let placed =
+        menu_flyout_from_menu(&menu, width, height, 96, last_row(&menu_rows), &flyout_rows);
 
     // Both panels are inside the window, at the width the
     // clamps hold them to: the main menu's measured width is
-    // the window's own, and the flyout's fixed one is the
-    // half the window leaves beside it.
+    // the window's own, and the flyout's own panel is the
+    // half the window leaves beside it or its own rows'
+    // measurement, whichever is the narrower.
     for panel in [placed.menu.panel, placed.popup.panel] {
         assert!(
             panel.left >= 0 && panel.right <= width,
@@ -426,14 +502,14 @@ fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
     // a second width: the gap the flyout is held off the
     // menu by is four logical pixels at 96 DPI.
     for width in [620i32, 700i32] {
-        let placed =
-            menu_flyout_from_menu(
-                &menu_popup_from_point(a_point(), width, 300, 96, &menu_rows),
-                width,
-                300,
-                96,
-                &flyout_rows,
-            );
+        let placed = menu_flyout_from_menu(
+            &menu_popup_from_point(a_point(), width, 300, 96, &menu_rows),
+            width,
+            300,
+            96,
+            last_row(&menu_rows),
+            &flyout_rows,
+        );
 
         // The menu is left where the point anchored it, and
         // the flyout's left edge is a small gap right of its
@@ -477,6 +553,7 @@ fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
         760,
         300,
         144,
+        last_row(&menu_rows),
         &flyout_rows,
     );
     assert_eq!(placed.popup.panel.left, placed.menu.panel.right + 6);
@@ -491,6 +568,142 @@ fn the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row() {
         assert!(panel.top >= 0);
         assert!(panel.bottom <= 300);
     }
+}
+
+/// The flyout hangs from the row it was opened from rather than from the panel's last
+/// row: the Jump row's flyout is top-aligned with the Jump row — the menu's own first —
+/// so a panel beside a row sits beside the row a hand pressed or rested on, which is what
+/// makes the two panels read as one menu (see `pin_menu::pinned_menu_paint`).
+#[test]
+fn the_flyout_hangs_on_the_row_it_was_opened_from() {
+    let menu_rows = three_rows();
+    let flyout_rows = four_choices();
+
+    let menu = menu_popup_from_point(a_point(), 900, 300, 96, &menu_rows);
+
+    // Hung from the first row: the flyout's top is that row's own band top, and not the
+    // top of the row below it.
+    let first = menu_flyout_from_menu(&menu, 900, 300, 96, 0, &flyout_rows);
+    assert_eq!(
+        first.popup.panel.top, menu.bands[0].top,
+        "the Jump flyout hangs on the Jump row"
+    );
+    assert_ne!(
+        first.popup.panel.top, menu.bands[1].top,
+        "and not on the row below it"
+    );
+
+    // And hung from the last row: the top moves down with the row it was opened from, by a
+    // row's own height here, where no rule sits between the rows.
+    let last = menu_flyout_from_menu(&menu, 900, 300, 96, last_row(&menu_rows), &flyout_rows);
+    // And hung from the middle row: the top follows the row it was opened from, whatever
+    // the row is.
+    let middle = menu_flyout_from_menu(&menu, 900, 300, 96, 1, &flyout_rows);
+    assert_eq!(
+        middle.popup.panel.top, menu.bands[1].top,
+        "the flyout's top follows the row it was opened from"
+    );
+    assert_eq!(
+        last.popup.panel.top, menu.bands[2].top,
+        "the Seek flyout hangs on the Seek row"
+    );
+}
+
+/// A separator is a rule between two groups of rows rather than a row of its own: its band
+/// is half a row's, the rows below it keep the numbers a hand counts them by, and a point
+/// in its band answers nothing at all — so a press on the rule does nothing, and the rows
+/// either side of it keep the meaning they had (see `MenuMark::Separator`).
+#[test]
+fn a_separator_is_a_rule_between_the_rows_rather_than_one_of_them() {
+    // The Jump flyout's own shape: the master switch, a rule, and then the jumps.
+    let ruled = vec![
+        MenuRow {
+            label: "Enabled".to_string(),
+            mark: MenuMark::Check(true),
+        },
+        MenuRow {
+            label: String::new(),
+            mark: MenuMark::Separator,
+        },
+        MenuRow {
+            label: "Loop".to_string(),
+            mark: MenuMark::None,
+        },
+        MenuRow {
+            label: "To Next".to_string(),
+            mark: MenuMark::Bullet,
+        },
+    ];
+    // The same rows with the rule answered instead of ruled: the room a rule does not take.
+    let answered = vec![
+        MenuRow {
+            label: "Enabled".to_string(),
+            mark: MenuMark::Check(true),
+        },
+        MenuRow {
+            label: String::new(),
+            mark: MenuMark::None,
+        },
+        MenuRow {
+            label: "Loop".to_string(),
+            mark: MenuMark::None,
+        },
+        MenuRow {
+            label: "To Next".to_string(),
+            mark: MenuMark::Bullet,
+        },
+    ];
+
+    let popup = menu_popup_from_point(a_point(), 400, 300, 96, &ruled);
+    let answered = menu_popup_from_point(a_point(), 400, 300, 96, &answered);
+
+    // The rule's band is half a row's — a rule with a little room either side of it rather
+    // than an empty row — and no row a hand counts is answered by it.
+    assert_eq!(
+        popup.bands[1].height,
+        popup.row_height / 2,
+        "a separator's band is half a row's"
+    );
+    assert_eq!(popup.bands[1].answers, None, "and it answers no row");
+
+    // The rows a hand counts keep their numbers: the switch first, the jumps after it, the
+    // rule between them not counted at all.
+    assert_eq!(
+        popup.bands[0].answers,
+        Some(0),
+        "the switch is the first row a hand counts"
+    );
+    assert_eq!(
+        popup.bands[2].answers,
+        Some(1),
+        "and the row after the rule is the second"
+    );
+    assert_eq!(popup.bands[3].answers, Some(2));
+
+    // The panel is the room the rule does not take shorter than the same rows answered.
+    assert_eq!(
+        answered.panel.bottom - popup.panel.bottom,
+        popup.row_height - popup.bands[1].height,
+        "the panel is half a row shorter for the rule"
+    );
+
+    // And a point in the rule's band answers no row, while the rows either side of it
+    // answer the rows they are — the row after the rule included, which is the row a press
+    // on it has to mean.
+    let middle_x = (popup.panel.left + popup.panel.right) / 2;
+    let band_middle = |index: usize| popup.bands[index].top + popup.bands[index].height / 2;
+    assert_eq!(
+        menu_row_at(&popup, middle_x, band_middle(1)),
+        None,
+        "a press on the rule is a press on no row"
+    );
+    assert_eq!(menu_row_at(&popup, middle_x, band_middle(0)), Some(0));
+    assert_eq!(
+        menu_row_at(&popup, middle_x, band_middle(2)),
+        Some(1),
+        "the row after the rule keeps the number it is counted by"
+    );
+    assert_eq!(menu_row_at(&popup, middle_x, band_middle(3)), Some(2));
 }
 
 /// Where the flyout does not fit right of the menu, it flips to
@@ -515,6 +728,7 @@ fn the_seek_flyout_flips_left_where_it_does_not_fit_right() {
             width,
             300,
             dpi,
+            last_row(&menu_rows),
             &flyout_rows,
         );
 
@@ -631,7 +845,14 @@ fn the_arrow_while_the_flyout_is_down_is_the_side_the_flyout_opens_on() {
 
         // The same panel with the flyout up: the two placed together,
         // the flyout beside the menu.
-        let placed = menu_flyout_from_menu(&down, width, height, dpi, &flyout_rows);
+        let placed = menu_flyout_from_menu(
+            &down,
+            width,
+            height,
+            dpi,
+            last_row(&menu_rows),
+            &flyout_rows,
+        );
 
         assert_eq!(
             placed.menu.arrow, down.arrow,
@@ -683,6 +904,7 @@ fn both_panels_stay_inside_the_window_at_every_width() {
         200,
         300,
         96,
+        last_row(&menu_rows),
         &flyout_rows,
     );
     assert_eq!(
@@ -705,6 +927,7 @@ fn both_panels_stay_inside_the_window_at_every_width() {
         250,
         300,
         144,
+        last_row(&menu_rows),
         &flyout_rows,
     );
     assert_eq!(split.menu.panel.left, 0);
@@ -721,6 +944,7 @@ fn both_panels_stay_inside_the_window_at_every_width() {
         600,
         120,
         96,
+        last_row(&menu_rows),
         &flyout_rows,
     );
     assert_eq!(
@@ -766,6 +990,7 @@ fn every_menu_row_stays_visible_and_uncovered_while_the_flyout_is_up() {
             width,
             height,
             dpi,
+            last_row(&menu_rows),
             &flyout_rows,
         );
         let menu = placed.menu;
@@ -1071,11 +1296,104 @@ fn the_row_under_the_pointer_is_washed() {
     }
 }
 
-/// The Seek row carries an arrow at its own right, pointing toward the
-/// side the flyout sits on: a filled triangle whose ink is on that row
-/// and nowhere else, and whose point is the side the placement chose.
+/// A separator's band is a rule and nothing else: a hairline across the panel, no label,
+/// no mark, and no wash — the wash follows the row a hand counts, so a pointer on the row
+/// after the rule washes that row and never the rule's band (see `MenuRowBand`).
 #[test]
-fn the_seek_row_carries_an_arrow_pointing_at_the_flyout() {
+fn a_separator_is_a_rule_and_is_never_washed() {
+    let (width, height) = (400i32, 300i32);
+    let backdrop = [90u8, 60, 30];
+    let palette = ChromePalette {
+        background: [30, 34, 42],
+        foreground: [198, 202, 210],
+        accent: [86, 182, 194],
+        dark: true,
+    };
+    let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
+
+    let rows = vec![
+        MenuRow {
+            label: "Enabled".to_string(),
+            mark: MenuMark::Check(true),
+        },
+        MenuRow {
+            label: String::new(),
+            mark: MenuMark::Separator,
+        },
+        MenuRow {
+            label: "Loop".to_string(),
+            mark: MenuMark::Bullet,
+        },
+        MenuRow {
+            label: "To Next".to_string(),
+            mark: MenuMark::None,
+        },
+    ];
+    let popup = menu_popup_from_point(a_point(), width, height, 96, &rows);
+
+    // The pointer is on the row after the rule, which is the second row a hand counts.
+    let mut buffer = vec![0u8; (width * height * 4) as usize];
+    for pixel in buffer.as_chunks_mut::<4>().0 {
+        pixel[0] = backdrop[0];
+        pixel[1] = backdrop[1];
+        pixel[2] = backdrop[2];
+        pixel[3] = 255;
+    }
+    paint_menu_popup(
+        &mut buffer,
+        width,
+        &palette,
+        &popup,
+        &rows,
+        Some(1),
+        &surface,
+        1.0,
+    );
+
+    // A pixel of the far pad at a band's own top, left of the marker column, where no
+    // label, no mark and no rule is drawn: the panel's own page where nothing is washed.
+    let page = [palette.background[2], palette.background[1], palette.background[0]];
+    let background_of = |index: usize| {
+        let band = popup.bands[index];
+        let at = ((band.top * width) as usize + (popup.panel.left + 2) as usize) * 4;
+        [buffer[at], buffer[at + 1], buffer[at + 2]]
+    };
+
+    assert_ne!(
+        background_of(2),
+        page,
+        "the row the pointer is on is washed, which is the row after the rule"
+    );
+    assert_eq!(
+        background_of(1),
+        page,
+        "the rule's band is not a row and carries no wash of its own"
+    );
+    assert_eq!(background_of(0), page, "nor is the row above it washed");
+    assert_eq!(background_of(3), page, "nor the row below it");
+
+    // And the rule itself is drawn: a hairline inside its own band, across the panel where
+    // the page is and nothing else is.
+    let band = popup.bands[1];
+    let mut ink = 0;
+    for y in band.top..band.top + band.height {
+        for x in popup.panel.left + 10..popup.panel.right - 10 {
+            let at = ((y * width + x) as usize) * 4;
+            if buffer[at..at + 3] != page {
+                ink += 1;
+            }
+        }
+    }
+    assert!(ink > 0, "the rule is drawn across the panel");
+}
+
+/// A door row carries an arrow at its own right, pointing toward the
+/// side the panel it opens sits on: a filled triangle whose ink is on that row
+/// and nowhere else, and whose point is the side the placement chose. Every door
+/// row carries one — a card's menu has two of them — and a row that answers
+/// rather than opening anything carries none, whatever side the tier answered.
+#[test]
+fn a_door_row_carries_the_arrow_and_a_row_that_answers_carries_none() {
     let (width, height) = (620i32, 300i32);
     let backdrop = [90u8, 60, 30];
     let palette = ChromePalette {
@@ -1086,11 +1404,12 @@ fn the_seek_row_carries_an_arrow_pointing_at_the_flyout() {
     };
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
 
-    // The same menu painted twice: once with no arrow at all, once
-    // with the arrow pointing right and once pointing left. The ink
-    // in the band at the row's own right is the arrow's.
+    // The same menu painted once with no arrow at all, once with the
+    // arrows pointing right and once pointing left. The ink in the band
+    // at a row's own right is the arrow's.
+    let rows = two_doors();
     let paint = |arrow: MenuArrow| -> Vec<u8> {
-        let mut popup = menu_popup_from_point(a_point(), width, height, 96, &three_rows());
+        let mut popup = menu_popup_from_point(a_point(), width, height, 96, &rows);
         popup.arrow = arrow;
         let mut buffer = vec![0u8; (width * height * 4) as usize];
         for pixel in buffer.as_chunks_mut::<4>().0 {
@@ -1104,7 +1423,7 @@ fn the_seek_row_carries_an_arrow_pointing_at_the_flyout() {
             width,
             &palette,
             &popup,
-            &three_rows(),
+            &rows,
             None,
             &surface,
             1.0,
@@ -1112,24 +1431,27 @@ fn the_seek_row_carries_an_arrow_pointing_at_the_flyout() {
         buffer
     };
 
-    let base = menu_popup_from_point(a_point(), width, height, 96, &three_rows());
-    let row_top = base.rows_top + 2 * base.row_height;
-    // The band at the row's own right that the arrow stands in: from a
+    let base = menu_popup_from_point(a_point(), width, height, 96, &rows);
+    // The band at a row's own right that the arrow stands in: from a
     // little inside the panel's right edge to a little inside it again,
     // short of the hairline the panel is outlined with.
     let columns = base.panel.right - 25..base.panel.right - 3;
-    let page = [palette.background[2], palette.background[1], palette.background[0]];
-    let behind = [backdrop[2], backdrop[1], backdrop[0]];
 
-    // The ink of the arrow in the row that carries it: the pixels of
-    // the seek row's right band that are neither the page nor the
-    // backdrop.
-    let arrow_ink = |buffer: &[u8]| -> Vec<(i32, i32)> {
+    let plain = paint(MenuArrow::None);
+    let right = paint(MenuArrow::Right);
+    let left = paint(MenuArrow::Left);
+
+    // What an arrow adds to a paint, in a row: the pixels of that row's own right band
+    // that the same paint with no arrow at all did not draw. It is the arrow and nothing
+    // else — a row's label is the same either way — which is why a row that carries no
+    // arrow has nothing here whatever side the tier answered.
+    let arrow_ink = |buffer: &[u8], index: usize| -> Vec<(i32, i32)> {
+        let band = base.bands[index];
         let mut ink = Vec::new();
-        for y in row_top..row_top + base.row_height {
+        for y in band.top..band.top + band.height {
             for x in columns.clone() {
                 let at = ((y * width + x) as usize) * 4;
-                if buffer[at..at + 3] != page && buffer[at..at + 3] != behind {
+                if buffer[at..at + 3] != plain[at..at + 3] {
                     ink.push((x, y));
                 }
             }
@@ -1137,24 +1459,22 @@ fn the_seek_row_carries_an_arrow_pointing_at_the_flyout() {
         ink
     };
 
-    let plain = paint(MenuArrow::None);
-    let right = paint(MenuArrow::Right);
-    let left = paint(MenuArrow::Left);
+    // Both doors carry one, whichever way the side they point at is, and the row that
+    // answers between them carries none: there the two paints are the same picture.
+    for pointed in [&right, &left] {
+        for door in [0usize, 2] {
+            assert!(
+                !arrow_ink(pointed, door).is_empty(),
+                "door row {door} carries an arrow where its panel is beside it"
+            );
+        }
+        assert!(
+            arrow_ink(pointed, 1).is_empty(),
+            "a row that answers carries no arrow"
+        );
+    }
 
-    assert!(
-        arrow_ink(&plain).is_empty(),
-        "a row that opens nothing carries no arrow"
-    );
-    assert!(
-        !arrow_ink(&right).is_empty(),
-        "the Seek row carries an arrow where the flyout is to its right"
-    );
-    assert!(
-        !arrow_ink(&left).is_empty(),
-        "and an arrow where the flyout is to its left"
-    );
-
-    // Which way it points: the two are the same triangle turned about
+    // Which way one points: the two are the same triangle turned about
     // the mark's own middle, so the ink of the left-pointing one is
     // further right than the right-pointing one's — its point is the
     // left edge and its base the right for one, and the other way
@@ -1162,8 +1482,8 @@ fn the_seek_row_carries_an_arrow_pointing_at_the_flyout() {
     let mean = |ink: &[(i32, i32)]| {
         ink.iter().map(|&(x, _)| x as f64).sum::<f64>() / ink.len() as f64
     };
-    let right_ink = arrow_ink(&right);
-    let left_ink = arrow_ink(&left);
+    let right_ink = arrow_ink(&right, 2);
+    let left_ink = arrow_ink(&left, 2);
     assert!(
         mean(&left_ink) > mean(&right_ink),
         "the left-pointing arrow's ink sits further right than the right-pointing one's"
