@@ -541,7 +541,24 @@ pub(super) fn player_end(
     }
 }
 
-/// Begin a pinned film again from the beginning, answering whether that was what to do.
+/// Whether a pass that is still being played has reached the end of its file, by this app's own
+/// clock.
+///
+/// It is the end for a player that *stays up* when the film ends rather than exiting — mpv, which
+/// is launched with `--keep-open=yes` and holds the last frame (see `start_mpv_video_playback`) —
+/// and it is asked with no grace at all, because the five seconds `player_end` allows are the width
+/// needed to read a *gone* player's going as the film finishing rather than as a kill (see
+/// `FILM_END_GRACE_SECONDS`). A player that is still up has done no going, the length of the file
+/// is the file's own, and the pass is over when the clock reaches it — no earlier, which is the
+/// whole of what an end of file that steps on needs: five seconds read off the tail of every film
+/// is a next file begun while the one before it is still talking.
+pub(super) fn pass_ended(reached: f64, duration: Option<f64>) -> bool {
+    duration
+        .filter(|duration| *duration > 0.0)
+        .is_some_and(|duration| reached >= duration)
+}
+
+/// Answer the end of a pinned film's pass: stop it, step on, or begin it again from the top.
 ///
 /// This is the loop FFmpeg's player is no longer asked for, and it is one tick of the preview loop
 /// rather than a thread of its own: a player that has ended is a process that is gone, the loop
@@ -559,6 +576,12 @@ pub(super) fn player_end(
 /// what it sees and wrong about what it means: a film that has finished looks exactly like one
 /// whose player has been killed. Answered after any of them, the loop would be restarting a pin
 /// that has already closed itself.
+///
+/// **And it is where the end of a film that leaves its player up is answered at all**, which is why
+/// `End of File → Pause` and `Continue` both settle the bar here: mpv holds its last frame when the
+/// film ends (`--keep-open=yes`), so the reconciliation that catches a player that has exited never
+/// runs for it, and nothing else in the tick would ever tell the bar the film was over (see
+/// `pass_ended`).
 pub(super) fn loop_ended_pinned_player(
     anchor: Option<NavCategory>,
     wait: &mut Option<PinWait>,
@@ -593,7 +616,11 @@ pub(super) fn loop_ended_pinned_player(
     // and `Continue` is the walk's next file, taken in the folder's own order or at random
     // where the pin's shuffle says so (see `ask_pin_walk`).
     let end_of_file = current_pin_mode_video_end_of_file();
-    if end_of_file == PinEndOfFile::Pause {
+
+    // A film being held is not a film whose pass has ended, whatever the clock underneath says:
+    // the start a hold keeps counting from is the one the clock runs on, so a film held for longer
+    // than it lasts would otherwise be read as finished under the hand (see `PinTransport::held`).
+    if transport.paused_at.is_some() {
         return false;
     }
 
@@ -601,14 +628,43 @@ pub(super) fn loop_ended_pinned_player(
         .lock()
         .is_ok_and(|pending| pending.is_some());
     let reached = started.1 + started.0.elapsed().as_secs_f64();
-    if player_end(
-        transport.paused_at.is_none(),
-        reached,
-        transport.duration,
-        retiring,
-    ) != PlayerEnd::Finished
-    {
+
+    // A player that is still up when the clock says the pass is over is the one player that stays
+    // up at the end of its film — mpv — and its end is the film's own end rather than the five
+    // seconds the gone-player reading allows for. A player that has gone keeps that reading, and
+    // with it the retirement check: the `retiring` player is the one being replaced, and a going
+    // that has to be told from the film finishing is exactly what that flag is for (see
+    // `player_end`). The player still up is the replacement, whose own clock was begun at the
+    // second it was given (see `restart_pinned_player`), so no retirement of another process is
+    // anything to this reading.
+    let live = is_video_process_running();
+    let ended = if live {
+        pass_ended(reached, transport.duration)
+    } else {
+        player_end(true, reached, transport.duration, retiring) == PlayerEnd::Finished
+    };
+    if !ended {
         return false;
+    }
+
+    if end_of_file == PinEndOfFile::Pause {
+        // **The player that stays up is the end of file that never used to arrive.** A player
+        // that exits is reconciled by `settle_pinned_transport`, which finds nothing behind the
+        // bar and writes the film down as held — but mpv holds its last frame instead of going, so
+        // nothing was ever reconciled: the clock counted past the end of the film for as long as
+        // the pin was up, the bar swept round, and the play/pause button claimed a film that was
+        // playing. So the pass's end is written down here, where the end of file is answered: the
+        // clock stops at the film's own end, the bar stands there, and the button becomes the play
+        // button a finished film is owed (see `toggle_pinned_playback` for the press that begins
+        // it again from the top).
+        if !live {
+            // A player that has gone is the reconcile's to answer, and it writes the second the
+            // *wrapped* clock stands at — which is where the bar and the next press expect it.
+            return false;
+        }
+        let held = transport.duration.unwrap_or(reached).min(reached);
+        update_pin_transport(|transport| transport.player_gone(held));
+        return true;
     }
 
     if end_of_file != PinEndOfFile::Loop {
@@ -620,14 +676,24 @@ pub(super) fn loop_ended_pinned_player(
         if ask_pin_walk(path.clone(), 1, anchor) {
             *wait = Some(PinWait::new());
         }
+        // And the film is held where it stands until the walk lands, which is the same write the
+        // end of file that pauses makes and for a second reason besides: the walk is a folder read
+        // and the clock under the bar would otherwise keep its own count past the end while the pin
+        // waits — a bar that wraps round while the next file is being looked for reads as a film
+        // that is still playing, and the second the walk was asked from is the end of the film.
+        if let Some(end) = transport.duration {
+            update_pin_transport(|transport| transport.player_gone(end));
+        }
         return true;
     }
 
-    // A player that is still running has not ended, whatever the clock says. The grace below is for
-    // a player that has *gone* and whose going is read as the film finishing; it is not a licence to
-    // cut the tail off a film that is still playing, and without this check a film shorter than the
-    // grace would be begun again on the tick after it began.
-    if is_video_process_running() {
+    // A loop of a film the player is still holding is a wrap the tick gives it, down the pipe the
+    // player listens on (`video_loop_tick`): the wrap is asked *after* this function in the tick,
+    // and it is the one road mpv's loop has. A player that has gone is begun again here, because
+    // there is nothing left to tell: the grace this reading allows is for a player that has gone
+    // and whose going is read as the film finishing, not a licence to cut the tail off a film that
+    // is still playing.
+    if live {
         return false;
     }
 
