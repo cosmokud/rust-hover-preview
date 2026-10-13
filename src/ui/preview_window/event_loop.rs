@@ -946,16 +946,8 @@ pub fn run_preview_window() {
             // noted for the player the *hover* began, so reading the end of file here is what lets
             // `End of File → Loop` loop a film the hover was playing once, and a pin's step or an
             // end of file that is `Pause` stop one the hover was looping (see `pin_video_loops`).
-            //
-            // **And an end of file that is `Pause` is a rewind too, held at the top it names** (see
-            // `pin_video_pauses_at_the_top`): the same wrap a loop is given, so that the press which
-            // plays the film again is the plain resume of a held film rather than a seek written
-            // against a player that has stopped at the end of its file.
             if let Some(film) = current_video_path.clone().or_else(pinned_path) {
-                let _ = video_loop_tick(
-                    pin_is_playing_current(),
-                    pin_video_loops(&film) || pin_video_pauses_at_the_top(&film),
-                );
+                let _ = video_loop_tick(pin_is_playing_current(), pin_video_loops(&film));
             }
 
             // A pin that still believes it holds the keyboard, and that Windows says does not, is
