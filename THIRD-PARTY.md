@@ -92,6 +92,19 @@ Text: [`LICENSES/MIT.txt`](LICENSES/MIT.txt)
 - [inout 0.1.4](https://github.com/RustCrypto/utils) -- `MIT OR Apache-2.0` -- Copyright (c) 2022 Artyom Pavlov; Copyright (c) 2022 The RustCrypto Project Developers
 - [itoa 1.0.18](https://github.com/dtolnay/itoa) -- `MIT OR Apache-2.0` -- by David Tolnay
 - [js-sys 0.3.105](https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys) -- `MIT OR Apache-2.0` -- Copyright (c) 2014 Alex Crichton
+- [jxl-bitstream 1.1.0](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-coding 1.0.1](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-color 0.11.0](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-frame 0.13.3](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-grid 0.6.2](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-image 0.13.0](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-jbr 0.2.1](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-modular 0.11.3](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-oxide 0.12.6](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-oxide-common 1.0.0](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-render 0.12.4](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-threadpool 1.0.0](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
+- [jxl-vardct 0.11.1](https://github.com/tirr-c/jxl-oxide.git) -- `MIT OR Apache-2.0` -- by Wonwoo Choi
 - [libc 0.2.189](https://github.com/rust-lang/libc) -- `MIT OR Apache-2.0` -- Copyright (c) The Rust Project Developers
 - [libm 0.2.16](https://github.com/rust-lang/compiler-builtins) -- Copyright (c) 2018 Jorge Aparicio; Copyright © 1993,2004 Sun Microsystems or; Copyright © 2003-2009 Bruce D. Evans or; Copyright © 2003-2009 Steven G. Kargl or; Copyright © 2003-2011 David Schultz or; Copyright © 2005-2020 Rich Felker, et al.; Copyright © 2008 Stephen L. Moshier or; Copyright © 2017-2018 Arm Limited
 - [libredox 0.1.25](https://gitlab.redox-os.org/redox-os/libredox.git) -- Copyright (c) 2023 4lDO2
@@ -148,6 +161,8 @@ Text: [`LICENSES/MIT.txt`](LICENSES/MIT.txt)
 - [time 0.3.55](https://github.com/time-rs/time) -- `MIT OR Apache-2.0` -- Copyright (c) Jacob Pratt et al.
 - [time-core 0.1.9](https://github.com/time-rs/time) -- `MIT OR Apache-2.0` -- Copyright (c) Jacob Pratt et al.
 - [time-macros 0.2.32](https://github.com/time-rs/time) -- `MIT OR Apache-2.0` -- Copyright (c) Jacob Pratt et al.
+- [tracing 0.1.44](https://github.com/tokio-rs/tracing) -- Copyright (c) 2019 Tokio Contributors
+- [tracing-core 0.1.36](https://github.com/tokio-rs/tracing) -- Copyright (c) 2019 Tokio Contributors
 - [two-face 0.4.5](https://github.com/CosmicHorrorDev/two-face) -- `MIT OR Apache-2.0` -- Copyright (c) 2023-2023 The `two-face` developers (https://github.com/CosmicHorrorDev/two-face).
 - [typed-path 0.12.3](https://github.com/chipsenkbeil/typed-path) -- `MIT OR Apache-2.0` -- by Chip Senkbeil
 - [typenum 1.20.1](https://github.com/paholg/typenum) -- `MIT OR Apache-2.0` -- Copyright (c) 2014 Paho Lurie-Gregg; Copyright 2014 Paho Lurie-Gregg
