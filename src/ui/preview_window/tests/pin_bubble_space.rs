@@ -86,3 +86,64 @@ fn the_bubble_menu_holds_only_what_has_playback() {
         );
     }
 }
+
+/// The menu names the hold for what it will do, and the way out for where it goes: Pause while
+/// playing and Play while held, and the taskbar spelled the way the tray spells it.
+#[test]
+fn the_bubble_menu_names_what_each_row_will_do() {
+    assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::Toggle, true),
+        "Pause",
+        "a hold on playing media pauses it"
+    );
+    assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::Toggle, false),
+        "Play",
+        "a hold on held media lets it go"
+    );
+    assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::ToTaskbar, true),
+        "Minimize to Taskbar",
+        "the stand-in is the taskbar's, not the tray's"
+    );
+    assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::Close, false),
+        "Close",
+        "the way out is a close"
+    );
+}
+
+/// The painted menu carries the same rows in the same order, labelled for the playback behind
+/// them — the panel the chrome paints cannot disagree with the rows the press answers.
+#[test]
+fn the_painted_menu_carries_the_rows_the_press_answers() {
+    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Audio), true)
+        .iter()
+        .map(|row| row.label.clone())
+        .collect();
+    assert_eq!(
+        painted,
+        vec!["Pause", "Minimize to Taskbar", "Close"],
+        "a playing sound's menu pauses first"
+    );
+
+    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Video), false)
+        .iter()
+        .map(|row| row.label.clone())
+        .collect();
+    assert_eq!(
+        painted,
+        vec!["Play", "Minimize to Taskbar", "Close"],
+        "a held film's menu lets it go"
+    );
+
+    let painted: Vec<String> = bubble_menu_chrome_rows(Some(MediaType::Text), true)
+        .iter()
+        .map(|row| row.label.clone())
+        .collect();
+    assert_eq!(
+        painted,
+        vec!["Minimize to Taskbar", "Close"],
+        "a page's menu offers only the two ways out"
+    );
+}
