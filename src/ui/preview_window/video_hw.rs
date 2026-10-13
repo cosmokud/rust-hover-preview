@@ -535,25 +535,45 @@ pub(super) fn video_loop_tick(playing: bool, loops: bool) -> bool {
             if video_route(&path) == VideoRoute::Mpv
                 && mpv_ipc::seek_absolute(loop_.pid, seconds)
             {
-                // **And it is set going in the same breath, which is the half a seek cannot do.**
-                // A film that has reached its end is *paused* there (`--keep-open=yes`, see
-                // `mpv_args`), and a seek is a position for that player rather than a new pass: mpv
-                // keeps the pause, and says so in its own log — `playback restart complete @
-                // 0.000000, audio=playing, video=playing (paused)` (measured on mpv 0.41.0 down
-                // this app's own pipe). So a wrap that lands a moment after the pass has ended is a
-                // film standing at its first frame, silent and going nowhere, until the user presses
-                // pause and play at it. The tick only rewinds a film that is playing (see
-                // `video_loop_action`), so playing is what it is owed back.
-                mpv_ipc::set_paused(loop_.pid, false);
+                // **And which state the film is left in is the second line's to say, in the same
+                // breath as the seek.** A seek is a position for a player rather than a new pass —
+                // mpv keeps whatever pause it holds across one — so the state a wrap leaves is the
+                // state it is told to leave. `End of File → Loop` sets the film going again (a wrap
+                // that lands a moment after the pass has ended would otherwise leave it standing at
+                // its first frame, silent, with mpv's own log saying as much: `playback restart
+                // complete @ 0.000000, audio=playing, video=playing (paused)`, measured on mpv
+                // 0.41.0 down this app's own pipe). `End of File → Pause` holds it there instead
+                // (see `pin_video_pauses_at_the_top`), because the press that plays it again must
+                // not be a seek of its own: a seek written against a player that has stopped at the
+                // end of its file restarts the film's whole chain — `hr-seek, skipping to 0.000000`,
+                // `Reinit context to 320x240`, `first video frame after restart shown`, the same
+                // log — and the picture goes away with it, which is what the board's play button
+                // showed. A film held at its top is begun again by that press with one command and
+                // no seek at all (see `toggle_pinned_playback`).
+                //
+                // **And the hold is posted before the film reaches the end it pauses at**, which is
+                // what makes taking it home free as well: the rewind is due a tenth of a second
+                // early (see `rewind_due`), the same margin the loop's wrap is spent on, so the film
+                // is still playing when it is taken back — the seek is the one every wrap makes
+                // rather than a restart of a player that has already stopped.
+                let at_the_top = pin_video_pauses_at_the_top(&path);
+                mpv_ipc::set_paused(loop_.pid, at_the_top);
                 loop_.from = seconds;
                 loop_.at = Instant::now();
-                // **And the pin's own bar is moved onto that second with the clock.** A wrap is
-                // not a relaunch on this road — no player is begun again, so `transport.begun`
-                // never runs and nothing else writes the second the pass now runs from — and a bar
-                // left counting from the launch it was taken up at stands a whole pass away from
-                // the picture after the first wrap (see `rebase_video_loop_clock_to`).
+                // **And the pin's own bar is moved onto that second with the clock**, held there
+                // where the film was: a wrap is not a relaunch on this road — no player is begun
+                // again, so `transport.begun` never runs and nothing else writes the second the pass
+                // now runs from — and a bar left counting from the launch it was taken up at stands a
+                // whole pass away from the picture after the first wrap (see
+                // `rebase_video_loop_clock_to`).
                 if pinned_path().as_deref() == Some(path.as_path()) {
-                    update_pin_transport(|transport| transport.released(seconds));
+                    update_pin_transport(|transport| {
+                        if at_the_top {
+                            transport.held(seconds)
+                        } else {
+                            transport.released(seconds)
+                        }
+                    });
                 }
                 return true;
             }

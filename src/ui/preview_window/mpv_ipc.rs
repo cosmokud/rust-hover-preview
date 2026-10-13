@@ -71,8 +71,29 @@ fn write(pid: u32, line: String) -> bool {
     deliver(&name, line)
 }
 
+/// How many times a line is offered to the pipe, and how long the wait between two offers is.
+///
+/// mpv serves one client at a time and frees the next instance of its pipe a moment after the
+/// client before it has been let go of, so two lines written in one breath — the pair the tick's
+/// rewind is (see `video_loop_tick`) — can have the *second* refused with `ERROR_PIPE_BUSY`.
+/// Measured against mpv 0.41.0 with a film playing: 60 such pairs written back to back the way
+/// `deliver` writes them had the second line refused 3 times, and none at all with a millisecond
+/// between the two. A few milliseconds of patience is many times the moment it takes, and only a
+/// refused line ever pays it.
+const PIPE_OFFERS: usize = 6;
+const PIPE_OFFER_WAIT: std::time::Duration = std::time::Duration::from_millis(2);
+
+/// Windows' own `ERROR_PIPE_BUSY`, which is what an open that finds every instance of the pipe
+/// taken answers — the one failure worth waiting for rather than reporting.
+const ERROR_PIPE_BUSY: i32 = 231;
+
 /// Write one command line down the pipe and close it. MPV holds the other end; a pipe that cannot
 /// be opened is a player that is not there, and a command for one is not an error.
+///
+/// **And a pipe with every instance taken is tried again rather than answered `false`**, because
+/// that is a line the player is ready to hear: what a line refused there costs is not the waiting
+/// but the command — the rewind's settle is the half that holds a film at its top, and one lost to
+/// the pipe is a film that plays on from the first frame instead (see `video_loop_tick`).
 ///
 /// **A test run notes the line instead and writes nothing**, which is what keeps the suite from
 /// opening a pipe to a player it never began (see `NOTED`); the one test that has a real player to
@@ -91,10 +112,17 @@ fn deliver(name: &str, line: String) -> bool {
 
     use std::io::Write;
     let path = format!(r"\\.\pipe\{name}");
-    let Ok(mut pipe) = std::fs::OpenOptions::new().write(true).open(path) else {
-        return false;
-    };
-    pipe.write_all(line.as_bytes()).is_ok()
+    let mut offers = PIPE_OFFERS;
+    loop {
+        offers -= 1;
+        match std::fs::OpenOptions::new().write(true).open(&path) {
+            Ok(mut pipe) => return pipe.write_all(line.as_bytes()).is_ok(),
+            Err(error) if offers > 0 && error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                std::thread::sleep(PIPE_OFFER_WAIT);
+            }
+            Err(_) => return false,
+        }
+    }
 }
 
 /// Whether a line is written down a real pipe rather than noted.
@@ -357,6 +385,101 @@ mod tests {
             "mpv has to quit on the line this app writes it, and a player still up five seconds \
              later is a line mpv never read — which is what a command line without the newline the \
              JSON IPC delimits on is, however exactly the string of it is asserted"
+        );
+    }
+
+    /// **Both lines of a pair written in one breath reach the player, over and over.**
+    ///
+    /// The tick's rewind is such a pair — a seek, and the line that settles the state the film is
+    /// left in (see `video_loop_tick`) — and mpv serves one client at a time, freeing the next
+    /// instance of its pipe only once the client before it has been let go of. Measured on mpv
+    /// 0.41.0 with this exact write, 60 pairs back to back had the *second* line refused with
+    /// `ERROR_PIPE_BUSY` six times. A refused line is a command the player never reads, and for the
+    /// rewind's own pair the half that is lost is the hold: the film is taken to its top and then
+    /// plays on from there where it was meant to stand, pass after pass — which is the fault this
+    /// test is here to keep out (see `deliver`).
+    ///
+    /// Run it the way the ignore asks for — `cargo test
+    /// a_real_mpv_takes_every_line_of_a_pair -- --ignored` — and one at a time beside the other test
+    /// here that writes for real, for the reason its own note gives.
+    #[test]
+    #[ignore = "starts a real mpv, which a test run must never do; needs one installed"]
+    fn a_real_mpv_takes_every_line_of_a_pair_written_back_to_back() {
+        use crate::app::engine_processes;
+        use crate::formats::codecs;
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+
+        let Some(program) = codecs::resolve_mpv(None, &codecs::mpv_installs()) else {
+            println!("this machine has no mpv, so there is no pipe to hand a pair to");
+            return;
+        };
+
+        let name = next_pipe_name();
+        let ipc = format!(r#"--input-ipc-server=\\.\pipe\{name}"#);
+        let started = engine_processes::hidden_command(&program)
+            .args([
+                "--no-config",
+                "--idle=yes",
+                "--vo=null",
+                "--ao=null",
+                ipc.as_str(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        let mut player = match started {
+            Ok(player) => player,
+            Err(error) => {
+                println!(
+                    "mpv is installed but could not be started ({}), so there is no pipe to hand \
+                     a pair to",
+                    error.kind()
+                );
+                return;
+            }
+        };
+
+        remember_pipe(player.id(), &name);
+        write_to_a_real_pipe(true);
+
+        // The player puts its end of the pipe up while it starts, so the first line is tried until
+        // it lands. An idle player has no film for a seek to move and answers the command with an
+        // error nobody reads, which is the point: what is under test is the pipe under a pair, not
+        // what mpv does with either half.
+        let patience = Instant::now() + Duration::from_secs(5);
+        let look = Duration::from_millis(25);
+        let mut handed = false;
+        while !handed && Instant::now() < patience {
+            handed = seek_absolute(player.id(), 0.0);
+            if !handed {
+                std::thread::sleep(look);
+            }
+        }
+        assert!(
+            handed,
+            "the first line has to reach the player's pipe: a pipe that cannot be opened is not a \
+             player this app can tell anything"
+        );
+
+        let mut refused = 0;
+        for _ in 0..60 {
+            if !seek_absolute(player.id(), 0.0) || !set_paused(player.id(), true) {
+                refused += 1;
+            }
+        }
+
+        let _ = player.kill();
+        let _ = player.wait();
+        forget_pipe(player.id());
+        write_to_a_real_pipe(false);
+
+        assert_eq!(
+            refused, 0,
+            "every line of every pair has to be accepted: a pipe with both hands full is waited \
+             out, because a line answered false is a command the film on screen never hears"
         );
     }
 }

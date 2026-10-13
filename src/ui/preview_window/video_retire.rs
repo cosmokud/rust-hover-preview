@@ -577,11 +577,17 @@ pub(super) fn pass_ended(reached: f64, duration: Option<f64>) -> bool {
 /// whose player has been killed. Answered after any of them, the loop would be restarting a pin
 /// that has already closed itself.
 ///
-/// **And it is where the end of a film that leaves its player up is answered at all**, which is why
-/// `End of File → Pause` and `Continue` both settle the bar here: mpv holds its last frame when the
-/// film ends (`--keep-open=yes`), so the reconciliation that catches a player that has exited never
-/// runs for it, and nothing else in the tick would ever tell the bar the film was over (see
-/// `pass_ended`).
+/// **And it is where the end of a film that leaves its player up is answered at all.** mpv stands on
+/// its last frame when the film ends (`--keep-open=yes`) instead of exiting, so the reconciliation
+/// that catches a player which has *gone* never runs for it, and nothing else in the tick would tell
+/// the bar the film was over — which is why a walk that this end of file asks for is asked here, off
+/// this app's own clock and with no grace cut off the tail of the film (see `pass_ended`).
+///
+/// A pass that ends in a *hold* is not answered here: `End of File → Pause` takes the film back to the
+/// first frame and holds it there from the tick's own rewind, before its end is ever read off this
+/// clock, so that the press which plays it again is the plain resume of a held film rather than a seek
+/// against a player that has stopped at the end of its file (see `pin_video_pauses_at_the_top` and
+/// `video_loop_tick`).
 pub(super) fn loop_ended_pinned_player(
     anchor: Option<NavCategory>,
     wait: &mut Option<PinWait>,
@@ -647,6 +653,27 @@ pub(super) fn loop_ended_pinned_player(
         return false;
     }
 
+    // **Where the rewind can take the film home, `Pause` is that rewind's to answer and not this
+    // reading's.** A film the rewind holds at its top is a film whose pass never reaches its end at
+    // all, and one whose end this reading *did* catch — a tick that landed after the film had already
+    // stopped — is taken back to the top by that same rewind later in the same tick (see
+    // `pin_video_pauses_at_the_top` and `video_loop_tick`). Writing the film down as *held* here, which
+    // is what this reading used to do, is what would stop it: a film this app believes is held is a
+    // film the rewind leaves alone (see `video_loop_action`). And a seek to the top written from here
+    // would be a seek against a player that has stopped at the end of its file — the restart of the
+    // film's whole chain, picture and all, that the rewind exists to avoid.
+    //
+    // **And a film nothing can take home is still this reading's**, asked of the same predicate the
+    // rewind will ask itself (`rewind_due`) rather than a paraphrase of it: a film shorter than the
+    // margin a rewind is posted within is never rewound at all (see `video_launch`), so its end is the
+    // arm below, which is the bar's only answer to a player that stands on its last frame rather than
+    // going.
+    if end_of_file == PinEndOfFile::Pause
+        && video_launch::rewind_due(true, transport.duration, reached)
+    {
+        return false;
+    }
+
     if end_of_file == PinEndOfFile::Pause {
         // **The player that stays up is the end of file that never used to arrive.** A player
         // that exits is reconciled by `settle_pinned_transport`, which finds nothing behind the
@@ -655,8 +682,8 @@ pub(super) fn loop_ended_pinned_player(
         // the pin was up, the bar swept round, and the play/pause button claimed a film that was
         // playing. So the pass's end is written down here, where the end of file is answered: the
         // clock stops at the film's own end, the bar stands there, and the button becomes the play
-        // button a finished film is owed (see `toggle_pinned_playback` for the press that begins
-        // it again from the top).
+        // button a finished film is owed. It is the arm a film the rewind cannot take home is left
+        // with — one whose length nothing has read (see the note above).
         if !live {
             // A player that has gone is the reconcile's to answer, and it writes the second the
             // *wrapped* clock stands at — which is where the bar and the next press expect it.

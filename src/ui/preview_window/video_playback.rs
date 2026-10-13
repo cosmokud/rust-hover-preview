@@ -88,6 +88,29 @@ pub(super) fn pin_video_loops(path: &Path) -> bool {
     }
 }
 
+/// Whether the pinned film `path` is one that stops at the beginning of itself at the end of a pass.
+///
+/// `End of File → Pause` is the one end of file that neither begins the pass again nor steps on, and
+/// what it does at the end of a pass is what a loop does — take the film back to its first frame
+/// down the pipe the player listens on, the one road mpv has (see `video_loop_tick`) — and then leave
+/// it standing there.
+///
+/// **At the top and not at the end**, which is the whole of what keeps the press that plays it again
+/// a clean one. A film held at the top is resumed by that press with a single command, the same
+/// resume every other held film already has (see `toggle_pinned_playback`). A film held at its own
+/// end has to be taken to the top *by* the press, and a seek written against a player that has
+/// stopped at the end of its file is answered by mpv as a restart of the film's whole chain — its
+/// own log has the decoder reinitialised and the first frame shown again (`hr-seek, skipping to
+/// 0.000000`, `Reinit context to 320x240`, `first video frame after restart shown`, measured in
+/// mpv 0.41.0's own log) — and the picture the chain owns goes with it, which is the band showing
+/// the desktop for the moment in between. The picture the pin is left showing is the same either
+/// way: the frame the press would have put there.
+pub(super) fn pin_video_pauses_at_the_top(path: &Path) -> bool {
+    pinned()
+        && pinned_path().as_deref() == Some(path)
+        && current_pin_mode_video_end_of_file() == PinEndOfFile::Pause
+}
+
 /// The player a preview holds: the process this app began, or — under test — the id one would
 /// have been given.
 ///
