@@ -266,10 +266,7 @@ mod tests {
     ///
     /// It writes for real, so run it alone, the way the ignore asks for — `cargo test
     /// a_real_mpv_quits_on_the_line_this_app_writes -- --ignored` — and not beside the tests that
-    /// read the noted lines. Nor beside the other test here that writes for real: the flag that
-    /// turns the writing on and the pipe this app holds are one pair for the whole process, so the
-    /// two of them run one after the other rather than together (`cargo test a_real_mpv --
-    /// --ignored --test-threads=1`).
+    /// read the noted lines.
     #[test]
     #[ignore = "starts a real mpv, which a test run must never do; needs one installed"]
     fn a_real_mpv_quits_on_the_line_this_app_writes() {
@@ -360,115 +357,6 @@ mod tests {
             "mpv has to quit on the line this app writes it, and a player still up five seconds \
              later is a line mpv never read — which is what a command line without the newline the \
              JSON IPC delimits on is, however exactly the string of it is asserted"
-        );
-    }
-
-    /// **Two lines written straight after one another both reach the player.**
-    ///
-    /// The tick writes a pair — the rewind that takes a film back to its first frame and the line
-    /// that settles which state it is left in, played or held (see `video_loop_tick`) — and every
-    /// line is a connection of its own: the pipe is opened, one line written, the handle dropped
-    /// (`deliver`). The second line is the one this test is about, and it is read from outside the
-    /// pipe the only way a write-only client can read anything: `quit`, whose answer is a player
-    /// that is gone.
-    ///
-    /// Run it the way the ignore asks for — `cargo test
-    /// a_real_mpv_reads_two_lines_written_straight_after_one_another -- --ignored` — and not beside
-    /// the tests that read the noted lines: the flag that turns the writing on and the pipe this app
-    /// holds are one pair for the whole process, so this test and the one above it run one after the
-    /// other rather than together (`cargo test a_real_mpv -- --ignored --test-threads=1`).
-    #[test]
-    #[ignore = "starts a real mpv, which a test run must never do; needs one installed"]
-    fn a_real_mpv_reads_two_lines_written_straight_after_one_another() {
-        use crate::app::engine_processes;
-        use crate::formats::codecs;
-        use std::process::Stdio;
-        use std::time::{Duration, Instant};
-
-        let Some(program) = codecs::resolve_mpv(None, &codecs::mpv_installs()) else {
-            println!("this machine has no mpv, so there is no pipe to hand two lines to");
-            return;
-        };
-
-        let name = next_pipe_name();
-        let ipc = format!(r#"--input-ipc-server=\\.\pipe\{name}"#);
-
-        let started = engine_processes::hidden_command(&program)
-            .args([
-                "--no-config",
-                "--idle=yes",
-                "--vo=null",
-                "--ao=null",
-                ipc.as_str(),
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-
-        let mut player = match started {
-            Ok(player) => player,
-            Err(error) => {
-                println!(
-                    "mpv is installed but could not be started ({}), so there is no pipe to hand \
-                     two lines to",
-                    error.kind()
-                );
-                return;
-            }
-        };
-
-        remember_pipe(player.id(), &name);
-        write_to_a_real_pipe(true);
-
-        // The first line is tried until it lands, the way the test above tries its own: the player
-        // puts its end of the pipe up while it starts, and it changes nothing about the player.
-        let first = r#"{"command":["set_property","volume",50],"async":true}"#.to_string() + "\n";
-        let patience = Instant::now() + Duration::from_secs(5);
-        let look = Duration::from_millis(25);
-        let mut handed = false;
-        while !handed && Instant::now() < patience {
-            handed = write(player.id(), first.clone());
-            if !handed {
-                std::thread::sleep(look);
-            }
-        }
-        assert!(
-            handed,
-            "the first line has to reach the player's pipe: a pipe that cannot be opened is not a \
-             player this app can tell anything"
-        );
-
-        // **And the second in the same breath as the first**, which is the shape of the pair a press
-        // writes: the first line's connection is closed, and the next one is opened at once.
-        let second = r#"{"command":["quit"]}"#.to_string() + "\n";
-        let sent = write(player.id(), second);
-
-        let gone_by = Instant::now() + Duration::from_secs(5);
-        let mut gone = false;
-        while !gone && Instant::now() < gone_by {
-            gone = matches!(player.try_wait(), Ok(Some(_)));
-            if !gone {
-                std::thread::sleep(look);
-            }
-        }
-
-        if !gone {
-            let _ = player.kill();
-        }
-        let _ = player.wait();
-        forget_pipe(player.id());
-        write_to_a_real_pipe(false);
-
-        assert!(
-            sent,
-            "the second line has to be written as well: a pair is two commands, and one that \
-             cannot be written is a command the player never reads"
-        );
-        assert!(
-            gone,
-            "mpv has to quit on the second line, and a player still up five seconds later is a \
-             second line that was written and never reached it"
         );
     }
 }

@@ -599,23 +599,15 @@ pub(super) fn toggle_pinned_playback(
                 // the last frame, and letting it go there plays that frame and ends the pass again
                 // at once. So the press begins the film from the top, which is what a play button
                 // over a finished film is for.
-                //
-                // **At the top, though, is where the tick's own rewind leaves a film whose end of
-                // file is `Pause`** — `held` is then the first frame and nothing here is a seek (see
-                // `pin_video_pauses_at_the_top`). What is left for this road is the film nothing
-                // moved: one a pin was taken up on while it stood at its end, or one whose end of
-                // file became `Pause` after the pass was over.
                 let held = transport.paused_at.unwrap_or(0.0);
                 let finished = transport
                     .duration
                     .is_some_and(|duration| duration > 0.0 && held >= duration);
                 let from = if finished { 0.0 } else { held };
                 if finished && mpv {
-                    // The seek is what begins the film again, and it is written before the play for
-                    // a reason of its own: a player let go of on its last frame plays that frame and
-                    // ends the pass again at once. mpv stops there rather than pausing there (see
-                    // `mpv_args`), so the seek alone would do here; the play below goes with it all
-                    // the same, for a player a press had paused, which a seek leaves paused.
+                    // mpv stops on its last frame rather than pausing there (see `mpv_args`), so
+                    // the seek to the top is what begins the film again; the play below goes with
+                    // it for a player a press had paused, which a seek leaves paused.
                     mpv_ipc::seek_absolute(VIDEO_PID.load(Ordering::SeqCst), from);
                 }
                 if hold_the_player(false) {
