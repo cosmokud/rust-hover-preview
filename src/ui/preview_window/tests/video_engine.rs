@@ -86,7 +86,7 @@ fn video_engine_probe() {
         // asked for the way the preview loop asks for them, and what comes back is counted.
         // The volume is nothing, so nothing is heard of this.
         if media_engine_plays(&path) {
-            video_player::play(&path, 320, 240, 0, probed_picture(&path, 320, 240));
+            video_player::play(&path, 320, 240, 0, probed_picture(&path, 320, 240), true);
             println!("a session over it started: {}", video_player::is_playing());
 
             let mut pixels = Vec::new();

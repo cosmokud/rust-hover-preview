@@ -302,14 +302,14 @@ pub(super) fn source_rect(crop: Crop) -> Option<MFVideoNormalizedRect> {
 /// could not start one leaves nothing behind rather than a session that will never produce
 /// a frame: [`is_playing`] answers for that, and the hover it was for is answered with no
 /// preview.
-pub fn play(path: &Path, width: u32, height: u32, volume: u32, picture: Picture) {
+pub fn play(path: &Path, width: u32, height: u32, volume: u32, picture: Picture, loop_: bool) {
     stop();
 
     if width == 0 || height == 0 || !codecs::mf_started() {
         return;
     }
 
-    if let Some(session) = Session::begin(path, Some((width, height)), picture, volume, 0.0, true) {
+    if let Some(session) = Session::begin(path, Some((width, height)), picture, volume, 0.0, loop_) {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
 }
@@ -541,11 +541,33 @@ pub(super) fn a_sound_that_has_played_to_its_end(
     ended || (!paused && at.zip(length).is_some_and(|(at, length)| at >= length))
 }
 
+/// Whether the film being played has run to the end of it: the video half of what
+/// [`audio_ended`] answers for a sound, read the same way — the engine's own word for
+/// the end of a file it was asked to play once, or a clock that has run to the length
+/// the engine says the file is while the film is still going. Only a film asked not to
+/// loop ever ends, so this is the one answer a pinned film whose jump is on and not a
+/// loop is advanced by, and every other film answers no for as long as it is on screen.
+pub fn video_ended() -> bool {
+    SESSION.with(|slot| {
+        let slot = slot.borrow();
+        let Some(session) = slot.as_ref() else {
+            return false;
+        };
+
+        a_sound_that_has_played_to_its_end(
+            session.ended.load(Ordering::Acquire),
+            unsafe { session.engine.IsPaused() }.as_bool(),
+            position(),
+            duration(),
+        )
+    })
+}
+
 /// Whether the sound being played has run to the end of its file.
 ///
 /// Only a sound asked not to loop ever ends: a looping engine reports no end, so this
-/// is the one answer a pinned sound whose loop switch is off is advanced by (see
-/// `pin_mode_audio_loop_off_for`), and every other sound answers no for as long as it
+/// is the one answer a pinned sound whose jump is on and not a loop is advanced by (see
+/// `pin_audio_loops`), and every other sound answers no for as long as it
 /// is on screen.
 ///
 /// The engine's own word is the answer where it has been given — a session asked not

@@ -1554,6 +1554,8 @@ fn a_pinned_film_the_engine_failed_at_is_stepped_over_rather_than_closed() {
         shuffle: false,
         sounds: Vec::new(),
         shuffle_bag: Vec::new(),
+        videos: Vec::new(),
+        video_bag: Vec::new(),
         anchor: None,
     });
     let load: Option<PinLoad> = None;

@@ -57,20 +57,34 @@ pub(super) fn position_is_remembered(pinned: bool) -> bool {
     seek == AudioSeek::Remember
 }
 
-/// Whether a pinned sound's file is gone round for as long as it is
-/// shown, read the way the pin's seek is and at the same moment: from
-/// the pin's own setting as a player is started, so a change in the
-/// tray reaches the next pin — and a sound already playing is left
-/// where it is.
+/// Whether a hovered sound loops, read the way the pin's seek is and at the same
+/// moment: from the setting as a player is started, so a change in the tray reaches
+/// the next hover — and a sound already playing is left where it is.
 ///
-/// A sound that is *not* to be looped is a sound the engine plays
-/// once, and the end of it is what moves the pin on to the next file
-/// of the folder (see `pin_mode_audio_loop_off_for`).
-pub(super) fn current_pin_mode_audio_loop() -> bool {
+/// A sound that is *not* to be looped is a sound the player plays once, and the end
+/// of it is silence rather than another pass (see `wrap_audio_player`).
+pub(super) fn current_audio_jump_enabled() -> bool {
     CONFIG
         .lock()
-        .map(|cfg| cfg.pin_mode_audio_loop)
-        .unwrap_or(DEFAULT_PIN_MODE_AUDIO_LOOP)
+        .map(|cfg| cfg.audio_jump_enabled)
+        .unwrap_or(DEFAULT_AUDIO_JUMP_ENABLED)
+}
+
+/// What a pinned sound does at the end of its file, and whether that answer is acted
+/// on at all — the pin's own jump mode and its master switch, read the way the hover's
+/// loop is and at the same moment.
+///
+/// `Loop` is the sound beginning again, `To Next` the file beside it, `Shuffle` a
+/// random sound of the folder, and a switch that is off is the sound stopping at the
+/// end of its file rather than any of the three (see `wrap_audio_player`).
+pub(super) fn current_pin_mode_audio_jump() -> (bool, PinJumpMode) {
+    CONFIG
+        .lock()
+        .map(|cfg| (cfg.pin_mode_audio_jump_enabled, cfg.pin_mode_audio_jump))
+        .unwrap_or((
+            DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED,
+            DEFAULT_PIN_MODE_AUDIO_JUMP,
+        ))
 }
 
 /// What a sound's card is built with: the theme, which is the one setting a painted
@@ -732,7 +746,7 @@ pub(super) fn start_audio_playback_at(
                 // over the gain it asked for (see `video_player::stop`).
                 video_player::stop();
 
-                media.video_process = start_audio_player(path, volume, start, Some(gain));
+                media.video_process = start_audio_player(path, volume, start, Some(gain), pin_audio_loops(path));
 
                 return media.video_process.is_some();
             }
@@ -753,17 +767,18 @@ pub(super) fn start_audio_playback_at(
                 return true;
             }
 
-            // A pinned sound whose loop switch is off is a sound the engine
-            // plays once, and the end of it is what moves the pin on (see
-            // `pin_mode_audio_loop_off_for`); every other sound is one the
-            // engine goes round for as long as it is on screen.
-            video_player::play_audio(path, volume, start, !pin_mode_audio_loop_off_for(path));
+            // Whether the engine goes round for as long as the sound is on screen:
+            // a hovered sound loops where its own jump switch says so, and a pinned
+            // one where the pin's jump is both on and a loop — every other pinned
+            // sound is one the engine plays once, and the end of it is what either
+            // moves the pin on or stops it (see `pin_audio_jump_off_for`).
+            video_player::play_audio(path, volume, start, pin_audio_loops(path));
             video_player::is_playing()
         }
         Player::Ffmpeg => {
             // A gain measured for the file is FFmpeg's filter and goes with it; the branch above
             // is where a file with one was already taken, so this is a player started with no gain.
-            media.video_process = start_audio_player(path, volume, start, None);
+            media.video_process = start_audio_player(path, volume, start, None, pin_audio_loops(path));
             media.video_process.is_some()
         }
     }
@@ -801,6 +816,7 @@ pub(super) fn start_audio_player(
     volume: u32,
     start: f64,
     gain: Option<f64>,
+    loop_: bool,
 ) -> Option<PlayerProcess> {
     let mut command = engine_processes::hidden_command("ffplay");
     command.args(["-nodisp", "-autoexit", "-loglevel", "quiet"]);
@@ -822,9 +838,12 @@ pub(super) fn start_audio_player(
 
     if start.is_finite() && start > 0.0 {
         command.args(["-ss", &format!("{start:.3}")]);
-    } else {
+    } else if loop_ {
         // The whole file, looped by the player itself: with no position given to it, the
-        // position its loop returns to is the beginning of the file.
+        // position its loop returns to is the beginning of the file. A pass that is not
+        // to be looped is played once instead, and its exit is what the wrap answers —
+        // with another pass, the next file, or nothing, as the jump says (see
+        // `wrap_audio_player`).
         command.args(["-loop", "0"]);
     }
 
@@ -881,18 +900,25 @@ pub(super) fn reached_the_end(played: Duration, length: Option<f64>, offset: f64
     played.as_secs_f64() >= pass.min(AUDIO_WRAP_MINIMUM)
 }
 
-/// Whether the pin's own loop switch is off for the sound `path` is showing.
+/// Whether the sound `path` is showing goes round on its own: a hovered sound loops
+/// where its own jump switch says so, and a pinned one where the pin's jump is both on
+/// and a loop — every other sound is one the engine plays once, and the end of it is
+/// what either moves the pin on or stops it (see `wrap_audio_player`).
 ///
 /// The setting is the pin's own, so a hover preview — a sound the pointer is
-/// on rather than one a pin was asked to keep — is always looped, whatever the
-/// setting says, and the question is only ever asked of the file a pin is
-/// showing.
-pub(super) fn pin_mode_audio_loop_off_for(path: &Path) -> bool {
-    pinned() && pinned_path().as_deref() == Some(path) && !current_pin_mode_audio_loop()
+/// on rather than one a pin was asked to keep — is answered by its own switch, and
+/// the question of the pin's half is only ever asked of the file a pin is showing.
+pub(super) fn pin_audio_loops(path: &Path) -> bool {
+    if pinned() && pinned_path().as_deref() == Some(path) {
+        let (enabled, jump) = current_pin_mode_audio_jump();
+        enabled && jump == PinJumpMode::Loop
+    } else {
+        current_audio_jump_enabled()
+    }
 }
 
 /// Whether the sound the native engine is playing for the pin has ended, which
-/// is the one thing a pinned sound whose loop switch is off is advanced by.
+/// is the one thing a pinned sound whose jump is on and not a loop is advanced by.
 ///
 /// The engine was asked not to loop when the player was started (see
 /// `start_audio_playback_at`), so its end is its own to report: the engine's
@@ -901,7 +927,12 @@ pub(super) fn pin_mode_audio_loop_off_for(path: &Path) -> bool {
 /// a time — a file the engine is not playing has not ended, whatever the clock
 /// of the file on screen says (see `video_player::audio_ended`).
 pub(super) fn pinned_native_audio_ended(path: &Path) -> bool {
-    pin_mode_audio_loop_off_for(path)
+    if !(pinned() && pinned_path().as_deref() == Some(path)) {
+        return false;
+    }
+    let (enabled, jump) = current_pin_mode_audio_jump();
+    enabled
+        && jump != PinJumpMode::Loop
         && video_player::playing_path().as_deref() == Some(path)
         && video_player::audio_ended()
 }
@@ -926,8 +957,8 @@ pub(super) fn pinned_native_audio_ended(path: &Path) -> bool {
 /// played anything — is not started again: the card is left with no clock rather than with
 /// another player, which is the answer a file this machine will not play gets.
 ///
-/// A pinned sound whose loop switch is off is not wrapped at all: the end of its
-/// file is the end of the sound, and what is asked for in the player's place is
+/// A pinned sound whose jump is on and not a loop is not wrapped at all: the end of
+/// its file is the end of the sound, and what is asked for in the player's place is
 /// the next file of the folder, the same ask the caption's own **Next** button
 /// makes (see `ask_pin_walk`). The walk is the planner's work, so the wait for
 /// its answer is the pin's own — the same arc a **Next** press turns (see
@@ -968,17 +999,28 @@ pub(super) fn wrap_audio_player(
         return;
     }
 
-    // A pinned sound whose loop switch is off has played its file through: the
-    // pass is not gone round, and the next file of the folder is asked for
-    // instead — the same ask the caption's own **Next** button makes, with the
-    // same wait for its answer. The card is left with no clock and no player,
-    // which is what a sound that has ended is, until the walk lands.
-    if pin_mode_audio_loop_off_for(path) {
+    // What the end of the pass means: a pinned sound whose jump switch is off stops
+    // at the end of its file — the pass is not gone round and no file is asked for,
+    // which is what a sound that has ended is until something else is played — and any
+    // other jump but a loop is the next file of the folder, the same ask the caption's
+    // own **Next** button makes, with the same wait for its answer. The card is left
+    // with no clock and no player either way. A hovered sound whose jump switch is off
+    // stops the same way; one whose switch is on is wrapped below.
+    if pinned() && pinned_path().as_deref() == Some(path) {
+        let (enabled, jump) = current_pin_mode_audio_jump();
+        if !enabled || jump != PinJumpMode::Loop {
+            *started = None;
+            AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+
+            if enabled {
+                ask_pin_walk(path.to_path_buf(), 1, anchor);
+                *wait = Some(PinWait::new());
+            }
+            return;
+        }
+    } else if !current_audio_jump_enabled() {
         *started = None;
         AUDIO_CARD_DIRTY.store(true, Ordering::Release);
-
-        ask_pin_walk(path.to_path_buf(), 1, anchor);
-        *wait = Some(PinWait::new());
         return;
     }
 

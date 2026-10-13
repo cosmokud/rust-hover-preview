@@ -143,6 +143,7 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             video_height,
             volume,
             probed_picture(&file.path, video_width, video_height),
+            pin_video_loops(&file.path),
         );
 
         if !video_player::is_playing() {

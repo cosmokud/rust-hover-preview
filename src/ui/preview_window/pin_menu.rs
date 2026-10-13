@@ -11,8 +11,8 @@
 
 use super::*;
 
-/// The state of the card's menu: whether its panel is up, and
-/// whether the Seek row's flyout is up beside it.
+/// The state of the card's menu: whether its panel is up, and which row's flyout is
+/// up beside it.
 ///
 /// Both are the window's own rather than the configuration's, because
 /// they are what the pointer is looking at right now: a panel up is up
@@ -23,8 +23,12 @@ use super::*;
 pub(super) struct PinMenu {
     /// Whether the panel is up.
     pub(super) open: bool,
-    /// Whether the Seek row's flyout is up beside the menu,
-    /// rather than the menu holding its three rows alone.
+    /// Whether the Jump row's flyout is up beside the menu, rather than the menu
+    /// holding its two rows alone. Only one flyout is ever up: opening one puts
+    /// the other away (see `refresh_pin_menu`).
+    pub(super) jump: bool,
+    /// Whether the Seek row's flyout is up beside the menu, for the same reason
+    /// the Jump row's is.
     pub(super) seek: bool,
     /// Where the right-click that opened the panel landed, in the
     /// window's own coordinates: the panel's top-left, held inside
@@ -36,6 +40,11 @@ pub(super) struct PinMenu {
     pub(super) hover_main: Option<usize>,
     /// The row of the flyout the pointer is over, for the same wash.
     pub(super) hover_flyout: Option<usize>,
+    /// When the pointer came onto the Jump row, while the hover timer
+    /// that opens the flyout is running: cleared the moment the
+    /// pointer leaves the row, so that a hand only passing over it
+    /// opens nothing (see `refresh_pin_menu`).
+    pub(super) jump_since: Option<Instant>,
     /// When the pointer came onto the Seek row, while the hover timer
     /// that opens the flyout is running: cleared the moment the
     /// pointer leaves the row, so that a hand only passing over it
@@ -79,7 +88,7 @@ pub(super) struct PinMenuFlyout {
     pub(super) hover: Option<usize>,
 }
 
-/// How long the pointer rests on the Seek row before its flyout opens:
+/// How long the pointer rests on a row that opens a flyout before it opens:
 /// the Windows-like hover delay, long enough that a hand on its way
 /// across the row does not open a panel it did not mean to, and short
 /// enough that a hand meaning to use the row does not wait (see
@@ -110,37 +119,66 @@ const SEEK_LABELS: [&str; 4] = [
     "Random",
 ];
 
-/// The rows the card's menu holds: the two mode
-/// toggles and the row that opens the seek
-/// choices.
+/// The rows the card's menu holds: the row that opens the jump
+/// choices and the row that opens the seek choices.
 ///
-/// The main menu is always these three rows — the
-/// seek choices are the flyout's own rows, beside
-/// the menu's rather than in place of them (see
-/// `seek_rows`).
+/// The main menu is always these two rows — the choices are the flyouts' own rows,
+/// beside the menu's rather than in place of them (see `jump_rows` and `seek_rows`).
 ///
-/// The rows are read out of the configuration rather than held in the
-/// pin's state, because what a row *says* is what the setting says: a
-/// marker is the setting's own answer to "which one is this?", and a
-/// toggle is the setting's own opposite. Reading them at the paint
-/// rather than remembering them is also what makes a change to a
-/// setting show the moment it is made, from wherever it was made.
+/// The rows are doors rather than answers, so neither carries a mark: what each
+/// choice is, is the flyout's to say (see `menu_rows` before the jump, which marked
+/// two toggles here instead).
 pub(super) fn menu_rows() -> Vec<pin_chrome::MenuRow> {
-    let (shuffle, loop_) = pin_mode_audio_toggles();
     vec![
         pin_chrome::MenuRow {
-            label: "Shuffle".to_string(),
-            mark: pin_chrome::MenuMark::Check(shuffle),
-        },
-        pin_chrome::MenuRow {
-            label: "Loop".to_string(),
-            mark: pin_chrome::MenuMark::Check(loop_),
+            label: "Jump".to_string(),
+            mark: pin_chrome::MenuMark::None,
         },
         pin_chrome::MenuRow {
             label: "Seek".to_string(),
             mark: pin_chrome::MenuMark::None,
         },
     ]
+}
+
+/// The jumps a pinned sound can end with, in the order the tray's own `Pin Mode
+/// Jump` submenu offers them (see `shell::tray::ids::PIN_JUMP_CHOICES`), held here
+/// because that list is the tray's own and this is the card's.
+const JUMP_CHOICES: [PinJumpMode; 3] = [
+    PinJumpMode::Loop,
+    PinJumpMode::ToNext,
+    PinJumpMode::Shuffle,
+];
+
+/// What each of the jump choices is listed as: the words the tray lists
+/// the same three under, without the mark that menu puts on the default — the
+/// card's menu marks the one in force instead (see `jump_rows`).
+const JUMP_LABELS: [&str; 3] = ["Loop", "To Next", "Shuffle"];
+
+/// The rows the Jump row's flyout holds: the master switch first, then the three
+/// jumps, in the order the tray lists them in — the switch carrying its check, and
+/// the jump the pin plays by carrying its disc.
+///
+/// Read out of the configuration at the paint rather than remembered, so that a
+/// change to the setting shows the moment it is made, from wherever it was made —
+/// the same setting the tray's own `Pin Mode Jump` submenu writes (see `menu_rows`).
+pub(super) fn jump_rows() -> Vec<pin_chrome::MenuRow> {
+    let (enabled, current) = pin_audio_jump();
+    let mut rows = vec![pin_chrome::MenuRow {
+        label: "Enabled".to_string(),
+        mark: pin_chrome::MenuMark::Check(enabled),
+    }];
+    rows.extend(JUMP_CHOICES.iter().zip(JUMP_LABELS).map(|(choice, label)| {
+        pin_chrome::MenuRow {
+            label: label.to_string(),
+            mark: if *choice == current {
+                pin_chrome::MenuMark::Bullet
+            } else {
+                pin_chrome::MenuMark::None
+            },
+        }
+    }));
+    rows
 }
 
 /// The rows the Seek row's flyout holds: the four
@@ -176,34 +214,35 @@ fn pin_mode_audio_seek() -> AudioSeek {
         .unwrap_or(DEFAULT_PIN_MODE_AUDIO_SEEK)
 }
 
-/// The two mode toggles, read the same way. A lock that cannot be taken
-/// is answered with the defaults rather than with nothing, because a row
-/// that says nothing is a row a hand cannot read.
-fn pin_mode_audio_toggles() -> (bool, bool) {
-    let Ok(config) = CONFIG.lock() else {
-        return (
-            DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
-            DEFAULT_PIN_MODE_AUDIO_LOOP,
-        );
-    };
-
-    (config.pin_mode_audio_shuffle, config.pin_mode_audio_loop)
+/// What a pinned sound does at the end of its file, and whether that answer is
+/// acted on at all — the same setting the tray's own `Pin Mode Jump` submenu
+/// writes. A lock that cannot be taken is answered with the defaults rather than
+/// with nothing, because a row that says nothing is a row a hand cannot read.
+fn pin_audio_jump() -> (bool, PinJumpMode) {
+    CONFIG
+        .lock()
+        .ok()
+        .map(|config| (config.pin_mode_audio_jump_enabled, config.pin_mode_audio_jump))
+        .unwrap_or((
+            DEFAULT_PIN_MODE_AUDIO_JUMP_ENABLED,
+            DEFAULT_PIN_MODE_AUDIO_JUMP,
+        ))
 }
 
-/// The two mode toggles and where a pinned sound starts, written the way
-/// every setting this app's own menus write is: under the
+/// The jump switch and the jump itself, and where a pinned sound starts, written
+/// the way every setting this app's own menus write is: under the
 /// configuration's lock and saved (see
 /// `shell::tray::commands::setters`).
-fn toggle_pin_mode_audio_shuffle() {
+fn toggle_pin_audio_jump_enabled() {
     if let Ok(mut config) = CONFIG.lock() {
-        config.pin_mode_audio_shuffle = !config.pin_mode_audio_shuffle;
+        config.pin_mode_audio_jump_enabled = !config.pin_mode_audio_jump_enabled;
         config.save();
     }
 }
 
-fn toggle_pin_mode_audio_loop() {
+fn set_pin_audio_jump(jump: PinJumpMode) {
     if let Ok(mut config) = CONFIG.lock() {
-        config.pin_mode_audio_loop = !config.pin_mode_audio_loop;
+        config.pin_mode_audio_jump = jump;
         config.save();
     }
 }
@@ -245,7 +284,15 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     }
 
     let rows = menu_rows();
-    let choices = pin.menu.seek.then(seek_rows);
+    // The Jump row's flyout where it is up, else the Seek row's: only one flyout is
+    // ever up, so the one that is up is the panel's (see `refresh_pin_menu`).
+    let choices = if pin.menu.jump {
+        Some(jump_rows())
+    } else if pin.menu.seek {
+        Some(seek_rows())
+    } else {
+        None
+    };
     let (width, height) = pin.window_size();
 
     // The flyout's own placement is what says where the main
@@ -254,7 +301,7 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     // `pin_chrome::menu_flyout_from_menu`). With the flyout down,
     // the main menu is placed alone — and carries the same arrow
     // the flyout's placement answers, both placements asking the
-    // one tier the flyout opens in, so the Seek row points the way
+    // one tier the flyout opens in, so a row that opens one points the way
     // its flyout opens whether the flyout is up or not.
     let (popup, flyout) = match choices {
         Some(choices) => {
@@ -295,13 +342,14 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
 /// Three things are settled here and nowhere else, because they are all
 /// questions about where the pointer is right now rather than about anything
 /// the window was sent: the row the pointer is on, which is washed; whether
-/// the pointer has rested on the Seek row long enough for its flyout to open;
-/// and whether a flyout that is up is still wanted. A pointer that merely
-/// crosses the Seek row opens nothing — the timer is cleared the moment it
-/// leaves — and a flyout that is up stays up while the pointer is on the Seek
-/// row, in the gap between the panels, or on the flyout itself, and goes when
+/// the pointer has rested on a row that opens a flyout long enough for it to
+/// open; and whether a flyout that is up is still wanted. A pointer that merely
+/// crosses such a row opens nothing — the timer is cleared the moment it
+/// leaves — and a flyout that is up stays up while the pointer is on its row,
+/// in the gap between the panels, or on the flyout itself, and goes when
 /// the pointer is on another row or off the menu entirely (see
-/// `pin_chrome::menu_flyout_gap_holds`).
+/// `pin_chrome::menu_flyout_gap_holds`). Opening one flyout puts the other
+/// away, so only one is ever up.
 ///
 /// The pointer is read as a place on the screen and taken against the
 /// window's own box, the conversion `refresh_pin_volume` makes, for the same
@@ -329,46 +377,67 @@ pub(super) fn refresh_pin_menu(
         .as_ref()
         .and_then(|flyout| at.and_then(|(x, y)| pin_chrome::menu_row_at(&flyout.popup, x, y)));
 
-    // The Seek row is the main menu's last: it is the row the flyout hangs
-    // from, whatever the panel holds (see `menu_rows`).
+    // The Jump row is the main menu's first and the Seek row its last: the rows the
+    // flyouts hang from, whatever the panel holds (see `menu_rows`).
+    let jump_row = 0usize;
     let seek_row = (paint.rows.len() as i32 - 1).max(0) as usize;
+    let on_jump = hover_main == Some(jump_row);
     let on_seek = hover_main == Some(seek_row);
 
-    // The timer: it starts when the pointer comes onto the Seek row and is
+    // The timers: each starts when the pointer comes onto its row and is
     // cleared the moment it leaves, so a crossing opens nothing.
+    let jump_since = match on_jump {
+        true => pin.menu.jump_since.or(Some(now)),
+        false => None,
+    };
     let seek_since = match on_seek {
         true => pin.menu.seek_since.or(Some(now)),
         false => None,
     };
-    let rested = seek_since.is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
+    let rested_jump =
+        jump_since.is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
+    let rested_seek =
+        seek_since.is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
 
-    // Whether a flyout that is up is still wanted: the pointer is on the Seek
-    // row, the gap, or the flyout itself.
-    let kept = on_seek
-        || hover_flyout.is_some()
+    // Whether a flyout that is up is still wanted: the pointer is on its row,
+    // the gap, or the flyout itself.
+    let in_flyout = hover_flyout.is_some()
         || paint.flyout.as_ref().is_some_and(|flyout| {
             at.is_some_and(|(x, y)| {
                 pin_chrome::menu_flyout_gap_holds(&paint.popup, &flyout.popup, x, y)
             })
         });
+    let kept_jump = on_jump || (pin.menu.jump && in_flyout);
+    let kept_seek = on_seek || (pin.menu.seek && in_flyout);
 
-    let seek = (pin.menu.seek || rested) && kept;
+    let mut jump = (pin.menu.jump || rested_jump) && kept_jump;
+    let mut seek = (pin.menu.seek || rested_seek) && kept_seek;
+    // Only one flyout is ever up: a hand that has rested on one row has left the
+    // other, so the rested one wins and the kept one goes with the row it hung from.
+    if rested_jump {
+        seek = false;
+    } else if rested_seek {
+        jump = false;
+    }
 
     let changed = pin.menu.hover_main != hover_main
         || pin.menu.hover_flyout != hover_flyout
+        || pin.menu.jump != jump
         || pin.menu.seek != seek
+        || pin.menu.jump_since != jump_since
         || pin.menu.seek_since != seek_since;
     pin.menu.hover_main = hover_main;
     pin.menu.hover_flyout = hover_flyout;
+    pin.menu.jump = jump;
     pin.menu.seek = seek;
+    pin.menu.jump_since = jump_since;
     pin.menu.seek_since = seek_since;
 
     changed
 }
 
 /// A press on a pinned window with the card's menu up, answering whether
-/// it was the menu's: a press on a row is that row's own — a mode
-/// toggles and the panel goes away with the answer, the Seek row opens
+/// it was the menu's: a press on a row is that row's own — a door row opens
 /// its flyout beside the menu and the panel stays up to hold it, a row
 /// of the flyout is the choice the pin plays by from then on and the
 /// whole menu goes away with it — while a press anywhere else is a press
@@ -390,27 +459,24 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     // and everywhere outside both panels is not a row (see
     // `pin_chrome::menu_row_at`).
     let stays_up = match pin_chrome::menu_row_at(&paint.popup, x, y) {
-        Some(index) => match index {
-            // The two mode toggles: the setting is turned over and the
-            // panel goes away, because a toggle is an answer rather than
-            // a door.
-            0 => {
-                toggle_pin_mode_audio_shuffle();
-                false
-            }
-            1 => {
-                toggle_pin_mode_audio_loop();
-                false
-            }
-            // The seek row: the door the flyout comes through. A press on
-            // it opens the flyout beside the menu and the menu stays up,
-            // its rows still showing — the same door the hover opens, for
-            // a hand that has come to press rather than wait.
-            _ => {
-                with_pin(|pin| pin.menu.seek = true);
-                true
-            }
-        },
+        // The doors the flyouts come through: a press on one opens its flyout
+        // beside the menu and the menu stays up, its rows still showing — the
+        // same doors the hover opens, for a hand that has come to press rather
+        // than wait. Opening one puts the other away, so only one is ever up.
+        Some(0) => {
+            with_pin(|pin| {
+                pin.menu.jump = true;
+                pin.menu.seek = false;
+            });
+            true
+        }
+        Some(_) => {
+            with_pin(|pin| {
+                pin.menu.seek = true;
+                pin.menu.jump = false;
+            });
+            true
+        }
         None => match paint
             .flyout
             .as_ref()
@@ -419,9 +485,23 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
             // A row of the flyout: the one pressed is the one the pin
             // plays by from then on, and the whole menu goes away with
             // the answer — both panels, because the flyout is the
-            // menu's own — the way a menu a choice was made in does.
+            // menu's own — the way a menu a choice was made in does. The
+            // Jump flyout's first row is the master switch, and the rest are
+            // the jumps; the Seek flyout's rows are the seeks.
             Some(index) => {
-                if let Some(choice) = SEEK_CHOICES.get(index) {
+                let jump_open = pin_state()
+                    .and_then(|pinned| pinned.pin().map(|pin| pin.menu.jump))
+                    .unwrap_or(false);
+                if jump_open {
+                    match index {
+                        0 => toggle_pin_audio_jump_enabled(),
+                        _ => {
+                            if let Some(jump) = JUMP_CHOICES.get(index - 1) {
+                                set_pin_audio_jump(*jump);
+                            }
+                        }
+                    }
+                } else if let Some(choice) = SEEK_CHOICES.get(index) {
                     set_pin_mode_audio_seek(*choice);
                 }
                 false
@@ -455,10 +535,9 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
 /// right-click on a pin showing anything else opens nothing at all (see
 /// `pin_shows_an_audio_card`).
 ///
-/// A menu put up is put up on its main page, the
-/// flyout put away: a hand that opens the menu has
-/// come for the toggles, and the choices are one
-/// row away.
+/// A menu put up is put up on its main page, both
+/// flyouts put away: a hand that opens the menu has
+/// come for the choices, and they are one row away.
 pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
     let audio = pin_state()
         .and_then(|pinned| pinned.pin().map(pin_shows_an_audio_card))
@@ -469,10 +548,12 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
 
     with_pin(|pin| {
         pin.menu.open = true;
+        pin.menu.jump = false;
         pin.menu.seek = false;
         pin.menu.point = (x, y);
         pin.menu.hover_main = None;
         pin.menu.hover_flyout = None;
+        pin.menu.jump_since = None;
         pin.menu.seek_since = None;
     });
     // The menu is this window's own, so the window takes the pointer while

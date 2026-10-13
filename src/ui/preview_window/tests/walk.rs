@@ -74,6 +74,8 @@ fn a_walk_offers_every_other_file_of_the_folder_once_and_then_ends() {
         shuffle: false,
         sounds: Vec::new(),
         shuffle_bag: Vec::new(),
+        videos: Vec::new(),
+        video_bag: Vec::new(),
         anchor: None,
     };
 
@@ -118,6 +120,8 @@ fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
         shuffle: false,
         sounds: Vec::new(),
         shuffle_bag: Vec::new(),
+        videos: Vec::new(),
+        video_bag: Vec::new(),
         anchor: None,
     };
 
@@ -323,13 +327,13 @@ fn sounded_folder(name: &str) -> PathBuf {
 /// guard is dropped, for the same reason `WalkEveryFile` is: the walk is
 /// read under the app's own configuration, so a test says what it wants
 /// walked rather than taking whatever the machine it runs on has set.
-struct ShuffleThePin(bool);
+struct ShuffleThePin(PinJumpMode);
 
 impl ShuffleThePin {
     fn set() -> Self {
         let mut config = CONFIG.lock().expect("the configuration");
-        let was = config.pin_mode_audio_shuffle;
-        config.pin_mode_audio_shuffle = true;
+        let was = config.pin_mode_audio_jump;
+        config.pin_mode_audio_jump = PinJumpMode::Shuffle;
 
         ShuffleThePin(was)
     }
@@ -338,7 +342,7 @@ impl ShuffleThePin {
 impl Drop for ShuffleThePin {
     fn drop(&mut self) {
         if let Ok(mut config) = CONFIG.lock() {
-            config.pin_mode_audio_shuffle = self.0;
+            config.pin_mode_audio_jump = self.0;
         }
     }
 }
@@ -445,7 +449,7 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
     // And a walk that does not shuffle carries no sounds to pick from,
     // which is the walk every step of a pin's was before the setting.
     let mut config = CONFIG.lock().expect("the configuration");
-    config.pin_mode_audio_shuffle = false;
+    config.pin_mode_audio_jump = PinJumpMode::ToNext;
     let answer = answer_pin_job(&PinJob::Walk {
         at: folder.join("b.mp3"),
         step: 1,
@@ -660,6 +664,8 @@ fn a_walk_the_planner_answers_carries_the_list_it_walked() {
         shuffle: false,
         sounds: Vec::new(),
         shuffle_bag: Vec::new(),
+        videos: Vec::new(),
+        video_bag: Vec::new(),
         anchor: None,
     };
 
@@ -896,6 +902,8 @@ fn a_shuffled_walk_hears_every_sound_once_before_repeating() {
         shuffle: true,
         sounds: sounds.clone(),
         shuffle_bag: bag,
+        videos: Vec::new(),
+        video_bag: Vec::new(),
         anchor: None,
     };
 

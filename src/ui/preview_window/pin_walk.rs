@@ -102,9 +102,11 @@ pub(crate) struct PinStep {
     /// the first is a walk through what is already in hand rather than a second read of
     /// the folder (see `PinPlanner`).
     pub(super) list: Vec<PathBuf>,
-    /// Whether a step *forward* of this walk is a random one of the
-    /// folder's sounds rather than the one beside it, which is what the
-    /// pin's own shuffle switch says a step is (see `shuffle_step`).
+    /// Whether a step *forward* of this walk is a random one of the folder's sounds
+    /// or films rather than the one beside it: a shuffle where the anchor's own pin
+    /// jump says `Shuffle` — the audio jump for a walk anchored on a sound, the video
+    /// jump for one anchored on a film — and a step beside it everywhere else (see
+    /// `shuffle_step`).
     ///
     /// A step back is the file before it either way: a shuffle is an
     /// order the *next* file is picked in, and there is no order a
@@ -112,15 +114,23 @@ pub(crate) struct PinStep {
     pub(super) shuffle: bool,
     /// The sounds of the list — the files whose extension is in the
     /// `[audio]` list of `config.ini` — which is what a shuffled step
-    /// picks from. Empty where the walk does not shuffle, and the whole
-    /// of what a shuffle is limited to: no file of another kind is one
-    /// a shuffled step ever lands on.
+    /// anchored on a sound picks from. Empty where the walk does not shuffle
+    /// sounds, and the whole of what such a shuffle is limited to: no file of
+    /// another kind is one a shuffled step ever lands on.
     pub(super) sounds: Vec<PathBuf>,
     /// The sounds not yet played in this shuffle permutation. Each shuffled step is
     /// drawn from here and removed, so every sound is heard once before any repeats;
     /// when spent it is rebuilt from `sounds` minus the file on screen. A deleted file
     /// is tried once then gone with the removal (see `shuffle_step`).
     pub(super) shuffle_bag: Vec<PathBuf>,
+    /// The films of the list — the files whose extension is in the `[video]` or
+    /// `[ffmpeg]` lists of `config.ini` — which is what a shuffled step anchored on
+    /// a film picks from. Empty where the walk does not shuffle films, for the same
+    /// reason `sounds` is empty where it does not shuffle sounds.
+    pub(super) videos: Vec<PathBuf>,
+    /// The films not yet played in this shuffle permutation, drawn from and rebuilt
+    /// the way the sounds' own bag is (see `shuffle_bag`).
+    pub(super) video_bag: Vec<PathBuf>,
     /// The category of the first file pinned, which is what `list` was filtered by and
     /// what the next press reuses instead of recomputing from the file the pin is
     /// standing on — or nothing where the walk was asked with no session behind it, in
@@ -146,20 +156,40 @@ impl PinStep {
         // step costs a position in a vector rather than a walk of the folder behind it.
         // A shuffled step is drawn from the bag and removed, so the permutation is heard
         // once through before anything repeats; a spent bag is rebuilt minus the file on
-        // screen rather than ending the walk.
+        // screen rather than ending the walk. A walk anchored on a film shuffles films
+        // out of `video_bag`, and any other shuffling walk shuffles sounds out of
+        // `shuffle_bag` — only one of the two pools is ever filled (see `answer_pin_job`).
         let path = if self.shuffle && self.step > 0 {
-            let mut pick = shuffle_step(&self.at, &self.shuffle_bag, roll());
+            let films = !self.videos.is_empty();
+            let mut pick = shuffle_step(
+                &self.at,
+                if films { &self.video_bag } else { &self.shuffle_bag },
+                roll(),
+            );
             if pick.is_none() {
-                self.shuffle_bag = self
-                    .sounds
+                let pool = if films { &self.videos } else { &self.sounds };
+                let fresh: Vec<PathBuf> = pool
                     .iter()
-                    .filter(|sound| !pin_navigation::same_file(sound, &self.at))
+                    .filter(|file| !pin_navigation::same_file(file, &self.at))
                     .cloned()
                     .collect();
-                pick = shuffle_step(&self.at, &self.shuffle_bag, roll());
+                if films {
+                    self.video_bag = fresh;
+                } else {
+                    self.shuffle_bag = fresh;
+                }
+                pick = shuffle_step(
+                    &self.at,
+                    if films { &self.video_bag } else { &self.shuffle_bag },
+                    roll(),
+                );
             }
             let path = pick?;
-            self.shuffle_bag.retain(|sound| !pin_navigation::same_file(sound, &path));
+            if films {
+                self.video_bag.retain(|film| !pin_navigation::same_file(film, &path));
+            } else {
+                self.shuffle_bag.retain(|sound| !pin_navigation::same_file(sound, &path));
+            }
             path
         } else {
             pin_navigation::step_to(&self.at, &self.list, self.step)?
@@ -399,27 +429,49 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             let anchor = anchor.or_else(|| pin_navigation::wanted_category(at, config));
             let list = pin_navigation::list_for(at, anchor, config).unwrap_or_else(|| empty.clone());
 
-            // The sounds of the list, read where the list is: a walk that
-            // shuffles steps through the folder's sounds one permutation at a time, and
-            // which files those are is a question of the `[audio]` list of
-            // the file the walk was asked with, so it is answered here once
-            // rather than on every step (see `PinStep::step`). The bag starts as every
-            // sound but the one on screen, since that one is already heard.
-            let (shuffle, sounds, shuffle_bag) = if config.pin_mode_audio_shuffle {
-                let sounds: Vec<PathBuf> = list
+            // Whether a step forward of this walk is a random one of the anchor's own
+            // kind rather than the file beside it: the audio jump says so for a walk
+            // anchored on a sound, the video jump for one anchored on a film, and a
+            // manual Next shuffles by the same flag — a shuffle is an order the *next*
+            // file is picked in, whatever asked for it (see `PinStep::step`). Each pool
+            // is the anchor's kind of the list, read where the list is: which files those
+            // are is a question of the `[audio]` and video lists of the file the walk was
+            // asked with, so it is answered here once rather than on every step. Each bag
+            // starts as every file of the pool but the one on screen, since that one is
+            // already showing.
+            let audio_shuffle = anchor == Some(NavCategory::Audio)
+                && config.pin_mode_audio_jump == PinJumpMode::Shuffle;
+            let video_shuffle = anchor == Some(NavCategory::Video)
+                && config.pin_mode_video_jump == PinJumpMode::Shuffle;
+            let sounds: Vec<PathBuf> = if audio_shuffle {
+                list
                     .iter()
                     .filter(|path| lists::AUDIO.claims(path, config))
                     .cloned()
-                    .collect();
-                let bag = sounds
-                    .iter()
-                    .filter(|sound| !pin_navigation::same_file(sound, at))
-                    .cloned()
-                    .collect();
-                (true, sounds, bag)
+                    .collect()
             } else {
-                (false, Vec::new(), Vec::new())
+                Vec::new()
             };
+            let shuffle_bag: Vec<PathBuf> = sounds
+                .iter()
+                .filter(|sound| !pin_navigation::same_file(sound, at))
+                .cloned()
+                .collect();
+            let videos: Vec<PathBuf> = if video_shuffle {
+                list
+                    .iter()
+                    .filter(|path| lists::VIDEO.claims(path, config))
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let video_bag: Vec<PathBuf> = videos
+                .iter()
+                .filter(|film| !pin_navigation::same_file(film, at))
+                .cloned()
+                .collect();
+            let shuffle = audio_shuffle || video_shuffle;
 
             // The walk is the list asked one file at a time, so it is bounded by the list:
             // every file of it but the one the pin is showing is one the walk may still be
@@ -436,6 +488,8 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
                 shuffle,
                 sounds,
                 shuffle_bag,
+                videos,
+                video_bag,
                 // Carried so the next press reuses it: the walk the pin lands on is kept
                 // as the walk of the file on screen, whose anchor this is (see
                 // `step_pinned_file`).

@@ -153,7 +153,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
         if let Some(mut held) = hd_media {
             let (w, h) = (held.current_width(), held.current_height());
             eprintln!("repro baseline: play 1080p at {w}x{h}");
-            video_player::play(&hd, w, h, 0, probed_picture(&hd, w, h));
+            video_player::play(&hd, w, h, 0, probed_picture(&hd, w, h), true);
             eprintln!("repro baseline: is_playing={}", video_player::is_playing());
             failure = wait_for_first_frame(&mut held, "baseline", Duration::from_secs(15));
             if failure.is_none() {
@@ -174,7 +174,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
         } else if let Some(ref media) = live {
             let (w, h) = (media.current_width(), media.current_height());
             eprintln!("repro leg 1: play 1080p at {w}x{h}");
-            video_player::play(&hd, w, h, 0, probed_picture(&hd, w, h));
+            video_player::play(&hd, w, h, 0, probed_picture(&hd, w, h), true);
             let mut flowing = live.take().unwrap();
             failure = wait_for_first_frame(&mut flowing, "leg1", Duration::from_secs(15));
             if failure.is_none() {
@@ -227,7 +227,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
                     "repro swap: after stop VIDEO_PID={}",
                     VIDEO_PID.load(Ordering::SeqCst),
                 );
-                video_player::play(&hd, w, h, 0, probed_picture(&hd, w, h));
+                video_player::play(&hd, w, h, 0, probed_picture(&hd, w, h), true);
                 eprintln!("repro swap: is_playing={}", video_player::is_playing());
                 failure = wait_for_first_frame(&mut held, "swap", Duration::from_secs(20));
                 if failure.is_none() {
@@ -257,7 +257,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
         eprintln!("repro rapid: play 1080p and abandon before any frame");
         if let Some(mut opening) = load_for_swap(&hd) {
             let (w, h) = (opening.current_width(), opening.current_height());
-            video_player::play(&hd, w, h, 0, probed_picture(&hd, w, h));
+            video_player::play(&hd, w, h, 0, probed_picture(&hd, w, h), true);
             // No take at all: straight to the abandon a newer pick performs.
             stop_video_playback(&mut opening);
             eprintln!(
@@ -266,7 +266,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
             );
             if let Some(mut held) = load_for_swap(&hd) {
                 let (w2, h2) = (held.current_width(), held.current_height());
-                video_player::play(&hd, w2, h2, 0, probed_picture(&hd, w2, h2));
+                video_player::play(&hd, w2, h2, 0, probed_picture(&hd, w2, h2), true);
                 eprintln!("repro rapid: replayed, playing={}", video_player::is_playing());
                 failure = wait_for_first_frame(&mut held, "rapid", Duration::from_secs(20));
                 if failure.is_none() {
