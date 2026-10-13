@@ -511,9 +511,27 @@ pub(in super::super) fn set_markdown_mode(mode: MarkdownMode) {
 /// held, and what it is made of is a question answered off the folder when a button is
 /// pressed — so the next step of a pin already up is the first one under the new setting,
 /// and a pin with no folder of its own to walk is not a walk at all either way.
-pub(in super::super) fn set_pin_nav_file_types(mode: PinNavFileTypes) {
+/// Which files a walk anchored on a video steps through (see `Navigation Files → Video`).
+pub(in super::super) fn set_pin_nav_video(mode: PinNavFileTypes) {
     if let Ok(mut config) = CONFIG.lock() {
-        config.pin_nav_file_types = mode;
+        config.pin_nav_video = mode;
+        config.save();
+    }
+}
+
+/// Which files a walk anchored on a sound steps through (see `Navigation Files → Audio`).
+pub(in super::super) fn set_pin_nav_audio(mode: PinNavFileTypes) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_nav_audio = mode;
+        config.save();
+    }
+}
+
+/// Which files a walk anchored on any other file steps through (see `Navigation Files →
+/// Others`).
+pub(in super::super) fn set_pin_nav_others(mode: PinNavFileTypes) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_nav_others = mode;
         config.save();
     }
 }
