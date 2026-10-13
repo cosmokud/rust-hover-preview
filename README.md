@@ -312,13 +312,14 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - Both on by default: the media engine is paused where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
       - **Video**
       - **Audio**
-  - **Navigation Files** — What **Previous** and **Next** on the caption step through.
+  - **Navigation Files** — What **Previous** and **Next** on the caption step through: three anchors — **Video**, **Audio**, **Others** — each with **All Files** / **Same Category**. The walk is anchored on the first file pinned, so a video walks videos while a document walks end to end.
+    - Video and Audio start at **Same Category**, Others at **All Files**.
     - Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them.
     - The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front.
     - `Space` in a pinned sound pauses and resumes it, on the same terms.
     - `Escape` in a pinned window closes it.
-    - **All Files** (`default`) — Every file this build can preview, in the folder the pin was taken up in and not any subfolder of it, in the order the Explorer listing is showing them. A video sits beside a sound.
-    - **Same Category** — Only the files of the pinned file's own kind of thing: pictures, video, audio, documents, archives, text, fonts, or design.
+    - **All Files** — Every file this build can preview, in the folder the pin was taken up in and not any subfolder of it, in the order the Explorer listing is showing them. A video sits beside a sound.
+    - **Same Category** — Only the files of the walk's anchor category: video, audio, or the anchor's own kind for Others.
       - A camera raw is a picture and a book is a document, because that is what you call them.
       - A kind switched off under **Preview Types**, or one with no engine installed on the machine, is not a step either way.
       - A file this build *could* preview but that will not open is a step the window steps over rather than one it stops on.
@@ -480,7 +481,9 @@ Example, trimmed:
 check_for_updates=true
 pin_enabled=true
 pin_key=space
-pin_nav_file_types=all
+pin_nav_audio=category
+pin_nav_others=all
+pin_nav_video=category
 pin_update_enabled=true
 pin_update_on_hover=false
 preview_enabled=true
@@ -646,12 +649,12 @@ spinner_delay_ms=250
   - Off, the pin keeps the file it was taken up on until it is closed — a pin is also a window to read in, and one that swapped its file out from under the hand on every keystroke would be unreadable.
   - The keyboard half follows Explorer, so it is inert while a pinned window holds the keyboard — click back into the listing and it resumes.
 - `pin_update_on_hover`: whether that following includes the pointer's own hover, or only what a click or a key asks for. Default `false`; greyed in the tray while `pin_update_enabled` is off.
-- `pin_nav_file_types`: what the caption's **Previous** and **Next** buttons step through.
-  - `all` (default) is every file this build can preview, so a video steps to the sound beside it.
-  - `category` narrows the walk to the pinned file's own kind of thing — pictures, video, audio, documents, archives, text, fonts, or design, where a camera raw is a picture and a book is a document.
+- `pin_nav_video` / `pin_nav_audio` / `pin_nav_others`: what the caption's **Previous** and **Next** buttons step through, by the walk's anchor — the first file pinned. Video and Audio default to `category`, Others to `all`.
+  - `all` is every file this build can preview, so a video steps to the sound beside it.
+  - `category` narrows the walk to the anchor's category — video, audio, or the anchor's own kind for Others, where a camera raw is a picture and a book is a document.
   - The walk is the folder the pin was taken up in and no subfolder of it, is in the order the Explorer listing is showing, wraps at both ends, and is held per folder, read on the first press rather than when the pin is taken up.
   - A file it reaches that the window cannot show is stepped over, and the walk is bounded by the folder: each other file is offered at most once, so a folder of nothing this build can read ends the walk instead of going round for ever.
-  - A file written before this setting existed is read as `all`.
+  - A file holding only the old `pin_nav_file_types` seeds all three with it; a file written before any of them existed walks as the fresh defaults do.
 - `pin_minimize_to`: where a pin put away by the window's own **Minimize** button goes. `bubble` (default) leaves the round bubble on the desktop and keeps this app out of the taskbar; `taskbar` takes the window off the screen and shows this app's own taskbar button (titled **Rust Preview**), which brings the pin back where it stood when clicked and closes it on a right-click. Read when the button is pressed, so a change reaches the next minimize; a file written before this setting existed is read as `bubble`.
 - `pin_pause_video` / `pin_pause_audio`: whether a pin put away into its bubble or the taskbar holds what it was playing where it stands, and starts it again at the second it stopped at when the window comes back up. Both default `true`. They are two switches because a video and a sound are two different things to want quiet.
 - `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.

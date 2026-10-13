@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`Pin Mode → Navigation Files → Video / Audio / Others`** — the single All/Same Category switch is now three anchors, one per kind of first file pinned: Video and Audio start at `Same Category`, Others at `All Files` (`pin_nav_video`, `pin_nav_audio`, `pin_nav_others` in `config.ini`; a file holding only the old `pin_nav_file_types` seeds all three). The walk is anchored on the first file pinned, so `PDF → MP3 → DOCX` walks end to end while `MP3 → FLAC` never reaches a document.
+- **Shuffle plays every sound once before repeating** — a shuffled walk draws from a bag and removes each pick, rebuilding minus the file on screen when spent, so one permutation is every sound in some order; a deleted file is tried once then gone.
+
+### Fixed
+
+- **Same-file shuffle no longer leaves the seekbar standing** — a swap onto the file already playing restarts it at the swap's start instead of carrying on.
+- **Version bumped** — `0.4.1` in `Cargo.toml` and `Cargo.lock`.
+
 ## [0.4.0] - 2026-10-13
 
 ### Added
@@ -57,7 +69,7 @@
 
 ### Fixed
 
-- **An mpv film opens at the preview box on a display drawn at another scale** — the window mpv put up was twice the box on a display at 200% (twice as wide and twice as tall: 200% of the screen for a fit) and stayed there until the preview tick put it right a second later, which is the huge window that snapped small on a second display and never happened on the primary. mpv creates its window on the primary display and Windows rescales it to the display it is moved to, keeping its *logical* size, and mpv takes that rectangle as it stands, so the box is now named to mpv on the primary display's scale and Windows' own scaling lands the window on the box (measured on mpv 0.41.0: the box `2864x1611` came up as `5728x3222`, and asked for as `1432x806` it comes up as the box). FFmpeg's player and the media engine were never affected.
+- **An mpv film opens at the preview box on a display drawn at another scale** — the window mpv put up was twice the box on a display at 200% (twice as wide and twice as tall: 200% of the screen for a fit) and stayed there until the preview tick put it right a second later, which is the huge window that snapped small on a second display and never happened on the primary. mpv creates its window on the primary display and Windows rescales it to the display it is moved to, keeping its _logical_ size, and mpv takes that rectangle as it stands, so the box is now named to mpv on the primary display's scale and Windows' own scaling lands the window on the box (measured on mpv 0.41.0: the box `2864x1611` came up as `5728x3222`, and asked for as `1432x806` it comes up as the box). FFmpeg's player and the media engine were never affected.
 - **`Scaling → Video → Fit to Screen` fills the display** — a video's fit was answered as the file's own size, so a film smaller than the screen was watched at the size it was shot at however large the screen was, while a pinned window and a maximize over the same screen enlarged it; a hovered film's fit is the room now, up as well as down, for every engine. The shares below the fit are unchanged: `By Own Size` percentages and `By Screen` shares are still shares of the film's own size.
 - **mpv no longer plays a film on the primary display whatever box it was asked for** — a preview box on a monitor left of or above the primary one has a negative coordinate, and the launch dropped the position for such a box, which is what made mpv centre the film on the primary display instead; the geometry names the box whenever it names a size, and `+-2160` is the negative coordinate mpv reads it as (measured against mpv 0.41.0 with a second display above the primary: the size alone opens at the centre of the primary, the position opens on the second display). FFmpeg's player and the media engine were never affected.
 - **`Background → Image` `White` and `Checkerboard`** — the two rows carried command ids the `Pin Mode → Navigation Files` rows had also taken, so a click on either backdrop was answered as a click on the navigation rows instead of setting the backdrop; the navigation rows now sit in the free ids above the pin's own rows.
@@ -72,9 +84,6 @@
 - **New config keys** — `pin_enabled`, `pin_key`, `pin_update_enabled`, `pin_update_on_hover`, `pin_pause_audio`, `pin_pause_video` and `trigger_key_affect_pin_mode` are new; old files keep old behavior.
 - **`video_engine_probe` diagnostic** — `RHP_VIDEO_PROBE` now plays the file as well as probing it and can report a seek.
 - **Docs updated** — `README.md`, `ARCHITECTURE.md` and `PRIVACY.md` describe pinning, Pin Mode submenus, the two video lists and the media engine's role.
-
-### Fixed
-
 - **Pinned window no longer freezes or leaves pointer stuck** — Slow reads, re-decodes, folder walks and Shell queries run on their own threads; stuck presses end quickly, stale walks are dropped, lost pointer captures are released, and a pin whose thread stops is taken down as a last resort.
 - **Pinned window no longer closes on unplayable video/sound** — A file nothing could draw is stepped over; if nothing is left, the window stays on the failed file and shows a large cross on a plain panel while the caption still names it, unlike a no-preview file.
 - **Step over unshowable files** — Previous/Next and arrows keep walking until they find a showable file, bounded by the folder, instead of stopping dead; a file you picked in Explorer is still not stepped over.
