@@ -1048,7 +1048,7 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
     note_video_loop(101, &film, content, 0.0, Some(8.0));
     a_pass_has_run();
-    assert!(video_loop_tick(true), "the tick takes the film back");
+    assert!(video_loop_tick(true, true), "the tick takes the film back");
     assert_eq!(
         restart_count(),
         1,
@@ -1070,7 +1070,7 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     mpv_ipc::remember_pipe(101, "test-pipe");
     note_video_loop(101, &film, content, 0.0, Some(8.0));
     a_pass_has_run();
-    assert!(video_loop_tick(true), "the tick sends the film back");
+    assert!(video_loop_tick(true, true), "the tick sends the film back");
     assert_eq!(
         restart_count(),
         0,
@@ -1100,7 +1100,7 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     VIDEO_PID.store(101, Ordering::SeqCst);
     note_video_loop(101, &film, content, 0.0, Some(8.0));
     a_pass_has_run();
-    assert!(video_loop_tick(true), "the tick takes the engine's film back");
+    assert!(video_loop_tick(true, true), "the tick takes the engine's film back");
     assert_eq!(
         restart_count(),
         1,
@@ -1180,4 +1180,135 @@ fn the_loop_clock_is_moved_onto_the_moment_the_film_began_playing() {
     if let Ok(mut slot) = VIDEO_LOOP.lock() {
         *slot = None;
     }
+}
+
+/// The two jumps a film on screen is played under, put back when the guard is dropped.
+struct VideoJumps {
+    hover: bool,
+    pin_enabled: bool,
+    pin: PinJumpMode,
+}
+
+impl VideoJumps {
+    fn set(hover: bool, pin_enabled: bool, pin: PinJumpMode) -> Self {
+        let mut config = CONFIG.lock().expect("the configuration");
+        let was = VideoJumps {
+            hover: config.video_jump_enabled,
+            pin_enabled: config.pin_mode_video_jump_enabled,
+            pin: config.pin_mode_video_jump,
+        };
+        config.video_jump_enabled = hover;
+        config.pin_mode_video_jump_enabled = pin_enabled;
+        config.pin_mode_video_jump = pin;
+        was
+    }
+}
+
+impl Drop for VideoJumps {
+    fn drop(&mut self) {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.video_jump_enabled = self.hover;
+            config.pin_mode_video_jump_enabled = self.pin_enabled;
+            config.pin_mode_video_jump = self.pin;
+        }
+    }
+}
+
+/// A pinned film's loop is the *pin's* jump rather than the hover's, which is the one thing a
+/// take-up has to settle for mpv.
+///
+/// The clock a pass is measured by is made where a player is begun, and mpv is the only player a
+/// take-up does not begin again — so the film was begun by the *hover*, under the hover's jump, and
+/// that answer was carried into the pin with it. `Pin Mode Jump → Loop` with the hover's jump off
+/// was then a pinned film no rewind ever reached, and a pin's step with the hover's jump on was a
+/// rewind that undid the step. What fixes both is that the jump is asked of the film on screen when
+/// the end comes rather than remembered with the clock (see `pin_video_loops` and
+/// `video_loop_action`).
+#[test]
+fn a_pinned_films_loop_is_the_pins_own_jump_and_not_the_hovers() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (0, 0, 320, 240);
+    let film = PathBuf::from("pinned-loop-film.mkv");
+    stand_pin(Some(a_playing_pin(&film, content)));
+    stand_mpv_in(Some(true));
+    stand_ffplay_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+
+    // The record as the hover left it: the player it names was begun for the hover, and a pass has
+    // run its length since.
+    let a_pass_has_run = || {
+        if let Ok(mut slot) = VIDEO_LOOP.lock() {
+            if let Some(loop_) = slot.as_mut() {
+                loop_.at = Instant::now() - Duration::from_secs(9);
+            }
+        }
+    };
+
+    // A hover whose jump is off and a pin whose jump is a loop: the film on screen is the pin's, so
+    // it goes round.
+    let _jumps = VideoJumps::set(false, true, PinJumpMode::Loop);
+    assert!(
+        pin_video_loops(&film),
+        "the jump of the film on screen is the pin's rather than the hover's, which is what a \
+         record made for the hover's player has to be read by"
+    );
+    note_video_loop(101, &film, content, 0.0, Some(8.0));
+    a_pass_has_run();
+    assert!(
+        video_loop_tick(true, pin_video_loops(&film)),
+        "and the tick takes it back: for a pinned mpv film this tick is the only road the loop has, \
+         the player being one a take-up does not begin again"
+    );
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![
+            format!("{}\n", r#"{"command":["seek",0.000,"absolute"],"async":true}"#),
+            format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
+        ],
+        "the wrap is the seek and the play, the same as a hover's"
+    );
+
+    // And the other way round: a pin's step is not undone by a clock the hover made while looping.
+    drop(_jumps);
+    let _jumps = VideoJumps::set(true, true, PinJumpMode::ToNext);
+    assert!(
+        !pin_video_loops(&film),
+        "a pinned film the pin's jump steps on rather than loops is not one this app gives a loop to"
+    );
+    note_video_loop(101, &film, content, 0.0, Some(8.0));
+    a_pass_has_run();
+    mpv_ipc::clear_noted();
+    assert!(
+        !video_loop_tick(true, pin_video_loops(&film)),
+        "so the tick leaves it alone, and the end is the walk's to answer (see \
+         `loop_ended_pinned_player`)"
+    );
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "and nothing was told to the player at all"
+    );
+
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        *slot = None;
+    }
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
 }

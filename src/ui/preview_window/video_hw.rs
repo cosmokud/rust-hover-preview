@@ -419,9 +419,21 @@ pub(super) enum VideoLoopAction {
 /// end was past its end the moment it was let go of, and was rewound on the very next tick. Rebasing
 /// is what a release does to the transport's own clock, and it is the same arithmetic for the same
 /// reason (see `PinTransport::released`).
-pub(super) fn video_loop_action(loop_: &VideoLoop, playing: bool) -> VideoLoopAction {
+///
+/// **And the film's own jump is asked here rather than remembered with the record, which is the
+/// whole of what makes a pinned loop reach a player the pin did not begin.** A record is made where
+/// a player is begun, and mpv is the one player a take-up does not begin again — so a film the
+/// hover played once on carried the *hover's* answer into the pin: with the hover's jump off and
+/// `Pin Mode Jump → Loop` on there was nothing to rewind at all, and with the hover's jump on and
+/// the pin's jump a step the rewind undid a step the pin had asked for. `loops` is that question,
+/// asked of the setting the film on screen is played under (see `pin_video_loops`).
+pub(super) fn video_loop_action(loop_: &VideoLoop, playing: bool, loops: bool) -> VideoLoopAction {
     if !playing {
         return VideoLoopAction::Held;
+    }
+
+    if !loops {
+        return VideoLoopAction::CarryOn;
     }
 
     if !video_launch::rewind_due(true, loop_.duration, loop_.position()) {
@@ -447,7 +459,11 @@ pub(super) fn video_loop_action(loop_: &VideoLoop, playing: bool) -> VideoLoopAc
 /// `forget_video_loop`), so a record updated in place under a held lock would deadlock on the first
 /// pass. Taking it out also drops the clock of the player being replaced, which is right in its own
 /// right — a clock whose player is gone is a clock with nothing to measure.
-pub(super) fn video_loop_tick(playing: bool) -> bool {
+///
+/// `loops` is the film's own jump, read by the caller, which is the one that knows what is on
+/// screen: this tick is asked for a pinned film as much as for a hovered one, and a pinned film's
+/// loop is the one road mpv has (see `video_loop_action`).
+pub(super) fn video_loop_tick(playing: bool, loops: bool) -> bool {
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     let Ok(mut slot) = VIDEO_LOOP.lock() else {
         return false;
@@ -456,7 +472,7 @@ pub(super) fn video_loop_tick(playing: bool) -> bool {
         return false;
     };
 
-    match video_loop_action(loop_, playing) {
+    match video_loop_action(loop_, playing, loops) {
         VideoLoopAction::CarryOn => false,
         VideoLoopAction::Held => {
             // Rebased onto the second the film is standing at, which is the same correction the
