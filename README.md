@@ -286,10 +286,10 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - A pinned sound's card carries four buttons of its own: **Previous**, **Play/Pause**, **Next**, and **Volume**.
       - `Space` holds a sound where it stood and sets it going again from there.
       - A click on a sound's bar takes the file to that second.
-      - A right-click on the card opens the card's own menu — **End of File**, **Shuffle** and **Seek**, the pinned rows the tray's **Audio Preview → Pin Mode** holds, with a flyout off the two rows that open one.
+      - A right-click on the card opens the card's own menu — **End of File**, **Shuffle** and **Seek**, the pinned rows the tray's **Preview Settings → Audio → Pin Mode** holds, with a flyout off the two rows that open one.
     - A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied.
       - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected.
-    - A pinned video has a transport bar with a volume of its own, set on the window; it does not change **Video Preview → Volume**.
+    - A pinned video has a transport bar with a volume of its own, set on the window; it does not change **Preview Settings → Video → Volume**.
     - **Maximize** fits the window to the screen.
     - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a right-click on the bubble closes it), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
     - Clicking the window gives it the keyboard; then the arrow keys step it and `Escape` closes it.
@@ -300,7 +300,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - A file you click, or one the keyboard selects, is shown where the window already stands, rather than as a second preview beside it.
       - A file named this way that cannot be shown leaves the window on the file it already had.
       - Stepping over a file that will not open belongs to the caption's own **Previous** and **Next**, which you pressed.
-      - A sound's card is drawn at the size its **Audio** setting names, in the middle of that box; it follows the **Theme** setting, and no longer **Font Size**.
+      - A sound's card is drawn at the size its **Audio** setting names, in the middle of that box; it follows **System → Theme**, and no longer **Font Size**.
       - The keyboard half follows Explorer, so it pauses while a pinned window holds the keyboard; click back into the listing and it carries on.
     - **On Hover** — Off by default.
       - On, the pointer's own hover is one of the ways a pin is told about a file, the way a Quick Look window follows a listing.
@@ -309,11 +309,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **To Bubble** (Default) — The window collapses into the round bubble on the desktop, and this app never appears in the taskbar.
     - **To Taskbar** — The window leaves the screen and the app appears in the taskbar as its own button, titled **Rust Preview**; clicking the button brings the pinned window back where it stood, and a right-click on the button closes the window.
     - A window is away either way, so previews stay held back until it is brought back, whichever place the setting names.
-    - **Pause** — What a window put away holds where it is.
-      - Both on by default: the media engine is paused where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
-      - **Video**
-      - **Audio**
-  - **Navigation Files** — What **Previous** and **Next** on the caption step through: three anchors — **Video**, **Audio**, **Others** — each with **All Files** / **Same Category**. The walk is anchored on the first file pinned, so a video walks videos while a document walks end to end.
+    - What a window put away holds where it is is **Pause Minimized** at the top of each kind's own **Pin Mode** — one under **Preview Settings → Video**, one under **Preview Settings → Audio** — because what should go quiet while a pin is away is a question about one kind of file.
+  - **Navigation** — What **Previous** and **Next** on the caption step through: three anchors — **Video**, **Audio**, **Others** — each with **All Files** / **Same Category**. The walk is anchored on the first file pinned, so a video walks videos while a document walks end to end.
+    - The walk is the pin's own: one playlist spawned when the pin is taken up and stepped along, so a **Previous** is the file the walk came from and the **Next** after it is the file it was interrupted on. A file picked in the listing inside that folder carries the playlist on; one anywhere else starts fresh.
     - Video and Audio start at **Same Category**, Others at **All Files**.
     - Both work with **Update Preview** off; they are a thing you pressed, and no setting asks for them.
     - The arrow keys step the same way, and are asked for by nothing at all — but only once you have clicked the pinned window, which gives it the keyboard. Until you do, the arrows belong to whatever is in front.
@@ -331,46 +329,49 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - A LibreOffice document uses **Document**.
     - A PeaZip archive uses **Archives**.
     - A Calibre book uses **Ebook**, as do the app-drawn PDF and comic pages.
-- **Video Preview** — What a film's previews are like: the level a film is heard at, whether a hovered one goes round, and what a *pinned* one does.
-  - **Volume** — `100%`, `80%`, `65%`, `50%`, `35%`, `20%`, `10%`, `5%`, `1%`, and `0%`, loudest first. A film's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for.
+- **Preview Settings** — What each kind's previews are like, below **Preview Types**: one half per kind that has settings beyond whether it previews at all, named for the kind and nothing else.
+  - **Video** — What a film's previews are like: the level a film is heard at, whether a hovered one goes round, and what a *pinned* one does.
     - **Subtitles** — Whether a film's own subtitle tracks are probed for and copied out at all, which is what **General (Disk)** holds between hovers; `0` there draws a film without them.
       - Where the engine that will play is mpv the row reads **Subtitles (MPV)** and is not about a copy at all: mpv finds a film's own tracks and the `.srt` beside it and draws them itself, so nothing is extracted and the pinned `T` key does nothing on that route.
-    - **Normalize (Expensive)** — A file's integrated loudness is measured (ITU-R BS.1770 LUFS, by FFmpeg's `ebur128`) and brought to `-14 LUFS` before it plays, so a folder of films — or a set of sounds — is heard at one level rather than at each file's own.
-      - A file is not lifted past its own true peak, so a quiet one is corrected as far as its headroom allows rather than clipped.
-      - Off by default: a film's audio is a decode of the film, and measuring it costs that decode, which is what the row says.
-      - Greyed out unless FFmpeg is installed — FFmpeg is what measures the loudness and what applies the gain.
-      - The loudness is measured once per file and kept, so only a file's first hover waits for it.
-    - **Remember Level** — Whether a level moved with a pinned window's own volume knob is the level the next preview is played at. On by default, so a level turned with a knob is the level the next preview is played at; letting go of the knob writes the level to `config.ini`, nothing is rebuilt on screen and a preview already playing is left where it is.
-      - A pinned window also keeps that level across the other kind: a sound turned up to 100% and then stepped onto a film and back is played at 100% again, where a knob left on a film is kept for films rather than for the sounds either side of it.
-  - **Loop** — On by default: a hovered film goes round at the end of its file. Off, it stops there.
-  - **Pin Mode** — What a *pinned* film does.
-    - **Shuffle** — Off by default: whether a forward step of the walk takes a random film of the anchor's kind rather than the one beside it. A step back is the file before it either way.
-    - **End of File** — What a pinned film does at the end of its file: **Loop** (default), **Pause** (the file left where it ended, the bar and the play button standing there), or **Jump** — the walk's next file, which the **Shuffle** row decides between the file beside it and a random one of the same kind.
-- **Audio Preview** — The same questions for a sound, and the two places a sound starts: where a hovered one does and where a *pinned* one does.
-  - **Volume** — The same levels, loudest first; a sound file starts at `10%`, and a sound at `0%` still shows its card, silently.
-    - **Normalize (Expensive)** and **Remember Level** — the same two rows, asked of a sound, measured and remembered the same way.
-  - **Loop** — On by default: a hovered sound goes round at the end of its file. Off, it stops there.
-  - **Pin Mode** — What a *pinned* sound does.
-    - **Shuffle** and **End of File** — the same two rows as a film's, asked of a sound: a forward step takes a random sound rather than the one beside it, and a file that ends goes round, holds where it stopped, or steps on to the next.
-    - **Seek** — Where in a file a *pinned* sound starts playing: **From the Start** (default), **Remember**, **From the Middle**, or **Random**.
-  - **Seek** — Where in a file a hovered sound starts playing.
-    - **Remember** (`default`) — Picks it up where the last hover left it.
-    - **From the Start** — Always begins at the beginning.
-    - **From the Middle** — Drops it half way in.
-    - **Random** — Anywhere at all.
-    - The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen.
-    - A video is always played from its beginning.
-- **Text Preview**
-  - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in `%APPDATA%\rust-hover-preview\theme`.
-  - **Font Size** — `400%` at the top down to `70%` at the bottom.
-  - **Markdown** — Rendered or Source.
-  - **Render HTML** — Off by default.
-    - On, a `.htm` or `.html` file is previewed as the page it holds rather than as its markup, run by the browser engine.
-    - A page is the one thing previewed as a page rather than as a picture, so it is the one thing that runs, and a page that draws itself with script has nothing to show without a run.
-    - What it may still do is bounded: the frame it is shown in cannot open forms or popups or navigate, and nothing a page links to is fetched.
-    - SVG documents and font specimens, which a browser is handed as an image, are still drawn rather than run.
-    - A running page can be pointed at, clicked into and typed into; a document, a specimen and every other preview still cannot.
-    - Without the engine on the machine it stays a text preview.
+    - **Volume** — `100%`, `80%`, `65%`, `50%`, `35%`, `20%`, `10%`, `5%`, `1%`, and `0%`, loudest first. A film's soundtrack starts at `0%` — silent, so a hover never makes a sound the pointer did not ask for.
+      - **Normalize (Expensive)** — A file's integrated loudness is measured (ITU-R BS.1770 LUFS, by FFmpeg's `ebur128`) and brought to `-14 LUFS` before it plays, so a folder of films — or a set of sounds — is heard at one level rather than at each file's own.
+        - A file is not lifted past its own true peak, so a quiet one is corrected as far as its headroom allows rather than clipped.
+        - Off by default: a film's audio is a decode of the film, and measuring it costs that decode, which is what the row says.
+        - Greyed out unless FFmpeg is installed — FFmpeg is what measures the loudness and what applies the gain.
+        - The loudness is measured once per file and kept, so only a file's first hover waits for it.
+      - **Remember Level** — Whether a level moved with a pinned window's own volume knob is the level the next preview is played at. On by default, so a level turned with a knob is the level the next preview is played at; letting go of the knob writes the level to `config.ini`, nothing is rebuilt on screen and a preview already playing is left where it is.
+        - A pinned window also keeps that level across the other kind: a sound turned up to 100% and then stepped onto a film and back is played at 100% again, where a knob left on a film is kept for films rather than for the sounds either side of it.
+    - **Loop** — On by default: a hovered film goes round at the end of its file. Off, it stops there.
+    - **Pin Mode** — What a *pinned* film does.
+      - **Pause Minimized** — On by default: a film put away by the **Minimize** button is held where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
+      - **Shuffle** — Off by default: whether a forward step of the walk takes a random film of the anchor's kind rather than the one beside it. A step back is the file the walk came from.
+      - **End of File** — What a pinned film does at the end of its file: **Loop** (default), **Pause** (the file left where it ended, the bar and the play button standing there), or **Jump** — the walk's next file, which the **Shuffle** row decides between the file beside it and a random one of the same kind.
+    - **Audio** — The same questions for a sound, and the two places a sound starts: where a hovered one does and where a *pinned* one does.
+    - **Volume** — The same levels, loudest first; a sound file starts at `10%`, and a sound at `0%` still shows its card, silently.
+      - **Normalize (Expensive)** and **Remember Level** — the same two rows, asked of a sound, measured and remembered the same way.
+    - **Loop** — On by default: a hovered sound goes round at the end of its file. Off, it stops there.
+    - **Seek** — Where in a file a hovered sound starts playing.
+      - **Remember** (`default`) — Picks it up where the last hover left it.
+      - **From the Start** — Always begins at the beginning.
+      - **From the Middle** — Drops it half way in.
+      - **Random** — Anywhere at all.
+      - The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen.
+      - A video is always played from its beginning.
+    - **Pin Mode** — What a *pinned* sound does.
+      - **Pause Minimized** — On by default: the sound a pin put away was playing is held where it stood and started again at the second it stopped at when the window comes back.
+      - **Shuffle** and **End of File** — the same two rows as a film's, asked of a sound: a forward step takes a random sound rather than the one beside it, and a file that ends goes round, holds where it stopped, or steps on to the next.
+      - **Seek** — Where in a file a *pinned* sound starts playing: **From the Start** (default), **Remember**, **From the Middle**, or **Random**.
+    - **Text** — What a text preview is painted with: the font size, how Markdown is shown, and whether a page of HTML runs.
+      - **Font Size** — `400%` at the top down to `70%` at the bottom.
+      - **Markdown** — Rendered or Source.
+      - **Render HTML** — Off by default.
+        - On, a `.htm` or `.html` file is previewed as the page it holds rather than as its markup, run by the browser engine.
+        - A page is the one thing previewed as a page rather than as a picture, so it is the one thing that runs, and a page that draws itself with script has nothing to show without a run.
+        - What it may still do is bounded: the frame it is shown in cannot open forms or popups or navigate, and nothing a page links to is fetched.
+        - SVG documents and font specimens, which a browser is handed as an image, are still drawn rather than run.
+        - A running page can be pointed at, clicked into and typed into; a document, a specimen and every other preview still cannot.
+      - Without the engine on the machine it stays a text preview.
+    - **Image** — **Shuffle**, whether a *pinned* picture's walk takes the next file at random. A picture has no level to be heard at, nothing to go round at the end of and nowhere in it to start, so a shuffle is the whole of what a picture answers — and a hover has no next file, so the row is the pinned picture's own.
 - **Timing**
   - **Prioritize Keyboard** — On by default.
     - The file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview.
@@ -467,6 +468,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Check for Updates** — Whether the app asks GitHub for a newer release on its own, at startup and when the menu is opened. On by default; at most once every six hours. Where one is found, the **Update Available** row appears above this submenu on the menu's next opening; where none is, nothing happens. Turning it on asks at once.
   - **Run at Startup** — Add or remove the Windows startup entry.
     - On every start, an entry that names another copy of the app — a portable copy, an older version, a path that has moved — is pointed back at the one you are running.
+  - **Theme** — Atom One Light, One Dark Pro, or any `.tmTheme` in `%APPDATA%\rust-hover-preview\theme`. The look is the app's own rather than a text preview's, so it sits beside the rows about the app.
   - **Edit Config.ini** — Open the configuration file in its default editor.
 - **Exit** — Close the app.
 
@@ -495,6 +497,7 @@ pin_update_enabled=true
 pin_update_on_hover=false
 preview_enabled=true
 run_at_startup=true
+theme=light
 
 ; Minimize
 pin_minimize_to=bubble
@@ -517,7 +520,6 @@ video_preview_enabled=true
 markdown_mode=rendered
 render_html=false
 text_font_scale=125
-theme=light
 
 ; Timing
 hover_delay_ms=0
@@ -562,6 +564,7 @@ normalize_volume=false
 pin_mode_audio_end_of_file=loop
 pin_mode_audio_seek=start
 pin_mode_audio_shuffle=false
+pin_mode_image_shuffle=false
 pin_mode_video_end_of_file=loop
 pin_mode_video_shuffle=false
 remember_audio_volume=true
@@ -622,7 +625,8 @@ spinner_delay_ms=250
 
 - `video_loop` / `audio_loop`: whether a hovered film or sound goes round at the end of its file. Both default `true`; off, it stops at the end.
 - `pin_mode_video_end_of_file` / `pin_mode_audio_end_of_file`: what a *pinned* film or sound does at the end of its file — `loop` (default), `pause` (the file left where it ended, the card holding it with a play button), or `continue` (the walk's next file).
-- `pin_mode_video_shuffle` / `pin_mode_audio_shuffle`: whether a forward step of a *pinned* walk takes a random file of the anchor's kind rather than the one beside it. Both default `false`; a step back is the file before it either way.
+- `pin_mode_video_shuffle` / `pin_mode_audio_shuffle`: whether a forward step of a *pinned* walk takes a random file of the anchor's kind rather than the one beside it. Both default `false`; a step back is the file the walk came from.
+- `pin_mode_image_shuffle`: the same question asked of a *pinned* picture's walk, which has no end of file to jump from — its shuffle is the caption's buttons and the keyboard's alone. Default `false`.
 - `pin_mode_audio_seek`: where in a file a *pinned* sound starts playing — `start` (default), `remember`, `middle`, or `random`.
 - `audio_seek`: where in a file a hovered sound starts playing.
   - `remember` (default) picks it up where the last hover left it, `start` always begins at the beginning, `middle` drops it half way in, and `random` anywhere at all.
