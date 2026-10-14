@@ -1,15 +1,2 @@
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld.exe"
-
-# Where every cargo command — build, test, clippy, rustdoc, and whatever an IDE runs — picks
-# up the compilation cache, so a machine that installed sccache builds cached from one line
-# of config rather than a variable each contributor has to remember to set. The wrapper is
-# safe to check in precisely because it also covers the machine that did not install sccache:
-# there the compiler runs as it would with no wrapper named at all.
-#
-# What the cache serves is the dependency compiles, which is where this build's time goes.
-# sccache declines this crate's own `--crate-type bin` compile and every incremental debug
-# rebuild, so the win is a rebuild after a `cargo clean` or a toolchain bump, not a warm
-# `cargo build`.
-[build]
-rustc-wrapper = "tools/sccache-or-rustc.cmd"

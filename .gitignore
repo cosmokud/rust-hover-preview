@@ -27,3 +27,4 @@ MEMORY.md
 /.tmp/
 /.spec/
 /.venv/
+/.commandcode/
