@@ -707,6 +707,37 @@ pub(super) fn player_wait(
     None
 }
 
+/// How the wait for a *swap's* player stands: the same three answers, at a swap's own bound
+/// instead of a hover's.
+///
+/// It is `player_wait`'s question asked of the one road that already has something on screen. A
+/// hover holds back a window with a spinner behind it and nothing under the spinner that could
+/// arrive sooner, so ten seconds is a start nobody has to watch; a swap is waiting with the
+/// file the pin is leaving still up, at the box the pin is still at, and every tick of the wait
+/// is a tick of that old picture. So the bound is the one the cover a step raises is settled on
+/// — a player begun for a replacement has to open the file, seek, decode hardware and present,
+/// and a wait past that is a player this app stops watching (see `PIN_PARK_SWAP_TIMEOUT` and
+/// `settle_pinned_park`).
+///
+/// What the wait is *for* is the same fact the cover above it is settled on: the player's own
+/// window is the only sign a player of this kind gives that its film is on screen, so a window
+/// that is up has arrived, cap or no cap (see `player_wait`).
+pub(super) fn player_swap_wait(
+    window_up: bool,
+    player_alive: bool,
+    waited: Duration,
+) -> Option<PlayerWait> {
+    if window_up && player_alive {
+        return Some(PlayerWait::Arrived);
+    }
+
+    if !player_alive || waited >= PIN_PARK_SWAP_TIMEOUT {
+        return Some(PlayerWait::Abandoned);
+    }
+
+    None
+}
+
 /// Stop video playback, on the thread the engine belongs to.
 pub(super) fn stop_video_playback(media: &mut MediaData) {
     // A video the media engine is playing has no process and no window of its own: letting

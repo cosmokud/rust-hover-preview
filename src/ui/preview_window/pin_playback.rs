@@ -1350,9 +1350,10 @@ pub(super) fn relaunch_stranded_park() {
 /// Which of the two arms a park's end was taken on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum ParkSwap {
-    /// The player in the band is the one the park captured for: a drag holds its player rather than
-    /// replacing it, so that window has the picture the band is holding on it, and there is nothing
-    /// to wait for.
+    /// The band goes to the window standing in it with nothing left to wait for: a drag holds the
+    /// player it captured rather than replacing it, so that window has the picture the band is
+    /// holding on it — and a file step's replacement is a window the swap's own wait has already
+    /// been held for (see `park_swap_arm`).
     Presented,
     /// The wait is up and there *is* a window to hand the band to, but it has decoded nothing — the
     /// placeholder goes rather than an empty window standing in for a frame that may never come, and
@@ -1392,6 +1393,13 @@ pub(super) enum ParkSwap {
 /// restarted either side of the bound, so a window that turns up late is handed the band on the
 /// first tick that finds it (see `park_swap_arm_for_the_band`).
 ///
+/// **And a file step's cover is the one that is answered by its window and by nothing else.** The
+/// step's own wait is the same wait: the swap a step raises its cover for is held until the
+/// replacement player's window is up, which is the fact this arm is read from (see `PinSwapHold`
+/// and `player_swap_wait`). Waiting out the bound on top of that would hold the outgoing frame
+/// over a band that has already been given the incoming file's box — the last film stretched into
+/// the new one's shape, which is the whole of what the step's wait was for.
+///
 /// **The pixel sample the timeout is paired with is not in here, and cannot be.** It has to be read
 /// off the screen inside the player's rect, and the placeholder is what stands there — a layered
 /// window's own pixels are what the band is, and the player behind them is not on the screen to be
@@ -1401,7 +1409,12 @@ pub(super) enum ParkSwap {
 /// window with `PrintWindow`. So the honest form of "presented or wait" is "the player that was
 /// playing is back, or the wait is up and there is a window to show" — and the wait is what
 /// bounds a replacement, which is the only case there was ever anything to wait for.
-pub(super) fn park_swap_arm(window_up: bool, replaced: bool, waited: Duration) -> Option<ParkSwap> {
+pub(super) fn park_swap_arm(
+    owner: ParkArm,
+    window_up: bool,
+    replaced: bool,
+    waited: Duration,
+) -> Option<ParkSwap> {
     // Asked first, because it is a fact about there being anything to show at all: everything
     // below is an argument about *when* to show it, and every one of them ends with the flag down
     // and a window up. What this one answers instead is the cover's own bound — nothing behind the
@@ -1410,7 +1423,8 @@ pub(super) fn park_swap_arm(window_up: bool, replaced: bool, waited: Duration) -
         return (waited >= PIN_PARK_COVER_TIMEOUT).then_some(ParkSwap::Abandoned);
     }
 
-    if !replaced {
+    // A step's cover, and a move's, are handed the band the moment there is a window to hand it to.
+    if !replaced || owner == ParkArm::Step {
         return Some(ParkSwap::Presented);
     }
 
@@ -2287,18 +2301,19 @@ fn park_swap_arm_for_the_band(window_up: bool) -> Option<(ParkSwap, Duration)> {
     // that finds one. The alternative — the refusal a missing record used to be — is the stuck
     // placeholder: the band stays painted flat over a film nothing is going to be shown behind, and
     // nothing will ever write the record that could have ended it.
-    let (replaced, waited) = held
+    let (owner, replaced, waited) = held
         .as_mut()
         .map(|swap| {
             let since = *swap.since.get_or_insert_with(Instant::now);
             (
+                swap.owner,
                 swap.replacing || player_replaced_since(swap.player),
                 since.elapsed(),
             )
         })
-        .unwrap_or((false, Duration::ZERO));
+        .unwrap_or((ParkArm::Carry, false, Duration::ZERO));
 
-    park_swap_arm(window_up, replaced, waited).map(|arm| (arm, waited))
+    park_swap_arm(owner, window_up, replaced, waited).map(|arm| (arm, waited))
 }
 
 /// Whether the standing park is a cover that was waiting for a relaunch.

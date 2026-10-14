@@ -1370,9 +1370,9 @@ fn a_step_with_nothing_playing_raises_no_cover() {
     restore(previous_pin, previous_pid, previous_media);
 }
 
-/// K4 COVER hands the band over: the settle waits for the incoming player's
-/// window rather than swapping onto whatever merely exists, and takes the cover
-/// down in the same tick it puts that window up.
+/// K4 COVER hands the band over: the settle puts the window the step's swap was waiting
+/// for up and takes the cover down in the same tick, and it does not wait the bound out on
+/// top of that.
 #[test]
 fn a_step_hands_the_cover_to_the_window_that_replaces_it() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1392,18 +1392,14 @@ fn a_step_hands_the_cover_to_the_window_that_replaces_it() {
     let window = RecordedPinWindow::new(0x1000);
     fake_end_relaunch(103, 0.0, false);
 
-    // A replacement's window is on screen within milliseconds of being begun and
-    // has decoded nothing: the cover holds until the bound, not until the window.
-    assert!(
-        !settle_pinned_park_where(&window, true),
-        "an empty window in the band is not a band to hand back"
-    );
-    assert!(pin_player_is_parked(), "so the cover stands");
-
-    spend_the_swap_bound();
+    // The swap a step raises its cover for is itself held until this window is up, so the window
+    // is the band to hand back and there is nothing left to wait for: waiting the bound out on
+    // top of the swap's own wait would hold the outgoing frame over a band that has already been
+    // given the incoming file's box, which is the last film stretched into the new one's shape
+    // (see `PinSwapHold` and `park_swap_arm`).
     assert!(
         settle_pinned_park_where(&window, true),
-        "and the bound spent with one standing, the band goes back to it"
+        "a step's window is the band to hand back: the wait for it has already been paid once"
     );
     assert_eq!(
         window.calls(),
