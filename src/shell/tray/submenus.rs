@@ -209,7 +209,7 @@ pub(super) fn pin_nav_label(types: PinNavFileTypes) -> &'static str {
     }
 }
 
-/// One `Navigation Files` anchor submenu: the two walks a pin anchored on this kind of
+/// One `Navigation` anchor submenu: the two walks a pin anchored on this kind of
 /// file takes, with the one the setting is on checked and the one it starts at marked.
 fn append_pin_nav_anchor(
     parent: HMENU,
@@ -238,7 +238,7 @@ fn append_pin_nav_anchor(
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
 }
 
-/// The `Navigation Files` submenu: three anchors — Video, Audio, Others — each with its
+/// The `Navigation` submenu: three anchors — Video, Audio, Others — each with its
 /// own All/Same Category pair. The walk is anchored on the first file pinned, so a
 /// video walks videos while a document walks end to end (see `nav_mode_for`).
 pub(super) fn append_pin_nav_menu(parent: HMENU, video: PinNavFileTypes, audio: PinNavFileTypes, others: PinNavFileTypes) {
@@ -267,7 +267,7 @@ pub(super) fn append_pin_nav_menu(parent: HMENU, video: PinNavFileTypes, audio: 
         others,
         DEFAULT_PIN_NAV_OTHERS,
     );
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Navigation Files")) };
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Navigation")) };
 }
 
 /// What the two places a pinned window's minimize can put it are called, with the one the setting
@@ -301,14 +301,14 @@ pub(super) fn system_menu_label(version: &str) -> String {
     format!("System (v{version})")
 }
 
-/// The `Audio Preview → Seek` submenu: where in a file a sound starts playing — the same
+/// The `Audio → Seek` submenu: where in a file a sound starts playing — the same
 /// four ways the old `Volume → Audio Seek` offered, in the same order. Renamed because it
-/// sits under `Audio Preview` now rather than under `Volume` (see `audio_seek_label`).
+/// sits under `Audio` now rather than under `Volume` (see `audio_seek_label`).
 pub(super) fn append_seek_menu_renamed(parent: HMENU, title: PCWSTR, seek: AudioSeek) {
     append_seek_menu(parent, title, ID_TRAY_AUDIO_SEEK_BASE, audio_seek_label, seek);
 }
 
-/// The `Audio Preview → Pin Mode → Seek` submenu: where in a file a *pinned* sound starts
+/// The `Audio → Pin Mode → Seek` submenu: where in a file a *pinned* sound starts
 /// playing — the same four ways the old `Volume → Pin Mode Audio Seek` offered, in the
 /// same order. Renamed to plain `Seek` because it hangs under `Pin Mode`, beside `Shuffle`
 /// and `End of File`, where the question is where a pinned file starts rather than which
@@ -422,7 +422,7 @@ pub(super) fn pin_mode_audio_seek_label(seek: AudioSeek) -> String {
     seek_label(seek, DEFAULT_PIN_MODE_AUDIO_SEEK)
 }
 
-/// The `Video Preview → Loop` / `Audio Preview → Loop` row: the one row that says whether the
+/// The `Video → Loop` / `Audio → Loop` row: the one row that says whether the
 /// hovered film or sound goes round at the end of its file, carrying its check. It is a row of
 /// the kind's own submenu rather than a submenu of its own — `Loop` is the one answer this app
 /// offers for a hover's end — and it takes the id it is handed rather than a range (see
@@ -436,7 +436,23 @@ pub(super) fn append_loop_item(menu: HMENU, loop_id: u16, looping: bool, default
     );
 }
 
-/// The `Video Preview → Pin Mode → Shuffle` / `Audio Preview → Pin Mode → Shuffle` row:
+/// The `Video → Pin Mode → Pause Minimized` / `Audio → Pin Mode → Pause
+/// Minimized` row: whether a pin the minimize button put away holds the video or the sound it
+/// is playing where it is, carrying its check. It moved here from the `Pin Mode → Minimize →
+/// Pause` submenu, one row apiece, because what should go quiet while a pin is away is a
+/// question about one kind of file — a film a user wants to go on hearing while a pin is away
+/// is not a reason to let a podcast play on — so each kind's own `Pin Mode` answers it for
+/// itself (see `toggle_pin_pause_audio`).
+pub(super) fn append_pause_minimized_item(menu: HMENU, pause_id: u16, pause: bool) {
+    append_labeled_item(
+        menu,
+        MF_STRING | if pause { MF_CHECKED } else { MF_UNCHECKED },
+        pause_id,
+        "Pause Minimized",
+    );
+}
+
+/// The `Video → Pin Mode → Shuffle`, `Audio → Pin Mode → Shuffle` and `Image → Shuffle` rows:
 /// whether the next file a *pinned* preview steps on to — the end of a file its `End of
 /// File` row calls `Jump`, a caption's next press, a forward key — is a random file of the
 /// same kind rather than the one beside it, carrying its check. A hover has no next file,
@@ -451,7 +467,7 @@ pub(super) fn append_shuffle_item(menu: HMENU, shuffle_id: u16, shuffle: bool, d
     );
 }
 
-/// The `Video Preview → Pin Mode → End of File` / `Audio Preview → Pin Mode → End of File`
+/// The `Video → Pin Mode → End of File` / `Audio → Pin Mode → End of File`
 /// submenu: the three things a pinned film or sound can do at the end of its file, with the
 /// one in force carrying its mark.
 ///
@@ -514,16 +530,20 @@ pub(super) fn append_end_of_file_menu(
     };
 }
 
-/// The `Video Preview → Pin Mode` / `Audio Preview → Pin Mode` submenu: the rows that are a
-/// *pinned* preview's own — whether its forward steps shuffle, and what its end of file does
-/// — with the sound's own seek row hung under it last. One builder serves both kinds because
-/// the two ask the same questions of a film and of a sound (see `append_shuffle_item`,
-/// `append_end_of_file_menu` and `append_pin_seek_menu_renamed`).
+/// The `Video → Pin Mode` / `Audio → Pin Mode` submenu: the rows that are a
+/// *pinned* preview's own — whether it holds what it is playing while it is minimized,
+/// whether its forward steps shuffle, and what its end of file does — with the sound's own
+/// seek row hung under it last. One builder serves both kinds because the two ask the same
+/// questions of a film and of a sound (see `append_pause_minimized_item`,
+/// `append_shuffle_item`, `append_end_of_file_menu` and `append_pin_seek_menu_renamed`).
 ///
 /// The menu is handed back because the sound hangs one more row inside it: the caller that
 /// asked for the submenu is the one that knows whether there is a seek to put in it.
+#[allow(clippy::too_many_arguments)] // Each one is a row of the submenu, and a struct of them would be a type for one call.
 pub(super) fn append_pin_mode_menu(
     parent: HMENU,
+    pause_id: u16,
+    pause: bool,
     shuffle_id: u16,
     shuffle: bool,
     shuffle_default: bool,
@@ -532,6 +552,7 @@ pub(super) fn append_pin_mode_menu(
     end_of_file_default: PinEndOfFile,
 ) -> HMENU {
     let menu = unsafe { CreatePopupMenu().unwrap() };
+    append_pause_minimized_item(menu, pause_id, pause);
     append_shuffle_item(menu, shuffle_id, shuffle, shuffle_default);
     append_end_of_file_menu(menu, end_of_file_base, end_of_file, end_of_file_default);
     let _ = unsafe {

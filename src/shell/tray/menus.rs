@@ -21,6 +21,7 @@ use super::ids::{
     ID_TRAY_ENGINE_PERSISTENT_BASE, ID_TRAY_EXIT, ID_TRAY_FONT_BACKGROUND_BASE,
     ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE,
     ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
+    ID_TRAY_IMAGE_SHUFFLE,
     ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
     ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
@@ -48,7 +49,7 @@ use super::submenus::{
     append_labeled_item, append_loop_item,
     append_office_engine_menu,
     append_pin_mode_menu, append_pin_nav_menu, append_pin_seek_menu_renamed,
-    append_seek_menu_renamed, append_tick_menu,
+    append_seek_menu_renamed, append_shuffle_item, append_tick_menu,
     append_video_engine_menu, cache_size_label,
     decode_budget_label, default_label, pin_minimize_label, pin_update_label,
     remember_volume_label,
@@ -70,7 +71,7 @@ use crate::config::config::{
     DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB,
     DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME,
     DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
-    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
+    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_IMAGE_SHUFFLE, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
     DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
     DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
@@ -130,7 +131,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
 
     // And the "Pin Mode" submenu below it, which is the pin's own business: whether the key is
     // watched at all, whether a pin that is up is shown another file while the user picks one,
-    // and what a pin collapsed into its bubble does with what it is playing. The key's row names
+    // and where a pin the minimize button puts away goes. The key's row names
     // the key that pins the way the trigger key's own submenu names its own: the key is a
     // setting, so the row says which one is watched rather than only whether one is (see
     // `key_input`).
@@ -138,8 +139,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         pin_enabled,
         pin_key,
         pin_minimize_to,
-        pin_pause_audio,
-        pin_pause_video,
         pin_update,
         pin_update_on_hover,
         pin_nav_video,
@@ -152,8 +151,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                 c.pin_enabled,
                 c.pin_key.clone(),
                 c.pin_minimize_to,
-                c.pin_pause_audio,
-                c.pin_pause_video,
                 c.pin_update_enabled,
                 c.pin_update_on_hover,
                 c.pin_nav_video,
@@ -165,8 +162,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             true,
             "space".to_string(),
             DEFAULT_PIN_MINIMIZE_TO,
-            DEFAULT_PIN_PAUSE_AUDIO,
-            DEFAULT_PIN_PAUSE_VIDEO,
             DEFAULT_PIN_UPDATE_ENABLED,
             DEFAULT_PIN_UPDATE_ON_HOVER,
             DEFAULT_PIN_NAV_VIDEO,
@@ -234,18 +229,16 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Update Preview"),
     );
 
-    // The `Minimize` submenu: where a pin the minimize button puts away goes, and what such a
-    // pin holds while it is away. The two places are one of two rather than a switch — a
+    // The `Minimize` submenu: where a pin the minimize button puts away goes. The two
+    // places are one of two rather than a switch — a
     // minimize leaves either the round bubble on the desktop or the app's own button in the
     // taskbar, never both — so they carry a mark apiece and the setting picks between them (see
     // `PinMinimizeTo`), and the bubble is the answer the app starts at.
     //
-    // The `Pause` submenu hangs below them rather than on the pin's own row, because it is a
-    // question about the same away-state: a pin put away is not what the desktop was asked for,
-    // and the two below it are switches of their own because a video and a sound are two
-    // different things to want quiet — a film a user wants to go on hearing while a pin is away
-    // is not a reason to let a podcast play on, and the other way round. Both start on, the
-    // same because either is a pin put away. A video is listed above a sound.
+    // What such a pin holds while it is away is no longer asked here: the two `Pause
+    // Minimized` rows hang under the kind's own `Pin Mode` instead, because a film and a sound
+    // are two different things to want quiet and each kind's submenu is the one that knows
+    // which of the two is on screen (see `append_pause_minimized_item`).
     let minimize_menu = CreatePopupMenu().unwrap();
     let minimize_flag = |candidate: PinMinimizeTo| {
         MF_STRING
@@ -267,40 +260,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_PIN_MINIMIZE_TASKBAR,
         &pin_minimize_label(PinMinimizeTo::Taskbar),
     );
-    // A separator between the two places and the two switches, because they are not the same
-    // kind of row: the two above say where the pin goes, the two below only what it does with
-    // what it is playing once it is there.
-    let _ = AppendMenuW(minimize_menu, MF_SEPARATOR, 0, PCWSTR::null());
-
-    let pause_menu = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        pause_menu,
-        MF_STRING
-            | if pin_pause_video {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            },
-        ID_TRAY_PIN_PAUSE_VIDEO as usize,
-        w!("Video"),
-    );
-    let _ = AppendMenuW(
-        pause_menu,
-        MF_STRING
-            | if pin_pause_audio {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            },
-        ID_TRAY_PIN_PAUSE_AUDIO as usize,
-        w!("Audio"),
-    );
-    let _ = AppendMenuW(
-        minimize_menu,
-        MF_STRING | MF_POPUP,
-        pause_menu.0 as usize,
-        w!("Pause"),
-    );
     let _ = AppendMenuW(
         pin_menu,
         MF_STRING | MF_POPUP,
@@ -308,7 +267,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Minimize"),
     );
 
-    // The `Navigation Files` submenu: three anchors — Video, Audio, Others — each with
+    // The `Navigation` submenu: three anchors — Video, Audio, Others — each with
     // its own All/Same Category pair. The walk is anchored on the first file pinned,
     // so a video walks videos while a document walks end to end (see `nav_mode_for`).
     append_pin_nav_menu(pin_menu, pin_nav_video, pin_nav_audio, pin_nav_others);
@@ -371,16 +330,22 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Preview Types"),
     );
 
-    // Add the "Video Preview" and "Audio Preview" submenus above `Text Preview`: each
-    // kind's own place for what its previews are like — the level it is heard at, whether a
-    // hovered one goes round, what a *pinned* one does, and where in a file a sound starts —
-    // so a film's settings and a sound's are two menus rather than one (see
-    // `append_loop_item` and `append_pin_mode_menu`).
+    // The `Preview Settings` submenu, below `Preview Types`: one half per kind that has
+    // settings of its own beyond whether it previews at all — what its previews are like, the
+    // level it is heard at, whether a hovered one goes round, what a *pinned* one does, and
+    // where in a file a sound starts — so a film's settings and a sound's are two menus rather
+    // than one (see `append_loop_item` and `append_pin_mode_menu`).
     //
-    // The `Video` and `Audio` halves the old `Volume` menu held are the `Volume` rows
-    // inside these: the video's old rows renamed `Volume`, the sound's the same, with
-    // the sound's `Audio Seek` renamed `Seek` and its `Pin Mode Audio Seek` renamed `Seek`
-    // too, inside `Pin Mode` beside the rest of a pinned sound's own rows.
+    // The `Volume` rows inside the film's and the sound's halves are the halves the old
+    // `Volume` menu held, with the sound's `Audio Seek` renamed `Seek` and its `Pin Mode Audio
+    // Seek` renamed `Seek` too, inside `Pin Mode` beside the rest of a pinned sound's own rows.
+    // The picture's half holds the one question a picture answers: whether a pinned one
+    // shuffles.
+    //
+    // The film's and the sound's `Pause Minimized` rows are read here, beside the shuffle and
+    // the end of file they hang above: all three are what a *pinned* preview of that kind does,
+    // and the two switches moved out of `Pin Mode → Minimize` for the same reason the submenus
+    // are split in two — a film and a sound are two different things to want quiet.
     let (
         video_volume,
         audio_volume,
@@ -390,6 +355,9 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         audio_loop,
         video_shuffle,
         audio_shuffle,
+        image_shuffle,
+        pin_pause_video,
+        pin_pause_audio,
         pin_video_end_of_file,
         pin_audio_end_of_file,
     ) = CONFIG
@@ -404,6 +372,9 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                 c.audio_loop,
                 c.pin_mode_video_shuffle,
                 c.pin_mode_audio_shuffle,
+                c.pin_mode_image_shuffle,
+                c.pin_pause_video,
+                c.pin_pause_audio,
                 c.pin_mode_video_end_of_file,
                 c.pin_mode_audio_end_of_file,
             )
@@ -417,11 +388,14 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_AUDIO_LOOP,
             DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
             DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+            DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
+            DEFAULT_PIN_PAUSE_VIDEO,
+            DEFAULT_PIN_PAUSE_AUDIO,
             DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
             DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
         ));
 
-    let volume_menu = CreatePopupMenu().unwrap();
+    let preview_settings = CreatePopupMenu().unwrap();
     let append_levels = |levels: HMENU, current: u32, base: u16, default: u32| {
         // Largest first, which is the order a level is looked for in: a pointer crossing a folder
         // of sounds is most often turning one down, and the whole of the scale standing at the top
@@ -560,17 +534,23 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_AUDIO_VOLUME,
     );
 
-    let _ = AppendMenuW(
-        volume_menu,
-        MF_STRING | MF_POPUP,
-        video_levels.0 as usize,
-        w!("Volume"),
+    // The picture kind's own half, above the film's: the one question a picture answers that
+    // no other kind's rows answer for it — whether a *pinned* one takes the next file of the
+    // folder at random. A picture has no level to be heard at, nothing to go round at the end
+    // of, and nowhere in it to start, so the shuffle is the whole of it: a hover has no next
+    // file, and a step back is the file before it either way (see `append_shuffle_item`).
+    let image_menu = CreatePopupMenu().unwrap();
+    append_shuffle_item(
+        image_menu,
+        ID_TRAY_IMAGE_SHUFFLE,
+        image_shuffle,
+        DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     );
     let _ = AppendMenuW(
-        volume_menu,
+        preview_settings,
         MF_STRING | MF_POPUP,
-        audio_levels.0 as usize,
-        w!("Volume"),
+        image_menu.0 as usize,
+        w!("Image"),
     );
 
     // The film kind's own rows, below its `Volume`: whether a hovered film goes round at the end
@@ -593,6 +573,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     );
     append_pin_mode_menu(
         video_preview,
+        ID_TRAY_PIN_PAUSE_VIDEO,
+        pin_pause_video,
         ID_TRAY_VIDEO_SHUFFLE,
         video_shuffle,
         DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
@@ -601,17 +583,17 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
     );
     let _ = AppendMenuW(
-        menu,
+        preview_settings,
         MF_STRING | MF_POPUP,
         video_preview.0 as usize,
-        w!("Video Preview"),
+        w!("Video"),
     );
 
     // And the sound kind's own: the same `Loop` row and a `Seek` row of its own, with the
     // `Pin Mode` submenu below them — where in a file a hovered sound starts as the `Seek`
     // row says, and where a *pinned* one does, under `Pin Mode` beside the rest of a pinned
     // sound's own rows. Both are renamed from the old `Volume` menu's `Audio Seek` and `Pin
-    // Mode Audio Seek` because they sit under `Audio Preview` now rather than under `Volume`
+    // Mode Audio Seek` because they sit under `Audio` now rather than under `Volume`
     // (see `pin_mode_audio_seek`). `Pin Mode` is listed below the kind's own rows, so the
     // settings a hovered sound plays by come before the ones only a pinned sound has.
     let audio_preview = CreatePopupMenu().unwrap();
@@ -630,6 +612,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     append_seek_menu_renamed(audio_preview, w!("Seek"), audio_seek);
     let audio_pin_mode = append_pin_mode_menu(
         audio_preview,
+        ID_TRAY_PIN_PAUSE_AUDIO,
+        pin_pause_audio,
         ID_TRAY_AUDIO_SHUFFLE,
         audio_shuffle,
         DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
@@ -639,13 +623,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     );
     append_pin_seek_menu_renamed(audio_pin_mode, w!("Seek"), pin_mode_audio_seek);
     let _ = AppendMenuW(
-        menu,
+        preview_settings,
         MF_STRING | MF_POPUP,
         audio_preview.0 as usize,
-        w!("Audio Preview"),
+        w!("Audio"),
     );
 
-    // Add the "Text Preview" submenu: the size and Markdown mode a text preview is
+    // Add the "Text" submenu: the size and Markdown mode a text preview is
     // painted with. What a text preview *is* rather than what it shows — the scrollbar, the
     // selection and the keys that copy it — is the pin's business rather than a setting's: a
     // text preview pinned with the key becomes one to work in (see the pin in `preview_window`).
@@ -816,19 +800,26 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     );
 
     let _ = AppendMenuW(
-        menu,
+        preview_settings,
         MF_STRING | MF_POPUP,
         text_menu.0 as usize,
-        w!("Text Preview"),
+        w!("Text"),
     );
 
-    // The theme sits on the top menu rather than inside Text Preview: it is
-    // the chrome's own look rather than a text setting, beside what it themes.
+    // The theme no longer hangs on the top menu beside the text preview it themes: it is
+    // moved into `System`, between the two rows about this app's own place in the machine and
+    // the ones about its file (see the `System` submenu below). The `theme_menu` it is built
+    // in is filled out here, where the theme's own names are read, and hangs under `System`
+    // below.
+
+    // And the whole of it goes on the top menu below `Preview Types`, one row rather than
+    // three: the kinds it holds are the three that have settings beyond whether they preview
+    // at all, which is what `Preview Types` answers for them.
     let _ = AppendMenuW(
         menu,
         MF_STRING | MF_POPUP,
-        theme_menu.0 as usize,
-        w!("Theme"),
+        preview_settings.0 as usize,
+        w!("Preview Settings"),
     );
 
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -1682,8 +1673,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // The `System` submenu: the app's own place in the machine — the update
     // a check found, the `Check for Updates` switch below it (on where the app
     // starts), whether this app starts with the session (the registry's
-    // answer rather than the configuration's), and the configuration's own
-    // file and resets. The version the build is of is the submenu's own
+    // answer rather than the configuration's), how it looks, and the
+    // configuration's own file and resets. The version the build is of is the submenu's own
     // label, which is where a user looks to see which build is running.
     let system_menu = CreatePopupMenu().unwrap();
 
@@ -1722,6 +1713,20 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         flags,
         ID_TRAY_STARTUP as usize,
         w!("Run at Startup"),
+    );
+
+    let _ = AppendMenuW(system_menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+    // And the theme, between two separators of its own: the chrome's own look rather than a
+    // text setting, which is what it was a row of the top menu beside the text preview for.
+    // It sits here because the two rows above are the app's own place in the machine and the
+    // two below are its own file, and neither is about how anything is drawn — the look is
+    // the app's own rather than a preview's, so it belongs with the rows about the app.
+    let _ = AppendMenuW(
+        system_menu,
+        MF_STRING | MF_POPUP,
+        theme_menu.0 as usize,
+        w!("Theme"),
     );
 
     let _ = AppendMenuW(system_menu, MF_SEPARATOR, 0, PCWSTR::null());

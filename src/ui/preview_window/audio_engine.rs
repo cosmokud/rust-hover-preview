@@ -89,7 +89,8 @@ pub(super) fn current_pin_mode_audio_end_of_file() -> PinEndOfFile {
 /// `audio_font_scale_percent`). The Audio Scaling setting decides the room the card
 /// is laid out over and the size the card is drawn at together (see `audio_box_room`),
 /// so the text font size no longer moves the card at all: the card's font is the
-/// share's own, and what a change to Text Preview → Font Size does to a text preview
+/// share's own, and what a change to Preview Settings → Text → Font Size does to a text
+/// preview
 /// is something a sound's card never does.
 pub(super) fn current_audio_options() -> AudioPreviewOptions {
     CONFIG

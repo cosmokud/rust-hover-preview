@@ -24,7 +24,7 @@ use super::commands::{
     set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
     set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
     set_video_scale, set_video_volume, set_webview_idle, toggle_check_for_updates,
-    toggle_engine_persistent, toggle_loop, toggle_pin_shuffle,
+    toggle_engine_persistent, toggle_loop, toggle_pin_shuffle, PinShuffle,
     toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_enabled,
     toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
@@ -50,6 +50,7 @@ use super::ids::{
     ID_TRAY_FONT_70, ID_TRAY_FONT_80, ID_TRAY_FONT_90, ID_TRAY_FONT_BACKGROUND_BASE,
     ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE,
     ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
+    ID_TRAY_IMAGE_SHUFFLE,
     ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
     ID_TRAY_MPV_BASE, MPV_COMMANDS,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
@@ -294,11 +295,12 @@ unsafe extern "system" fn tray_window_proc(
                     // `Loop` rows, one per kind.
                     ID_TRAY_VIDEO_LOOP => toggle_loop(true),
                     ID_TRAY_AUDIO_LOOP => toggle_loop(false),
-                    // Whether a *pinned* film or sound takes the next file of its walk at
+                    // Whether a *pinned* film, sound or picture takes the next file of its walk at
                     // random: the `Shuffle` rows, one per kind, which its end of file and its
                     // own next key and button all ask.
-                    ID_TRAY_VIDEO_SHUFFLE => toggle_pin_shuffle(true),
-                    ID_TRAY_AUDIO_SHUFFLE => toggle_pin_shuffle(false),
+                    ID_TRAY_VIDEO_SHUFFLE => toggle_pin_shuffle(PinShuffle::Video),
+                    ID_TRAY_AUDIO_SHUFFLE => toggle_pin_shuffle(PinShuffle::Audio),
+                    ID_TRAY_IMAGE_SHUFFLE => toggle_pin_shuffle(PinShuffle::Image),
                     // What a pinned film or sound does at the end of it, by the position
                     // the end of file was listed at — the film's own range and the sound's.
                     cmd if (ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE
@@ -315,8 +317,8 @@ unsafe extern "system" fn tray_window_proc(
                     {
                         set_pin_end_of_file(cmd - ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, false)
                     }
-                    // A level of either half of the `Volume` rows inside `Video Preview` and
-                    // `Audio Preview`, by the position it was
+                    // A level of either half of the `Volume` rows inside `Preview Settings →
+                    // Video` and `→ Audio`, by the position it was
                     // listed at. The two halves offer the same levels, so one table answers for
                     // both and each range is what says which setting was meant.
                     cmd if (ID_TRAY_VIDEO_VOLUME_BASE
