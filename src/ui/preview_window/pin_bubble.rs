@@ -14,7 +14,12 @@ use super::*;
 pub(super) const PIN_BUBBLE_CLASS: PCWSTR = w!("RustHoverPreviewPinBubble");
 
 /// The bubble's window, or zero while no pin is collapsed.
-pub(super) static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
+///
+/// It is read where a press is told apart from a press that landed on the bubble rather
+/// than somewhere else, out on the Explorer hook's side: a collapsed pin's window is
+/// hidden, so the bubble is the only window of the pin's own a press can land on while
+/// a pin is one (see `bubble_window_is_at`).
+pub(crate) static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// One frame of a film FFmpeg's player is drawing, as the bubble shows it: the picture, already
 /// scaled to cover a square and cropped to the middle of it, and the side of that square.
@@ -265,6 +270,23 @@ pub(super) unsafe fn close_bubble_menu(hwnd: HWND) -> bool {
     let _ = MoveWindow(hwnd, x, y, side, side, true);
     render_pin_bubble(hwnd);
     true
+}
+
+/// Put the bubble's menu away from the preview loop's own tick, where one is up: the
+/// answer the hook's ask for a press that landed on another window gets.
+///
+/// The bubble is `WS_EX_NOACTIVATE` and is the foreground window only once a hand has
+/// pressed it, and only the foreground window's capture carries a press that lands
+/// elsewhere to it — so a press on the browser under the bubble, or on the desktop,
+/// arrives at the bubble's own procedure not at all. The hook's poll is the one side
+/// that reads every press, and this is its answer on the bubble's own road, the way
+/// `take_pin_menu_dismiss` is the card's (see `pin_menu_dismiss_ask`).
+pub(super) unsafe fn close_pin_bubble_menu() -> bool {
+    let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    if hwnd == 0 {
+        return false;
+    }
+    close_bubble_menu(HWND(hwnd as *mut _))
 }
 
 /// A press with the bubble's menu up, answering whether it was the menu's: a press on a row is

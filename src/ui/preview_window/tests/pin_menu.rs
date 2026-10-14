@@ -106,6 +106,28 @@ impl Drop for PutBack {
     }
 }
 
+/// The bubble a collapsed pin leaves, put up where a test asks and taken away again when the
+/// guard is dropped: its handle and the menu it holds are slots for the whole process, and a
+/// test that leaves either filled is a test every test after it stands inside (see
+/// `PIN_BUBBLE_HWND` and `BUBBLE_MENU`).
+struct BubblePutBack;
+
+impl BubblePutBack {
+    fn put(hwnd: HWND) -> Self {
+        PIN_BUBBLE_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for BubblePutBack {
+    fn drop(&mut self) {
+        PIN_BUBBLE_HWND.store(0, Ordering::SeqCst);
+        if let Ok(mut menu) = BUBBLE_MENU.lock() {
+            *menu = None;
+        }
+    }
+}
+
 /// The rows the menu holds are the settings it is the face of:
 /// the main page is the two doors — the row that opens the end-of-file
 /// choices and the row that opens the seek choices, neither carrying
@@ -1206,6 +1228,48 @@ fn the_loop_takes_a_foreign_press_ask_and_puts_the_menu_away() {
     );
     assert!(pinned_menu_geometry().is_none(), "both panels are away");
     assert!(pinned(), "and the pin that was standing is left standing");
+}
+
+/// The same ask puts the bubble's own menu away: with the pin's window hidden the bubble is
+/// the pin's own window, so a press the hook read on the browser beneath it — or on the
+/// desktop — landed outside the bubble as surely as it landed outside the card's, and the
+/// bubble's window never saw it to answer it (see `bubble_window_is_at` and
+/// `close_pin_bubble_menu`).
+#[test]
+fn the_same_ask_puts_the_bubbles_menu_away() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(sound_pin()));
+
+    // The bubble's own menu up in the circle a collapsed pin left, with the bubble's handle
+    // in the slot the loop's tick reads it from — a window nobody has to put on a screen
+    // for a menu to be stood up in a slot (see `open_bubble_menu`).
+    let _bubble = BubblePutBack::put(HWND(0x2000 as *mut _));
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true);
+    let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
+    if let Ok(mut menu) = BUBBLE_MENU.lock() {
+        *menu = Some(BubbleMenu {
+            rows,
+            popup,
+            hover: None,
+            dpi: 96,
+        });
+    }
+    assert!(bubble_menu_is_open(), "the bubble's menu is up");
+
+    // The hook's ask for a press that landed on another window, taken on the loop's tick.
+    request_pin_menu_dismiss();
+    assert!(
+        take_pin_menu_dismiss(),
+        "the ask is taken and a menu is the thing it closes"
+    );
+    assert!(!bubble_menu_is_open(), "the bubble's menu is away with it");
+    assert!(!pin_menu_is_open(), "and the card's own was never up");
+    assert!(pinned(), "while the pin that was standing is left standing");
 }
 
 /// Closing the menu from the window side puts both panels away and leaves
