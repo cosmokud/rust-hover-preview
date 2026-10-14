@@ -9,39 +9,13 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Every file of a list but the one the pin is showing, which is how many files a walk of that
-/// list may be asked for.
-///
-/// The file the pin is on is not one of them: the walk stepped from it, so it is where the walk
-/// came rather than a file to be shown, and offering it again would be a step onto the file
-/// already on screen. This is the whole of what bounds a walk, so that a folder of nothing this
-/// app can read is a walk that ends rather than one that goes for ever (see `PinStep`).
-pub(super) fn walk_budget(list: &[PathBuf]) -> usize {
-    list.len().saturating_sub(1)
-}
-
-/// The file a shuffled step of a walk lands on, from a roll that
-/// names it.
-///
-/// A shuffle is a walk through the anchor's own kind of file in an order of
-/// their own choosing: the pool is those files of the walk's list other than the file it is
-/// standing on — the file on screen is not
-/// a file a step is for, which is the whole of what `walk_budget`
-/// says for an ordinary step — and a roll names one of the pool. A
-/// pool with nothing in it is a walk with nowhere to go, which ends
-/// it rather than stepping onto a file that is not of the anchor's kind: a
-/// shuffle never lands on a file of another kind.
-pub(super) fn shuffle_step(at: &Path, pool: &[PathBuf], roll: usize) -> Option<PathBuf> {
-    let offered: Vec<&PathBuf> = pool
-        .iter()
-        .filter(|file| !pin_navigation::same_file(file, at))
-        .collect();
-
-    if offered.is_empty() {
-        return None;
+/// Put a playlist in the order it is walked in: the files after the first shuffled, so the
+/// permutation is drawn once — when the playlist is spawned or respawned — and every step
+/// after it is the next file of the order rather than a fresh draw (see `PinStep::order`).
+fn shuffle_rest(rest: &mut [PathBuf]) {
+    for i in (1..rest.len()).rev() {
+        rest.swap(i, roll() % (i + 1));
     }
-
-    Some(offered[roll % offered.len()].clone())
 }
 
 /// The files of a walk's list that are of the anchor's own kind, as `claims` answers for
@@ -51,16 +25,7 @@ fn kind_of_the_list(list: &[PathBuf], claims: impl Fn(&Path) -> bool) -> Vec<Pat
     list.iter().filter(|path| claims(path)).cloned().collect()
 }
 
-/// How many files a walk remembers where it has been, oldest first.
-///
-/// The only thing that fills it is a hand pressing **Next**, and the entry a bound drops is
-/// the one nobody goes back that far for — a walk is a look through one folder, not a
-/// browser's whole session. It bounds the walk that is cloned into every ask, every load and
-/// every answer, which is what an unbounded history would be paid for on every press (see
-/// `PinStep::back`).
-pub(super) const PIN_WALK_HISTORY_MAX: usize = 100;
-
-/// A roll of the folder's sounds: a number drawn from the clock mixed
+/// A roll for the playlist: a number drawn from the clock mixed
 /// with a count of how many have been drawn in this run, so that two
 /// steps a moment apart do not land on the same file the way two
 /// reads of a clock that barely moves would. Nothing here needs a
@@ -85,18 +50,15 @@ fn roll() -> usize {
     hasher.finish() as usize
 }
 
-/// A step the pin's own walk has taken, and what is left of the walk to ask for.
+/// A step the pin's own walk has taken, and the playlist it steps through.
 ///
-/// The walk is a list of files and a pin can only be shown some of them: a file that is not
-/// there, a file nothing here can read, a file whose decode comes back with nothing at all.
-/// Those are not where a walk stops. A caption button is one press and one gesture, and the
-/// gesture is *the next file I can look at* — so the file that cannot be shown is stepped over
-/// and the walk carries on from it, which is the one place the file the pin has to stop
+/// The walk is a playlist and a pin can only be shown one file of it at a time: a file that
+/// is not there, a file nothing here can read, a file whose decode comes back with nothing at
+/// all. Those are not where a walk stops. A caption button is one press and one gesture, and
+/// the gesture is *the next file I can look at* — so the file that cannot be shown is stepped
+/// over and the walk carries on from it, which is the one place the file the pin has to stop
 /// being what the walk steps from: a file that was not shown leaves the pin showing what it
 /// was showing, so the pin's own path is not where the walk is.
-///
-/// Every other file of the list is offered at most once, so a folder of nothing this app can
-/// read is a walk that ends rather than one that goes for ever (see `walk_budget`).
 #[derive(Clone)]
 pub(crate) struct PinStep {
     /// The file the walk last landed on, which is where the next step is taken from.
@@ -109,52 +71,29 @@ pub(crate) struct PinStep {
     /// pin has been given another file is an answer to a press about a file the pin is no
     /// longer showing, and this is what says so (see `PreviewMessage::PinAnswered`).
     pub(super) from: PathBuf,
-    /// Which way the walk goes: `1` along the listing, `-1` against it.
+    /// Which way the walk goes: `1` along the playlist, `-1` against it.
     pub(super) step: i32,
-    /// How many more files the walk may be asked for (see `walk_budget`).
-    pub(super) left: usize,
-    /// The folder's list, read once by the planner and carried here so that a step after
-    /// the first is a walk through what is already in hand rather than a second read of
-    /// the folder (see `PinPlanner`).
-    pub(super) list: Vec<PathBuf>,
-    /// Whether a step *forward* of this walk is a random one of the anchor's own kind
-    /// rather than the one beside it: the pin's own shuffle — the audio one for a walk
-    /// anchored on a sound, the video one for a film, the image one for a picture — and a
-    /// step beside it everywhere else (see `shuffle_step`).
-    ///
-    /// It is an order the *next* file is picked in and nothing else: a step back is the file
-    /// the walk came from, whatever the shuffle says, and so is the step forward that follows
-    /// one (see `back` and `forward`).
+    /// The playlist the walk steps through: the folder's own order where the pin walks
+    /// linearly, or the file the pin was standing on first and the anchor's own kind of the
+    /// folder shuffled after it where the pin shuffles. Spawned when the pin is triggered and
+    /// reconciled on every step after it, so every file is stepped onto once before any
+    /// repeats; a step back is the previous file of the order and the step forward after it
+    /// the file it was interrupted on — the order itself, never a draw.
+    pub(super) order: Vec<PathBuf>,
+    /// How many files in a row were stepped over without being shown: a folder of files
+    /// nothing can show is a walk that ends rather than one that goes round for ever, so each
+    /// file is tried once and then the mark is what the pin is left standing over (see
+    /// `step_over`). A fresh walk starts at none; a step is navigation rather than a miss.
+    pub(super) missed: usize,
+    /// Whether `order` is a shuffled playlist: the pin's own shuffle — the audio one for a
+    /// walk anchored on a sound, the video one for a film, the image one for a picture — and
+    /// the folder's own order everywhere else.
     pub(super) shuffle: bool,
-    /// The pool a shuffled step picks from: the files of the list whose extension is in the
-    /// anchor's own list of `config.ini` — `[audio]`, `[video]` or `[image]` — which is the
-    /// whole of what such a shuffle is limited to. Empty where the walk does not shuffle, and
-    /// never holding a file of another kind: no file of another kind is one a shuffled step
-    /// ever lands on.
-    pub(super) pool: Vec<PathBuf>,
-    /// The files of the pool not yet stepped onto in this shuffle permutation. Each shuffled
-    /// step is drawn from here and removed, so every file is stepped onto once before any
-    /// repeats; when spent it is rebuilt from the pool minus the file on screen. A deleted
-    /// file is tried once then gone with the removal (see `shuffle_step`).
-    pub(super) bag: Vec<PathBuf>,
-    /// The category of the first file pinned, which is what `list` was filtered by and
+    /// The category of the first file pinned, which is what `order` was filtered by and
     /// what the next press reuses instead of recomputing from the file the pin is
     /// standing on — or nothing where the walk was asked with no session behind it, in
     /// which case the next press anchors on the file it stands on, as a first press does.
     pub(super) anchor: Option<NavCategory>,
-    /// The files this walk has stepped off forward, most recent last: where a step back goes.
-    ///
-    /// Only files the pin was *shown* are in here, which is the whole of what makes it a
-    /// history rather than a trail: a file that could not be shown is stepped over without
-    /// being written down (see `step_over`), because it is not a place anyone would want to go
-    /// back to. Bounded by `PIN_WALK_HISTORY_MAX` — a hand drumming on **Next** is the only
-    /// thing that fills it, and the oldest entry is the one nobody is going back that far for.
-    pub(super) back: Vec<PathBuf>,
-    /// The files a step back stepped off, most recent last: where the next step forward goes,
-    /// so a walk taken back to the file it came from and then forward again lands on the file
-    /// it was interrupted on rather than on a new draw. A forward step clears it: a file
-    /// stepped onto is a file nothing is forward of any more (see `step`).
-    pub(super) forward: Vec<PathBuf>,
 }
 
 impl PinStep {
@@ -164,106 +103,78 @@ impl PinStep {
     }
 
     /// The file the next step of this walk lands on, and where the walk stands after it, or
-    /// nothing where the walk has nothing left to offer.
+    /// nothing where the walk has nowhere to step to.
     ///
     /// What a step *is* is decided here and nowhere else, because every road that asks for
     /// one is the same question: a caption's **Next**/**Previous**, a film's end of file and
-    /// a sound's all ask the walk for its next file. A step back is the file the walk came from
-    /// and a step forward after one is the file the walk was interrupted on — the file itself,
-    /// not a draw, which is what makes **Previous** take you back exactly where you were.
-    /// Neither of those is a file the budget counts: nothing new is offered for them (see
-    /// `back` and `forward`).
-    ///
-    /// Every other step is a draw: one of the anchor's own kind at random where the pin's
-    /// shuffle says so, or the file beside it — and the file it leaves is written down as where
-    /// a step back goes, with nothing left forward of it.
+    /// a sound's all ask the walk for its next file. A step is a move along the playlist: back
+    /// is the previous file of the order and forward the next one — the file itself, never a
+    /// draw, which is what makes **Previous** take you back exactly where you were and a
+    /// **Next** after it land on the file it was interrupted on.
     pub(super) fn step(&mut self) -> Option<PathBuf> {
-        if self.step < 0 {
-            if let Some(previous) = self.back.pop() {
-                self.forward.push(std::mem::replace(&mut self.at, previous));
-                return Some(self.at.clone());
+        self.advance(self.step)
+    }
+
+    /// The same step forward over a file that could not be shown (see `pin_step_off`):
+    /// navigation moves forward only, so a walk that fell back would be walked back to where
+    /// it came from. Nothing where every other file of the order has been tried, and nothing
+    /// rather than the file itself where there is nowhere to step to.
+    pub(super) fn step_over(&mut self) -> Option<PathBuf> {
+        if self.missed >= self.order.len().saturating_sub(1) {
+            return None;
+        }
+        self.missed += 1;
+        let leaving = self.at.clone();
+        let next = self.advance(1)?;
+        if pin_navigation::same_file(&next, &leaving) {
+            return None;
+        }
+        Some(next)
+    }
+
+    /// Move along the playlist without writing anything down about the file left: the half of
+    /// a step both roads share — the navigation, and the step-over of a file that could not
+    /// be shown (see `step_over`).
+    ///
+    /// A step re-anchors to the file it is standing on in the order in hand, so a press made
+    /// while the file the last step landed on is still being read steps the same playlist
+    /// rather than starting another. A shuffled walk stepping past its last file respawns the
+    /// playlist from the order in hand — the planner respawns from the folder instead, so
+    /// files added since join on the next press — and a linear one wraps, the way a folder is
+    /// a ring. A file no longer on the order steps onto the end it points at.
+    fn advance(&mut self, direction: i32) -> Option<PathBuf> {
+        if self.order.is_empty() {
+            return None;
+        }
+        // A shuffled walk stepping past its last file respawns the playlist rather than
+        // wrapping it; a single-file shuffle has nowhere to respawn to.
+        if direction >= 0
+            && self.shuffle
+            && self
+                .order
+                .last()
+                .is_some_and(|last| pin_navigation::same_file(last, &self.at))
+        {
+            let at = self.at.clone();
+            let mut rest: Vec<PathBuf> = self
+                .order
+                .iter()
+                .filter(|file| !pin_navigation::same_file(file, &at))
+                .cloned()
+                .collect();
+            if rest.is_empty() {
+                return None;
             }
-        } else if let Some(next) = self.forward.pop() {
-            self.back.push(std::mem::replace(&mut self.at, next));
+            shuffle_rest(&mut rest);
+            self.order = std::iter::once(at).chain(rest).collect();
+            self.at = self.order[1].clone();
             return Some(self.at.clone());
         }
-
-        if self.left == 0 {
-            return None;
-        }
-        self.left -= 1;
-
-        // The list is already in hand — the planner read it off the preview thread — so a
-        // step costs a position in a vector rather than a walk of the folder behind it.
-        // A shuffled step is drawn from the bag and removed, so the permutation is stepped
-        // through once before anything repeats; a spent bag is rebuilt minus the file on
-        // screen rather than ending the walk. Only one pool is ever filled — the anchor's own
-        // kind of the list — whatever kind that is (see `answer_pin_job`).
-        let leaving = self.at.clone();
-        let path = self.draw()?;
-
-        self.at = path.clone();
-
-        if self.step > 0 {
-            self.remember(leaving);
-            self.forward.clear();
-        }
-
-        Some(path)
-    }
-
-    /// The same step with nothing written down about the file it leaves: the step a file that
-    /// could not be shown is stepped over by (see `pin_step_off`).
-    ///
-    /// A file the pin was never shown is not a file anyone was taken off, so it is not one a
-    /// step back goes to — and a history that held it would be a **Previous** that lands on a
-    /// cross. It is the one step that is not a navigation, and the reason it is a second method
-    /// rather than a flag is that it must not be able to record by accident.
-    pub(super) fn step_over(&mut self) -> Option<PathBuf> {
-        if self.left == 0 {
-            return None;
-        }
-        self.left -= 1;
-
-        self.at = self.draw()?;
-
+        // Every other step is along the order — back the previous file, forward the next
+        // one — which wraps at either end, and a file no longer on it steps onto the end it
+        // points at.
+        self.at = pin_navigation::step_to(&self.at, &self.order, direction)?;
         Some(self.at.clone())
-    }
-
-    /// The file a step draws — the anchor's own kind at random where the pin's shuffle says
-    /// so, or the file beside it — without the walk moving onto it.
-    ///
-    /// It is the half of a step both roads share: the one a navigation is, which writes down
-    /// where it came from (see `step`), and the one a file that could not be shown is stepped
-    /// over by, which does not (see `step_over`).
-    fn draw(&mut self) -> Option<PathBuf> {
-        if self.shuffle && self.step > 0 {
-            let mut pick = shuffle_step(&self.at, &self.bag, roll());
-            if pick.is_none() {
-                self.bag = self
-                    .pool
-                    .iter()
-                    .filter(|file| !pin_navigation::same_file(file, &self.at))
-                    .cloned()
-                    .collect();
-                pick = shuffle_step(&self.at, &self.bag, roll());
-            }
-            let path = pick?;
-            self.bag
-                .retain(|held| !pin_navigation::same_file(held, &path));
-            return Some(path);
-        }
-
-        pin_navigation::step_to(&self.at, &self.list, self.step)
-    }
-
-    /// Write down the file a step left, bounded: a hand that keeps pressing is the only thing
-    /// that fills this, and the entry it drops is the one nobody goes back that far for.
-    fn remember(&mut self, leaving: PathBuf) {
-        if self.back.len() >= PIN_WALK_HISTORY_MAX {
-            self.back.remove(0);
-        }
-        self.back.push(leaving);
     }
 }
 
@@ -344,8 +255,7 @@ pub(super) enum PinJob {
         /// so a press standing on a sound keeps the first file's walk (see `list_for`).
         anchor: Option<NavCategory>,
         config: Box<AppConfig>,
-        /// The walk this press is a step of — the pin's own, whatever it is holding of its
-        /// shuffle permutation and of the files it has stepped off — so that the read the
+        /// The walk this press is a step of — the pin's own playlist — so that the read the
         /// planner does behind it continues one walk rather than starting another. Nothing
         /// where the press had no walk behind it, which is the same first press and the
         /// same case `anchor` describes.
@@ -375,19 +285,14 @@ pub(super) static PIN_JOBS: Lazy<PinJobSlot> = Lazy::new(|| (Mutex::new(None), C
 /// already up has (see `player_wait`, which bounds the same way for the same reason).
 pub(super) const PIN_JOB_GIVEUP: Duration = Duration::from_secs(15);
 
-/// The pin's own walk — the walk it is standing on — where that walk is standing on `at`.
+/// The pin's own walk — the playlist it is standing on — whatever file it is standing on.
 ///
-/// The walk the pin holds is its session and not one ask's (see `PinUp::walk`), and the one
-/// thing that makes it the walk this question is a step of is that it is standing on the file
-/// the question was asked about. A question about a file the pin is not standing on is one
-/// that walk has already been left behind by, and it carries nothing: the planner anchors on
-/// the file it was asked about instead (see `anchor`).
-fn session_walk(at: &Path) -> Option<PinStep> {
-    pin_state()
-        .as_ref()
-        .and_then(|state| state.walk())
-        .filter(|walk| pin_navigation::same_file(&walk.at, at))
-        .cloned()
+/// The walk the pin holds is its session and not one ask's (see `PinUp::walk`). It is carried
+/// without matching the file the question was asked about: a step re-anchors to that file in
+/// the order, so a press made while the file the last step landed on is still being read steps
+/// the same playlist rather than starting another (see `advance`).
+fn session_walk() -> Option<PinStep> {
+    pin_state().as_ref().and_then(|state| state.walk()).cloned()
 }
 
 /// The pin's own walk, taken, and the pin left holding none: the walk the pin is standing on,
@@ -399,19 +304,20 @@ pub(super) fn take_pin_walk() -> Option<PinStep> {
         .and_then(|held| held.take())
 }
 
-/// The draw the walk has already made comes off the pin's own bag, without the pin moving.
+/// The playlist the walk was answered with goes onto the pin's own walk, without the pin
+/// moving.
 ///
-/// Where the bag is advanced is where the step is *decided* rather than where the file it
-/// landed on is installed, and the two are a load apart: a press made while that load is still
-/// reading is a step of the same permutation, and a bag that still holds the file the last
-/// press drew is how one hand pressing twice is shown the same file twice (see `PinUp::walk`).
-///
-/// A step that drew nothing — a step back, or forward onto the file it was interrupted on —
-/// leaves the bag as it found it, so this is that same bag written back.
-pub(super) fn pin_walk_drew_its_file(walk: &PinStep) {
+/// Where the order is decided is a load apart from where the file it lands on is installed:
+/// a press made while that load is still reading re-anchors to the file on screen in this
+/// order, so it steps the same playlist instead of starting another. Only the order goes —
+/// the pin has not moved, so where it is standing is still where the next step is taken from
+/// (see `PinUp::walk`).
+pub(super) fn pin_walk_synced_its_playlist(walk: &PinStep) {
     if let Some(mut state) = pin_state() {
         if let Some(Some(held)) = state.walk_mut() {
-            held.bag = walk.bag.clone();
+            held.order = walk.order.clone();
+            held.shuffle = walk.shuffle;
+            held.anchor = walk.anchor;
         }
     }
 }
@@ -422,15 +328,15 @@ pub(super) fn pin_walk_drew_its_file(walk: &PinStep) {
 /// walk reads a folder behind it, and a lock held across a folder read is a lock every
 /// other thread of the app waits on for as long as the disk takes.
 ///
-/// The pin's own walk goes with it, for the same reason: the press is a step of the walk the
-/// pin is standing on, and the bag and the history that walk holds are what make the next
-/// file a continuation rather than a new draw (see `answer_pin_job`).
+/// The pin's own walk goes with it, for the same reason: the press is a step of the playlist
+/// the pin is standing on, and the order that walk holds is what makes the next file a
+/// continuation of the same playlist rather than a fresh draw (see `answer_pin_job`).
 pub(super) fn ask_pin_walk(at: PathBuf, step: i32, anchor: Option<NavCategory>) -> bool {
     let Some(config) = CONFIG.lock().ok().map(|config| config.clone()) else {
         return false;
     };
 
-    let session = session_walk(&at).map(Box::new);
+    let session = session_walk().map(Box::new);
 
     queue_pin_job(PinJob::Walk {
         at,
@@ -554,16 +460,20 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             // had no walk behind it, in which case the walk anchors on `at` itself. The
             // sounds below come out of this list, so they follow the same anchor.
             let anchor = anchor.or_else(|| pin_navigation::wanted_category(at, config));
+            // The playlist is reconciled against the folder as it is rather than as it was
+            // when the pin went up, so the cached scan is dropped before the list is read:
+            // a file copied in joins the playlist and one moved or deleted leaves it.
+            if let Some(folder) = at.parent() {
+                pin_navigation::forget_folder(folder);
+            }
             let list = pin_navigation::list_for(at, anchor, config).unwrap_or_else(|| empty.clone());
 
-            // Whether a step forward of this walk is a random one of the anchor's own
-            // kind rather than the file beside it: the pin's own shuffle says so, and a
-            // manual Next shuffles by the same switch — a shuffle is an order the *next*
-            // file is picked in, whatever asked for it (see `PinStep::step`). The pool is
-            // the anchor's kind of the list, read where the list is: which files those are is
-            // a question of the anchor's own list of the `config.ini` the walk was asked
-            // with, so it is answered here once rather than on every step. The bag starts as
-            // every file of the pool but the one on screen, since that one is already showing.
+            // Whether steps along this walk follow a shuffled playlist or the folder's own
+            // order: the pin's own shuffle says so — the audio one for a walk anchored on a
+            // sound, the video one for a film, the image one for a picture. The pool is the
+            // anchor's kind of the list, read where the list is: which files those are is a
+            // question of the anchor's own list of the `config.ini` the walk was asked with,
+            // so it is answered here once rather than on every step.
             let (shuffle, pool): (bool, Vec<PathBuf>) = match anchor {
                 Some(NavCategory::Audio) if config.pin_mode_audio_shuffle => {
                     (true, kind_of_the_list(&list, |path| lists::AUDIO.claims(path, config)))
@@ -576,61 +486,90 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
                 }
                 _ => (false, Vec::new()),
             };
-            // The bag starts as every file of the pool but the one on screen, since that
-            // one is already showing — or, where the pin is standing on a walk of its own,
-            // as whatever that walk has left of the permutation, which is the whole of what
-            // makes a shuffle a permutation: the bag is the pin's and not the press's, so
-            // every file of the kind is stepped onto once before any of them is stepped onto
-            // again (see `ask_pin_walk`).
-            //
-            // It is carried only where it is the same walk's: a bag drawn out of the sounds
-            // is not a bag to draw films out of, and the anchor is what says which of the
-            // kinds the bag was drawn from. A file deleted since is tried once and gone with
-            // the removal, the way a bag drawn from a pool says (see `shuffle_step`).
-            let bag: Vec<PathBuf> = match session {
-                Some(session) if session.anchor == anchor && !session.bag.is_empty() => {
-                    session.bag.clone()
+            // The playlist: the folder's own order where the walk is linear, so an addition
+            // lands in its sorted place and a deletion is gone with the fresh list — or the
+            // walk's own order reconciled where it shuffles, so a file gone since is dropped
+            // and a file added since goes on the end — or a fresh one where no walk is
+            // carried: a shuffle thrown either way, a new anchor, or the trigger that took
+            // the pin up at all. A playlist is spawned once per trigger and stepped along
+            // after it, so every file is stepped onto once before any repeats.
+            let mut order: Vec<PathBuf> = match session {
+                Some(session) if session.anchor == anchor && session.shuffle == shuffle => {
+                    if shuffle {
+                        let mut kept: Vec<PathBuf> = session
+                            .order
+                            .iter()
+                            .filter(|file| {
+                                pin_navigation::same_file(file, at)
+                                    || pool
+                                        .iter()
+                                        .any(|pooled| pin_navigation::same_file(pooled, file))
+                            })
+                            .cloned()
+                            .collect();
+                        let mut additions: Vec<PathBuf> = pool
+                            .iter()
+                            .filter(|file| {
+                                !kept
+                                    .iter()
+                                    .any(|kept| pin_navigation::same_file(kept, file))
+                            })
+                            .cloned()
+                            .collect();
+                        kept.append(&mut additions);
+                        kept
+                    } else {
+                        list.clone()
+                    }
                 }
-                _ => pool
+                _ => {
+                    if shuffle {
+                        let mut rest: Vec<PathBuf> = pool
+                            .iter()
+                            .filter(|file| !pin_navigation::same_file(file, at))
+                            .cloned()
+                            .collect();
+                        shuffle_rest(&mut rest);
+                        std::iter::once(at.clone()).chain(rest).collect()
+                    } else {
+                        list.clone()
+                    }
+                }
+            };
+            // A shuffled walk stepping past its last file respawns the playlist from the
+            // folder rather than from the order in hand, so files added since join the new
+            // permutation instead of waiting for the step after it.
+            if shuffle
+                && *step > 0
+                && order
+                    .last()
+                    .is_some_and(|last| pin_navigation::same_file(last, at))
+            {
+                let mut rest: Vec<PathBuf> = pool
                     .iter()
                     .filter(|file| !pin_navigation::same_file(file, at))
                     .cloned()
-                    .collect(),
-            };
-            // And the files the pin has been to come with it, so a step back is the file the
-            // pin was shown last rather than the one beside it in the listing (see
-            // `PinStep::back`).
-            let (back, forward) = match session {
-                Some(session) => (session.back.clone(), session.forward.clone()),
-                None => (Vec::new(), Vec::new()),
-            };
-
-            // The walk is the list asked one file at a time, so it is bounded by the list:
-            // every file of it but the one the pin is showing is one the walk may still be
-            // offered, and this step is the first of them.
-            let left = walk_budget(&list);
+                    .collect();
+                shuffle_rest(&mut rest);
+                order = std::iter::once(at.clone()).chain(rest).collect();
+            }
             let mut walk = PinStep {
                 at: at.clone(),
                 // The walk is asked from the file the pin is standing on, and steps from it
-                // onto the first of the list that is not that file.
+                // along the playlist.
                 from: at.clone(),
                 step: *step,
-                left,
-                list,
+                order,
+                missed: 0,
                 shuffle,
-                pool,
-                bag,
                 // Carried so the next press reuses it: the walk the pin lands on is kept
                 // as the walk of the file on screen, whose anchor this is (see
                 // `step_pinned_file`).
                 anchor,
-                back,
-                forward,
             };
 
-            // A step that lands is the walk; one that does not leaves it with nothing left
-            // to offer, which the loop reads as a walk that is over rather than one that is
-            // still out.
+            // A step that lands is the walk; one that does not leaves it standing where it
+            // was asked from, which the loop reads as a walk with nowhere to step to.
             walk.step();
 
             Some(PinPlanned::Walk(walk))
@@ -659,13 +598,12 @@ pub(crate) enum PinPlanned {
 
 /// Put the pin on its next file after one it could not be shown, and say where that is.
 ///
-/// A walk is put back where the loop holds it, with the next file of the list standing under it,
-/// and that is the whole of what makes a walk more than one file: the file it lands on next is
-/// picked up on a tick of its own, and a walk dropped after the first file it could not show is a
-/// walk of one — which is the navigation stopping on a corrupted file with the button still
-/// pressed. The list wraps (see `pin_navigation::step_to`) and the walk's budget bounds it, so a
-/// walk put back is a walk that ends rather than one that goes round for ever (see
-/// `walk_budget`).
+/// A walk is put back where the loop holds it, with the next file of the playlist standing
+/// under it, and that is the whole of what makes a walk more than one file: the file it lands
+/// on next is picked up on a tick of its own, and a walk dropped after the first file it could
+/// not show is a walk of one — which is the navigation stopping on a corrupted file with the
+/// button still pressed. The playlist wraps and a spent shuffle respawns it, so a walk put back
+/// is a walk that ends only where there is nowhere to step to (see `PinStep::advance`).
 ///
 /// Where the walk has run out — or where the failure had no walk to begin with, which is what a
 /// file a pick in the listing failed at is — nothing is queued. Navigation moves forward only, and
@@ -679,8 +617,6 @@ pub(crate) enum PinPlanned {
 /// the cross instead — the window stays up, says so about the file it could not draw, and the
 /// walk is free to start again from wherever the user presses next (see `show_pin_failure`).
 pub(super) fn pin_step_off(walk: Option<PinStep>, held: &mut Option<PinStep>) {
-    // A file that could not be shown is stepped over rather than recorded: it is not a place
-    // a step back goes (see `step_over`).
     if let Some(mut walk) = walk {
         if walk.step_over().is_some() {
             *held = Some(walk);
