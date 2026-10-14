@@ -231,6 +231,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "pin_mode_image_shuffle",
+            Some(self.pin_mode_image_shuffle.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "video_loop",
             Some(self.video_loop.to_string()),
         );
@@ -790,6 +795,11 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_video_shuffle") {
             self.pin_mode_video_shuffle = value;
+        }
+        // And the picture's own walk, read the same way: a file written before the key
+        // existed leaves the walk in the folder's own order, where this build starts.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_image_shuffle") {
+            self.pin_mode_image_shuffle = value;
         }
         if let Ok(Some(false)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_video_jump_enabled") {
             self.pin_mode_video_end_of_file = PinEndOfFile::Pause;

@@ -50,16 +50,13 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "pin_update_on_hover",
             "preview_enabled",
             "run_at_startup",
+            "theme",
         ],
     ),
-    // Where a pin put away by its own minimize goes, and what such a pin holds where it is —
-    // the `Pin Mode → Minimize` submenu, which is why the three sit under one heading rather
-    // than beside the pin's own key: they are what the minimize button does, not how a pin is
-    // taken up.
-    (
-        "Minimize",
-        &["pin_minimize_to", "pin_pause_audio", "pin_pause_video"],
-    ),
+    // Where a pin put away by its own minimize goes — the `Pin Mode → Minimize`
+    // submenu, which is why the key sits under one heading rather than beside the pin's
+    // own ones: it is what the minimize button does, not how a pin is taken up.
+    ("Minimize", &["pin_minimize_to"]),
     (
         "Preview Types",
         &[
@@ -77,7 +74,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "Text Preview",
-        &["markdown_mode", "render_html", "text_font_scale", "theme"],
+        &["markdown_mode", "render_html", "text_font_scale"],
     ),
     (
         "Timing",
@@ -130,8 +127,11 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "pin_mode_audio_end_of_file",
             "pin_mode_audio_seek",
             "pin_mode_audio_shuffle",
+            "pin_mode_image_shuffle",
             "pin_mode_video_end_of_file",
             "pin_mode_video_shuffle",
+            "pin_pause_audio",
+            "pin_pause_video",
             "remember_audio_volume",
             "remember_video_volume",
             "video_loop",
