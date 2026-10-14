@@ -1,0 +1,120 @@
+[
+  {
+    "order": 1,
+    "title": "Project Overview",
+    "description": "Start with README.md and ARCHITECTURE.md to understand what Rust Hover Preview does and how the runtime threads cooperate. These documents map the purpose, supported formats, and high-level source layout before touching code.",
+    "nodeIds": [
+      "document:README.md",
+      "document:ARCHITECTURE.md"
+    ]
+  },
+  {
+    "order": 2,
+    "title": "Application Entry Point",
+    "description": "src/main.rs bootstraps the binary crate: it wires config, paths, and the module tree, then hands off to the app layer. Reading it first reveals the runtime structure a newcomer needs.",
+    "nodeIds": [
+      "file:src/main.rs"
+    ],
+    "languageLesson": "Rust binaries start at fn main(); the crate root declares modules with mod so downstream code can use paths like crate::app."
+  },
+  {
+    "order": 3,
+    "title": "Core Application Modules",
+    "description": "The app module handles startup, dialogs, single-instance enforcement, AFK handling, and updates. These routines coordinate the lifecycle touched in Step 2 and gate whether the hook and UI run.",
+    "nodeIds": [
+      "file:src/app/mod.rs",
+      "file:src/app/startup.rs",
+      "file:src/app/single_instance.rs"
+    ],
+    "languageLesson": "mod.rs files act as module entry points, re-exporting child modules to keep use crate::app paths stable."
+  },
+  {
+    "order": 4,
+    "title": "Configuration and Settings",
+    "description": "Configuration persists settings, scales, and extension lists used across the app and UI. config.rs has high fan-in, meaning most subsystems depend on these values.",
+    "nodeIds": [
+      "file:src/config/mod.rs",
+      "file:src/config/config.rs"
+    ],
+    "languageLesson": "Rust config modules often centralize mutation behind a shared type; callers borrow the config instead of global state."
+  },
+  {
+    "order": 5,
+    "title": "Format Detection and Routing",
+    "description": "The formats module detects content type, parses file heads, and routes a file to the right reader or engine. It is a narrow layer with wide fan-in, so many readers depend on its decisions.",
+    "nodeIds": [
+      "file:src/formats/mod.rs",
+      "file:src/formats/content_type.rs",
+      "file:src/formats/routing.rs"
+    ]
+  },
+  {
+    "order": 6,
+    "title": "Format-Specific Readers",
+    "description": "Readers implement parsing for archives, images, fonts, video, PDF, and Office content. The reader cluster shares a mod entry point, so new formats plug in by adding a reader and registering it in routing.",
+    "nodeIds": [
+      "file:src/readers/mod.rs",
+      "file:src/readers/comic_preview.rs",
+      "file:src/readers/pdf_preview.rs",
+      "file:src/readers/font_preview.rs"
+    ]
+  },
+  {
+    "order": 7,
+    "title": "Rendering Engines",
+    "description": "Engines render heavier documents and media through WebView, ImageMagick, LibreOffice, Office, and a document cache. They bridge format detection to actual pixel or text output.",
+    "nodeIds": [
+      "file:src/engines/mod.rs",
+      "file:src/engines/document_cache.rs",
+      "file:src/engines/webview_preview.rs"
+    ]
+  },
+  {
+    "order": 8,
+    "title": "Shell Integration",
+    "description": "Explorer hook and tray modules connect the app to Windows: the hook captures hover and keyboard input, while the tray exposes settings and updates. pin_navigation and key_input carry user intent into the UI.",
+    "nodeIds": [
+      "file:src/shell/mod.rs",
+      "file:src/shell/explorer_hook.rs",
+      "file:src/shell/tray.rs"
+    ]
+  },
+  {
+    "order": 9,
+    "title": "Text and Audio Previews",
+    "description": "Text processing prepares preview content, paints text, and supports archive and audio previews plus pin chrome. It connects format output to the panes the user actually sees.",
+    "nodeIds": [
+      "file:src/text/mod.rs",
+      "file:src/text/text_paint.rs",
+      "file:src/text/pin_chrome.rs",
+      "file:src/text/audio_preview.rs"
+    ]
+  },
+  {
+    "order": 10,
+    "title": "Preview and Pin Windows",
+    "description": "The UI layer renders the hover preview window and the pinned window with playback, chrome, and drag support. It is the final consumer of the format, reader, and text pipelines.",
+    "nodeIds": [
+      "file:src/ui/mod.rs",
+      "file:src/ui/preview_window.rs"
+    ]
+  },
+  {
+    "order": 11,
+    "title": "Build and Tooling",
+    "description": "Cargo.toml declares dependencies and build profile, while CI workflows run tests and deploy. These define how the single crate is compiled and shipped.",
+    "nodeIds": [
+      "config:Cargo.toml",
+      "pipeline:.github/workflows/manual-ci.yml"
+    ]
+  },
+  {
+    "order": 12,
+    "title": "Licensing and Contribution",
+    "description": "README-adjacent documents such as CONTRIBUTING and PRIVACY explain how to contribute and what the app touches. They set expectations for privacy and maintenance without changing code.",
+    "nodeIds": [
+      "document:CONTRIBUTING.md",
+      "document:PRIVACY.md"
+    ]
+  }
+]

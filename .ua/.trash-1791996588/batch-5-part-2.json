@@ -1,0 +1,859 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/engines/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "src/engines/mod.rs",
+      "summary": "mod.rs (undefined, 8 lines).",
+      "tags": [
+        "entry-point",
+        "rust",
+        "source",
+        "engines"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/engines/office_render.rs",
+      "type": "file",
+      "name": "office_render.rs",
+      "filePath": "src/engines/office_render.rs",
+      "summary": "office_render.rs (undefined, 76 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "engines"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/engines/peazip_render.rs",
+      "type": "file",
+      "name": "peazip_render.rs",
+      "filePath": "src/engines/peazip_render.rs",
+      "summary": "peazip_render.rs (undefined, 743 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "engines"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:program",
+      "type": "function",
+      "name": "program",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        134,
+        144
+      ],
+      "summary": "Function program in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:installation_folders",
+      "type": "function",
+      "name": "installation_folders",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        156,
+        173
+      ],
+      "summary": "Function installation_folders in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:available",
+      "type": "function",
+      "name": "available",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        204,
+        206
+      ],
+      "summary": "Function available in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:available_for",
+      "type": "function",
+      "name": "available_for",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        211,
+        213
+      ],
+      "summary": "Function available_for in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:of",
+      "type": "function",
+      "name": "of",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        225,
+        236
+      ],
+      "summary": "Function of in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:refused",
+      "type": "function",
+      "name": "refused",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        248,
+        255
+      ],
+      "summary": "Function refused in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:listed",
+      "type": "function",
+      "name": "listed",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        263,
+        265
+      ],
+      "summary": "Function listed in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:request",
+      "type": "function",
+      "name": "request",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        272,
+        311
+      ],
+      "summary": "Function request in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:list",
+      "type": "function",
+      "name": "list",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        326,
+        355
+      ],
+      "summary": "Function list in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:contents",
+      "type": "function",
+      "name": "contents",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        387,
+        444
+      ],
+      "summary": "Function contents in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/peazip_render.rs:refuse",
+      "type": "function",
+      "name": "refuse",
+      "filePath": "src/engines/peazip_render.rs",
+      "lineRange": [
+        453,
+        465
+      ],
+      "summary": "Function refuse in src/engines/peazip_render.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/engines/supervisor.rs",
+      "type": "file",
+      "name": "supervisor.rs",
+      "filePath": "src/engines/supervisor.rs",
+      "summary": "supervisor.rs (undefined, 753 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "engines"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:src/engines/supervisor.rs:Adapter",
+      "type": "class",
+      "name": "Adapter",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        51,
+        56
+      ],
+      "summary": "Class Adapter defined in src/engines/supervisor.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/engines/supervisor.rs:Worker",
+      "type": "class",
+      "name": "Worker",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        73,
+        85
+      ],
+      "summary": "Class Worker defined in src/engines/supervisor.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        89,
+        96
+      ],
+      "summary": "Function new in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:request",
+      "type": "function",
+      "name": "request",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        104,
+        110
+      ],
+      "summary": "Function request in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:wake",
+      "type": "function",
+      "name": "wake",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        127,
+        135
+      ],
+      "summary": "Function wake in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:next",
+      "type": "function",
+      "name": "next",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        152,
+        167
+      ],
+      "summary": "Function next in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:wait",
+      "type": "function",
+      "name": "wait",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        187,
+        196
+      ],
+      "summary": "Function wait in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:take_queued",
+      "type": "function",
+      "name": "take_queued",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        201,
+        203
+      ],
+      "summary": "Function take_queued in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:begin",
+      "type": "function",
+      "name": "begin",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        242,
+        253
+      ],
+      "summary": "Function begin in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:stop",
+      "type": "function",
+      "name": "stop",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        259,
+        263
+      ],
+      "summary": "Function stop in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:running_source",
+      "type": "function",
+      "name": "running_source",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        268,
+        274
+      ],
+      "summary": "Function running_source in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:hung",
+      "type": "function",
+      "name": "hung",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        280,
+        285
+      ],
+      "summary": "Function hung in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/supervisor.rs:end_hung",
+      "type": "function",
+      "name": "end_hung",
+      "filePath": "src/engines/supervisor.rs",
+      "lineRange": [
+        291,
+        297
+      ],
+      "summary": "Function end_hung in src/engines/supervisor.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/engines/mod.rs",
+      "target": "file:src/engines/calibre_render.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/mod.rs",
+      "target": "file:src/engines/document_cache.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/mod.rs",
+      "target": "file:src/engines/imagemagick_render.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/mod.rs",
+      "target": "file:src/engines/libreoffice_render.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/mod.rs",
+      "target": "file:src/engines/office_render.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/mod.rs",
+      "target": "file:src/engines/peazip_render.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/mod.rs",
+      "target": "file:src/engines/supervisor.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/mod.rs",
+      "target": "file:src/engines/webview_preview.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/office_render.rs",
+      "target": "file:src/app/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/office_render.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/office_render.rs",
+      "target": "file:src/engines/document_cache.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/office_render.rs",
+      "target": "file:src/formats/office_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:program",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:installation_folders",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:available",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:available",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:available_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:available_for",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:refused",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:refused",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:listed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:listed",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:request",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:request",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:list",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:contents",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "function:src/engines/peazip_render.rs:refuse",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "file:src/engines/supervisor.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/peazip_render.rs",
+      "target": "file:src/formats/peazip_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "class:src/engines/supervisor.rs:Adapter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "class:src/engines/supervisor.rs:Adapter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "class:src/engines/supervisor.rs:Worker",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "class:src/engines/supervisor.rs:Worker",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:request",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:request",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:wake",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:wake",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:next",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:wait",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:wait",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:take_queued",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:take_queued",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:begin",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:begin",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:stop",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:stop",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:running_source",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:running_source",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:hung",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:hung",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:end_hung",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "function:src/engines/supervisor.rs:end_hung",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/supervisor.rs",
+      "target": "file:src/app/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

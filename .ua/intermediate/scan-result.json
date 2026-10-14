@@ -1,0 +1,2577 @@
+{
+  "project": "rust-hover-preview",
+  "name": "Rust Hover Preview",
+  "description": "Windows 11 system tray app that shows image, video, PDF, text, and archive previews on hover in Explorer",
+  "readmeHead": "# Rust Hover Preview\r\n\r\n![Rust](https://img.shields.io/badge/Rust-1.98.1+-orange?logo=rust)\r\n![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)\r\n![License](https://img.shields.io/badge/License-MIT-green)\r\n\r\nA Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in File Explorer for an instant preview, or press **Space** to lock open a pinned preview window. Works with keyboard navigation, and customizes easily via the tray icon or a simple `config.ini`\r\n\r\n[Showcase.webm](https://github.com/user-attachments/assets/33ee1f35-d399-4226-8847-5bd50f867ebb)\r\n\r\n## Highlights\r\n\r\n- Mouse-hover and keyboard-navigation previews in Explorer, beside the cursor or the focused item and kept on screen.\r\n- Press a key (SPACE by default) and a preview becomes a window of its own — captioned, movable, resizable, always on top, where it stays until you close it.\r\n- Supports images, videos, audios, ebooks, Office documents, design documents, text/code, archives, camera raw, vector drawings, fonts, and more.\r\n- *Granular display scaling:* Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.\r\n- Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.\r\n\r\n## Supported Formats\r\n\r\n### Images\r\n\r\n\r\n| Engine                                                                   | `config.ini` | Default extensions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |\r\n| --- | --- | --- |\r\n| This app's own decoders and the codecs Windows ships                     | `[image]`    | apng, avci, avif, bmp, dds, exr, ff, gif, hdr, heic, heif, ico, jfif, jpe, jpeg, jpg, jxl, pam, pbm, pgm, png, pnm, ppm, qoi, tga, tif, tiff, webp                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |\r\n| [Ima",
+  "languages": [
+    "rust",
+    "toml",
+    "yaml",
+    "markdown",
+    "powershell",
+    "nsi",
+    "tmtheme"
+  ],
+  "frameworks": [],
+  "files": [
+    {
+      "path": ".cargo/config.toml",
+      "language": "toml",
+      "sizeLines": 2,
+      "fileCategory": "config"
+    },
+    {
+      "path": ".gitattributes",
+      "language": "unknown",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": ".githooks/pre-push",
+      "language": "unknown",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": ".githooks/prepare-commit-msg",
+      "language": "unknown",
+      "sizeLines": 29,
+      "fileCategory": "code"
+    },
+    {
+      "path": ".github/CODEOWNERS",
+      "language": "unknown",
+      "sizeLines": 3,
+      "fileCategory": "code"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
+      "language": "yaml",
+      "sizeLines": 53,
+      "fileCategory": "config"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/config.yml",
+      "language": "yaml",
+      "sizeLines": 1,
+      "fileCategory": "config"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/feature_request.yml",
+      "language": "yaml",
+      "sizeLines": 40,
+      "fileCategory": "config"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/question.yml",
+      "language": "yaml",
+      "sizeLines": 16,
+      "fileCategory": "config"
+    },
+    {
+      "path": ".github/pull_request_template.md",
+      "language": "markdown",
+      "sizeLines": 24,
+      "fileCategory": "docs"
+    },
+    {
+      "path": ".github/workflows/deploy.yml",
+      "language": "yaml",
+      "sizeLines": 177,
+      "fileCategory": "infra"
+    },
+    {
+      "path": ".github/workflows/manual-ci.yml",
+      "language": "yaml",
+      "sizeLines": 57,
+      "fileCategory": "infra"
+    },
+    {
+      "path": ".github/workflows/manual-deploy.yml",
+      "language": "yaml",
+      "sizeLines": 205,
+      "fileCategory": "infra"
+    },
+    {
+      "path": ".github/workflows/test-deploy.yml",
+      "language": "yaml",
+      "sizeLines": 438,
+      "fileCategory": "infra"
+    },
+    {
+      "path": ".prettierignore",
+      "language": "unknown",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "language": "markdown",
+      "sizeLines": 433,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "language": "markdown",
+      "sizeLines": 1111,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "CODE_OF_CONDUCT.md",
+      "language": "markdown",
+      "sizeLines": 83,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "language": "markdown",
+      "sizeLines": 106,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "Cargo.toml",
+      "language": "toml",
+      "sizeLines": 305,
+      "fileCategory": "config"
+    },
+    {
+      "path": "LICENSES/Apache-2.0.txt",
+      "language": "txt",
+      "sizeLines": 73,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "LICENSES/BSD-2-Clause.txt",
+      "language": "txt",
+      "sizeLines": 9,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "LICENSES/BSD-3-Clause.txt",
+      "language": "txt",
+      "sizeLines": 11,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "LICENSES/CC0-1.0.txt",
+      "language": "txt",
+      "sizeLines": 121,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "LICENSES/LicenseRef-UnRAR.txt",
+      "language": "txt",
+      "sizeLines": 42,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "LICENSES/MIT.txt",
+      "language": "txt",
+      "sizeLines": 18,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "LICENSES/MPL-2.0.txt",
+      "language": "txt",
+      "sizeLines": 373,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "LICENSES/Unicode-3.0.txt",
+      "language": "txt",
+      "sizeLines": 39,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "LICENSES/Zlib.txt",
+      "language": "txt",
+      "sizeLines": 11,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "LICENSES/bzip2-1.0.6.txt",
+      "language": "txt",
+      "sizeLines": 15,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "PRIVACY.md",
+      "language": "markdown",
+      "sizeLines": 195,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "README.md",
+      "language": "markdown",
+      "sizeLines": 763,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "SECURITY.md",
+      "language": "markdown",
+      "sizeLines": 33,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "THIRD-PARTY.md",
+      "language": "markdown",
+      "sizeLines": 238,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "TODO.md",
+      "language": "markdown",
+      "sizeLines": 399,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "assets/themes/NOTICE.md",
+      "language": "markdown",
+      "sizeLines": 22,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "assets/themes/atom-one-light.tmTheme",
+      "language": "tmtheme",
+      "sizeLines": 2326,
+      "fileCategory": "code"
+    },
+    {
+      "path": "assets/themes/one-dark-pro.tmTheme",
+      "language": "tmtheme",
+      "sizeLines": 3011,
+      "fileCategory": "code"
+    },
+    {
+      "path": "build-installers.ps1",
+      "language": "powershell",
+      "sizeLines": 66,
+      "fileCategory": "script"
+    },
+    {
+      "path": "build.rs",
+      "language": "rust",
+      "sizeLines": 58,
+      "fileCategory": "code"
+    },
+    {
+      "path": "generate-attribution.ps1",
+      "language": "powershell",
+      "sizeLines": 32,
+      "fileCategory": "script"
+    },
+    {
+      "path": "packaging/nsis/installer.nsi",
+      "language": "nsi",
+      "sizeLines": 979,
+      "fileCategory": "code"
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "language": "toml",
+      "sizeLines": 8,
+      "fileCategory": "config"
+    },
+    {
+      "path": "src/app/afk.rs",
+      "language": "rust",
+      "sizeLines": 67,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/app/dialogs.rs",
+      "language": "rust",
+      "sizeLines": 188,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/app/engine_processes.rs",
+      "language": "rust",
+      "sizeLines": 994,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/app/mod.rs",
+      "language": "rust",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/app/single_instance.rs",
+      "language": "rust",
+      "sizeLines": 56,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/app/startup.rs",
+      "language": "rust",
+      "sizeLines": 304,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/app/updates.rs",
+      "language": "rust",
+      "sizeLines": 791,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config.rs",
+      "language": "rust",
+      "sizeLines": 98,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config/app_config.rs",
+      "language": "rust",
+      "sizeLines": 766,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config/defaults.rs",
+      "language": "rust",
+      "sizeLines": 593,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config/ini_mapping.rs",
+      "language": "rust",
+      "sizeLines": 1113,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config/setting_types.rs",
+      "language": "rust",
+      "sizeLines": 1070,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config/settings_io.rs",
+      "language": "rust",
+      "sizeLines": 573,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config/tests.rs",
+      "language": "rust",
+      "sizeLines": 48,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config/tests/extension_lists.rs",
+      "language": "rust",
+      "sizeLines": 738,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config/tests/persistence.rs",
+      "language": "rust",
+      "sizeLines": 325,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config/tests/scales.rs",
+      "language": "rust",
+      "sizeLines": 1206,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/config/tests/settings.rs",
+      "language": "rust",
+      "sizeLines": 417,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/mod.rs",
+      "language": "rust",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/theme_files.rs",
+      "language": "rust",
+      "sizeLines": 108,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/calibre_render.rs",
+      "language": "rust",
+      "sizeLines": 340,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/document_cache.rs",
+      "language": "rust",
+      "sizeLines": 814,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/document_cache/tests.rs",
+      "language": "rust",
+      "sizeLines": 197,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/imagemagick_render.rs",
+      "language": "rust",
+      "sizeLines": 793,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/imagemagick_render/tests.rs",
+      "language": "rust",
+      "sizeLines": 412,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/libreoffice_render.rs",
+      "language": "rust",
+      "sizeLines": 798,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/libreoffice_render/tests.rs",
+      "language": "rust",
+      "sizeLines": 278,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/mod.rs",
+      "language": "rust",
+      "sizeLines": 8,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/office_render.rs",
+      "language": "rust",
+      "sizeLines": 76,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/office_render/com.rs",
+      "language": "rust",
+      "sizeLines": 240,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/office_render/engines.rs",
+      "language": "rust",
+      "sizeLines": 518,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/office_render/renderers.rs",
+      "language": "rust",
+      "sizeLines": 792,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/office_render/tests.rs",
+      "language": "rust",
+      "sizeLines": 807,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/office_render/worker.rs",
+      "language": "rust",
+      "sizeLines": 654,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/peazip_render.rs",
+      "language": "rust",
+      "sizeLines": 743,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/supervisor.rs",
+      "language": "rust",
+      "sizeLines": 753,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/webview_preview.rs",
+      "language": "rust",
+      "sizeLines": 87,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/webview_preview/api.rs",
+      "language": "rust",
+      "sizeLines": 496,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/webview_preview/engine.rs",
+      "language": "rust",
+      "sizeLines": 326,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/webview_preview/environment.rs",
+      "language": "rust",
+      "sizeLines": 425,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/webview_preview/host.rs",
+      "language": "rust",
+      "sizeLines": 870,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/webview_preview/pages.rs",
+      "language": "rust",
+      "sizeLines": 667,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/engines/webview_preview/tests.rs",
+      "language": "rust",
+      "sizeLines": 669,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/archive_formats.rs",
+      "language": "rust",
+      "sizeLines": 83,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/audio_formats.rs",
+      "language": "rust",
+      "sizeLines": 67,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/calibre_formats.rs",
+      "language": "rust",
+      "sizeLines": 332,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/codecs.rs",
+      "language": "rust",
+      "sizeLines": 1082,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/content_type.rs",
+      "language": "rust",
+      "sizeLines": 117,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/content_type/matchers.rs",
+      "language": "rust",
+      "sizeLines": 970,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/content_type/probe.rs",
+      "language": "rust",
+      "sizeLines": 643,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/content_type/signatures.rs",
+      "language": "rust",
+      "sizeLines": 1132,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/content_type/tests.rs",
+      "language": "rust",
+      "sizeLines": 70,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/content_type/tests/answers.rs",
+      "language": "rust",
+      "sizeLines": 401,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/content_type/tests/table.rs",
+      "language": "rust",
+      "sizeLines": 782,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/ebook_formats.rs",
+      "language": "rust",
+      "sizeLines": 231,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/font_formats.rs",
+      "language": "rust",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/head.rs",
+      "language": "rust",
+      "sizeLines": 786,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/head/tests.rs",
+      "language": "rust",
+      "sizeLines": 396,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/libre_formats.rs",
+      "language": "rust",
+      "sizeLines": 307,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/lists.rs",
+      "language": "rust",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/lists/built_ins.rs",
+      "language": "rust",
+      "sizeLines": 603,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/lists/list_store.rs",
+      "language": "rust",
+      "sizeLines": 487,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/lists/sanitize.rs",
+      "language": "rust",
+      "sizeLines": 110,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/lists/tests.rs",
+      "language": "rust",
+      "sizeLines": 268,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/magick_formats.rs",
+      "language": "rust",
+      "sizeLines": 277,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/mod.rs",
+      "language": "rust",
+      "sizeLines": 17,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/native_formats.rs",
+      "language": "rust",
+      "sizeLines": 513,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/office_formats.rs",
+      "language": "rust",
+      "sizeLines": 299,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/peazip_formats.rs",
+      "language": "rust",
+      "sizeLines": 469,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/routing.rs",
+      "language": "rust",
+      "sizeLines": 932,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/routing/readers.rs",
+      "language": "rust",
+      "sizeLines": 94,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/routing/tests.rs",
+      "language": "rust",
+      "sizeLines": 645,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/text_formats.rs",
+      "language": "rust",
+      "sizeLines": 158,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/formats/video_formats.rs",
+      "language": "rust",
+      "sizeLines": 419,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/main.rs",
+      "language": "rust",
+      "sizeLines": 333,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/paths.rs",
+      "language": "rust",
+      "sizeLines": 44,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/archive_listing.rs",
+      "language": "rust",
+      "sizeLines": 697,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/archive_listing/engine_reports.rs",
+      "language": "rust",
+      "sizeLines": 381,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/archive_listing/tests.rs",
+      "language": "rust",
+      "sizeLines": 302,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/audio_seek.rs",
+      "language": "rust",
+      "sizeLines": 656,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/audio_track.rs",
+      "language": "rust",
+      "sizeLines": 378,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/bcn.rs",
+      "language": "rust",
+      "sizeLines": 54,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/bcn/bc6h.rs",
+      "language": "rust",
+      "sizeLines": 721,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/bcn/bc7.rs",
+      "language": "rust",
+      "sizeLines": 385,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/bcn/block_formats.rs",
+      "language": "rust",
+      "sizeLines": 429,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/comic_preview.rs",
+      "language": "rust",
+      "sizeLines": 402,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/dds_image.rs",
+      "language": "rust",
+      "sizeLines": 988,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/eps_image.rs",
+      "language": "rust",
+      "sizeLines": 632,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/font_preview.rs",
+      "language": "rust",
+      "sizeLines": 53,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/font_preview/font_tables.rs",
+      "language": "rust",
+      "sizeLines": 871,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/font_preview/specimen.rs",
+      "language": "rust",
+      "sizeLines": 345,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/font_preview/tests.rs",
+      "language": "rust",
+      "sizeLines": 614,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/heif_sequence.rs",
+      "language": "rust",
+      "sizeLines": 634,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/jxl_image.rs",
+      "language": "rust",
+      "sizeLines": 418,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/metafile_image.rs",
+      "language": "rust",
+      "sizeLines": 411,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/mod.rs",
+      "language": "rust",
+      "sizeLines": 20,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/office_preview.rs",
+      "language": "rust",
+      "sizeLines": 325,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/pdf_preview.rs",
+      "language": "rust",
+      "sizeLines": 878,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/project_image.rs",
+      "language": "rust",
+      "sizeLines": 294,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/psd_image.rs",
+      "language": "rust",
+      "sizeLines": 876,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/svg_preview.rs",
+      "language": "rust",
+      "sizeLines": 526,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/tone_map.rs",
+      "language": "rust",
+      "sizeLines": 151,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/video_player.rs",
+      "language": "rust",
+      "sizeLines": 255,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/video_player/frame_copy.rs",
+      "language": "rust",
+      "sizeLines": 627,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/video_player/playback.rs",
+      "language": "rust",
+      "sizeLines": 959,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/video_player/session.rs",
+      "language": "rust",
+      "sizeLines": 537,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/video_player/tests.rs",
+      "language": "rust",
+      "sizeLines": 807,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/webp_image.rs",
+      "language": "rust",
+      "sizeLines": 152,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/readers/wic_image.rs",
+      "language": "rust",
+      "sizeLines": 557,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/cloud_files.rs",
+      "language": "rust",
+      "sizeLines": 50,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook.rs",
+      "language": "rust",
+      "sizeLines": 141,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/focus_items.rs",
+      "language": "rust",
+      "sizeLines": 328,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/hover_location.rs",
+      "language": "rust",
+      "sizeLines": 192,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/input.rs",
+      "language": "rust",
+      "sizeLines": 351,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/locations.rs",
+      "language": "rust",
+      "sizeLines": 549,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/main_loop.rs",
+      "language": "rust",
+      "sizeLines": 1675,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/pin_watch.rs",
+      "language": "rust",
+      "sizeLines": 922,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/probe_trace.rs",
+      "language": "rust",
+      "sizeLines": 466,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/resolver.rs",
+      "language": "rust",
+      "sizeLines": 412,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/shell_views.rs",
+      "language": "rust",
+      "sizeLines": 631,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/tests.rs",
+      "language": "rust",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/tests/display.rs",
+      "language": "rust",
+      "sizeLines": 410,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/tests/picks.rs",
+      "language": "rust",
+      "sizeLines": 1200,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/tests/view.rs",
+      "language": "rust",
+      "sizeLines": 387,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/ui_elements.rs",
+      "language": "rust",
+      "sizeLines": 480,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/view_sort.rs",
+      "language": "rust",
+      "sizeLines": 330,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/views.rs",
+      "language": "rust",
+      "sizeLines": 572,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/explorer_hook/window_state.rs",
+      "language": "rust",
+      "sizeLines": 497,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/hook_thread.rs",
+      "language": "rust",
+      "sizeLines": 71,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/key_input.rs",
+      "language": "rust",
+      "sizeLines": 667,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/mod.rs",
+      "language": "rust",
+      "sizeLines": 7,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/pin_navigation.rs",
+      "language": "rust",
+      "sizeLines": 981,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/tray.rs",
+      "language": "rust",
+      "sizeLines": 105,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/tray/commands.rs",
+      "language": "rust",
+      "sizeLines": 57,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/tray/commands/setters.rs",
+      "language": "rust",
+      "sizeLines": 998,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/tray/commands/toggles.rs",
+      "language": "rust",
+      "sizeLines": 351,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/tray/event_loop.rs",
+      "language": "rust",
+      "sizeLines": 796,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/tray/ids.rs",
+      "language": "rust",
+      "sizeLines": 634,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/tray/menus.rs",
+      "language": "rust",
+      "sizeLines": 1832,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/tray/submenus.rs",
+      "language": "rust",
+      "sizeLines": 1581,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/tray/tests.rs",
+      "language": "rust",
+      "sizeLines": 1608,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/shell/wheel_input.rs",
+      "language": "rust",
+      "sizeLines": 92,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/archive_preview.rs",
+      "language": "rust",
+      "sizeLines": 989,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/archive_preview/tests.rs",
+      "language": "rust",
+      "sizeLines": 401,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/audio_preview.rs",
+      "language": "rust",
+      "sizeLines": 81,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/audio_preview/card.rs",
+      "language": "rust",
+      "sizeLines": 644,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/audio_preview/page.rs",
+      "language": "rust",
+      "sizeLines": 997,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/audio_preview/tests.rs",
+      "language": "rust",
+      "sizeLines": 1469,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/mod.rs",
+      "language": "rust",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome.rs",
+      "language": "rust",
+      "sizeLines": 68,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome/bubble.rs",
+      "language": "rust",
+      "sizeLines": 770,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome/caption.rs",
+      "language": "rust",
+      "sizeLines": 686,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome/menu.rs",
+      "language": "rust",
+      "sizeLines": 948,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome/primitives.rs",
+      "language": "rust",
+      "sizeLines": 748,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome/tests.rs",
+      "language": "rust",
+      "sizeLines": 44,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome/tests/bubble.rs",
+      "language": "rust",
+      "sizeLines": 242,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome/tests/caption.rs",
+      "language": "rust",
+      "sizeLines": 763,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome/tests/menu.rs",
+      "language": "rust",
+      "sizeLines": 1638,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome/tests/transport.rs",
+      "language": "rust",
+      "sizeLines": 423,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/pin_chrome/transport.rs",
+      "language": "rust",
+      "sizeLines": 956,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/text_paint.rs",
+      "language": "rust",
+      "sizeLines": 666,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/text_preview.rs",
+      "language": "rust",
+      "sizeLines": 29,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/text_preview/document.rs",
+      "language": "rust",
+      "sizeLines": 576,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/text_preview/frame.rs",
+      "language": "rust",
+      "sizeLines": 386,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/text_preview/layout.rs",
+      "language": "rust",
+      "sizeLines": 875,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/text_preview/markdown.rs",
+      "language": "rust",
+      "sizeLines": 433,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/text_preview/source.rs",
+      "language": "rust",
+      "sizeLines": 613,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/text_preview/tests.rs",
+      "language": "rust",
+      "sizeLines": 82,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/text/text_theme.rs",
+      "language": "rust",
+      "sizeLines": 163,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/mod.rs",
+      "language": "rust",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window.rs",
+      "language": "rust",
+      "sizeLines": 351,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/animated.rs",
+      "language": "rust",
+      "sizeLines": 821,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/audio_engine.rs",
+      "language": "rust",
+      "sizeLines": 1246,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/audio_meter.rs",
+      "language": "rust",
+      "sizeLines": 87,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/dimensions.rs",
+      "language": "rust",
+      "sizeLines": 982,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/displays.rs",
+      "language": "rust",
+      "sizeLines": 567,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/engine_render.rs",
+      "language": "rust",
+      "sizeLines": 522,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/event_loop.rs",
+      "language": "rust",
+      "sizeLines": 3840,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/ffplay_window.rs",
+      "language": "rust",
+      "sizeLines": 748,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/hover_facts.rs",
+      "language": "rust",
+      "sizeLines": 709,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/image_cache.rs",
+      "language": "rust",
+      "sizeLines": 165,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/layout.rs",
+      "language": "rust",
+      "sizeLines": 998,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/load.rs",
+      "language": "rust",
+      "sizeLines": 756,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/load_dispatch.rs",
+      "language": "rust",
+      "sizeLines": 661,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/loading_paint.rs",
+      "language": "rust",
+      "sizeLines": 388,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/media_data.rs",
+      "language": "rust",
+      "sizeLines": 686,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/media_types.rs",
+      "language": "rust",
+      "sizeLines": 742,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/message_utils.rs",
+      "language": "rust",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/mpv_ipc.rs",
+      "language": "rust",
+      "sizeLines": 485,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/paint.rs",
+      "language": "rust",
+      "sizeLines": 1157,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_bubble.rs",
+      "language": "rust",
+      "sizeLines": 1699,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_chrome_layout.rs",
+      "language": "rust",
+      "sizeLines": 1044,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_drag.rs",
+      "language": "rust",
+      "sizeLines": 1164,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_geometry.rs",
+      "language": "rust",
+      "sizeLines": 843,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_input.rs",
+      "language": "rust",
+      "sizeLines": 1093,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_install.rs",
+      "language": "rust",
+      "sizeLines": 1466,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_lifecycle.rs",
+      "language": "rust",
+      "sizeLines": 1056,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_menu.rs",
+      "language": "rust",
+      "sizeLines": 702,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_model.rs",
+      "language": "rust",
+      "sizeLines": 993,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_playback.rs",
+      "language": "rust",
+      "sizeLines": 2407,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_swap.rs",
+      "language": "rust",
+      "sizeLines": 923,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_taskbar.rs",
+      "language": "rust",
+      "sizeLines": 194,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_walk.rs",
+      "language": "rust",
+      "sizeLines": 1196,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_window.rs",
+      "language": "rust",
+      "sizeLines": 848,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_window/tests.rs",
+      "language": "rust",
+      "sizeLines": 848,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pin_window/window.rs",
+      "language": "rust",
+      "sizeLines": 266,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pixels.rs",
+      "language": "rust",
+      "sizeLines": 449,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/pointer.rs",
+      "language": "rust",
+      "sizeLines": 739,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/preview_scale.rs",
+      "language": "rust",
+      "sizeLines": 406,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/requests.rs",
+      "language": "rust",
+      "sizeLines": 586,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/subtitle_files.rs",
+      "language": "rust",
+      "sizeLines": 929,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/subtitle_files/tests.rs",
+      "language": "rust",
+      "sizeLines": 610,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/surfaces.rs",
+      "language": "rust",
+      "sizeLines": 394,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests.rs",
+      "language": "rust",
+      "sizeLines": 304,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/cache.rs",
+      "language": "rust",
+      "sizeLines": 304,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/engine_probes.rs",
+      "language": "rust",
+      "sizeLines": 842,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/hover.rs",
+      "language": "rust",
+      "sizeLines": 787,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/layout.rs",
+      "language": "rust",
+      "sizeLines": 650,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/media_scales.rs",
+      "language": "rust",
+      "sizeLines": 624,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_audio_facts.rs",
+      "language": "rust",
+      "sizeLines": 161,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_audio_pause.rs",
+      "language": "rust",
+      "sizeLines": 44,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_audio_seek.rs",
+      "language": "rust",
+      "sizeLines": 128,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_bubble_art.rs",
+      "language": "rust",
+      "sizeLines": 37,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_bubble_space.rs",
+      "language": "rust",
+      "sizeLines": 162,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_cards.rs",
+      "language": "rust",
+      "sizeLines": 2014,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_edges.rs",
+      "language": "rust",
+      "sizeLines": 875,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_frames.rs",
+      "language": "rust",
+      "sizeLines": 2505,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_input.rs",
+      "language": "rust",
+      "sizeLines": 1028,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_keys.rs",
+      "language": "rust",
+      "sizeLines": 779,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_menu.rs",
+      "language": "rust",
+      "sizeLines": 1340,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_player_failure.rs",
+      "language": "rust",
+      "sizeLines": 90,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_resize.rs",
+      "language": "rust",
+      "sizeLines": 727,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_subtitle_reload.rs",
+      "language": "rust",
+      "sizeLines": 298,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_swap_ffplay_jigsaw.rs",
+      "language": "rust",
+      "sizeLines": 444,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_swap_ffplay_native.rs",
+      "language": "rust",
+      "sizeLines": 334,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/pin_volume.rs",
+      "language": "rust",
+      "sizeLines": 712,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/placement.rs",
+      "language": "rust",
+      "sizeLines": 759,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/probes.rs",
+      "language": "rust",
+      "sizeLines": 1790,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/video_engine.rs",
+      "language": "rust",
+      "sizeLines": 530,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/video_hold.rs",
+      "language": "rust",
+      "sizeLines": 1337,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/video_transport.rs",
+      "language": "rust",
+      "sizeLines": 2311,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/walk.rs",
+      "language": "rust",
+      "sizeLines": 2145,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/ws_g_seek_hold.rs",
+      "language": "rust",
+      "sizeLines": 736,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/ws_h_supersede.rs",
+      "language": "rust",
+      "sizeLines": 656,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/ws_j_always_kill.rs",
+      "language": "rust",
+      "sizeLines": 1186,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/ws_k_chrome_nav.rs",
+      "language": "rust",
+      "sizeLines": 1917,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/ws_l_cover_owner.rs",
+      "language": "rust",
+      "sizeLines": 770,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "language": "rust",
+      "sizeLines": 1091,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/text_selection.rs",
+      "language": "rust",
+      "sizeLines": 280,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/tick.rs",
+      "language": "rust",
+      "sizeLines": 470,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/video_hw.rs",
+      "language": "rust",
+      "sizeLines": 832,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/video_launch.rs",
+      "language": "rust",
+      "sizeLines": 1964,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/video_playback.rs",
+      "language": "rust",
+      "sizeLines": 1176,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/video_probe.rs",
+      "language": "rust",
+      "sizeLines": 848,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/video_retire.rs",
+      "language": "rust",
+      "sizeLines": 940,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/ui/preview_window/window_proc.rs",
+      "language": "rust",
+      "sizeLines": 441,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/no_path_leaks.rs",
+      "language": "rust",
+      "sizeLines": 188,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tribute.toml",
+      "language": "toml",
+      "sizeLines": 70,
+      "fileCategory": "config"
+    }
+  ],
+  "totalFiles": 301,
+  "filteredByIgnore": 0,
+  "estimatedComplexity": "large",
+  "stats": {
+    "filesScanned": 301,
+    "byCategory": {
+      "config": 8,
+      "code": 266,
+      "docs": 21,
+      "infra": 4,
+      "script": 2
+    },
+    "byLanguage": {
+      "toml": 4,
+      "unknown": 5,
+      "yaml": 8,
+      "markdown": 11,
+      "txt": 10,
+      "tmtheme": 2,
+      "powershell": 2,
+      "rust": 258,
+      "nsi": 1
+    }
+  },
+  "importMap": {
+    ".cargo/config.toml": [],
+    ".gitattributes": [],
+    ".githooks/pre-push": [],
+    ".githooks/prepare-commit-msg": [],
+    ".github/CODEOWNERS": [],
+    ".github/ISSUE_TEMPLATE/bug_report.yml": [],
+    ".github/ISSUE_TEMPLATE/config.yml": [],
+    ".github/ISSUE_TEMPLATE/feature_request.yml": [],
+    ".github/ISSUE_TEMPLATE/question.yml": [],
+    ".github/pull_request_template.md": [],
+    ".github/workflows/deploy.yml": [],
+    ".github/workflows/manual-ci.yml": [],
+    ".github/workflows/manual-deploy.yml": [],
+    ".github/workflows/test-deploy.yml": [],
+    ".prettierignore": [],
+    "ARCHITECTURE.md": [],
+    "CHANGELOG.md": [],
+    "CODE_OF_CONDUCT.md": [],
+    "CONTRIBUTING.md": [],
+    "Cargo.toml": [],
+    "LICENSES/Apache-2.0.txt": [],
+    "LICENSES/BSD-2-Clause.txt": [],
+    "LICENSES/BSD-3-Clause.txt": [],
+    "LICENSES/CC0-1.0.txt": [],
+    "LICENSES/LicenseRef-UnRAR.txt": [],
+    "LICENSES/MIT.txt": [],
+    "LICENSES/MPL-2.0.txt": [],
+    "LICENSES/Unicode-3.0.txt": [],
+    "LICENSES/Zlib.txt": [],
+    "LICENSES/bzip2-1.0.6.txt": [],
+    "PRIVACY.md": [],
+    "README.md": [],
+    "SECURITY.md": [],
+    "THIRD-PARTY.md": [],
+    "TODO.md": [],
+    "assets/themes/NOTICE.md": [],
+    "assets/themes/atom-one-light.tmTheme": [],
+    "assets/themes/one-dark-pro.tmTheme": [],
+    "build-installers.ps1": [],
+    "build.rs": [],
+    "generate-attribution.ps1": [],
+    "packaging/nsis/installer.nsi": [],
+    "rust-toolchain.toml": [],
+    "src/app/afk.rs": [
+      "src/config/config.rs"
+    ],
+    "src/app/dialogs.rs": [],
+    "src/app/engine_processes.rs": [],
+    "src/app/mod.rs": [
+      "src/app/afk.rs",
+      "src/app/dialogs.rs",
+      "src/app/engine_processes.rs",
+      "src/app/single_instance.rs",
+      "src/app/startup.rs",
+      "src/app/updates.rs"
+    ],
+    "src/app/single_instance.rs": [],
+    "src/app/startup.rs": [],
+    "src/app/updates.rs": [
+      "src/app/mod.rs"
+    ],
+    "src/config/config.rs": [
+      "src/formats/mod.rs",
+      "src/readers/tone_map.rs"
+    ],
+    "src/config/config/app_config.rs": [
+      "src/formats/mod.rs",
+      "src/readers/tone_map.rs"
+    ],
+    "src/config/config/defaults.rs": [
+      "src/readers/tone_map.rs"
+    ],
+    "src/config/config/ini_mapping.rs": [
+      "src/formats/mod.rs",
+      "src/readers/tone_map.rs"
+    ],
+    "src/config/config/setting_types.rs": [
+      "src/config/mod.rs",
+      "src/formats/mod.rs"
+    ],
+    "src/config/config/settings_io.rs": [
+      "src/config/mod.rs",
+      "src/formats/mod.rs"
+    ],
+    "src/config/config/tests.rs": [],
+    "src/config/config/tests/extension_lists.rs": [],
+    "src/config/config/tests/persistence.rs": [],
+    "src/config/config/tests/scales.rs": [],
+    "src/config/config/tests/settings.rs": [],
+    "src/config/mod.rs": [
+      "src/config/config.rs",
+      "src/config/theme_files.rs"
+    ],
+    "src/config/theme_files.rs": [],
+    "src/engines/calibre_render.rs": [
+      "src/config/config.rs",
+      "src/engines/document_cache.rs",
+      "src/engines/supervisor.rs"
+    ],
+    "src/engines/document_cache.rs": [
+      "src/config/config.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/engines/document_cache/tests.rs": [
+      "src/config/config.rs"
+    ],
+    "src/engines/imagemagick_render.rs": [
+      "src/config/config.rs",
+      "src/engines/document_cache.rs",
+      "src/engines/supervisor.rs"
+    ],
+    "src/engines/imagemagick_render/tests.rs": [],
+    "src/engines/libreoffice_render.rs": [
+      "src/config/config.rs",
+      "src/engines/document_cache.rs",
+      "src/engines/supervisor.rs"
+    ],
+    "src/engines/libreoffice_render/tests.rs": [],
+    "src/engines/mod.rs": [
+      "src/engines/calibre_render.rs",
+      "src/engines/document_cache.rs",
+      "src/engines/imagemagick_render.rs",
+      "src/engines/libreoffice_render.rs",
+      "src/engines/office_render.rs",
+      "src/engines/peazip_render.rs",
+      "src/engines/supervisor.rs",
+      "src/engines/webview_preview.rs"
+    ],
+    "src/engines/office_render.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/engines/document_cache.rs",
+      "src/formats/office_formats.rs"
+    ],
+    "src/engines/office_render/com.rs": [],
+    "src/engines/office_render/engines.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/formats/office_formats.rs"
+    ],
+    "src/engines/office_render/renderers.rs": [
+      "src/config/config.rs",
+      "src/engines/document_cache.rs",
+      "src/formats/office_formats.rs",
+      "src/paths.rs"
+    ],
+    "src/engines/office_render/tests.rs": [],
+    "src/engines/office_render/worker.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/engines/document_cache.rs",
+      "src/formats/office_formats.rs",
+      "src/shell/mod.rs",
+      "src/ui/mod.rs"
+    ],
+    "src/engines/peazip_render.rs": [
+      "src/engines/supervisor.rs",
+      "src/formats/peazip_formats.rs"
+    ],
+    "src/engines/supervisor.rs": [
+      "src/app/mod.rs"
+    ],
+    "src/engines/webview_preview.rs": [
+      "src/config/config.rs"
+    ],
+    "src/engines/webview_preview/api.rs": [
+      "src/config/config.rs",
+      "src/formats/mod.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/engines/webview_preview/engine.rs": [
+      "src/config/config.rs"
+    ],
+    "src/engines/webview_preview/environment.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/paths.rs"
+    ],
+    "src/engines/webview_preview/host.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/formats/mod.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/engines/webview_preview/pages.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/formats/mod.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/engines/webview_preview/tests.rs": [],
+    "src/formats/archive_formats.rs": [
+      "src/formats/mod.rs"
+    ],
+    "src/formats/audio_formats.rs": [
+      "src/formats/mod.rs"
+    ],
+    "src/formats/calibre_formats.rs": [
+      "src/config/config.rs",
+      "src/formats/lists.rs"
+    ],
+    "src/formats/codecs.rs": [],
+    "src/formats/content_type.rs": [
+      "src/config/config.rs"
+    ],
+    "src/formats/content_type/matchers.rs": [
+      "src/config/config.rs"
+    ],
+    "src/formats/content_type/probe.rs": [
+      "src/config/config.rs"
+    ],
+    "src/formats/content_type/signatures.rs": [],
+    "src/formats/content_type/tests.rs": [],
+    "src/formats/content_type/tests/answers.rs": [],
+    "src/formats/content_type/tests/table.rs": [],
+    "src/formats/ebook_formats.rs": [
+      "src/formats/mod.rs"
+    ],
+    "src/formats/font_formats.rs": [
+      "src/formats/mod.rs"
+    ],
+    "src/formats/head.rs": [
+      "src/readers/mod.rs"
+    ],
+    "src/formats/head/tests.rs": [],
+    "src/formats/libre_formats.rs": [
+      "src/config/config.rs",
+      "src/formats/mod.rs"
+    ],
+    "src/formats/lists.rs": [
+      "src/config/config.rs"
+    ],
+    "src/formats/lists/built_ins.rs": [],
+    "src/formats/lists/list_store.rs": [
+      "src/config/config.rs"
+    ],
+    "src/formats/lists/sanitize.rs": [],
+    "src/formats/lists/tests.rs": [],
+    "src/formats/magick_formats.rs": [
+      "src/config/config.rs",
+      "src/formats/mod.rs"
+    ],
+    "src/formats/mod.rs": [
+      "src/formats/archive_formats.rs",
+      "src/formats/audio_formats.rs",
+      "src/formats/calibre_formats.rs",
+      "src/formats/codecs.rs",
+      "src/formats/content_type.rs",
+      "src/formats/ebook_formats.rs",
+      "src/formats/font_formats.rs",
+      "src/formats/head.rs",
+      "src/formats/libre_formats.rs",
+      "src/formats/lists.rs",
+      "src/formats/magick_formats.rs",
+      "src/formats/native_formats.rs",
+      "src/formats/office_formats.rs",
+      "src/formats/peazip_formats.rs",
+      "src/formats/routing.rs",
+      "src/formats/text_formats.rs",
+      "src/formats/video_formats.rs"
+    ],
+    "src/formats/native_formats.rs": [
+      "src/config/config.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/formats/office_formats.rs": [
+      "src/config/config.rs"
+    ],
+    "src/formats/peazip_formats.rs": [
+      "src/config/config.rs",
+      "src/formats/mod.rs"
+    ],
+    "src/formats/routing.rs": [
+      "src/config/config.rs",
+      "src/formats/mod.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/formats/routing/readers.rs": [
+      "src/config/config.rs",
+      "src/engines/mod.rs",
+      "src/formats/mod.rs"
+    ],
+    "src/formats/routing/tests.rs": [],
+    "src/formats/text_formats.rs": [
+      "src/formats/lists.rs"
+    ],
+    "src/formats/video_formats.rs": [
+      "src/config/config.rs"
+    ],
+    "src/main.rs": [
+      "src/app/mod.rs",
+      "src/config/mod.rs",
+      "src/engines/mod.rs",
+      "src/formats/mod.rs",
+      "src/paths.rs",
+      "src/readers/mod.rs",
+      "src/shell/mod.rs",
+      "src/text/mod.rs",
+      "src/ui/mod.rs"
+    ],
+    "src/paths.rs": [],
+    "src/readers/archive_listing.rs": [
+      "src/config/config.rs"
+    ],
+    "src/readers/archive_listing/engine_reports.rs": [],
+    "src/readers/archive_listing/tests.rs": [],
+    "src/readers/audio_seek.rs": [
+      "src/config/config.rs"
+    ],
+    "src/readers/audio_track.rs": [
+      "src/formats/mod.rs"
+    ],
+    "src/readers/bcn.rs": [],
+    "src/readers/bcn/bc6h.rs": [],
+    "src/readers/bcn/bc7.rs": [],
+    "src/readers/bcn/block_formats.rs": [],
+    "src/readers/comic_preview.rs": [
+      "src/config/config.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/readers/dds_image.rs": [
+      "src/config/config.rs",
+      "src/readers/bcn.rs",
+      "src/readers/tone_map.rs"
+    ],
+    "src/readers/eps_image.rs": [
+      "src/config/config.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/readers/font_preview.rs": [],
+    "src/readers/font_preview/font_tables.rs": [
+      "src/config/config.rs"
+    ],
+    "src/readers/font_preview/specimen.rs": [
+      "src/config/config.rs"
+    ],
+    "src/readers/font_preview/tests.rs": [],
+    "src/readers/heif_sequence.rs": [
+      "src/formats/mod.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/readers/jxl_image.rs": [
+      "src/config/config.rs"
+    ],
+    "src/readers/metafile_image.rs": [
+      "src/config/config.rs"
+    ],
+    "src/readers/mod.rs": [
+      "src/readers/archive_listing.rs",
+      "src/readers/audio_seek.rs",
+      "src/readers/audio_track.rs",
+      "src/readers/bcn.rs",
+      "src/readers/comic_preview.rs",
+      "src/readers/dds_image.rs",
+      "src/readers/eps_image.rs",
+      "src/readers/font_preview.rs",
+      "src/readers/heif_sequence.rs",
+      "src/readers/jxl_image.rs",
+      "src/readers/metafile_image.rs",
+      "src/readers/office_preview.rs",
+      "src/readers/pdf_preview.rs",
+      "src/readers/project_image.rs",
+      "src/readers/psd_image.rs",
+      "src/readers/svg_preview.rs",
+      "src/readers/tone_map.rs",
+      "src/readers/video_player.rs",
+      "src/readers/webp_image.rs",
+      "src/readers/wic_image.rs"
+    ],
+    "src/readers/office_preview.rs": [
+      "src/config/config.rs",
+      "src/engines/document_cache.rs",
+      "src/engines/mod.rs",
+      "src/formats/mod.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/readers/pdf_preview.rs": [
+      "src/config/config.rs",
+      "src/shell/mod.rs"
+    ],
+    "src/readers/project_image.rs": [
+      "src/config/config.rs"
+    ],
+    "src/readers/psd_image.rs": [
+      "src/config/config.rs"
+    ],
+    "src/readers/svg_preview.rs": [
+      "src/config/config.rs"
+    ],
+    "src/readers/tone_map.rs": [],
+    "src/readers/video_player.rs": [
+      "src/paths.rs"
+    ],
+    "src/readers/video_player/frame_copy.rs": [
+      "src/formats/mod.rs",
+      "src/readers/mod.rs"
+    ],
+    "src/readers/video_player/playback.rs": [
+      "src/formats/mod.rs"
+    ],
+    "src/readers/video_player/session.rs": [
+      "src/paths.rs"
+    ],
+    "src/readers/video_player/tests.rs": [],
+    "src/readers/webp_image.rs": [
+      "src/config/config.rs"
+    ],
+    "src/readers/wic_image.rs": [
+      "src/config/config.rs"
+    ],
+    "src/shell/cloud_files.rs": [],
+    "src/shell/explorer_hook.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/engines/mod.rs",
+      "src/formats/video_formats.rs",
+      "src/shell/mod.rs",
+      "src/ui/preview_window.rs"
+    ],
+    "src/shell/explorer_hook/focus_items.rs": [],
+    "src/shell/explorer_hook/hover_location.rs": [],
+    "src/shell/explorer_hook/input.rs": [],
+    "src/shell/explorer_hook/locations.rs": [],
+    "src/shell/explorer_hook/main_loop.rs": [],
+    "src/shell/explorer_hook/pin_watch.rs": [],
+    "src/shell/explorer_hook/probe_trace.rs": [],
+    "src/shell/explorer_hook/resolver.rs": [],
+    "src/shell/explorer_hook/shell_views.rs": [],
+    "src/shell/explorer_hook/tests.rs": [],
+    "src/shell/explorer_hook/tests/display.rs": [],
+    "src/shell/explorer_hook/tests/picks.rs": [],
+    "src/shell/explorer_hook/tests/view.rs": [],
+    "src/shell/explorer_hook/ui_elements.rs": [],
+    "src/shell/explorer_hook/view_sort.rs": [],
+    "src/shell/explorer_hook/views.rs": [],
+    "src/shell/explorer_hook/window_state.rs": [],
+    "src/shell/hook_thread.rs": [],
+    "src/shell/key_input.rs": [],
+    "src/shell/mod.rs": [
+      "src/shell/cloud_files.rs",
+      "src/shell/explorer_hook.rs",
+      "src/shell/hook_thread.rs",
+      "src/shell/key_input.rs",
+      "src/shell/pin_navigation.rs",
+      "src/shell/tray.rs",
+      "src/shell/wheel_input.rs"
+    ],
+    "src/shell/pin_navigation.rs": [
+      "src/config/config.rs",
+      "src/formats/mod.rs",
+      "src/paths.rs",
+      "src/shell/explorer_hook.rs"
+    ],
+    "src/shell/tray.rs": [
+      "src/config/config.rs"
+    ],
+    "src/shell/tray/commands.rs": [],
+    "src/shell/tray/commands/setters.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/engines/mod.rs",
+      "src/formats/mod.rs",
+      "src/ui/preview_window.rs"
+    ],
+    "src/shell/tray/commands/toggles.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/engines/mod.rs",
+      "src/ui/preview_window.rs"
+    ],
+    "src/shell/tray/event_loop.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/shell/mod.rs"
+    ],
+    "src/shell/tray/ids.rs": [
+      "src/config/config.rs"
+    ],
+    "src/shell/tray/menus.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/config/mod.rs",
+      "src/engines/mod.rs",
+      "src/formats/codecs.rs",
+      "src/text/mod.rs"
+    ],
+    "src/shell/tray/submenus.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/engines/mod.rs",
+      "src/formats/codecs.rs"
+    ],
+    "src/shell/tray/tests.rs": [],
+    "src/shell/wheel_input.rs": [],
+    "src/text/archive_preview.rs": [
+      "src/config/config.rs",
+      "src/readers/archive_listing.rs",
+      "src/text/text_paint.rs",
+      "src/text/text_theme.rs"
+    ],
+    "src/text/archive_preview/tests.rs": [
+      "src/readers/archive_listing.rs"
+    ],
+    "src/text/audio_preview.rs": [
+      "src/config/config.rs",
+      "src/readers/audio_track.rs",
+      "src/text/mod.rs",
+      "src/text/text_paint.rs"
+    ],
+    "src/text/audio_preview/card.rs": [
+      "src/config/config.rs",
+      "src/readers/audio_track.rs",
+      "src/text/mod.rs",
+      "src/text/text_paint.rs"
+    ],
+    "src/text/audio_preview/page.rs": [
+      "src/text/pin_chrome.rs",
+      "src/text/text_paint.rs",
+      "src/text/text_theme.rs"
+    ],
+    "src/text/audio_preview/tests.rs": [
+      "src/readers/audio_track.rs"
+    ],
+    "src/text/mod.rs": [
+      "src/text/archive_preview.rs",
+      "src/text/audio_preview.rs",
+      "src/text/pin_chrome.rs",
+      "src/text/text_paint.rs",
+      "src/text/text_preview.rs",
+      "src/text/text_theme.rs"
+    ],
+    "src/text/pin_chrome.rs": [
+      "src/text/text_paint.rs"
+    ],
+    "src/text/pin_chrome/bubble.rs": [
+      "src/text/text_paint.rs"
+    ],
+    "src/text/pin_chrome/caption.rs": [
+      "src/text/text_paint.rs"
+    ],
+    "src/text/pin_chrome/menu.rs": [
+      "src/text/text_paint.rs"
+    ],
+    "src/text/pin_chrome/primitives.rs": [
+      "src/text/text_paint.rs"
+    ],
+    "src/text/pin_chrome/tests.rs": [
+      "src/text/pin_chrome/bubble.rs",
+      "src/text/pin_chrome/caption.rs",
+      "src/text/pin_chrome/menu.rs",
+      "src/text/pin_chrome/transport.rs"
+    ],
+    "src/text/pin_chrome/tests/bubble.rs": [],
+    "src/text/pin_chrome/tests/caption.rs": [],
+    "src/text/pin_chrome/tests/menu.rs": [],
+    "src/text/pin_chrome/tests/transport.rs": [],
+    "src/text/pin_chrome/transport.rs": [
+      "src/text/text_paint.rs"
+    ],
+    "src/text/text_paint.rs": [
+      "src/config/config.rs"
+    ],
+    "src/text/text_preview.rs": [],
+    "src/text/text_preview/document.rs": [
+      "src/config/config.rs",
+      "src/text/text_paint.rs",
+      "src/text/text_theme.rs"
+    ],
+    "src/text/text_preview/frame.rs": [
+      "src/config/config.rs",
+      "src/text/mod.rs",
+      "src/text/text_paint.rs"
+    ],
+    "src/text/text_preview/layout.rs": [
+      "src/text/text_paint.rs",
+      "src/text/text_theme.rs"
+    ],
+    "src/text/text_preview/markdown.rs": [
+      "src/text/text_paint.rs",
+      "src/text/text_theme.rs"
+    ],
+    "src/text/text_preview/source.rs": [
+      "src/text/text_paint.rs",
+      "src/text/text_theme.rs"
+    ],
+    "src/text/text_preview/tests.rs": [
+      "src/config/config.rs"
+    ],
+    "src/text/text_theme.rs": [
+      "src/config/config.rs",
+      "src/config/mod.rs"
+    ],
+    "src/ui/mod.rs": [
+      "src/ui/preview_window.rs"
+    ],
+    "src/ui/preview_window.rs": [
+      "src/app/mod.rs",
+      "src/config/config.rs",
+      "src/engines/mod.rs",
+      "src/formats/mod.rs",
+      "src/paths.rs",
+      "src/readers/audio_track.rs",
+      "src/readers/mod.rs",
+      "src/shell/mod.rs",
+      "src/text/archive_preview.rs",
+      "src/text/audio_preview.rs",
+      "src/text/mod.rs",
+      "src/text/text_paint.rs",
+      "src/text/text_preview.rs"
+    ],
+    "src/ui/preview_window/animated.rs": [],
+    "src/ui/preview_window/audio_engine.rs": [
+      "src/formats/routing.rs"
+    ],
+    "src/ui/preview_window/audio_meter.rs": [],
+    "src/ui/preview_window/dimensions.rs": [
+      "src/text/text_paint.rs"
+    ],
+    "src/ui/preview_window/displays.rs": [],
+    "src/ui/preview_window/engine_render.rs": [],
+    "src/ui/preview_window/event_loop.rs": [],
+    "src/ui/preview_window/ffplay_window.rs": [],
+    "src/ui/preview_window/hover_facts.rs": [],
+    "src/ui/preview_window/image_cache.rs": [],
+    "src/ui/preview_window/layout.rs": [],
+    "src/ui/preview_window/load.rs": [],
+    "src/ui/preview_window/load_dispatch.rs": [],
+    "src/ui/preview_window/loading_paint.rs": [],
+    "src/ui/preview_window/media_data.rs": [],
+    "src/ui/preview_window/media_types.rs": [],
+    "src/ui/preview_window/message_utils.rs": [],
+    "src/ui/preview_window/mpv_ipc.rs": [],
+    "src/ui/preview_window/paint.rs": [],
+    "src/ui/preview_window/pin_bubble.rs": [],
+    "src/ui/preview_window/pin_chrome_layout.rs": [],
+    "src/ui/preview_window/pin_drag.rs": [],
+    "src/ui/preview_window/pin_geometry.rs": [
+      "src/formats/routing.rs"
+    ],
+    "src/ui/preview_window/pin_input.rs": [],
+    "src/ui/preview_window/pin_install.rs": [],
+    "src/ui/preview_window/pin_lifecycle.rs": [],
+    "src/ui/preview_window/pin_menu.rs": [],
+    "src/ui/preview_window/pin_model.rs": [],
+    "src/ui/preview_window/pin_playback.rs": [],
+    "src/ui/preview_window/pin_swap.rs": [],
+    "src/ui/preview_window/pin_taskbar.rs": [],
+    "src/ui/preview_window/pin_walk.rs": [
+      "src/formats/mod.rs",
+      "src/formats/routing.rs"
+    ],
+    "src/ui/preview_window/pin_window.rs": [
+      "src/ui/preview_window/tests.rs"
+    ],
+    "src/ui/preview_window/pin_window/tests.rs": [],
+    "src/ui/preview_window/pin_window/window.rs": [],
+    "src/ui/preview_window/pixels.rs": [],
+    "src/ui/preview_window/pointer.rs": [],
+    "src/ui/preview_window/preview_scale.rs": [],
+    "src/ui/preview_window/requests.rs": [],
+    "src/ui/preview_window/subtitle_files.rs": [
+      "src/ui/preview_window/tests.rs"
+    ],
+    "src/ui/preview_window/subtitle_files/tests.rs": [],
+    "src/ui/preview_window/surfaces.rs": [],
+    "src/ui/preview_window/tests.rs": [
+      "src/config/config.rs",
+      "src/ui/preview_window/layout.rs",
+      "src/ui/preview_window/pin_input.rs",
+      "src/ui/preview_window/pin_menu.rs"
+    ],
+    "src/ui/preview_window/tests/cache.rs": [],
+    "src/ui/preview_window/tests/engine_probes.rs": [],
+    "src/ui/preview_window/tests/hover.rs": [],
+    "src/ui/preview_window/tests/layout.rs": [],
+    "src/ui/preview_window/tests/media_scales.rs": [],
+    "src/ui/preview_window/tests/pin_audio_facts.rs": [],
+    "src/ui/preview_window/tests/pin_audio_pause.rs": [],
+    "src/ui/preview_window/tests/pin_audio_seek.rs": [
+      "src/config/config.rs"
+    ],
+    "src/ui/preview_window/tests/pin_bubble_art.rs": [],
+    "src/ui/preview_window/tests/pin_bubble_space.rs": [],
+    "src/ui/preview_window/tests/pin_cards.rs": [
+      "src/ui/preview_window/pin_input.rs"
+    ],
+    "src/ui/preview_window/tests/pin_edges.rs": [],
+    "src/ui/preview_window/tests/pin_frames.rs": [],
+    "src/ui/preview_window/tests/pin_input.rs": [],
+    "src/ui/preview_window/tests/pin_keys.rs": [],
+    "src/ui/preview_window/tests/pin_menu.rs": [],
+    "src/ui/preview_window/tests/pin_player_failure.rs": [],
+    "src/ui/preview_window/tests/pin_resize.rs": [],
+    "src/ui/preview_window/tests/pin_subtitle_reload.rs": [],
+    "src/ui/preview_window/tests/pin_swap_ffplay_jigsaw.rs": [],
+    "src/ui/preview_window/tests/pin_swap_ffplay_native.rs": [],
+    "src/ui/preview_window/tests/pin_volume.rs": [],
+    "src/ui/preview_window/tests/placement.rs": [],
+    "src/ui/preview_window/tests/probes.rs": [],
+    "src/ui/preview_window/tests/video_engine.rs": [],
+    "src/ui/preview_window/tests/video_hold.rs": [],
+    "src/ui/preview_window/tests/video_transport.rs": [],
+    "src/ui/preview_window/tests/walk.rs": [],
+    "src/ui/preview_window/tests/ws_g_seek_hold.rs": [],
+    "src/ui/preview_window/tests/ws_h_supersede.rs": [],
+    "src/ui/preview_window/tests/ws_j_always_kill.rs": [],
+    "src/ui/preview_window/tests/ws_k_chrome_nav.rs": [
+      "src/ui/preview_window/pin_input.rs"
+    ],
+    "src/ui/preview_window/tests/ws_l_cover_owner.rs": [
+      "src/ui/preview_window/pin_input.rs"
+    ],
+    "src/ui/preview_window/tests/ws_m_frame_truth.rs": [
+      "src/ui/preview_window/pin_input.rs"
+    ],
+    "src/ui/preview_window/text_selection.rs": [],
+    "src/ui/preview_window/tick.rs": [],
+    "src/ui/preview_window/video_hw.rs": [],
+    "src/ui/preview_window/video_launch.rs": [],
+    "src/ui/preview_window/video_playback.rs": [],
+    "src/ui/preview_window/video_probe.rs": [],
+    "src/ui/preview_window/video_retire.rs": [
+      "src/formats/routing.rs"
+    ],
+    "src/ui/preview_window/window_proc.rs": [],
+    "tests/no_path_leaks.rs": [],
+    "tribute.toml": []
+  }
+}

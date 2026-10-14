@@ -1,0 +1,1749 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 12,
+  "filesSkipped": [
+    "build-installers.ps1",
+    "generate-attribution.ps1"
+  ],
+  "filesUnreadable": [],
+  "analysisOutcomes": {
+    "structure": {
+      "succeeded": 12,
+      "failed": 0
+    },
+    "callGraph": {
+      "succeeded": 0,
+      "failed": 0,
+      "skipped": 12
+    }
+  },
+  "results": [
+    {
+      "path": "ARCHITECTURE.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 433,
+      "nonEmptyLines": 234,
+      "sections": [
+        {
+          "heading": "Architecture (compact)",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Runtime threads (`src/main.rs`, `src/app/`, `src/shell/`, `src/ui/`)",
+          "level": 2,
+          "line": 9
+        },
+        {
+          "heading": "Source layout",
+          "level": 2,
+          "line": 44
+        },
+        {
+          "heading": "Media pipeline (`formats/routing.rs`, `native_formats.rs`, `lists.rs`)",
+          "level": 2,
+          "line": 72
+        },
+        {
+          "heading": "Read guards (`cloud_files.rs`, `content_type`, `paths.rs`, budgets)",
+          "level": 2,
+          "line": 109
+        },
+        {
+          "heading": "Caches",
+          "level": 2,
+          "line": 151
+        },
+        {
+          "heading": "Preview window (`ui/preview_window/`)",
+          "level": 2,
+          "line": 177
+        },
+        {
+          "heading": "Explorer hook (`shell/explorer_hook/`)",
+          "level": 2,
+          "line": 209
+        },
+        {
+          "heading": "Pin mode (`ui/preview_window/pin_*.rs`, `pin_window.rs`, `pin_chrome/`, `text/`)",
+          "level": 2,
+          "line": 250
+        },
+        {
+          "heading": "Kind notes (reader → engine, gate, scale, backdrop)",
+          "level": 2,
+          "line": 328
+        },
+        {
+          "heading": "Config / tray / processes / build",
+          "level": 2,
+          "line": 405
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 11
+      }
+    },
+    {
+      "path": "CHANGELOG.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 1111,
+      "nonEmptyLines": 806,
+      "sections": [
+        {
+          "heading": "Changelog",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "[0.4.2] - 2026-10-14",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 5
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 10
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 21
+        },
+        {
+          "heading": "[0.4.1] - 2026-10-14",
+          "level": 2,
+          "line": 34
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 36
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 41
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 47
+        },
+        {
+          "heading": "[0.4.0] - 2026-10-13",
+          "level": 2,
+          "line": 61
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 63
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 107
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 116
+        },
+        {
+          "heading": "[0.3.6] - 2026-09-27",
+          "level": 2,
+          "line": 183
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 185
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 202
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 214
+        },
+        {
+          "heading": "[0.3.5] - 2026-09-26",
+          "level": 2,
+          "line": 219
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 221
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 227
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 243
+        },
+        {
+          "heading": "[0.3.4] - 2026-09-25",
+          "level": 2,
+          "line": 250
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 252
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 262
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 273
+        },
+        {
+          "heading": "[0.3.3] - 2026-09-24",
+          "level": 2,
+          "line": 282
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 284
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 296
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 306
+        },
+        {
+          "heading": "[0.3.2] - 2026-09-24",
+          "level": 2,
+          "line": 317
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 319
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 328
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 332
+        },
+        {
+          "heading": "[0.3.1] - 2026-09-24",
+          "level": 2,
+          "line": 345
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 347
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 352
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 357
+        },
+        {
+          "heading": "[0.3.0] - 2026-09-23",
+          "level": 2,
+          "line": 361
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 363
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 370
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 388
+        },
+        {
+          "heading": "[0.2.14] - 2026-09-23",
+          "level": 2,
+          "line": 398
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 400
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 409
+        },
+        {
+          "heading": "[0.2.13] - 2026-09-22",
+          "level": 2,
+          "line": 414
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 416
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 427
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 433
+        },
+        {
+          "heading": "[0.2.12] - 2026-09-22",
+          "level": 2,
+          "line": 440
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 442
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 449
+        },
+        {
+          "heading": "[0.2.11] - 2026-09-21",
+          "level": 2,
+          "line": 455
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 457
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 470
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 485
+        },
+        {
+          "heading": "[0.2.10] - 2026-09-21",
+          "level": 2,
+          "line": 491
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 493
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 501
+        },
+        {
+          "heading": "[0.2.9] - 2026-09-21",
+          "level": 2,
+          "line": 510
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 512
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 520
+        },
+        {
+          "heading": "[0.2.8] - 2026-09-20",
+          "level": 2,
+          "line": 527
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 529
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 533
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 538
+        },
+        {
+          "heading": "[0.2.7] - 2026-09-19",
+          "level": 2,
+          "line": 550
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 552
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 564
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 571
+        },
+        {
+          "heading": "[0.2.6] - 2026-09-17",
+          "level": 2,
+          "line": 579
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 581
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 591
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 605
+        },
+        {
+          "heading": "[0.2.5] - 2026-09-17",
+          "level": 2,
+          "line": 617
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 619
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 626
+        },
+        {
+          "heading": "[0.2.4] - 2026-09-17",
+          "level": 2,
+          "line": 635
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 637
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 641
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 649
+        },
+        {
+          "heading": "[0.2.3] - 2026-09-17",
+          "level": 2,
+          "line": 656
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 658
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 667
+        },
+        {
+          "heading": "[0.2.2] - 2026-09-16",
+          "level": 2,
+          "line": 678
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 680
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 686
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 692
+        },
+        {
+          "heading": "[0.2.1] - 2026-09-16",
+          "level": 2,
+          "line": 700
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 702
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 712
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 719
+        },
+        {
+          "heading": "[0.2.0] - 2026-09-16",
+          "level": 2,
+          "line": 723
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 725
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 729
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 735
+        },
+        {
+          "heading": "[0.1.14] - 2026-09-16",
+          "level": 2,
+          "line": 739
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 741
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 750
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 759
+        },
+        {
+          "heading": "[0.1.14-rc.10] - 2026-09-16",
+          "level": 2,
+          "line": 763
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 765
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 769
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 773
+        },
+        {
+          "heading": "[0.1.14-rc.9] - 2026-09-15",
+          "level": 2,
+          "line": 778
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 780
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 786
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 790
+        },
+        {
+          "heading": "[0.1.14-rc.8] - 2026-09-15",
+          "level": 2,
+          "line": 796
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 798
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 802
+        },
+        {
+          "heading": "[0.1.14-rc.7] - 2026-09-14",
+          "level": 2,
+          "line": 808
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 810
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 814
+        },
+        {
+          "heading": "[0.1.14-rc.6] - 2026-09-14",
+          "level": 2,
+          "line": 820
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 822
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 827
+        },
+        {
+          "heading": "[0.1.14-rc.5] - 2026-09-14",
+          "level": 2,
+          "line": 833
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 835
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 840
+        },
+        {
+          "heading": "[0.1.14-rc.3] - 2026-07-03",
+          "level": 2,
+          "line": 846
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 848
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 853
+        },
+        {
+          "heading": "[0.1.14-rc.2] - 2026-07-01",
+          "level": 2,
+          "line": 859
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 861
+        },
+        {
+          "heading": "[0.1.14-rc.1] - 2026-06-24",
+          "level": 2,
+          "line": 868
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 870
+        },
+        {
+          "heading": "[0.1.13] - 2026-06-03",
+          "level": 2,
+          "line": 874
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 876
+        },
+        {
+          "heading": "[0.1.13-rc.2] - 2026-05-13",
+          "level": 2,
+          "line": 880
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 882
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 886
+        },
+        {
+          "heading": "[0.1.13-rc.1] - 2026-05-05",
+          "level": 2,
+          "line": 892
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 894
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 898
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 905
+        },
+        {
+          "heading": "[0.1.12] - 2026-04-30",
+          "level": 2,
+          "line": 909
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 911
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 915
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 920
+        },
+        {
+          "heading": "[0.1.11] - 2026-04-30",
+          "level": 2,
+          "line": 924
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 926
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 930
+        },
+        {
+          "heading": "[0.1.10] - 2026-04-29",
+          "level": 2,
+          "line": 936
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 938
+        },
+        {
+          "heading": "[0.1.9] - 2026-04-29",
+          "level": 2,
+          "line": 945
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 947
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 953
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 960
+        },
+        {
+          "heading": "[0.1.8] - 2026-04-29",
+          "level": 2,
+          "line": 970
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 972
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 978
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 984
+        },
+        {
+          "heading": "[0.1.7] - 2026-04-28",
+          "level": 2,
+          "line": 988
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 990
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 995
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 1001
+        },
+        {
+          "heading": "[0.1.6] - 2026-04-06",
+          "level": 2,
+          "line": 1006
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 1008
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 1014
+        },
+        {
+          "heading": "[0.1.5] - 2026-04-01",
+          "level": 2,
+          "line": 1022
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 1024
+        },
+        {
+          "heading": "[0.1.4] - 2026-03-03",
+          "level": 2,
+          "line": 1029
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 1031
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 1035
+        },
+        {
+          "heading": "[0.1.3] - 2026-03-03",
+          "level": 2,
+          "line": 1039
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 1041
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 1045
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 1050
+        },
+        {
+          "heading": "[0.1.2] - 2026-03-03",
+          "level": 2,
+          "line": 1056
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 1058
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 1063
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 1070
+        },
+        {
+          "heading": "[0.1.1] - 2026-03-03",
+          "level": 2,
+          "line": 1075
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 1077
+        },
+        {
+          "heading": "Changed",
+          "level": 3,
+          "line": 1085
+        },
+        {
+          "heading": "Fixed",
+          "level": 3,
+          "line": 1092
+        },
+        {
+          "heading": "Miscellaneous",
+          "level": 3,
+          "line": 1098
+        },
+        {
+          "heading": "[0.1.0] - 2026-02-03",
+          "level": 2,
+          "line": 1103
+        },
+        {
+          "heading": "Added",
+          "level": 3,
+          "line": 1105
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 179
+      }
+    },
+    {
+      "path": "CODE_OF_CONDUCT.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 83,
+      "nonEmptyLines": 48,
+      "sections": [
+        {
+          "heading": "Contributor Covenant Code of Conduct",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Our Pledge",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Our Standards",
+          "level": 2,
+          "line": 9
+        },
+        {
+          "heading": "Enforcement Responsibilities",
+          "level": 2,
+          "line": 27
+        },
+        {
+          "heading": "Scope",
+          "level": 2,
+          "line": 33
+        },
+        {
+          "heading": "Enforcement",
+          "level": 2,
+          "line": 37
+        },
+        {
+          "heading": "Enforcement Guidelines",
+          "level": 2,
+          "line": 43
+        },
+        {
+          "heading": "1. Correction",
+          "level": 3,
+          "line": 47
+        },
+        {
+          "heading": "2. Warning",
+          "level": 3,
+          "line": 53
+        },
+        {
+          "heading": "3. Temporary Ban",
+          "level": 3,
+          "line": 59
+        },
+        {
+          "heading": "4. Permanent Ban",
+          "level": 3,
+          "line": 65
+        },
+        {
+          "heading": "Attribution",
+          "level": 2,
+          "line": 71
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 12
+      }
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 106,
+      "nonEmptyLines": 77,
+      "sections": [
+        {
+          "heading": "Contributing to Rust Hover Preview",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Code of Conduct",
+          "level": 2,
+          "line": 7
+        },
+        {
+          "heading": "Ways to contribute",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "Before you start",
+          "level": 2,
+          "line": 23
+        },
+        {
+          "heading": "Getting set up",
+          "level": 2,
+          "line": 32
+        },
+        {
+          "heading": "Making changes",
+          "level": 2,
+          "line": 53
+        },
+        {
+          "heading": "Opening a pull request",
+          "level": 2,
+          "line": 79
+        },
+        {
+          "heading": "Reporting bugs",
+          "level": 2,
+          "line": 89
+        },
+        {
+          "heading": "Suggesting features",
+          "level": 2,
+          "line": 98
+        },
+        {
+          "heading": "Questions",
+          "level": 2,
+          "line": 103
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 10
+      }
+    },
+    {
+      "path": "Cargo.toml",
+      "language": "toml",
+      "fileCategory": "config",
+      "totalLines": 305,
+      "nonEmptyLines": 277,
+      "sections": [
+        {
+          "heading": "package",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "dependencies",
+          "level": 1,
+          "line": 12
+        },
+        {
+          "heading": "build-dependencies",
+          "level": 1,
+          "line": 213
+        },
+        {
+          "heading": "dev-dependencies",
+          "level": 1,
+          "line": 216
+        },
+        {
+          "heading": "profile.dev",
+          "level": 2,
+          "line": 231
+        },
+        {
+          "heading": "profile.dev.package.\"*\"",
+          "level": 4,
+          "line": 235
+        },
+        {
+          "heading": "profile.release",
+          "level": 2,
+          "line": 238
+        },
+        {
+          "heading": "profile.github",
+          "level": 2,
+          "line": 251
+        },
+        {
+          "heading": "package.metadata.packager",
+          "level": 3,
+          "line": 256
+        },
+        {
+          "heading": "[[package.metadata.packager.binaries]]",
+          "level": 4,
+          "line": 271
+        },
+        {
+          "heading": "package.metadata.packager.nsis",
+          "level": 4,
+          "line": 275
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 11
+      }
+    },
+    {
+      "path": "PRIVACY.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 195,
+      "nonEmptyLines": 170,
+      "sections": [
+        {
+          "heading": "Privacy Policy for Rust Hover Preview",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "What the app touches, and why",
+          "level": 2,
+          "line": 11
+        },
+        {
+          "heading": "What the app does not do",
+          "level": 2,
+          "line": 44
+        },
+        {
+          "heading": "Updates",
+          "level": 2,
+          "line": 82
+        },
+        {
+          "heading": "What is stored on your PC",
+          "level": 2,
+          "line": 110
+        },
+        {
+          "heading": "OS access, in plain terms",
+          "level": 2,
+          "line": 129
+        },
+        {
+          "heading": "Third parties on your machine",
+          "level": 2,
+          "line": 167
+        },
+        {
+          "heading": "If you report a bug",
+          "level": 2,
+          "line": 185
+        },
+        {
+          "heading": "Contact",
+          "level": 2,
+          "line": 192
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 9
+      }
+    },
+    {
+      "path": "README.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 763,
+      "nonEmptyLines": 598,
+      "sections": [
+        {
+          "heading": "Rust Hover Preview",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Highlights",
+          "level": 2,
+          "line": 11
+        },
+        {
+          "heading": "Supported Formats",
+          "level": 2,
+          "line": 19
+        },
+        {
+          "heading": "Images",
+          "level": 3,
+          "line": 21
+        },
+        {
+          "heading": "Videos",
+          "level": 3,
+          "line": 32
+        },
+        {
+          "heading": "Audio",
+          "level": 3,
+          "line": 42
+        },
+        {
+          "heading": "Text",
+          "level": 3,
+          "line": 50
+        },
+        {
+          "heading": "Ebook",
+          "level": 3,
+          "line": 59
+        },
+        {
+          "heading": "Archives",
+          "level": 3,
+          "line": 68
+        },
+        {
+          "heading": "Document",
+          "level": 3,
+          "line": 77
+        },
+        {
+          "heading": "Vector",
+          "level": 3,
+          "line": 86
+        },
+        {
+          "heading": "Fonts",
+          "level": 3,
+          "line": 94
+        },
+        {
+          "heading": "Design",
+          "level": 3,
+          "line": 102
+        },
+        {
+          "heading": "Installation",
+          "level": 2,
+          "line": 110
+        },
+        {
+          "heading": "Optional: Enable Video Preview with mpv",
+          "level": 3,
+          "line": 124
+        },
+        {
+          "heading": "Optional: Enable Video Preview and Advanced Audio Processing with FFmpeg",
+          "level": 3,
+          "line": 150
+        },
+        {
+          "heading": "Optional: Enable More Video Codecs (Windows Codecs)",
+          "level": 3,
+          "line": 173
+        },
+        {
+          "heading": "Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview (Windows Codecs)",
+          "level": 3,
+          "line": 189
+        },
+        {
+          "heading": "Optional: Enable CorelDRAW and Other Documents (LibreOffice)",
+          "level": 3,
+          "line": 208
+        },
+        {
+          "heading": "Optional: Enable Camera Raw and More Pictures (ImageMagick)",
+          "level": 3,
+          "line": 218
+        },
+        {
+          "heading": "Optional: Enable Niche Archives (PeaZip)",
+          "level": 3,
+          "line": 228
+        },
+        {
+          "heading": "Optional: Enable Ebooks (Calibre)",
+          "level": 3,
+          "line": 238
+        },
+        {
+          "heading": "Usage",
+          "level": 2,
+          "line": 253
+        },
+        {
+          "heading": "System Tray Menu",
+          "level": 2,
+          "line": 266
+        },
+        {
+          "heading": "Configuration",
+          "level": 2,
+          "line": 475
+        },
+        {
+          "heading": "Here's what this .INI does:",
+          "level": 2,
+          "line": 602
+        },
+        {
+          "heading": "Look and text",
+          "level": 3,
+          "line": 604
+        },
+        {
+          "heading": "What can preview",
+          "level": 3,
+          "line": 614
+        },
+        {
+          "heading": "Video and audio",
+          "level": 3,
+          "line": 624
+        },
+        {
+          "heading": "Memory and cache",
+          "level": 3,
+          "line": 637
+        },
+        {
+          "heading": "Performance",
+          "level": 3,
+          "line": 645
+        },
+        {
+          "heading": "HDR",
+          "level": 3,
+          "line": 651
+        },
+        {
+          "heading": "Waiting and engines",
+          "level": 3,
+          "line": 656
+        },
+        {
+          "heading": "Trigger and position",
+          "level": 3,
+          "line": 672
+        },
+        {
+          "heading": "Scaling",
+          "level": 3,
+          "line": 692
+        },
+        {
+          "heading": "Fonts",
+          "level": 3,
+          "line": 705
+        },
+        {
+          "heading": "Backgrounds",
+          "level": 3,
+          "line": 709
+        },
+        {
+          "heading": "Old or removed names",
+          "level": 3,
+          "line": 718
+        },
+        {
+          "heading": "Extension list behavior",
+          "level": 3,
+          "line": 729
+        },
+        {
+          "heading": "Build from Source",
+          "level": 2,
+          "line": 734
+        },
+        {
+          "heading": "Architecture",
+          "level": 2,
+          "line": 745
+        },
+        {
+          "heading": "TODO",
+          "level": 2,
+          "line": 749
+        },
+        {
+          "heading": "Privacy",
+          "level": 2,
+          "line": 753
+        },
+        {
+          "heading": "License",
+          "level": 2,
+          "line": 757
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 44
+      }
+    },
+    {
+      "path": "SECURITY.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 33,
+      "nonEmptyLines": 23,
+      "sections": [
+        {
+          "heading": "Security Policy",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Supported versions",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Reporting a vulnerability",
+          "level": 2,
+          "line": 13
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 3
+      }
+    },
+    {
+      "path": "THIRD-PARTY.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 238,
+      "nonEmptyLines": 206,
+      "sections": [
+        {
+          "heading": "Third-party licenses",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Apache-2.0",
+          "level": 2,
+          "line": 5
+        },
+        {
+          "heading": "BSD-2-Clause",
+          "level": 2,
+          "line": 14
+        },
+        {
+          "heading": "BSD-3-Clause",
+          "level": 2,
+          "line": 20
+        },
+        {
+          "heading": "CC0-1.0",
+          "level": 2,
+          "line": 31
+        },
+        {
+          "heading": "LicenseRef-UnRAR",
+          "level": 2,
+          "line": 37
+        },
+        {
+          "heading": "MIT",
+          "level": 2,
+          "line": 43
+        },
+        {
+          "heading": "MPL-2.0",
+          "level": 2,
+          "line": 215
+        },
+        {
+          "heading": "Unicode-3.0",
+          "level": 2,
+          "line": 221
+        },
+        {
+          "heading": "Zlib",
+          "level": 2,
+          "line": 227
+        },
+        {
+          "heading": "bzip2-1.0.6",
+          "level": 2,
+          "line": 233
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 11
+      }
+    },
+    {
+      "path": "TODO.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 399,
+      "nonEmptyLines": 341,
+      "sections": [
+        {
+          "heading": "TODO",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Features",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Multi-Frame Formats The Front Does Not Count",
+          "level": 2,
+          "line": 11
+        },
+        {
+          "heading": "Unsupported Audio Formats",
+          "level": 2,
+          "line": 52
+        },
+        {
+          "heading": "Unsupported LibreOffice Format",
+          "level": 2,
+          "line": 96
+        },
+        {
+          "heading": "Unsupported ImageMagick File Format",
+          "level": 2,
+          "line": 143
+        },
+        {
+          "heading": "Unsupported PeaZip File Format",
+          "level": 2,
+          "line": 214
+        },
+        {
+          "heading": "Unsupported Calibre File Format",
+          "level": 2,
+          "line": 272
+        },
+        {
+          "heading": "Unsupported Comic Formats",
+          "level": 2,
+          "line": 317
+        },
+        {
+          "heading": "What A Running Page Is Still Not Given",
+          "level": 2,
+          "line": 360
+        },
+        {
+          "heading": "A Held Sound The Engine Plays Cannot Be Set Going Again",
+          "level": 2,
+          "line": 391
+        },
+        {
+          "heading": "Configuration",
+          "level": 2,
+          "line": 397
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 12
+      }
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "language": "toml",
+      "fileCategory": "config",
+      "totalLines": 8,
+      "nonEmptyLines": 8,
+      "sections": [
+        {
+          "heading": "toolchain",
+          "level": 1,
+          "line": 6
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 1
+      }
+    },
+    {
+      "path": "tribute.toml",
+      "language": "toml",
+      "fileCategory": "config",
+      "totalLines": 70,
+      "nonEmptyLines": 65,
+      "sections": [
+        {
+          "heading": "[[exception]]",
+          "level": 1,
+          "line": 39
+        },
+        {
+          "heading": "[[clarify]]",
+          "level": 1,
+          "line": 47
+        },
+        {
+          "heading": "[[extra]]",
+          "level": 1,
+          "line": 56
+        },
+        {
+          "heading": "[[license-text]]",
+          "level": 1,
+          "line": 68
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 4
+      }
+    }
+  ]
+}

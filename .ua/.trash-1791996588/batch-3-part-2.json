@@ -1,0 +1,472 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/config/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "src/config/mod.rs",
+      "summary": "mod.rs (undefined, 6 lines).",
+      "tags": [
+        "entry-point",
+        "rust",
+        "source",
+        "config"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/config/theme_files.rs",
+      "type": "file",
+      "name": "theme_files.rs",
+      "filePath": "src/config/theme_files.rs",
+      "summary": "theme_files.rs (undefined, 108 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "config"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/config/theme_files.rs:dir",
+      "type": "function",
+      "name": "dir",
+      "filePath": "src/config/theme_files.rs",
+      "lineRange": [
+        19,
+        21
+      ],
+      "summary": "Function dir in src/config/theme_files.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/config/theme_files.rs:ensure",
+      "type": "function",
+      "name": "ensure",
+      "filePath": "src/config/theme_files.rs",
+      "lineRange": [
+        25,
+        29
+      ],
+      "summary": "Function ensure in src/config/theme_files.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/config/theme_files.rs:names",
+      "type": "function",
+      "name": "names",
+      "filePath": "src/config/theme_files.rs",
+      "lineRange": [
+        35,
+        62
+      ],
+      "summary": "Function names in src/config/theme_files.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/config/theme_files.rs:find",
+      "type": "function",
+      "name": "find",
+      "filePath": "src/config/theme_files.rs",
+      "lineRange": [
+        68,
+        73
+      ],
+      "summary": "Function find in src/config/theme_files.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/config/theme_files.rs:path_of",
+      "type": "function",
+      "name": "path_of",
+      "filePath": "src/config/theme_files.rs",
+      "lineRange": [
+        78,
+        81
+      ],
+      "summary": "Function path_of in src/config/theme_files.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/config/theme_files.rs:theme_name",
+      "type": "function",
+      "name": "theme_name",
+      "filePath": "src/config/theme_files.rs",
+      "lineRange": [
+        84,
+        94
+      ],
+      "summary": "Function theme_name in src/config/theme_files.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/config/theme_files.rs:stem",
+      "type": "function",
+      "name": "stem",
+      "filePath": "src/config/theme_files.rs",
+      "lineRange": [
+        98,
+        108
+      ],
+      "summary": "Function stem in src/config/theme_files.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/formats/archive_formats.rs",
+      "type": "file",
+      "name": "archive_formats.rs",
+      "filePath": "src/formats/archive_formats.rs",
+      "summary": "archive_formats.rs (undefined, 83 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/formats/archive_formats.rs:claims_in",
+      "type": "function",
+      "name": "claims_in",
+      "filePath": "src/formats/archive_formats.rs",
+      "lineRange": [
+        29,
+        42
+      ],
+      "summary": "Function claims_in in src/formats/archive_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/formats/audio_formats.rs",
+      "type": "file",
+      "name": "audio_formats.rs",
+      "filePath": "src/formats/audio_formats.rs",
+      "summary": "audio_formats.rs (undefined, 67 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/formats/audio_formats.rs:remember_audio_only",
+      "type": "function",
+      "name": "remember_audio_only",
+      "filePath": "src/formats/audio_formats.rs",
+      "lineRange": [
+        33,
+        42
+      ],
+      "summary": "Function remember_audio_only in src/formats/audio_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/audio_formats.rs:probed_audio_only",
+      "type": "function",
+      "name": "probed_audio_only",
+      "filePath": "src/formats/audio_formats.rs",
+      "lineRange": [
+        45,
+        51
+      ],
+      "summary": "Function probed_audio_only in src/formats/audio_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/audio_formats.rs:probed_audio_only_in",
+      "type": "function",
+      "name": "probed_audio_only_in",
+      "filePath": "src/formats/audio_formats.rs",
+      "lineRange": [
+        63,
+        67
+      ],
+      "summary": "Function probed_audio_only_in in src/formats/audio_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/formats/calibre_formats.rs",
+      "type": "file",
+      "name": "calibre_formats.rs",
+      "filePath": "src/formats/calibre_formats.rs",
+      "summary": "calibre_formats.rs (undefined, 332 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/calibre_formats.rs:is_engine_ebook",
+      "type": "function",
+      "name": "is_engine_ebook",
+      "filePath": "src/formats/calibre_formats.rs",
+      "lineRange": [
+        109,
+        122
+      ],
+      "summary": "Function is_engine_ebook in src/formats/calibre_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/config/mod.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/config/mod.rs",
+      "target": "file:src/config/theme_files.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:dir",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:dir",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:ensure",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:ensure",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:names",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:names",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:find",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:find",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:path_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:path_of",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:theme_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/config/theme_files.rs",
+      "target": "function:src/config/theme_files.rs:stem",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/archive_formats.rs",
+      "target": "function:src/formats/archive_formats.rs:claims_in",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/archive_formats.rs",
+      "target": "function:src/formats/archive_formats.rs:claims_in",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/archive_formats.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/audio_formats.rs",
+      "target": "function:src/formats/audio_formats.rs:remember_audio_only",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/audio_formats.rs",
+      "target": "function:src/formats/audio_formats.rs:remember_audio_only",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/audio_formats.rs",
+      "target": "function:src/formats/audio_formats.rs:probed_audio_only",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/audio_formats.rs",
+      "target": "function:src/formats/audio_formats.rs:probed_audio_only",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/audio_formats.rs",
+      "target": "function:src/formats/audio_formats.rs:probed_audio_only_in",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/audio_formats.rs",
+      "target": "function:src/formats/audio_formats.rs:probed_audio_only_in",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/audio_formats.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/calibre_formats.rs",
+      "target": "function:src/formats/calibre_formats.rs:is_engine_ebook",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/calibre_formats.rs",
+      "target": "function:src/formats/calibre_formats.rs:is_engine_ebook",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/calibre_formats.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/calibre_formats.rs",
+      "target": "file:src/formats/lists.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

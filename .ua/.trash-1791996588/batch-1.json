@@ -1,0 +1,6015 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/config/config.rs",
+      "type": "file",
+      "name": "config.rs",
+      "filePath": "src/config/config.rs",
+      "summary": "config.rs (undefined, 98 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "config"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/engines/document_cache/tests.rs",
+      "type": "file",
+      "name": "tests.rs",
+      "filePath": "src/engines/document_cache/tests.rs",
+      "summary": "tests.rs (undefined, 197 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "test",
+        "engines"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/document_cache/tests.rs:keys_a_page_by_the_document_its_version_and_its_engine",
+      "type": "function",
+      "name": "keys_a_page_by_the_document_its_version_and_its_engine",
+      "filePath": "src/engines/document_cache/tests.rs",
+      "lineRange": [
+        31,
+        50
+      ],
+      "summary": "Function keys_a_page_by_the_document_its_version_and_its_engine.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/document_cache/tests.rs:keeps_reads_and_forgets_a_page",
+      "type": "function",
+      "name": "keeps_reads_and_forgets_a_page",
+      "filePath": "src/engines/document_cache/tests.rs",
+      "lineRange": [
+        55,
+        85
+      ],
+      "summary": "Function keeps_reads_and_forgets_a_page.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/document_cache/tests.rs:reads_a_refusal_until_it_ages_out",
+      "type": "function",
+      "name": "reads_a_refusal_until_it_ages_out",
+      "filePath": "src/engines/document_cache/tests.rs",
+      "lineRange": [
+        90,
+        126
+      ],
+      "summary": "Function reads_a_refusal_until_it_ages_out.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/document_cache/tests.rs:gives_up_the_page_that_was_read_longest_ago",
+      "type": "function",
+      "name": "gives_up_the_page_that_was_read_longest_ago",
+      "filePath": "src/engines/document_cache/tests.rs",
+      "lineRange": [
+        132,
+        167
+      ],
+      "summary": "Function gives_up_the_page_that_was_read_longest_ago.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/document_cache/tests.rs:reads_and_remembers_a_pages_size",
+      "type": "function",
+      "name": "reads_and_remembers_a_pages_size",
+      "filePath": "src/engines/document_cache/tests.rs",
+      "lineRange": [
+        172,
+        187
+      ],
+      "summary": "Function reads_and_remembers_a_pages_size.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/engines/webview_preview/api.rs",
+      "type": "file",
+      "name": "api.rs",
+      "filePath": "src/engines/webview_preview/api.rs",
+      "summary": "api.rs (undefined, 496 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "engines"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/engines/webview_preview/api.rs:wanted_area",
+      "type": "function",
+      "name": "wanted_area",
+      "filePath": "src/engines/webview_preview/api.rs",
+      "lineRange": [
+        236,
+        247
+      ],
+      "summary": "Function wanted_area.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/api.rs:runtime_version",
+      "type": "function",
+      "name": "runtime_version",
+      "filePath": "src/engines/webview_preview/api.rs",
+      "lineRange": [
+        251,
+        267
+      ],
+      "summary": "Function runtime_version.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/engines/webview_preview/engine.rs",
+      "type": "file",
+      "name": "engine.rs",
+      "filePath": "src/engines/webview_preview/engine.rs",
+      "summary": "engine.rs (undefined, 326 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "engines"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/engines/webview_preview/engine.rs:trace",
+      "type": "function",
+      "name": "trace",
+      "filePath": "src/engines/webview_preview/engine.rs",
+      "lineRange": [
+        83,
+        96
+      ],
+      "summary": "Function trace.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/engine.rs:engine_thread",
+      "type": "function",
+      "name": "engine_thread",
+      "filePath": "src/engines/webview_preview/engine.rs",
+      "lineRange": [
+        98,
+        273
+      ],
+      "summary": "Function engine_thread.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/engine.rs:carry_out_placement",
+      "type": "function",
+      "name": "carry_out_placement",
+      "filePath": "src/engines/webview_preview/engine.rs",
+      "lineRange": [
+        281,
+        326
+      ],
+      "summary": "Function carry_out_placement.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/formats/content_type/matchers.rs",
+      "type": "file",
+      "name": "matchers.rs",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "summary": "matchers.rs (undefined, 970 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_declared_package",
+      "type": "function",
+      "name": "is_declared_package",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        65,
+        74
+      ],
+      "summary": "Function is_declared_package.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_netpbm",
+      "type": "function",
+      "name": "is_netpbm",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        100,
+        112
+      ],
+      "summary": "Function is_netpbm.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_riff_form",
+      "type": "function",
+      "name": "is_riff_form",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        206,
+        216
+      ],
+      "summary": "Function is_riff_form.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_dbase_table",
+      "type": "function",
+      "name": "is_dbase_table",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        262,
+        278
+      ],
+      "summary": "Function is_dbase_table.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_hevc_stream",
+      "type": "function",
+      "name": "is_hevc_stream",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        314,
+        336
+      ],
+      "summary": "Function is_hevc_stream.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_vvc_stream",
+      "type": "function",
+      "name": "is_vvc_stream",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        341,
+        351
+      ],
+      "summary": "Function is_vvc_stream.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_av1_obu_stream",
+      "type": "function",
+      "name": "is_av1_obu_stream",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        361,
+        427
+      ],
+      "summary": "Function is_av1_obu_stream.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_avs_sequence",
+      "type": "function",
+      "name": "is_avs_sequence",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        437,
+        467
+      ],
+      "summary": "Function is_avs_sequence.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_dirac_stream",
+      "type": "function",
+      "name": "is_dirac_stream",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        472,
+        504
+      ],
+      "summary": "Function is_dirac_stream.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_evc_stream",
+      "type": "function",
+      "name": "is_evc_stream",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        509,
+        538
+      ],
+      "summary": "Function is_evc_stream.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_vc1_test_stream",
+      "type": "function",
+      "name": "is_vc1_test_stream",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        551,
+        561
+      ],
+      "summary": "Function is_vc1_test_stream.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_yop",
+      "type": "function",
+      "name": "is_yop",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        565,
+        581
+      ],
+      "summary": "Function is_yop.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_c93",
+      "type": "function",
+      "name": "is_c93",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        598,
+        620
+      ],
+      "summary": "Function is_c93.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_cdg",
+      "type": "function",
+      "name": "is_cdg",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        625,
+        650
+      ],
+      "summary": "Function is_cdg.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_cdxl",
+      "type": "function",
+      "name": "is_cdxl",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        654,
+        701
+      ],
+      "summary": "Function is_cdxl.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_moflex",
+      "type": "function",
+      "name": "is_moflex",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        705,
+        729
+      ],
+      "summary": "Function is_moflex.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_h261_picture",
+      "type": "function",
+      "name": "is_h261_picture",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        737,
+        748
+      ],
+      "summary": "Function is_h261_picture.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_h263_picture",
+      "type": "function",
+      "name": "is_h263_picture",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        752,
+        765
+      ],
+      "summary": "Function is_h263_picture.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:read_bits",
+      "type": "function",
+      "name": "read_bits",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        786,
+        799
+      ],
+      "summary": "Function read_bits.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:palm_ebook_or_program_database",
+      "type": "function",
+      "name": "palm_ebook_or_program_database",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        880,
+        890
+      ],
+      "summary": "Function palm_ebook_or_program_database.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/matchers.rs:is_palm_database",
+      "type": "function",
+      "name": "is_palm_database",
+      "filePath": "src/formats/content_type/matchers.rs",
+      "lineRange": [
+        914,
+        925
+      ],
+      "summary": "Function is_palm_database.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/formats/content_type/probe.rs",
+      "type": "file",
+      "name": "probe.rs",
+      "filePath": "src/formats/content_type/probe.rs",
+      "summary": "probe.rs (undefined, 643 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/content_type/probe.rs:read",
+      "type": "function",
+      "name": "read",
+      "filePath": "src/formats/content_type/probe.rs",
+      "lineRange": [
+        71,
+        100
+      ],
+      "summary": "Function read.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/probe.rs:borrowed",
+      "type": "function",
+      "name": "borrowed",
+      "filePath": "src/formats/content_type/probe.rs",
+      "lineRange": [
+        104,
+        117
+      ],
+      "summary": "Function borrowed.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/probe.rs:of_reaching_config",
+      "type": "function",
+      "name": "of_reaching_config",
+      "filePath": "src/formats/content_type/probe.rs",
+      "lineRange": [
+        220,
+        233
+      ],
+      "summary": "Function of_reaching_config.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/probe.rs:answered",
+      "type": "function",
+      "name": "answered",
+      "filePath": "src/formats/content_type/probe.rs",
+      "lineRange": [
+        266,
+        296
+      ],
+      "summary": "Function answered.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/probe.rs:window_of",
+      "type": "function",
+      "name": "window_of",
+      "filePath": "src/formats/content_type/probe.rs",
+      "lineRange": [
+        353,
+        362
+      ],
+      "summary": "Function window_of.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/probe.rs:detected_names",
+      "type": "function",
+      "name": "detected_names",
+      "filePath": "src/formats/content_type/probe.rs",
+      "lineRange": [
+        366,
+        379
+      ],
+      "summary": "Function detected_names.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/probe.rs:names_of",
+      "type": "function",
+      "name": "names_of",
+      "filePath": "src/formats/content_type/probe.rs",
+      "lineRange": [
+        396,
+        468
+      ],
+      "summary": "Function names_of.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/probe.rs:kind_by_name",
+      "type": "function",
+      "name": "kind_by_name",
+      "filePath": "src/formats/content_type/probe.rs",
+      "lineRange": [
+        577,
+        589
+      ],
+      "summary": "Function kind_by_name.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/content_type/probe.rs:classify",
+      "type": "function",
+      "name": "classify",
+      "filePath": "src/formats/content_type/probe.rs",
+      "lineRange": [
+        592,
+        618
+      ],
+      "summary": "Function classify.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/content_type/probe.rs:Probe",
+      "type": "class",
+      "name": "Probe",
+      "filePath": "src/formats/content_type/probe.rs",
+      "lineRange": [
+        60,
+        67
+      ],
+      "summary": "Class Probe.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/formats/head.rs",
+      "type": "file",
+      "name": "head.rs",
+      "filePath": "src/formats/head.rs",
+      "summary": "head.rs (undefined, 786 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/head.rs:held_or_read",
+      "type": "function",
+      "name": "held_or_read",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        207,
+        223
+      ],
+      "summary": "Function held_or_read.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/head.rs:keep",
+      "type": "function",
+      "name": "keep",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        248,
+        257
+      ],
+      "summary": "Function keep.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/head.rs:read",
+      "type": "function",
+      "name": "read",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        259,
+        299
+      ],
+      "summary": "Function read.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/head.rs:facts",
+      "type": "function",
+      "name": "facts",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        307,
+        507
+      ],
+      "summary": "Function facts.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/head.rs:ftyp_brands",
+      "type": "function",
+      "name": "ftyp_brands",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        536,
+        568
+      ],
+      "summary": "Function ftyp_brands.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/head.rs:png_is_animated",
+      "type": "function",
+      "name": "png_is_animated",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        583,
+        606
+      ],
+      "summary": "Function png_is_animated.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/head.rs:gif_is_animated",
+      "type": "function",
+      "name": "gif_is_animated",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        615,
+        679
+      ],
+      "summary": "Function gif_is_animated.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/head.rs:skip_gif_sub_blocks",
+      "type": "function",
+      "name": "skip_gif_sub_blocks",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        684,
+        697
+      ],
+      "summary": "Function skip_gif_sub_blocks.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/head.rs:webp_is_animated",
+      "type": "function",
+      "name": "webp_is_animated",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        706,
+        739
+      ],
+      "summary": "Function webp_is_animated.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/head.rs:tiff_holds_more_than_one_page",
+      "type": "function",
+      "name": "tiff_holds_more_than_one_page",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        744,
+        783
+      ],
+      "summary": "Function tiff_holds_more_than_one_page.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/head.rs:Head",
+      "type": "class",
+      "name": "Head",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        87,
+        92
+      ],
+      "summary": "Class Head.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/formats/head.rs:Facts",
+      "type": "class",
+      "name": "Facts",
+      "filePath": "src/formats/head.rs",
+      "lineRange": [
+        147,
+        151
+      ],
+      "summary": "Class Facts.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/formats/lists/list_store.rs",
+      "type": "file",
+      "name": "list_store.rs",
+      "filePath": "src/formats/lists/list_store.rs",
+      "summary": "list_store.rs (undefined, 487 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/lists/list_store.rs:claims",
+      "type": "function",
+      "name": "claims",
+      "filePath": "src/formats/lists/list_store.rs",
+      "lineRange": [
+        107,
+        117
+      ],
+      "summary": "Function claims.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/lists/list_store.rs:repair_older_lists",
+      "type": "function",
+      "name": "repair_older_lists",
+      "filePath": "src/formats/lists/list_store.rs",
+      "lineRange": [
+        461,
+        487
+      ],
+      "summary": "Function repair_older_lists.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/lists/list_store.rs:List",
+      "type": "class",
+      "name": "List",
+      "filePath": "src/formats/lists/list_store.rs",
+      "lineRange": [
+        31,
+        74
+      ],
+      "summary": "Class List.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/formats/native_formats.rs",
+      "type": "file",
+      "name": "native_formats.rs",
+      "filePath": "src/formats/native_formats.rs",
+      "summary": "native_formats.rs (undefined, 513 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/native_formats.rs:job_for",
+      "type": "function",
+      "name": "job_for",
+      "filePath": "src/formats/native_formats.rs",
+      "lineRange": [
+        134,
+        166
+      ],
+      "summary": "Function job_for.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/native_formats.rs:picture_job",
+      "type": "function",
+      "name": "picture_job",
+      "filePath": "src/formats/native_formats.rs",
+      "lineRange": [
+        184,
+        203
+      ],
+      "summary": "Function picture_job.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/native_formats.rs:drawing_job",
+      "type": "function",
+      "name": "drawing_job",
+      "filePath": "src/formats/native_formats.rs",
+      "lineRange": [
+        222,
+        232
+      ],
+      "summary": "Function drawing_job.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/native_formats.rs:page_job",
+      "type": "function",
+      "name": "page_job",
+      "filePath": "src/formats/native_formats.rs",
+      "lineRange": [
+        241,
+        250
+      ],
+      "summary": "Function page_job.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/native_formats.rs:archive_job",
+      "type": "function",
+      "name": "archive_job",
+      "filePath": "src/formats/native_formats.rs",
+      "lineRange": [
+        255,
+        265
+      ],
+      "summary": "Function archive_job.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/native_formats.rs:NativeJob",
+      "type": "class",
+      "name": "NativeJob",
+      "filePath": "src/formats/native_formats.rs",
+      "lineRange": [
+        36,
+        103
+      ],
+      "summary": "Class NativeJob.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/readers/audio_seek.rs",
+      "type": "file",
+      "name": "audio_seek.rs",
+      "filePath": "src/readers/audio_seek.rs",
+      "summary": "audio_seek.rs (undefined, 656 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/audio_seek.rs:memory_path",
+      "type": "function",
+      "name": "memory_path",
+      "filePath": "src/readers/audio_seek.rs",
+      "lineRange": [
+        66,
+        75
+      ],
+      "summary": "Function memory_path.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/audio_seek.rs:planned",
+      "type": "function",
+      "name": "planned",
+      "filePath": "src/readers/audio_seek.rs",
+      "lineRange": [
+        142,
+        161
+      ],
+      "summary": "Function planned.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/audio_seek.rs:remembered",
+      "type": "function",
+      "name": "remembered",
+      "filePath": "src/readers/audio_seek.rs",
+      "lineRange": [
+        164,
+        174
+      ],
+      "summary": "Function remembered.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/audio_seek.rs:remember",
+      "type": "function",
+      "name": "remember",
+      "filePath": "src/readers/audio_seek.rs",
+      "lineRange": [
+        182,
+        206
+      ],
+      "summary": "Function remember.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/audio_seek.rs:with_memory",
+      "type": "function",
+      "name": "with_memory",
+      "filePath": "src/readers/audio_seek.rs",
+      "lineRange": [
+        223,
+        242
+      ],
+      "summary": "Function with_memory.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/audio_seek.rs:parse",
+      "type": "function",
+      "name": "parse",
+      "filePath": "src/readers/audio_seek.rs",
+      "lineRange": [
+        256,
+        284
+      ],
+      "summary": "Function parse.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/audio_seek.rs:write",
+      "type": "function",
+      "name": "write",
+      "filePath": "src/readers/audio_seek.rs",
+      "lineRange": [
+        291,
+        312
+      ],
+      "summary": "Function write.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/audio_seek.rs:render",
+      "type": "function",
+      "name": "render",
+      "filePath": "src/readers/audio_seek.rs",
+      "lineRange": [
+        321,
+        377
+      ],
+      "summary": "Function render.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/audio_seek.rs:anywhere",
+      "type": "function",
+      "name": "anywhere",
+      "filePath": "src/readers/audio_seek.rs",
+      "lineRange": [
+        406,
+        424
+      ],
+      "summary": "Function anywhere.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/bcn.rs",
+      "type": "file",
+      "name": "bcn.rs",
+      "filePath": "src/readers/bcn.rs",
+      "summary": "bcn.rs (undefined, 54 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/readers/comic_preview.rs",
+      "type": "file",
+      "name": "comic_preview.rs",
+      "filePath": "src/readers/comic_preview.rs",
+      "summary": "comic_preview.rs (undefined, 402 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/comic_preview.rs:dimensions",
+      "type": "function",
+      "name": "dimensions",
+      "filePath": "src/readers/comic_preview.rs",
+      "lineRange": [
+        88,
+        100
+      ],
+      "summary": "Function dimensions.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/comic_preview.rs:decode",
+      "type": "function",
+      "name": "decode",
+      "filePath": "src/readers/comic_preview.rs",
+      "lineRange": [
+        104,
+        128
+      ],
+      "summary": "Function decode.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/comic_preview.rs:first_page_name",
+      "type": "function",
+      "name": "first_page_name",
+      "filePath": "src/readers/comic_preview.rs",
+      "lineRange": [
+        136,
+        146
+      ],
+      "summary": "Function first_page_name.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/comic_preview.rs:is_page_name",
+      "type": "function",
+      "name": "is_page_name",
+      "filePath": "src/readers/comic_preview.rs",
+      "lineRange": [
+        150,
+        160
+      ],
+      "summary": "Function is_page_name.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/comic_preview.rs:natural_order",
+      "type": "function",
+      "name": "natural_order",
+      "filePath": "src/readers/comic_preview.rs",
+      "lineRange": [
+        173,
+        204
+      ],
+      "summary": "Function natural_order.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/comic_preview.rs:compare_number",
+      "type": "function",
+      "name": "compare_number",
+      "filePath": "src/readers/comic_preview.rs",
+      "lineRange": [
+        208,
+        238
+      ],
+      "summary": "Function compare_number.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/comic_preview.rs:dimension_key",
+      "type": "function",
+      "name": "dimension_key",
+      "filePath": "src/readers/comic_preview.rs",
+      "lineRange": [
+        259,
+        269
+      ],
+      "summary": "Function dimension_key.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/dds_image.rs",
+      "type": "file",
+      "name": "dds_image.rs",
+      "filePath": "src/readers/dds_image.rs",
+      "summary": "dds_image.rs (undefined, 988 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:decode",
+      "type": "function",
+      "name": "decode",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        135,
+        189
+      ],
+      "summary": "Function decode.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:bytes_per_pixel",
+      "type": "function",
+      "name": "bytes_per_pixel",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        288,
+        302
+      ],
+      "summary": "Function bytes_per_pixel.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:level_bytes",
+      "type": "function",
+      "name": "level_bytes",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        307,
+        319
+      ],
+      "summary": "Function level_bytes.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:read_header",
+      "type": "function",
+      "name": "read_header",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        342,
+        421
+      ],
+      "summary": "Function read_header.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:level_at",
+      "type": "function",
+      "name": "level_at",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        431,
+        445
+      ],
+      "summary": "Function level_at.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:preview_level",
+      "type": "function",
+      "name": "preview_level",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        458,
+        481
+      ],
+      "summary": "Function preview_level.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:legacy_picture",
+      "type": "function",
+      "name": "legacy_picture",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        485,
+        531
+      ],
+      "summary": "Function legacy_picture.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:numeric_picture",
+      "type": "function",
+      "name": "numeric_picture",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        542,
+        557
+      ],
+      "summary": "Function numeric_picture.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:dx10_picture",
+      "type": "function",
+      "name": "dx10_picture",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        565,
+        636
+      ],
+      "summary": "Function dx10_picture.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:read_level",
+      "type": "function",
+      "name": "read_level",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        647,
+        664
+      ],
+      "summary": "Function read_level.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:decode_blocks",
+      "type": "function",
+      "name": "decode_blocks",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        674,
+        727
+      ],
+      "summary": "Function decode_blocks.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:decode_samples",
+      "type": "function",
+      "name": "decode_samples",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        730,
+        820
+      ],
+      "summary": "Function decode_samples.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:masked_texel",
+      "type": "function",
+      "name": "masked_texel",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        823,
+        855
+      ],
+      "summary": "Function masked_texel.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:masked_channel",
+      "type": "function",
+      "name": "masked_channel",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        862,
+        873
+      ],
+      "summary": "Function masked_channel.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:colour_texel",
+      "type": "function",
+      "name": "colour_texel",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        876,
+        906
+      ],
+      "summary": "Function colour_texel.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:sample_level",
+      "type": "function",
+      "name": "sample_level",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        913,
+        924
+      ],
+      "summary": "Function sample_level.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:sample_alpha",
+      "type": "function",
+      "name": "sample_alpha",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        928,
+        940
+      ],
+      "summary": "Function sample_alpha.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/dds_image.rs:partial_float",
+      "type": "function",
+      "name": "partial_float",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        973,
+        988
+      ],
+      "summary": "Function partial_float.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/readers/dds_image.rs:Sample",
+      "type": "class",
+      "name": "Sample",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        200,
+        211
+      ],
+      "summary": "Class Sample.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/readers/dds_image.rs:Samples",
+      "type": "class",
+      "name": "Samples",
+      "filePath": "src/readers/dds_image.rs",
+      "lineRange": [
+        250,
+        277
+      ],
+      "summary": "Class Samples.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/readers/eps_image.rs",
+      "type": "file",
+      "name": "eps_image.rs",
+      "filePath": "src/readers/eps_image.rs",
+      "summary": "eps_image.rs (undefined, 632 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:dimensions",
+      "type": "function",
+      "name": "dimensions",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        69,
+        81
+      ],
+      "summary": "Function dimensions.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:container_preview",
+      "type": "function",
+      "name": "container_preview",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        123,
+        155
+      ],
+      "summary": "Function container_preview.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:comment_preview",
+      "type": "function",
+      "name": "comment_preview",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        164,
+        207
+      ],
+      "summary": "Function comment_preview.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:preview_kind",
+      "type": "function",
+      "name": "preview_kind",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        211,
+        223
+      ],
+      "summary": "Function preview_kind.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:draw",
+      "type": "function",
+      "name": "draw",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        226,
+        236
+      ],
+      "summary": "Function draw.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:frame_from",
+      "type": "function",
+      "name": "frame_from",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        263,
+        277
+      ],
+      "summary": "Function frame_from.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:picture_dimensions",
+      "type": "function",
+      "name": "picture_dimensions",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        280,
+        291
+      ],
+      "summary": "Function picture_dimensions.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:entry_values",
+      "type": "function",
+      "name": "entry_values",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        346,
+        370
+      ],
+      "summary": "Function entry_values.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:read",
+      "type": "function",
+      "name": "read",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        375,
+        491
+      ],
+      "summary": "Function read.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:picture",
+      "type": "function",
+      "name": "picture",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        494,
+        553
+      ],
+      "summary": "Function picture.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:unpack_packbits",
+      "type": "function",
+      "name": "unpack_packbits",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        564,
+        582
+      ],
+      "summary": "Function unpack_packbits.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/eps_image.rs:dimension_key",
+      "type": "function",
+      "name": "dimension_key",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        611,
+        621
+      ],
+      "summary": "Function dimension_key.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/readers/eps_image.rs:Palette",
+      "type": "class",
+      "name": "Palette",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        302,
+        314
+      ],
+      "summary": "Class Palette.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/readers/eps_image.rs:Order",
+      "type": "class",
+      "name": "Order",
+      "filePath": "src/readers/eps_image.rs",
+      "lineRange": [
+        318,
+        321
+      ],
+      "summary": "Class Order.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/readers/font_preview.rs",
+      "type": "file",
+      "name": "font_preview.rs",
+      "filePath": "src/readers/font_preview.rs",
+      "summary": "font_preview.rs (undefined, 53 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/font_preview/font_tables.rs",
+      "type": "file",
+      "name": "font_tables.rs",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "summary": "font_tables.rs (undefined, 871 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:tables_of",
+      "type": "function",
+      "name": "tables_of",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        29,
+        46
+      ],
+      "summary": "Function tables_of.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:table",
+      "type": "function",
+      "name": "table",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        67,
+        83
+      ],
+      "summary": "Function table.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:collection_tables",
+      "type": "function",
+      "name": "collection_tables",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        92,
+        104
+      ],
+      "summary": "Function collection_tables.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:woff_tables",
+      "type": "function",
+      "name": "woff_tables",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        108,
+        139
+      ],
+      "summary": "Function woff_tables.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:inflate",
+      "type": "function",
+      "name": "inflate",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        144,
+        160
+      ],
+      "summary": "Function inflate.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:woff2_tables",
+      "type": "function",
+      "name": "woff2_tables",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        186,
+        255
+      ],
+      "summary": "Function woff2_tables.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:base128",
+      "type": "function",
+      "name": "base128",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        259,
+        280
+      ],
+      "summary": "Function base128.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:decompress",
+      "type": "function",
+      "name": "decompress",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        295,
+        314
+      ],
+      "summary": "Function decompress.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:parse",
+      "type": "function",
+      "name": "parse",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        331,
+        368
+      ],
+      "summary": "Function parse.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:glyph",
+      "type": "function",
+      "name": "glyph",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        378,
+        396
+      ],
+      "summary": "Function glyph.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:drawable_codes",
+      "type": "function",
+      "name": "drawable_codes",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        400,
+        418
+      ],
+      "summary": "Function drawable_codes.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:segment_map_glyph",
+      "type": "function",
+      "name": "segment_map_glyph",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        438,
+        478
+      ],
+      "summary": "Function segment_map_glyph.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:group_map_glyph",
+      "type": "function",
+      "name": "group_map_glyph",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        482,
+        500
+      ],
+      "summary": "Function group_map_glyph.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:range_map_glyph",
+      "type": "function",
+      "name": "range_map_glyph",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        504,
+        514
+      ],
+      "summary": "Function range_map_glyph.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:drawable",
+      "type": "function",
+      "name": "drawable",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        534,
+        544
+      ],
+      "summary": "Function drawable.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:segment_map_codes",
+      "type": "function",
+      "name": "segment_map_codes",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        549,
+        581
+      ],
+      "summary": "Function segment_map_codes.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:group_map_codes",
+      "type": "function",
+      "name": "group_map_codes",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        584,
+        615
+      ],
+      "summary": "Function group_map_codes.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:range_map_codes",
+      "type": "function",
+      "name": "range_map_codes",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        618,
+        634
+      ],
+      "summary": "Function range_map_codes.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:byte_map_codes",
+      "type": "function",
+      "name": "byte_map_codes",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        637,
+        646
+      ],
+      "summary": "Function byte_map_codes.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:name_strings",
+      "type": "function",
+      "name": "name_strings",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        651,
+        701
+      ],
+      "summary": "Function name_strings.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:decode_name",
+      "type": "function",
+      "name": "decode_name",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        718,
+        733
+      ],
+      "summary": "Function decode_name.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:collection_face",
+      "type": "function",
+      "name": "collection_face",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        741,
+        769
+      ],
+      "summary": "Function collection_face.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:extract_face",
+      "type": "function",
+      "name": "extract_face",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        780,
+        833
+      ],
+      "summary": "Function extract_face.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/font_tables.rs:path_hash",
+      "type": "function",
+      "name": "path_hash",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        838,
+        847
+      ],
+      "summary": "Function path_hash.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/readers/font_preview/font_tables.rs:CharacterMap",
+      "type": "class",
+      "name": "CharacterMap",
+      "filePath": "src/readers/font_preview/font_tables.rs",
+      "lineRange": [
+        322,
+        327
+      ],
+      "summary": "Class CharacterMap.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/readers/font_preview/specimen.rs",
+      "type": "file",
+      "name": "specimen.rs",
+      "filePath": "src/readers/font_preview/specimen.rs",
+      "summary": "specimen.rs (undefined, 345 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/font_preview/specimen.rs:probe_face",
+      "type": "function",
+      "name": "probe_face",
+      "filePath": "src/readers/font_preview/specimen.rs",
+      "lineRange": [
+        92,
+        107
+      ],
+      "summary": "Function probe_face.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/specimen.rs:browser_source",
+      "type": "function",
+      "name": "browser_source",
+      "filePath": "src/readers/font_preview/specimen.rs",
+      "lineRange": [
+        135,
+        160
+      ],
+      "summary": "Function browser_source.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/specimen.rs:read_specimen",
+      "type": "function",
+      "name": "read_specimen",
+      "filePath": "src/readers/font_preview/specimen.rs",
+      "lineRange": [
+        163,
+        183
+      ],
+      "summary": "Function read_specimen.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/specimen.rs:sample_lines",
+      "type": "function",
+      "name": "sample_lines",
+      "filePath": "src/readers/font_preview/specimen.rs",
+      "lineRange": [
+        187,
+        205
+      ],
+      "summary": "Function sample_lines.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/specimen.rs:specimen_title",
+      "type": "function",
+      "name": "specimen_title",
+      "filePath": "src/readers/font_preview/specimen.rs",
+      "lineRange": [
+        224,
+        244
+      ],
+      "summary": "Function specimen_title.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/specimen.rs:held",
+      "type": "function",
+      "name": "held",
+      "filePath": "src/readers/font_preview/specimen.rs",
+      "lineRange": [
+        291,
+        300
+      ],
+      "summary": "Function held.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/specimen.rs:hold",
+      "type": "function",
+      "name": "hold",
+      "filePath": "src/readers/font_preview/specimen.rs",
+      "lineRange": [
+        304,
+        332
+      ],
+      "summary": "Function hold.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/font_preview/specimen.rs:file_version",
+      "type": "function",
+      "name": "file_version",
+      "filePath": "src/readers/font_preview/specimen.rs",
+      "lineRange": [
+        334,
+        345
+      ],
+      "summary": "Function file_version.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/heif_sequence.rs",
+      "type": "file",
+      "name": "heif_sequence.rs",
+      "filePath": "src/readers/heif_sequence.rs",
+      "summary": "heif_sequence.rs (undefined, 634 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/heif_sequence.rs:decode_sequence",
+      "type": "function",
+      "name": "decode_sequence",
+      "filePath": "src/readers/heif_sequence.rs",
+      "lineRange": [
+        87,
+        199
+      ],
+      "summary": "Function decode_sequence.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/heif_sequence.rs:frame_delays_ms",
+      "type": "function",
+      "name": "frame_delays_ms",
+      "filePath": "src/readers/heif_sequence.rs",
+      "lineRange": [
+        220,
+        249
+      ],
+      "summary": "Function frame_delays_ms.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/heif_sequence.rs:fit_within",
+      "type": "function",
+      "name": "fit_within",
+      "filePath": "src/readers/heif_sequence.rs",
+      "lineRange": [
+        301,
+        321
+      ],
+      "summary": "Function fit_within.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/heif_sequence.rs:negotiated_size",
+      "type": "function",
+      "name": "negotiated_size",
+      "filePath": "src/readers/heif_sequence.rs",
+      "lineRange": [
+        337,
+        352
+      ],
+      "summary": "Function negotiated_size.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/heif_sequence.rs:set_output_type",
+      "type": "function",
+      "name": "set_output_type",
+      "filePath": "src/readers/heif_sequence.rs",
+      "lineRange": [
+        359,
+        394
+      ],
+      "summary": "Function set_output_type.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/heif_sequence.rs:reader_attributes",
+      "type": "function",
+      "name": "reader_attributes",
+      "filePath": "src/readers/heif_sequence.rs",
+      "lineRange": [
+        403,
+        420
+      ],
+      "summary": "Function reader_attributes.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/heif_sequence.rs:sample_pixels",
+      "type": "function",
+      "name": "sample_pixels",
+      "filePath": "src/readers/heif_sequence.rs",
+      "lineRange": [
+        436,
+        474
+      ],
+      "summary": "Function sample_pixels.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/jxl_image.rs",
+      "type": "file",
+      "name": "jxl_image.rs",
+      "filePath": "src/readers/jxl_image.rs",
+      "summary": "jxl_image.rs (undefined, 418 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/jxl_image.rs:decode_frame",
+      "type": "function",
+      "name": "decode_frame",
+      "filePath": "src/readers/jxl_image.rs",
+      "lineRange": [
+        64,
+        89
+      ],
+      "summary": "Function decode_frame.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/jxl_image.rs:animation",
+      "type": "function",
+      "name": "animation",
+      "filePath": "src/readers/jxl_image.rs",
+      "lineRange": [
+        96,
+        130
+      ],
+      "summary": "Function animation.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/jxl_image.rs:read_head",
+      "type": "function",
+      "name": "read_head",
+      "filePath": "src/readers/jxl_image.rs",
+      "lineRange": [
+        173,
+        182
+      ],
+      "summary": "Function read_head.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/jxl_image.rs:open_header",
+      "type": "function",
+      "name": "open_header",
+      "filePath": "src/readers/jxl_image.rs",
+      "lineRange": [
+        206,
+        230
+      ],
+      "summary": "Function open_header.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/jxl_image.rs:open",
+      "type": "function",
+      "name": "open",
+      "filePath": "src/readers/jxl_image.rs",
+      "lineRange": [
+        238,
+        254
+      ],
+      "summary": "Function open.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/jxl_image.rs:compose",
+      "type": "function",
+      "name": "compose",
+      "filePath": "src/readers/jxl_image.rs",
+      "lineRange": [
+        263,
+        312
+      ],
+      "summary": "Function compose.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/metafile_image.rs",
+      "type": "file",
+      "name": "metafile_image.rs",
+      "filePath": "src/readers/metafile_image.rs",
+      "summary": "metafile_image.rs (undefined, 411 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/metafile_image.rs:is_metafile_records",
+      "type": "function",
+      "name": "is_metafile_records",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        70,
+        81
+      ],
+      "summary": "Function is_metafile_records.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/metafile_image.rs:draw_records",
+      "type": "function",
+      "name": "draw_records",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        99,
+        108
+      ],
+      "summary": "Function draw_records.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/metafile_image.rs:read",
+      "type": "function",
+      "name": "read",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        131,
+        145
+      ],
+      "summary": "Function read.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/metafile_image.rs:open",
+      "type": "function",
+      "name": "open",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        168,
+        197
+      ],
+      "summary": "Function open.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/metafile_image.rs:bounds",
+      "type": "function",
+      "name": "bounds",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        201,
+        222
+      ],
+      "summary": "Function bounds.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/metafile_image.rs:is_enhanced",
+      "type": "function",
+      "name": "is_enhanced",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        250,
+        265
+      ],
+      "summary": "Function is_enhanced.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/metafile_image.rs:recover",
+      "type": "function",
+      "name": "recover",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        275,
+        302
+      ],
+      "summary": "Function recover.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/metafile_image.rs:create",
+      "type": "function",
+      "name": "create",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        318,
+        368
+      ],
+      "summary": "Function create.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/metafile_image.rs:play",
+      "type": "function",
+      "name": "play",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        382,
+        394
+      ],
+      "summary": "Function play.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/readers/metafile_image.rs:Placeable",
+      "type": "class",
+      "name": "Placeable",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        124,
+        128
+      ],
+      "summary": "Class Placeable.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/readers/metafile_image.rs:Drawing",
+      "type": "class",
+      "name": "Drawing",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        163,
+        165
+      ],
+      "summary": "Class Drawing.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/readers/metafile_image.rs:Surface",
+      "type": "class",
+      "name": "Surface",
+      "filePath": "src/readers/metafile_image.rs",
+      "lineRange": [
+        306,
+        313
+      ],
+      "summary": "Class Surface.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/readers/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "src/readers/mod.rs",
+      "summary": "mod.rs (undefined, 20 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/project_image.rs",
+      "type": "file",
+      "name": "project_image.rs",
+      "filePath": "src/readers/project_image.rs",
+      "summary": "project_image.rs (undefined, 294 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/project_image.rs:dimensions",
+      "type": "function",
+      "name": "dimensions",
+      "filePath": "src/readers/project_image.rs",
+      "lineRange": [
+        93,
+        105
+      ],
+      "summary": "Function dimensions.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/project_image.rs:decode",
+      "type": "function",
+      "name": "decode",
+      "filePath": "src/readers/project_image.rs",
+      "lineRange": [
+        109,
+        134
+      ],
+      "summary": "Function decode.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/project_image.rs:probe_dimensions",
+      "type": "function",
+      "name": "probe_dimensions",
+      "filePath": "src/readers/project_image.rs",
+      "lineRange": [
+        137,
+        151
+      ],
+      "summary": "Function probe_dimensions.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/project_image.rs:preview_member",
+      "type": "function",
+      "name": "preview_member",
+      "filePath": "src/readers/project_image.rs",
+      "lineRange": [
+        161,
+        178
+      ],
+      "summary": "Function preview_member.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/project_image.rs:member_bytes",
+      "type": "function",
+      "name": "member_bytes",
+      "filePath": "src/readers/project_image.rs",
+      "lineRange": [
+        183,
+        195
+      ],
+      "summary": "Function member_bytes.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/project_image.rs:dimension_key",
+      "type": "function",
+      "name": "dimension_key",
+      "filePath": "src/readers/project_image.rs",
+      "lineRange": [
+        200,
+        210
+      ],
+      "summary": "Function dimension_key.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/psd_image.rs",
+      "type": "file",
+      "name": "psd_image.rs",
+      "filePath": "src/readers/psd_image.rs",
+      "summary": "psd_image.rs (undefined, 876 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:decode",
+      "type": "function",
+      "name": "decode",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        73,
+        197
+      ],
+      "summary": "Function decode.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:header_from",
+      "type": "function",
+      "name": "header_from",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        219,
+        247
+      ],
+      "summary": "Function header_from.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:colour_of",
+      "type": "function",
+      "name": "colour_of",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        265,
+        276
+      ],
+      "summary": "Function colour_of.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:next_row",
+      "type": "function",
+      "name": "next_row",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        325,
+        359
+      ],
+      "summary": "Function next_row.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:unwind_prediction",
+      "type": "function",
+      "name": "unwind_prediction",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        374,
+        399
+      ],
+      "summary": "Function unwind_prediction.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:gather_samples",
+      "type": "function",
+      "name": "gather_samples",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        404,
+        417
+      ],
+      "summary": "Function gather_samples.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:unpack_row",
+      "type": "function",
+      "name": "unpack_row",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        423,
+        446
+      ],
+      "summary": "Function unpack_row.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:row_samples",
+      "type": "function",
+      "name": "row_samples",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        451,
+        494
+      ],
+      "summary": "Function row_samples.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:meaning_of",
+      "type": "function",
+      "name": "meaning_of",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        512,
+        529
+      ],
+      "summary": "Function meaning_of.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:reduce",
+      "type": "function",
+      "name": "reduce",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        570,
+        620
+      ],
+      "summary": "Function reduce.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:spans",
+      "type": "function",
+      "name": "spans",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        625,
+        636
+      ],
+      "summary": "Function spans.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:accumulate",
+      "type": "function",
+      "name": "accumulate",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        639,
+        664
+      ],
+      "summary": "Function accumulate.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:compose",
+      "type": "function",
+      "name": "compose",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        668,
+        712
+      ],
+      "summary": "Function compose.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:read_counts",
+      "type": "function",
+      "name": "read_counts",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        728,
+        758
+      ],
+      "summary": "Function read_counts.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/psd_image.rs:read_length",
+      "type": "function",
+      "name": "read_length",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        762,
+        772
+      ],
+      "summary": "Function read_length.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/readers/psd_image.rs:Reducer",
+      "type": "class",
+      "name": "Reducer",
+      "filePath": "src/readers/psd_image.rs",
+      "lineRange": [
+        539,
+        547
+      ],
+      "summary": "Class Reducer.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/readers/svg_preview.rs",
+      "type": "file",
+      "name": "svg_preview.rs",
+      "filePath": "src/readers/svg_preview.rs",
+      "summary": "svg_preview.rs (undefined, 526 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/svg_preview.rs:measure",
+      "type": "function",
+      "name": "measure",
+      "filePath": "src/readers/svg_preview.rs",
+      "lineRange": [
+        73,
+        89
+      ],
+      "summary": "Function measure.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/svg_preview.rs:read_document",
+      "type": "function",
+      "name": "read_document",
+      "filePath": "src/readers/svg_preview.rs",
+      "lineRange": [
+        98,
+        117
+      ],
+      "summary": "Function read_document.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/svg_preview.rs:measure_bytes",
+      "type": "function",
+      "name": "measure_bytes",
+      "filePath": "src/readers/svg_preview.rs",
+      "lineRange": [
+        126,
+        152
+      ],
+      "summary": "Function measure_bytes.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/svg_preview.rs:length",
+      "type": "function",
+      "name": "length",
+      "filePath": "src/readers/svg_preview.rs",
+      "lineRange": [
+        159,
+        192
+      ],
+      "summary": "Function length.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/svg_preview.rs:unit_scale",
+      "type": "function",
+      "name": "unit_scale",
+      "filePath": "src/readers/svg_preview.rs",
+      "lineRange": [
+        201,
+        212
+      ],
+      "summary": "Function unit_scale.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/svg_preview.rs:view_box_size",
+      "type": "function",
+      "name": "view_box_size",
+      "filePath": "src/readers/svg_preview.rs",
+      "lineRange": [
+        216,
+        228
+      ],
+      "summary": "Function view_box_size.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/svg_preview.rs:held",
+      "type": "function",
+      "name": "held",
+      "filePath": "src/readers/svg_preview.rs",
+      "lineRange": [
+        297,
+        306
+      ],
+      "summary": "Function held.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/svg_preview.rs:hold",
+      "type": "function",
+      "name": "hold",
+      "filePath": "src/readers/svg_preview.rs",
+      "lineRange": [
+        310,
+        341
+      ],
+      "summary": "Function hold.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/svg_preview.rs:file_version",
+      "type": "function",
+      "name": "file_version",
+      "filePath": "src/readers/svg_preview.rs",
+      "lineRange": [
+        343,
+        354
+      ],
+      "summary": "Function file_version.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/webp_image.rs",
+      "type": "file",
+      "name": "webp_image.rs",
+      "filePath": "src/readers/webp_image.rs",
+      "summary": "webp_image.rs (undefined, 152 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/readers/webp_image.rs:decode",
+      "type": "function",
+      "name": "decode",
+      "filePath": "src/readers/webp_image.rs",
+      "lineRange": [
+        48,
+        86
+      ],
+      "summary": "Function decode.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/webp_image.rs:read",
+      "type": "function",
+      "name": "read",
+      "filePath": "src/readers/webp_image.rs",
+      "lineRange": [
+        94,
+        103
+      ],
+      "summary": "Function read.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/wic_image.rs",
+      "type": "file",
+      "name": "wic_image.rs",
+      "filePath": "src/readers/wic_image.rs",
+      "summary": "wic_image.rs (undefined, 557 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/wic_image.rs:decode",
+      "type": "function",
+      "name": "decode",
+      "filePath": "src/readers/wic_image.rs",
+      "lineRange": [
+        133,
+        149
+      ],
+      "summary": "Function decode.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/wic_image.rs:factory",
+      "type": "function",
+      "name": "factory",
+      "filePath": "src/readers/wic_image.rs",
+      "lineRange": [
+        157,
+        169
+      ],
+      "summary": "Function factory.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/wic_image.rs:open_frame",
+      "type": "function",
+      "name": "open_frame",
+      "filePath": "src/readers/wic_image.rs",
+      "lineRange": [
+        183,
+        203
+      ],
+      "summary": "Function open_frame.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/wic_image.rs:scaled_pixels",
+      "type": "function",
+      "name": "scaled_pixels",
+      "filePath": "src/readers/wic_image.rs",
+      "lineRange": [
+        221,
+        245
+      ],
+      "summary": "Function scaled_pixels.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/wic_image.rs:native_scaled_bitmap",
+      "type": "function",
+      "name": "native_scaled_bitmap",
+      "filePath": "src/readers/wic_image.rs",
+      "lineRange": [
+        253,
+        310
+      ],
+      "summary": "Function native_scaled_bitmap.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/wic_image.rs:convert_to_bgra",
+      "type": "function",
+      "name": "convert_to_bgra",
+      "filePath": "src/readers/wic_image.rs",
+      "lineRange": [
+        315,
+        335
+      ],
+      "summary": "Function convert_to_bgra.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/wic_image.rs:scale_pixels",
+      "type": "function",
+      "name": "scale_pixels",
+      "filePath": "src/readers/wic_image.rs",
+      "lineRange": [
+        340,
+        360
+      ],
+      "summary": "Function scale_pixels.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/shell/tray/ids.rs",
+      "type": "file",
+      "name": "ids.rs",
+      "filePath": "src/shell/tray/ids.rs",
+      "summary": "ids.rs (undefined, 634 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "shell"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:src/text/text_preview/tests.rs",
+      "type": "file",
+      "name": "tests.rs",
+      "filePath": "src/text/text_preview/tests.rs",
+      "summary": "tests.rs (undefined, 82 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "test",
+        "text"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/text_preview/tests.rs:write_png",
+      "type": "function",
+      "name": "write_png",
+      "filePath": "src/text/text_preview/tests.rs",
+      "lineRange": [
+        20,
+        33
+      ],
+      "summary": "Function write_png.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/text_preview/tests.rs:draws_pages_of_text",
+      "type": "function",
+      "name": "draws_pages_of_text",
+      "filePath": "src/text/text_preview/tests.rs",
+      "lineRange": [
+        39,
+        82
+      ],
+      "summary": "Function draws_pages_of_text.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/ui/preview_window/tests/pin_audio_seek.rs",
+      "type": "file",
+      "name": "pin_audio_seek.rs",
+      "filePath": "src/ui/preview_window/tests/pin_audio_seek.rs",
+      "summary": "pin_audio_seek.rs (undefined, 128 lines).",
+      "tags": [
+        "code",
+        "source",
+        "rust",
+        "test",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/pin_audio_seek.rs:put",
+      "type": "function",
+      "name": "put",
+      "filePath": "src/ui/preview_window/tests/pin_audio_seek.rs",
+      "lineRange": [
+        13,
+        23
+      ],
+      "summary": "Function put.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/pin_audio_seek.rs:a_pinned_sound_starts_where_the_pin_says_a_hover_does_not_have_to",
+      "type": "function",
+      "name": "a_pinned_sound_starts_where_the_pin_says_a_hover_does_not_have_to",
+      "filePath": "src/ui/preview_window/tests/pin_audio_seek.rs",
+      "lineRange": [
+        41,
+        69
+      ],
+      "summary": "Function a_pinned_sound_starts_where_the_pin_says_a_hover_does_not_have_to.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/pin_audio_seek.rs:the_two_settings_start_at_their_own_answers",
+      "type": "function",
+      "name": "the_two_settings_start_at_their_own_answers",
+      "filePath": "src/ui/preview_window/tests/pin_audio_seek.rs",
+      "lineRange": [
+        78,
+        89
+      ],
+      "summary": "Function the_two_settings_start_at_their_own_answers.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/pin_audio_seek.rs:the_position_written_down_is_what_the_sound_s_own_setting_says",
+      "type": "function",
+      "name": "the_position_written_down_is_what_the_sound_s_own_setting_says",
+      "filePath": "src/ui/preview_window/tests/pin_audio_seek.rs",
+      "lineRange": [
+        100,
+        128
+      ],
+      "summary": "Function the_position_written_down_is_what_the_sound_s_own_setting_says.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/tests/pin_audio_seek.rs:SeekSettings",
+      "type": "class",
+      "name": "SeekSettings",
+      "filePath": "src/ui/preview_window/tests/pin_audio_seek.rs",
+      "lineRange": [
+        7,
+        10
+      ],
+      "summary": "Class SeekSettings.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/config/config.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/config/config.rs",
+      "target": "file:src/readers/tone_map.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/document_cache/tests.rs",
+      "target": "function:src/engines/document_cache/tests.rs:keys_a_page_by_the_document_its_version_and_its_engine",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/document_cache/tests.rs",
+      "target": "function:src/engines/document_cache/tests.rs:keeps_reads_and_forgets_a_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/document_cache/tests.rs",
+      "target": "function:src/engines/document_cache/tests.rs:reads_a_refusal_until_it_ages_out",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/document_cache/tests.rs",
+      "target": "function:src/engines/document_cache/tests.rs:gives_up_the_page_that_was_read_longest_ago",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/document_cache/tests.rs",
+      "target": "function:src/engines/document_cache/tests.rs:reads_and_remembers_a_pages_size",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/document_cache/tests.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/api.rs",
+      "target": "function:src/engines/webview_preview/api.rs:wanted_area",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/api.rs",
+      "target": "function:src/engines/webview_preview/api.rs:runtime_version",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/api.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/api.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/api.rs",
+      "target": "file:src/readers/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/engine.rs",
+      "target": "function:src/engines/webview_preview/engine.rs:trace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/engine.rs",
+      "target": "function:src/engines/webview_preview/engine.rs:engine_thread",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/engine.rs",
+      "target": "function:src/engines/webview_preview/engine.rs:carry_out_placement",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/engine.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_declared_package",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_netpbm",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_riff_form",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_dbase_table",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_hevc_stream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_vvc_stream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_av1_obu_stream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_avs_sequence",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_dirac_stream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_evc_stream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_vc1_test_stream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_yop",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_c93",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_cdg",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_cdxl",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_moflex",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_h261_picture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_h263_picture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:read_bits",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:palm_ebook_or_program_database",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "function:src/formats/content_type/matchers.rs:is_palm_database",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/matchers.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "function:src/formats/content_type/probe.rs:read",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "function:src/formats/content_type/probe.rs:borrowed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "function:src/formats/content_type/probe.rs:of_reaching_config",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "function:src/formats/content_type/probe.rs:answered",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "function:src/formats/content_type/probe.rs:read",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "function:src/formats/content_type/probe.rs:window_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "function:src/formats/content_type/probe.rs:detected_names",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "function:src/formats/content_type/probe.rs:names_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "function:src/formats/content_type/probe.rs:kind_by_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "function:src/formats/content_type/probe.rs:classify",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "class:src/formats/content_type/probe.rs:Probe",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/content_type/probe.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "function:src/formats/head.rs:held_or_read",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "function:src/formats/head.rs:keep",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "function:src/formats/head.rs:read",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "function:src/formats/head.rs:facts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "function:src/formats/head.rs:ftyp_brands",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "function:src/formats/head.rs:png_is_animated",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "function:src/formats/head.rs:gif_is_animated",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "function:src/formats/head.rs:skip_gif_sub_blocks",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "function:src/formats/head.rs:webp_is_animated",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "function:src/formats/head.rs:tiff_holds_more_than_one_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "class:src/formats/head.rs:Head",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "class:src/formats/head.rs:Facts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/head.rs",
+      "target": "file:src/readers/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/lists/list_store.rs",
+      "target": "function:src/formats/lists/list_store.rs:claims",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/lists/list_store.rs",
+      "target": "function:src/formats/lists/list_store.rs:repair_older_lists",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/lists/list_store.rs",
+      "target": "class:src/formats/lists/list_store.rs:List",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/lists/list_store.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/native_formats.rs",
+      "target": "function:src/formats/native_formats.rs:job_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/native_formats.rs",
+      "target": "function:src/formats/native_formats.rs:picture_job",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/native_formats.rs",
+      "target": "function:src/formats/native_formats.rs:drawing_job",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/native_formats.rs",
+      "target": "function:src/formats/native_formats.rs:page_job",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/native_formats.rs",
+      "target": "function:src/formats/native_formats.rs:archive_job",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/native_formats.rs",
+      "target": "class:src/formats/native_formats.rs:NativeJob",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/native_formats.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/native_formats.rs",
+      "target": "file:src/readers/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/audio_seek.rs",
+      "target": "function:src/readers/audio_seek.rs:memory_path",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/audio_seek.rs",
+      "target": "function:src/readers/audio_seek.rs:planned",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/audio_seek.rs",
+      "target": "function:src/readers/audio_seek.rs:remembered",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/audio_seek.rs",
+      "target": "function:src/readers/audio_seek.rs:remember",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/audio_seek.rs",
+      "target": "function:src/readers/audio_seek.rs:with_memory",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/audio_seek.rs",
+      "target": "function:src/readers/audio_seek.rs:parse",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/audio_seek.rs",
+      "target": "function:src/readers/audio_seek.rs:write",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/audio_seek.rs",
+      "target": "function:src/readers/audio_seek.rs:render",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/audio_seek.rs",
+      "target": "function:src/readers/audio_seek.rs:anywhere",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/audio_seek.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/comic_preview.rs",
+      "target": "function:src/readers/comic_preview.rs:dimensions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/comic_preview.rs",
+      "target": "function:src/readers/comic_preview.rs:decode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/comic_preview.rs",
+      "target": "function:src/readers/comic_preview.rs:first_page_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/comic_preview.rs",
+      "target": "function:src/readers/comic_preview.rs:is_page_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/comic_preview.rs",
+      "target": "function:src/readers/comic_preview.rs:natural_order",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/comic_preview.rs",
+      "target": "function:src/readers/comic_preview.rs:compare_number",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/comic_preview.rs",
+      "target": "function:src/readers/comic_preview.rs:dimension_key",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/comic_preview.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/comic_preview.rs",
+      "target": "file:src/readers/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:decode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:bytes_per_pixel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:level_bytes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:read_header",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:level_at",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:preview_level",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:legacy_picture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:numeric_picture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:dx10_picture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:read_level",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:decode_blocks",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:decode_samples",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:masked_texel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:masked_channel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:colour_texel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:sample_level",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:sample_alpha",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "function:src/readers/dds_image.rs:partial_float",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "class:src/readers/dds_image.rs:Sample",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "class:src/readers/dds_image.rs:Samples",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "file:src/readers/bcn.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/dds_image.rs",
+      "target": "file:src/readers/tone_map.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:dimensions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:container_preview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:comment_preview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:preview_kind",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:draw",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:frame_from",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:picture_dimensions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:entry_values",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:read",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:picture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:unpack_packbits",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "function:src/readers/eps_image.rs:dimension_key",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "class:src/readers/eps_image.rs:Palette",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "class:src/readers/eps_image.rs:Order",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/eps_image.rs",
+      "target": "file:src/readers/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:tables_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:table",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:collection_tables",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:woff_tables",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:inflate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:woff2_tables",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:base128",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:decompress",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:parse",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:glyph",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:drawable_codes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:segment_map_glyph",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:group_map_glyph",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:range_map_glyph",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:drawable",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:segment_map_codes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:group_map_codes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:range_map_codes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:byte_map_codes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:name_strings",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:decode_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:collection_face",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:extract_face",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "function:src/readers/font_preview/font_tables.rs:path_hash",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "class:src/readers/font_preview/font_tables.rs:CharacterMap",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/font_tables.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/font_preview/specimen.rs",
+      "target": "function:src/readers/font_preview/specimen.rs:probe_face",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/specimen.rs",
+      "target": "function:src/readers/font_preview/specimen.rs:browser_source",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/specimen.rs",
+      "target": "function:src/readers/font_preview/specimen.rs:read_specimen",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/specimen.rs",
+      "target": "function:src/readers/font_preview/specimen.rs:sample_lines",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/specimen.rs",
+      "target": "function:src/readers/font_preview/specimen.rs:specimen_title",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/specimen.rs",
+      "target": "function:src/readers/font_preview/specimen.rs:held",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/specimen.rs",
+      "target": "function:src/readers/font_preview/specimen.rs:hold",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/specimen.rs",
+      "target": "function:src/readers/font_preview/specimen.rs:file_version",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/font_preview/specimen.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/heif_sequence.rs",
+      "target": "function:src/readers/heif_sequence.rs:decode_sequence",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/heif_sequence.rs",
+      "target": "function:src/readers/heif_sequence.rs:frame_delays_ms",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/heif_sequence.rs",
+      "target": "function:src/readers/heif_sequence.rs:fit_within",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/heif_sequence.rs",
+      "target": "function:src/readers/heif_sequence.rs:negotiated_size",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/heif_sequence.rs",
+      "target": "function:src/readers/heif_sequence.rs:set_output_type",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/heif_sequence.rs",
+      "target": "function:src/readers/heif_sequence.rs:reader_attributes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/heif_sequence.rs",
+      "target": "function:src/readers/heif_sequence.rs:sample_pixels",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/heif_sequence.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/heif_sequence.rs",
+      "target": "file:src/readers/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/jxl_image.rs",
+      "target": "function:src/readers/jxl_image.rs:decode_frame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/jxl_image.rs",
+      "target": "function:src/readers/jxl_image.rs:animation",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/jxl_image.rs",
+      "target": "function:src/readers/jxl_image.rs:read_head",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/jxl_image.rs",
+      "target": "function:src/readers/jxl_image.rs:open_header",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/jxl_image.rs",
+      "target": "function:src/readers/jxl_image.rs:open",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/jxl_image.rs",
+      "target": "function:src/readers/jxl_image.rs:compose",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/jxl_image.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "function:src/readers/metafile_image.rs:is_metafile_records",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "function:src/readers/metafile_image.rs:draw_records",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "function:src/readers/metafile_image.rs:read",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "function:src/readers/metafile_image.rs:open",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "function:src/readers/metafile_image.rs:bounds",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "function:src/readers/metafile_image.rs:is_enhanced",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "function:src/readers/metafile_image.rs:recover",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "function:src/readers/metafile_image.rs:create",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "function:src/readers/metafile_image.rs:play",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "class:src/readers/metafile_image.rs:Placeable",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "class:src/readers/metafile_image.rs:Drawing",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "class:src/readers/metafile_image.rs:Surface",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/metafile_image.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/archive_listing.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/audio_seek.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/audio_track.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/bcn.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/comic_preview.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/dds_image.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/eps_image.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/font_preview.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/heif_sequence.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/jxl_image.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/metafile_image.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/office_preview.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/pdf_preview.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/project_image.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/psd_image.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/svg_preview.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/tone_map.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/video_player.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/webp_image.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/mod.rs",
+      "target": "file:src/readers/wic_image.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/project_image.rs",
+      "target": "function:src/readers/project_image.rs:dimensions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/project_image.rs",
+      "target": "function:src/readers/project_image.rs:decode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/project_image.rs",
+      "target": "function:src/readers/project_image.rs:probe_dimensions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/project_image.rs",
+      "target": "function:src/readers/project_image.rs:preview_member",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/project_image.rs",
+      "target": "function:src/readers/project_image.rs:member_bytes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/project_image.rs",
+      "target": "function:src/readers/project_image.rs:dimension_key",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/project_image.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:decode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:header_from",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:colour_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:next_row",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:unwind_prediction",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:gather_samples",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:unpack_row",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:row_samples",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:meaning_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:reduce",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:spans",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:accumulate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:compose",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:read_counts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "function:src/readers/psd_image.rs:read_length",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "class:src/readers/psd_image.rs:Reducer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/psd_image.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/svg_preview.rs",
+      "target": "function:src/readers/svg_preview.rs:measure",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/svg_preview.rs",
+      "target": "function:src/readers/svg_preview.rs:read_document",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/svg_preview.rs",
+      "target": "function:src/readers/svg_preview.rs:measure_bytes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/svg_preview.rs",
+      "target": "function:src/readers/svg_preview.rs:length",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/svg_preview.rs",
+      "target": "function:src/readers/svg_preview.rs:unit_scale",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/svg_preview.rs",
+      "target": "function:src/readers/svg_preview.rs:view_box_size",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/svg_preview.rs",
+      "target": "function:src/readers/svg_preview.rs:held",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/svg_preview.rs",
+      "target": "function:src/readers/svg_preview.rs:hold",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/svg_preview.rs",
+      "target": "function:src/readers/svg_preview.rs:file_version",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/svg_preview.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/webp_image.rs",
+      "target": "function:src/readers/webp_image.rs:decode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/webp_image.rs",
+      "target": "function:src/readers/webp_image.rs:read",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/webp_image.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/wic_image.rs",
+      "target": "function:src/readers/wic_image.rs:decode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/wic_image.rs",
+      "target": "function:src/readers/wic_image.rs:factory",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/wic_image.rs",
+      "target": "function:src/readers/wic_image.rs:open_frame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/wic_image.rs",
+      "target": "function:src/readers/wic_image.rs:scaled_pixels",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/wic_image.rs",
+      "target": "function:src/readers/wic_image.rs:native_scaled_bitmap",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/wic_image.rs",
+      "target": "function:src/readers/wic_image.rs:convert_to_bgra",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/wic_image.rs",
+      "target": "function:src/readers/wic_image.rs:scale_pixels",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/wic_image.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/tray/ids.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/text/text_preview/tests.rs",
+      "target": "function:src/text/text_preview/tests.rs:write_png",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/text_preview/tests.rs",
+      "target": "function:src/text/text_preview/tests.rs:draws_pages_of_text",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/text_preview/tests.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/pin_audio_seek.rs",
+      "target": "function:src/ui/preview_window/tests/pin_audio_seek.rs:put",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/pin_audio_seek.rs",
+      "target": "function:src/ui/preview_window/tests/pin_audio_seek.rs:a_pinned_sound_starts_where_the_pin_says_a_hover_does_not_have_to",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/pin_audio_seek.rs",
+      "target": "function:src/ui/preview_window/tests/pin_audio_seek.rs:the_two_settings_start_at_their_own_answers",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/pin_audio_seek.rs",
+      "target": "function:src/ui/preview_window/tests/pin_audio_seek.rs:the_position_written_down_is_what_the_sound_s_own_setting_says",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/pin_audio_seek.rs",
+      "target": "class:src/ui/preview_window/tests/pin_audio_seek.rs:SeekSettings",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/pin_audio_seek.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

@@ -1,0 +1,1653 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/ui/preview_window/layout.rs",
+      "type": "file",
+      "name": "layout.rs",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "summary": "layout.rs (undefined, 998 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/layout.rs:height",
+      "type": "function",
+      "name": "height",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        29,
+        31
+      ],
+      "summary": "Function height in layout.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/layout.rs:room",
+      "type": "function",
+      "name": "room",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        42,
+        47
+      ],
+      "summary": "Function room in layout.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/layout.rs:region",
+      "type": "function",
+      "name": "region",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        51,
+        53
+      ],
+      "summary": "Function region in layout.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/layout.rs:cursor_position",
+      "type": "function",
+      "name": "cursor_position",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        57,
+        61
+      ],
+      "summary": "Function cursor_position in layout.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/layout.rs:centered_top",
+      "type": "function",
+      "name": "centered_top",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        70,
+        73
+      ],
+      "summary": "Function centered_top in layout.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/layout.rs:avoiding_text",
+      "type": "function",
+      "name": "avoiding_text",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        146,
+        328
+      ],
+      "summary": "Function avoiding_text in layout.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/layout.rs:compute_mouse_layout",
+      "type": "function",
+      "name": "compute_mouse_layout",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        355,
+        557
+      ],
+      "summary": "Function compute_mouse_layout in layout.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/layout.rs:compute_keyboard_layout",
+      "type": "function",
+      "name": "compute_keyboard_layout",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        629,
+        952
+      ],
+      "summary": "Function compute_keyboard_layout in layout.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/layout.rs:clamp_pinned_box",
+      "type": "function",
+      "name": "clamp_pinned_box",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        968,
+        998
+      ],
+      "summary": "Function clamp_pinned_box in layout.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/ui/preview_window/layout.rs:PreviewLayout",
+      "type": "class",
+      "name": "PreviewLayout",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        8,
+        15
+      ],
+      "summary": "Class PreviewLayout in layout.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/layout.rs:ScreenBounds",
+      "type": "class",
+      "name": "ScreenBounds",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        21,
+        26
+      ],
+      "summary": "Class ScreenBounds in layout.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/layout.rs:Clearance",
+      "type": "class",
+      "name": "Clearance",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        89,
+        115
+      ],
+      "summary": "Class Clearance in layout.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/layout.rs:KeyboardPlacement",
+      "type": "class",
+      "name": "KeyboardPlacement",
+      "filePath": "src/ui/preview_window/layout.rs",
+      "lineRange": [
+        578,
+        606
+      ],
+      "summary": "Class KeyboardPlacement in layout.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/ui/preview_window/pin_input.rs",
+      "type": "file",
+      "name": "pin_input.rs",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "summary": "pin_input.rs (undefined, 1093 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:cursor_screen_point",
+      "type": "function",
+      "name": "cursor_screen_point",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        8,
+        12
+      ],
+      "summary": "Function cursor_screen_point in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:content_box_of",
+      "type": "function",
+      "name": "content_box_of",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        17,
+        34
+      ],
+      "summary": "Function content_box_of in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_mouse_move",
+      "type": "function",
+      "name": "pinned_mouse_move",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        39,
+        158
+      ],
+      "summary": "Function pinned_mouse_move in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_caption_geometry",
+      "type": "function",
+      "name": "pinned_caption_geometry",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        177,
+        190
+      ],
+      "summary": "Function pinned_caption_geometry in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_transport_geometry",
+      "type": "function",
+      "name": "pinned_transport_geometry",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        208,
+        226
+      ],
+      "summary": "Function pinned_transport_geometry in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_transport_press",
+      "type": "function",
+      "name": "pinned_transport_press",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        234,
+        324
+      ],
+      "summary": "Function pinned_transport_press in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pin_seconds_at",
+      "type": "function",
+      "name": "pin_seconds_at",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        334,
+        336
+      ],
+      "summary": "Function pin_seconds_at in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_transport_drag",
+      "type": "function",
+      "name": "pinned_transport_drag",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        340,
+        356
+      ],
+      "summary": "Function pinned_transport_drag in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_transport_release",
+      "type": "function",
+      "name": "pinned_transport_release",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        360,
+        458
+      ],
+      "summary": "Function pinned_transport_release in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_volume_geometry",
+      "type": "function",
+      "name": "pinned_volume_geometry",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        468,
+        473
+      ],
+      "summary": "Function pinned_volume_geometry in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_volume_panel",
+      "type": "function",
+      "name": "pinned_volume_panel",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        484,
+        503
+      ],
+      "summary": "Function pinned_volume_panel in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_audio_volume_popup",
+      "type": "function",
+      "name": "pinned_audio_volume_popup",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        513,
+        547
+      ],
+      "summary": "Function pinned_audio_volume_popup in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pin_volume_dragging",
+      "type": "function",
+      "name": "pin_volume_dragging",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        550,
+        554
+      ],
+      "summary": "Function pin_volume_dragging in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_volume_press",
+      "type": "function",
+      "name": "pinned_volume_press",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        563,
+        598
+      ],
+      "summary": "Function pinned_volume_press in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_volume_drag",
+      "type": "function",
+      "name": "pinned_volume_drag",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        602,
+        613
+      ],
+      "summary": "Function pinned_volume_drag in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_volume_release",
+      "type": "function",
+      "name": "pinned_volume_release",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        617,
+        671
+      ],
+      "summary": "Function pinned_volume_release in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:toggle_pin_volume",
+      "type": "function",
+      "name": "toggle_pin_volume",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        685,
+        711
+      ],
+      "summary": "Function toggle_pin_volume in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:raise_pinned_window",
+      "type": "function",
+      "name": "raise_pinned_window",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        716,
+        728
+      ],
+      "summary": "Function raise_pinned_window in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_press",
+      "type": "function",
+      "name": "pinned_press",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        745,
+        825
+      ],
+      "summary": "Function pinned_press in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_audio_control_press",
+      "type": "function",
+      "name": "pinned_audio_control_press",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        843,
+        915
+      ],
+      "summary": "Function pinned_audio_control_press in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_audio_control_release",
+      "type": "function",
+      "name": "pinned_audio_control_release",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        924,
+        965
+      ],
+      "summary": "Function pinned_audio_control_release in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_input.rs:pinned_release",
+      "type": "function",
+      "name": "pinned_release",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        979,
+        1093
+      ],
+      "summary": "Function pinned_release in pin_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:src/ui/preview_window/pin_input.rs:PinnedCaption",
+      "type": "class",
+      "name": "PinnedCaption",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        162,
+        175
+      ],
+      "summary": "Class PinnedCaption in pin_input.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/pin_input.rs:PinnedTransportBar",
+      "type": "class",
+      "name": "PinnedTransportBar",
+      "filePath": "src/ui/preview_window/pin_input.rs",
+      "lineRange": [
+        195,
+        206
+      ],
+      "summary": "Class PinnedTransportBar in pin_input.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/ui/preview_window/pin_menu.rs",
+      "type": "file",
+      "name": "pin_menu.rs",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "summary": "pin_menu.rs (undefined, 702 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:menu_rows",
+      "type": "function",
+      "name": "menu_rows",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        152,
+        167
+      ],
+      "summary": "Function menu_rows in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:end_of_file_rows",
+      "type": "function",
+      "name": "end_of_file_rows",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        193,
+        207
+      ],
+      "summary": "Function end_of_file_rows in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:seek_rows",
+      "type": "function",
+      "name": "seek_rows",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        217,
+        231
+      ],
+      "summary": "Function seek_rows in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:pinned_menu_geometry",
+      "type": "function",
+      "name": "pinned_menu_geometry",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        298,
+        303
+      ],
+      "summary": "Function pinned_menu_geometry in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:pinned_menu_paint",
+      "type": "function",
+      "name": "pinned_menu_paint",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        314,
+        377
+      ],
+      "summary": "Function pinned_menu_paint in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:refresh_pin_menu",
+      "type": "function",
+      "name": "refresh_pin_menu",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        399,
+        487
+      ],
+      "summary": "Function refresh_pin_menu in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:pinned_menu_press",
+      "type": "function",
+      "name": "pinned_menu_press",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        507,
+        584
+      ],
+      "summary": "Function pinned_menu_press in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:open_pin_menu",
+      "type": "function",
+      "name": "open_pin_menu",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        597,
+        623
+      ],
+      "summary": "Function open_pin_menu in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:pin_menu_is_open",
+      "type": "function",
+      "name": "pin_menu_is_open",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        627,
+        631
+      ],
+      "summary": "Function pin_menu_is_open in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:pin_menu_point_is_outside",
+      "type": "function",
+      "name": "pin_menu_point_is_outside",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        638,
+        644
+      ],
+      "summary": "Function pin_menu_point_is_outside in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:close_pin_menu",
+      "type": "function",
+      "name": "close_pin_menu",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        650,
+        663
+      ],
+      "summary": "Function close_pin_menu in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/pin_menu.rs:take_pin_menu_dismiss",
+      "type": "function",
+      "name": "take_pin_menu_dismiss",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        676,
+        702
+      ],
+      "summary": "Function take_pin_menu_dismiss in pin_menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/ui/preview_window/pin_menu.rs:PinMenu",
+      "type": "class",
+      "name": "PinMenu",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        23,
+        53
+      ],
+      "summary": "Class PinMenu in pin_menu.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/pin_menu.rs:PinMenuPaint",
+      "type": "class",
+      "name": "PinMenuPaint",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        63,
+        76
+      ],
+      "summary": "Class PinMenuPaint in pin_menu.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/pin_menu.rs:PinMenuFlyout",
+      "type": "class",
+      "name": "PinMenuFlyout",
+      "filePath": "src/ui/preview_window/pin_menu.rs",
+      "lineRange": [
+        84,
+        89
+      ],
+      "summary": "Class PinMenuFlyout in pin_menu.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:height",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:height",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:room",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:room",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:region",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:region",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:cursor_position",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:cursor_position",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:centered_top",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:centered_top",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:avoiding_text",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:avoiding_text",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:compute_mouse_layout",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:compute_mouse_layout",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:compute_keyboard_layout",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:compute_keyboard_layout",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:clamp_pinned_box",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "function:src/ui/preview_window/layout.rs:clamp_pinned_box",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "class:src/ui/preview_window/layout.rs:PreviewLayout",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "class:src/ui/preview_window/layout.rs:PreviewLayout",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "class:src/ui/preview_window/layout.rs:ScreenBounds",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "class:src/ui/preview_window/layout.rs:ScreenBounds",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "class:src/ui/preview_window/layout.rs:Clearance",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "class:src/ui/preview_window/layout.rs:Clearance",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "class:src/ui/preview_window/layout.rs:KeyboardPlacement",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/layout.rs",
+      "target": "class:src/ui/preview_window/layout.rs:KeyboardPlacement",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:cursor_screen_point",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:cursor_screen_point",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:content_box_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:content_box_of",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_mouse_move",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_mouse_move",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_caption_geometry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_caption_geometry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_transport_geometry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_transport_geometry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_transport_press",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_transport_press",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pin_seconds_at",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pin_seconds_at",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_transport_drag",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_transport_drag",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_transport_release",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_transport_release",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_volume_geometry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_volume_geometry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_volume_panel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_volume_panel",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_audio_volume_popup",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_audio_volume_popup",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pin_volume_dragging",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pin_volume_dragging",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_volume_press",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_volume_press",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_volume_drag",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_volume_drag",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_volume_release",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_volume_release",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:toggle_pin_volume",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:toggle_pin_volume",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:raise_pinned_window",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:raise_pinned_window",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_press",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_press",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_audio_control_press",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_audio_control_press",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_audio_control_release",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_audio_control_release",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_release",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "function:src/ui/preview_window/pin_input.rs:pinned_release",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "class:src/ui/preview_window/pin_input.rs:PinnedCaption",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "class:src/ui/preview_window/pin_input.rs:PinnedCaption",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "class:src/ui/preview_window/pin_input.rs:PinnedTransportBar",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_input.rs",
+      "target": "class:src/ui/preview_window/pin_input.rs:PinnedTransportBar",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:menu_rows",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:menu_rows",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:end_of_file_rows",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:end_of_file_rows",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:seek_rows",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:seek_rows",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:pinned_menu_geometry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:pinned_menu_geometry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:pinned_menu_paint",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:refresh_pin_menu",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:refresh_pin_menu",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:pinned_menu_press",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:pinned_menu_press",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:open_pin_menu",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:open_pin_menu",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:pin_menu_is_open",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:pin_menu_is_open",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:pin_menu_point_is_outside",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:pin_menu_point_is_outside",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:close_pin_menu",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:close_pin_menu",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:take_pin_menu_dismiss",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "function:src/ui/preview_window/pin_menu.rs:take_pin_menu_dismiss",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "class:src/ui/preview_window/pin_menu.rs:PinMenu",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "class:src/ui/preview_window/pin_menu.rs:PinMenu",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "class:src/ui/preview_window/pin_menu.rs:PinMenuPaint",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "class:src/ui/preview_window/pin_menu.rs:PinMenuPaint",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "class:src/ui/preview_window/pin_menu.rs:PinMenuFlyout",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/pin_menu.rs",
+      "target": "class:src/ui/preview_window/pin_menu.rs:PinMenuFlyout",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+Found 38 batch files (17 logical batches, 6 multi-part):
+  batch-1.json: 246 nodes, 273 edges
+  batch-2.json: 352 nodes, 397 edges
+  batch-3-part-1.json: 77 nodes, 149 edges
+  batch-3-part-2.json: 17 nodes, 28 edges
+  batch-3-part-3.json: 8 nodes, 12 edges
+  batch-3-part-4.json: 51 nodes, 100 edges
+  batch-3-part-5.json: 148 nodes, 283 edges
+  batch-3-part-6.json: 26 nodes, 50 edges
+  batch-4-part-1.json: 48 nodes, 78 edges
+  batch-4-part-2.json: 93 nodes, 155 edges
+  batch-4-part-3.json: 74 nodes, 152 edges
+  batch-4-part-4.json: 13 nodes, 21 edges
+  batch-5-part-1.json: 79 nodes, 125 edges
+  batch-5-part-2.json: 28 nodes, 56 edges
+  batch-5-part-3.json: 39 nodes, 63 edges
+  batch-5-part-4.json: 70 nodes, 140 edges
+  batch-6-part-1.json: 54 nodes, 88 edges
+  batch-6-part-2.json: 27 nodes, 49 edges
+  batch-7-part-1.json: 55 nodes, 103 edges
+  batch-7-part-2.json: 56 nodes, 95 edges
+  batch-7-part-3.json: 98 nodes, 98 edges
+  batch-7-part-4.json: 14 nodes, 14 edges
+  batch-8.json: 4 nodes, 4 edges
+  batch-9.json: 4 nodes, 0 edges
+  batch-10.json: 14 nodes, 0 edges
+  batch-11.json: 10 nodes, 0 edges
+  batch-12.json: 25 nodes, 0 edges
+  batch-13.json: 25 nodes, 0 edges
+  batch-14-part-1.json: 69 nodes, 118 edges
+  batch-14-part-2.json: 64 nodes, 87 edges
+  batch-14-part-3.json: 63 nodes, 69 edges
+  batch-14-part-4.json: 44 nodes, 75 edges
+  batch-14-part-5.json: 85 nodes, 162 edges
+  batch-14-part-6.json: 91 nodes, 173 edges
+  batch-14-part-7.json: 6 nodes, 10 edges
+  batch-15.json: 579 nodes, 1000 edges
+  batch-16.json: 422 nodes, 426 edges
+  batch-17.json: 103 nodes, 184 edges
+
+Input: 3281 nodes, 4837 edges
+
+Output: 3281 nodes, 4836 edges
+
+Imports edge recovery:
+  Recovered 0 `imports` edges from importMap (301 entries scanned)
+
+Written to D:\Github\rust-hover-preview\.ua\intermediate\assembled-graph.json (2603 KB)

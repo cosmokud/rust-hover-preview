@@ -1,0 +1,1522 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/formats/video_formats.rs",
+      "type": "file",
+      "name": "video_formats.rs",
+      "filePath": "src/formats/video_formats.rs",
+      "summary": "video_formats.rs (undefined, 419 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/video_formats.rs:list_matches_video",
+      "type": "function",
+      "name": "list_matches_video",
+      "filePath": "src/formats/video_formats.rs",
+      "lineRange": [
+        26,
+        39
+      ],
+      "summary": "Function list_matches_video in video_formats.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/video_formats.rs:matches_any_video_list",
+      "type": "function",
+      "name": "matches_any_video_list",
+      "filePath": "src/formats/video_formats.rs",
+      "lineRange": [
+        64,
+        80
+      ],
+      "summary": "Function matches_any_video_list in video_formats.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/video_formats.rs:matches_any_video_list_in",
+      "type": "function",
+      "name": "matches_any_video_list_in",
+      "filePath": "src/formats/video_formats.rs",
+      "lineRange": [
+        92,
+        99
+      ],
+      "summary": "Function matches_any_video_list_in in video_formats.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/video_formats.rs:claims_any_video_name",
+      "type": "function",
+      "name": "claims_any_video_name",
+      "filePath": "src/formats/video_formats.rs",
+      "lineRange": [
+        102,
+        108
+      ],
+      "summary": "Function claims_any_video_name in video_formats.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/video_formats.rs:claims_any_video_name_in",
+      "type": "function",
+      "name": "claims_any_video_name_in",
+      "filePath": "src/formats/video_formats.rs",
+      "lineRange": [
+        116,
+        123
+      ],
+      "summary": "Function claims_any_video_name_in in video_formats.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/video_formats.rs:claims_video_name",
+      "type": "function",
+      "name": "claims_video_name",
+      "filePath": "src/formats/video_formats.rs",
+      "lineRange": [
+        134,
+        140
+      ],
+      "summary": "Function claims_video_name in video_formats.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/video_formats.rs:is_video_file",
+      "type": "function",
+      "name": "is_video_file",
+      "filePath": "src/formats/video_formats.rs",
+      "lineRange": [
+        161,
+        171
+      ],
+      "summary": "Function is_video_file in video_formats.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/video_formats.rs:looks_like_mpegts",
+      "type": "function",
+      "name": "looks_like_mpegts",
+      "filePath": "src/formats/video_formats.rs",
+      "lineRange": [
+        173,
+        184
+      ],
+      "summary": "Function looks_like_mpegts in video_formats.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/video_formats.rs:has_mpegts_packets",
+      "type": "function",
+      "name": "has_mpegts_packets",
+      "filePath": "src/formats/video_formats.rs",
+      "lineRange": [
+        186,
+        198
+      ],
+      "summary": "Function has_mpegts_packets in video_formats.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/pdf_preview.rs",
+      "type": "file",
+      "name": "pdf_preview.rs",
+      "filePath": "src/readers/pdf_preview.rs",
+      "summary": "pdf_preview.rs (undefined, 878 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:initialize_apartment",
+      "type": "function",
+      "name": "initialize_apartment",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        62,
+        66
+      ],
+      "summary": "Function initialize_apartment in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:is_pdf_file",
+      "type": "function",
+      "name": "is_pdf_file",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        100,
+        105
+      ],
+      "summary": "Function is_pdf_file in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:is_pdf_file_in",
+      "type": "function",
+      "name": "is_pdf_file_in",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        116,
+        118
+      ],
+      "summary": "Function is_pdf_file_in in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:is_pdf_file_in_of",
+      "type": "function",
+      "name": "is_pdf_file_in_of",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        127,
+        139
+      ],
+      "summary": "Function is_pdf_file_in_of in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:is_pdf_preview",
+      "type": "function",
+      "name": "is_pdf_preview",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        143,
+        145
+      ],
+      "summary": "Function is_pdf_preview in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:page_dimensions",
+      "type": "function",
+      "name": "page_dimensions",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        151,
+        163
+      ],
+      "summary": "Function page_dimensions in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:page_dimension_key",
+      "type": "function",
+      "name": "page_dimension_key",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        168,
+        178
+      ],
+      "summary": "Function page_dimension_key in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:render_first_page",
+      "type": "function",
+      "name": "render_first_page",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        213,
+        225
+      ],
+      "summary": "Function render_first_page in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:render_opened_first_page",
+      "type": "function",
+      "name": "render_opened_first_page",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        228,
+        240
+      ],
+      "summary": "Function render_opened_first_page in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:book_page",
+      "type": "function",
+      "name": "book_page",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        283,
+        295
+      ],
+      "summary": "Function book_page in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:probe_book_page",
+      "type": "function",
+      "name": "probe_book_page",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        297,
+        334
+      ],
+      "summary": "Function probe_book_page in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:is_flat_page",
+      "type": "function",
+      "name": "is_flat_page",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        344,
+        353
+      ],
+      "summary": "Function is_flat_page in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:render_book_page",
+      "type": "function",
+      "name": "render_book_page",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        370,
+        390
+      ],
+      "summary": "Function render_book_page in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:decode_rendered_page",
+      "type": "function",
+      "name": "decode_rendered_page",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        399,
+        416
+      ],
+      "summary": "Function decode_rendered_page in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:page_size_in_dips",
+      "type": "function",
+      "name": "page_size_in_dips",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        443,
+        452
+      ],
+      "summary": "Function page_size_in_dips in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:fit_page",
+      "type": "function",
+      "name": "fit_page",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        456,
+        471
+      ],
+      "summary": "Function fit_page in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:fit_drawn_page",
+      "type": "function",
+      "name": "fit_drawn_page",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        489,
+        501
+      ],
+      "summary": "Function fit_drawn_page in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:open_document",
+      "type": "function",
+      "name": "open_document",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        517,
+        535
+      ],
+      "summary": "Function open_document in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:render_page",
+      "type": "function",
+      "name": "render_page",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        537,
+        564
+      ],
+      "summary": "Function render_page in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:read_stream_bytes",
+      "type": "function",
+      "name": "read_stream_bytes",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        566,
+        579
+      ],
+      "summary": "Function read_stream_bytes in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:opaque_bgra",
+      "type": "function",
+      "name": "opaque_bgra",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        585,
+        596
+      ],
+      "summary": "Function opaque_bgra in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/pdf_preview.rs:has_pdf_header",
+      "type": "function",
+      "name": "has_pdf_header",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        600,
+        612
+      ],
+      "summary": "Function has_pdf_header in pdf_preview.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/readers/pdf_preview.rs:BookPage",
+      "type": "class",
+      "name": "BookPage",
+      "filePath": "src/readers/pdf_preview.rs",
+      "lineRange": [
+        257,
+        260
+      ],
+      "summary": "Class BookPage in pdf_preview.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/shell/cloud_files.rs",
+      "type": "file",
+      "name": "cloud_files.rs",
+      "filePath": "src/shell/cloud_files.rs",
+      "summary": "cloud_files.rs (undefined, 50 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/cloud_files.rs:needs_download",
+      "type": "function",
+      "name": "needs_download",
+      "filePath": "src/shell/cloud_files.rs",
+      "lineRange": [
+        36,
+        42
+      ],
+      "summary": "Function needs_download in cloud_files.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/cloud_files.rs:is_remote",
+      "type": "function",
+      "name": "is_remote",
+      "filePath": "src/shell/cloud_files.rs",
+      "lineRange": [
+        48,
+        50
+      ],
+      "summary": "Function is_remote in cloud_files.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/shell/explorer_hook.rs",
+      "type": "file",
+      "name": "explorer_hook.rs",
+      "filePath": "src/shell/explorer_hook.rs",
+      "summary": "explorer_hook.rs (undefined, 141 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/shell/hook_thread.rs",
+      "type": "file",
+      "name": "hook_thread.rs",
+      "filePath": "src/shell/hook_thread.rs",
+      "summary": "hook_thread.rs (undefined, 71 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/hook_thread.rs:spawn",
+      "type": "function",
+      "name": "spawn",
+      "filePath": "src/shell/hook_thread.rs",
+      "lineRange": [
+        21,
+        37
+      ],
+      "summary": "Function spawn in hook_thread.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/hook_thread.rs:request_stop",
+      "type": "function",
+      "name": "request_stop",
+      "filePath": "src/shell/hook_thread.rs",
+      "lineRange": [
+        40,
+        47
+      ],
+      "summary": "Function request_stop in hook_thread.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/hook_thread.rs:run",
+      "type": "function",
+      "name": "run",
+      "filePath": "src/shell/hook_thread.rs",
+      "lineRange": [
+        49,
+        71
+      ],
+      "summary": "Function run in hook_thread.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/shell/key_input.rs",
+      "type": "file",
+      "name": "key_input.rs",
+      "filePath": "src/shell/key_input.rs",
+      "summary": "key_input.rs (undefined, 667 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:pin_key_command",
+      "type": "function",
+      "name": "pin_key_command",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        94,
+        99
+      ],
+      "summary": "Function pin_key_command in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:publish_pin_key_owner",
+      "type": "function",
+      "name": "publish_pin_key_owner",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        106,
+        109
+      ],
+      "summary": "Function publish_pin_key_owner in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:take_pin_key_presses",
+      "type": "function",
+      "name": "take_pin_key_presses",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        132,
+        140
+      ],
+      "summary": "Function take_pin_key_presses in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:pin_key_message_acts",
+      "type": "function",
+      "name": "pin_key_message_acts",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        170,
+        172
+      ],
+      "summary": "Function pin_key_message_acts in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:pin_toggle_held_after",
+      "type": "function",
+      "name": "pin_toggle_held_after",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        189,
+        213
+      ],
+      "summary": "Function pin_toggle_held_after in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:key_to_vk",
+      "type": "function",
+      "name": "key_to_vk",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        254,
+        305
+      ],
+      "summary": "Function key_to_vk in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:refresh",
+      "type": "function",
+      "name": "refresh",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        312,
+        326
+      ],
+      "summary": "Function refresh in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:take_presses",
+      "type": "function",
+      "name": "take_presses",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        330,
+        332
+      ],
+      "summary": "Function take_presses in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:spawn_key_watcher",
+      "type": "function",
+      "name": "spawn_key_watcher",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        335,
+        342
+      ],
+      "summary": "Function spawn_key_watcher in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:request_stop",
+      "type": "function",
+      "name": "request_stop",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        345,
+        347
+      ],
+      "summary": "Function request_stop in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/key_input.rs:key_hook_proc",
+      "type": "function",
+      "name": "key_hook_proc",
+      "filePath": "src/shell/key_input.rs",
+      "lineRange": [
+        349,
+        426
+      ],
+      "summary": "Function key_hook_proc in key_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:list_matches_video",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:matches_any_video_list",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:matches_any_video_list",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:matches_any_video_list_in",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:matches_any_video_list_in",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:claims_any_video_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:claims_any_video_name",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:claims_any_video_name_in",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:claims_any_video_name_in",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:claims_video_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:claims_video_name",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:is_video_file",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:is_video_file",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:looks_like_mpegts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:has_mpegts_packets",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "function:src/formats/video_formats.rs:has_mpegts_packets",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:initialize_apartment",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:initialize_apartment",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:is_pdf_file",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:is_pdf_file",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:is_pdf_file_in",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:is_pdf_file_in",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:is_pdf_file_in_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:is_pdf_file_in_of",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:is_pdf_preview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:is_pdf_preview",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:page_dimensions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:page_dimensions",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:page_dimension_key",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:render_first_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:render_first_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:render_opened_first_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:book_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:book_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:probe_book_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:is_flat_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:render_book_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:render_book_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:decode_rendered_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:page_size_in_dips",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:fit_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:fit_drawn_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:open_document",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:render_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:read_stream_bytes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:opaque_bgra",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:opaque_bgra",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "function:src/readers/pdf_preview.rs:has_pdf_header",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "class:src/readers/pdf_preview.rs:BookPage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "class:src/readers/pdf_preview.rs:BookPage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/cloud_files.rs",
+      "target": "function:src/shell/cloud_files.rs:needs_download",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/cloud_files.rs",
+      "target": "function:src/shell/cloud_files.rs:needs_download",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/cloud_files.rs",
+      "target": "function:src/shell/cloud_files.rs:is_remote",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/cloud_files.rs",
+      "target": "function:src/shell/cloud_files.rs:is_remote",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/hook_thread.rs",
+      "target": "function:src/shell/hook_thread.rs:spawn",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/hook_thread.rs",
+      "target": "function:src/shell/hook_thread.rs:spawn",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/hook_thread.rs",
+      "target": "function:src/shell/hook_thread.rs:request_stop",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/hook_thread.rs",
+      "target": "function:src/shell/hook_thread.rs:request_stop",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/hook_thread.rs",
+      "target": "function:src/shell/hook_thread.rs:run",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:pin_key_command",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:pin_key_command",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:publish_pin_key_owner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:publish_pin_key_owner",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:take_pin_key_presses",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:take_pin_key_presses",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:pin_key_message_acts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:pin_key_message_acts",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:pin_toggle_held_after",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:key_to_vk",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:key_to_vk",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:refresh",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:refresh",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:take_presses",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:take_presses",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:spawn_key_watcher",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:spawn_key_watcher",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:request_stop",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:request_stop",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/key_input.rs",
+      "target": "function:src/shell/key_input.rs:key_hook_proc",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/video_formats.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/pdf_preview.rs",
+      "target": "file:src/shell/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/explorer_hook.rs",
+      "target": "file:src/app/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/explorer_hook.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/explorer_hook.rs",
+      "target": "file:src/engines/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/explorer_hook.rs",
+      "target": "file:src/formats/video_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/explorer_hook.rs",
+      "target": "file:src/shell/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/explorer_hook.rs",
+      "target": "file:src/ui/preview_window.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

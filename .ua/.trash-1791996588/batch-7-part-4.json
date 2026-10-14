@@ -1,0 +1,340 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "type": "file",
+      "name": "ws_m_frame_truth.rs",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "summary": "ws_m_frame_truth.rs (undefined, 1091 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "test",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:pin_state_dump",
+      "type": "function",
+      "name": "pin_state_dump",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        45,
+        211
+      ],
+      "summary": "Function pin_state_dump in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:clean_slate",
+      "type": "function",
+      "name": "clean_slate",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        246,
+        260
+      ],
+      "summary": "Function clean_slate in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:step_the_pin_to_another_file",
+      "type": "function",
+      "name": "step_the_pin_to_another_file",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        275,
+        314
+      ],
+      "summary": "Function step_the_pin_to_another_file in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_caption_button_point",
+      "type": "function",
+      "name": "a_caption_button_point",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        329,
+        345
+      ],
+      "summary": "Function a_caption_button_point in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_point_in_the_media",
+      "type": "function",
+      "name": "a_point_in_the_media",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        350,
+        359
+      ],
+      "summary": "Function a_point_in_the_media in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_dump_of_three_take_ups_is_comparable",
+      "type": "function",
+      "name": "a_dump_of_three_take_ups_is_comparable",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        367,
+        418
+      ],
+      "summary": "Function a_dump_of_three_take_ups_is_comparable in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap",
+      "type": "function",
+      "name": "a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        428,
+        533
+      ],
+      "summary": "Function a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_transport_part_point",
+      "type": "function",
+      "name": "a_transport_part_point",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        537,
+        554
+      ],
+      "summary": "Function a_transport_part_point in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_bar",
+      "type": "function",
+      "name": "a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_bar",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        581,
+        705
+      ],
+      "summary": "Function a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_bar in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_swap_leaves_the_state_a_box_change_leaves",
+      "type": "function",
+      "name": "a_swap_leaves_the_state_a_box_change_leaves",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        717,
+        778
+      ],
+      "summary": "Function a_swap_leaves_the_state_a_box_change_leaves in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:the_box_a_swap_measures_is_the_box_the_take_up_installs",
+      "type": "function",
+      "name": "the_box_a_swap_measures_is_the_box_the_take_up_installs",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        799,
+        852
+      ],
+      "summary": "Function the_box_a_swap_measures_is_the_box_the_take_up_installs in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card",
+      "type": "function",
+      "name": "a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        865,
+        1038
+      ],
+      "summary": "Function a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_walk_while_the_pin_is_a_bubble_leaves_the_window_a_bubble_on_the_next_file",
+      "type": "function",
+      "name": "a_walk_while_the_pin_is_a_bubble_leaves_the_window_a_bubble_on_the_next_file",
+      "filePath": "src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "lineRange": [
+        1049,
+        1091
+      ],
+      "summary": "Function a_walk_while_the_pin_is_a_bubble_leaves_the_window_a_bubble_on_the_next_file in ws_m_frame_truth.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:pin_state_dump",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:clean_slate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:step_the_pin_to_another_file",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_caption_button_point",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_point_in_the_media",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_dump_of_three_take_ups_is_comparable",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_video_pin_is_still_usable_after_a_title_bar_drag_that_follows_a_swap",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_transport_part_point",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_video_pin_is_still_usable_after_a_swap_that_is_followed_by_a_press_on_its_bar",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_swap_leaves_the_state_a_box_change_leaves",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:the_box_a_swap_measures_is_the_box_the_take_up_installs",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "function:src/ui/preview_window/tests/ws_m_frame_truth.rs:a_walk_while_the_pin_is_a_bubble_leaves_the_window_a_bubble_on_the_next_file",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/tests/ws_m_frame_truth.rs",
+      "target": "file:src/ui/preview_window/pin_input.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

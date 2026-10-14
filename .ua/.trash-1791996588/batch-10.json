@@ -1,0 +1,187 @@
+{
+  "nodes": [
+    {
+      "id": "document:ARCHITECTURE.md",
+      "type": "document",
+      "name": "ARCHITECTURE.md",
+      "filePath": "ARCHITECTURE.md",
+      "summary": "Markdown document covering Architecture (compact), Runtime threads (`src/main.rs`, `src/app/`, `src/shell/`, `src/ui/`), Source layout.",
+      "tags": [
+        "docs",
+        "documentation",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:CHANGELOG.md",
+      "type": "document",
+      "name": "CHANGELOG.md",
+      "filePath": "CHANGELOG.md",
+      "summary": "Markdown document covering Changelog, [0.4.2] - 2026-10-14, Added.",
+      "tags": [
+        "docs",
+        "documentation",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:CODE_OF_CONDUCT.md",
+      "type": "document",
+      "name": "CODE_OF_CONDUCT.md",
+      "filePath": "CODE_OF_CONDUCT.md",
+      "summary": "Markdown document covering Contributor Covenant Code of Conduct, Our Pledge, Our Standards.",
+      "tags": [
+        "docs",
+        "documentation",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:CONTRIBUTING.md",
+      "type": "document",
+      "name": "CONTRIBUTING.md",
+      "filePath": "CONTRIBUTING.md",
+      "summary": "Markdown document covering Contributing to Rust Hover Preview, Code of Conduct, Ways to contribute.",
+      "tags": [
+        "docs",
+        "documentation",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:Cargo.toml",
+      "type": "config",
+      "name": "Cargo.toml",
+      "filePath": "Cargo.toml",
+      "summary": "Cargo manifest: package metadata, the dependency graph (windows, image, syntect, archive readers) and build profiles.",
+      "tags": [
+        "config",
+        "configuration",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:PRIVACY.md",
+      "type": "document",
+      "name": "PRIVACY.md",
+      "filePath": "PRIVACY.md",
+      "summary": "Markdown document covering Privacy Policy for Rust Hover Preview, What the app touches, and why, What the app does not do.",
+      "tags": [
+        "docs",
+        "documentation",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "Markdown document covering Rust Hover Preview, Highlights, Supported Formats.",
+      "tags": [
+        "docs",
+        "documentation",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:SECURITY.md",
+      "type": "document",
+      "name": "SECURITY.md",
+      "filePath": "SECURITY.md",
+      "summary": "Markdown document covering Security Policy, Supported versions, Reporting a vulnerability.",
+      "tags": [
+        "docs",
+        "documentation",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:THIRD-PARTY.md",
+      "type": "document",
+      "name": "THIRD-PARTY.md",
+      "filePath": "THIRD-PARTY.md",
+      "summary": "Markdown document covering Third-party licenses, Apache-2.0, BSD-2-Clause.",
+      "tags": [
+        "docs",
+        "documentation",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:TODO.md",
+      "type": "document",
+      "name": "TODO.md",
+      "filePath": "TODO.md",
+      "summary": "Markdown document covering Features, Multi-Frame Formats The Front Does Not Count, Unsupported Audio Formats.",
+      "tags": [
+        "docs",
+        "documentation",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:build-installers.ps1",
+      "type": "file",
+      "name": "build-installers.ps1",
+      "filePath": "build-installers.ps1",
+      "summary": "PowerShell script that builds the github profile and packages the NSIS installers via cargo-packager.",
+      "tags": [
+        "script",
+        "source",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:generate-attribution.ps1",
+      "type": "file",
+      "name": "generate-attribution.ps1",
+      "filePath": "generate-attribution.ps1",
+      "summary": "PowerShell script that regenerates the third-party attribution notices for bundled components.",
+      "tags": [
+        "script",
+        "source",
+        "rust"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:rust-toolchain.toml",
+      "type": "config",
+      "name": "rust-toolchain.toml",
+      "filePath": "rust-toolchain.toml",
+      "summary": "Rust toolchain pin: the compiler version and targets the project builds with.",
+      "tags": [
+        "config",
+        "configuration",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:tribute.toml",
+      "type": "config",
+      "name": "tribute.toml",
+      "filePath": "tribute.toml",
+      "summary": "Configuration for the tribute tool: metadata for generating third-party attribution notices.",
+      "tags": [
+        "config",
+        "configuration",
+        "general"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": []
+}

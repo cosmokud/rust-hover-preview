@@ -1,0 +1,14 @@
+{
+  "fixedSectionOk": true,
+  "nodesRecovered": 0,
+  "edgesRestored": 0,
+  "crossBatchEdgesAdded": 0,
+  "typesRemapped": 0,
+  "complexityRemapped": 0,
+  "notes": [
+    "Assembled graph has 3281 nodes and 4836 edges; no missing ids, unknown types, or unknown complexity values.",
+    "No dangling edges; all 306 imports edges expected by import-map are present.",
+    "Soft-cap warning: src/config/config.rs had high 1-hop degree (69, kept top 46 cross-batch entries) — downstream architecture analysis should not assume completeness of its neighbor set.",
+    "One duplicate edge dropped by dedup during merge (4837 -> 4836)."
+  ]
+}
