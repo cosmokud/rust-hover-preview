@@ -2760,7 +2760,18 @@ pub fn run_preview_window() {
                     // for, the mark for the file is what the pin is left standing over (see
                     // `pin_step_off` and `show_pin_failure`).
                     PinSwap::Refused { path, walk } => refuse_pinned_media(install, path, walk),
-                    PinSwap::Ready(file) => install_pinned_media(install, file),
+                    PinSwap::Ready(file) => {
+                        install_pinned_media(install, file);
+
+                        // And the band a step's cover is holding, where this install came out of
+                        // a hold: the park's own settle ran earlier in this tick, before the pin
+                        // had the box it has just been given, so it is asked again now the file
+                        // the window was held for is in it. A cover left standing over a band
+                        // that has moved is the outgoing frame stretched into the incoming
+                        // file's shape, which is the whole of what the hold was for (see
+                        // `PinSwapHold` and `settle_pinned_park`).
+                        settle_pinned_park();
+                    }
                 }
             }
 

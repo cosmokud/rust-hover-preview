@@ -518,44 +518,59 @@ fn a_band_is_handed_back_on_a_player_and_given_up_on_a_cover_that_waits_for_neit
     // The player that was playing is back, and it is the same process: nothing to wait for, at any
     // age — including immediately, which is what a move's release is.
     assert_eq!(
-        park_swap_arm(true, false, Duration::ZERO),
+        park_swap_arm(ParkArm::Carry, true, false, Duration::ZERO),
         Some(ParkSwap::Presented),
         "a move's park is answered by the player that is holding the frame the band is showing"
     );
     assert_eq!(
-        park_swap_arm(true, false, PIN_PARK_SWAP_TIMEOUT * 2),
+        park_swap_arm(ParkArm::Carry, true, false, PIN_PARK_SWAP_TIMEOUT * 2),
         Some(ParkSwap::Presented),
         "and the age of the wait changes nothing about that answer"
     );
 
     // A replacement is up but has decoded nothing: waiting, until the bound says stop.
     assert_eq!(
-        park_swap_arm(true, true, Duration::ZERO),
+        park_swap_arm(ParkArm::Resize, true, true, Duration::ZERO),
         None,
         "a replacement's window being visible is not a frame being on it"
     );
     assert_eq!(
-        park_swap_arm(true, true, PIN_PARK_SWAP_TIMEOUT - Duration::from_millis(1)),
+        park_swap_arm(
+            ParkArm::Resize,
+            true,
+            true,
+            PIN_PARK_SWAP_TIMEOUT - Duration::from_millis(1)
+        ),
         None,
         "nor is one that is one millisecond short of the bound"
     );
     assert_eq!(
-        park_swap_arm(true, true, PIN_PARK_SWAP_TIMEOUT),
+        park_swap_arm(ParkArm::Resize, true, true, PIN_PARK_SWAP_TIMEOUT),
         Some(ParkSwap::TimedOut),
         "and the bound hands the band back rather than holding a placeholder against an empty \
          window for ever — which is what stops a dark scene, a dead player or a missing decoder \
          from being a black band that never becomes a picture"
     );
 
+    // A file step's replacement is a window the swap was itself held for, so its cover is handed
+    // the band on the window and waits out nothing: that wait has already been paid, once, by the
+    // swap (see `PinSwapHold`).
+    assert_eq!(
+        park_swap_arm(ParkArm::Step, true, true, Duration::ZERO),
+        Some(ParkSwap::Presented),
+        "a step's cover is answered by its window: waiting the bound again would hold the outgoing \
+         frame over a band that has already been given the incoming file's box"
+    );
+
     // No window at all is the case the swap bound does *not* cover, and the one it most certainly
     // must not: there is nothing to hand the band to, and the placeholder it is holding is opaque.
     assert_eq!(
-        park_swap_arm(false, false, Duration::ZERO),
+        park_swap_arm(ParkArm::Carry, false, false, Duration::ZERO),
         None,
         "a player with no window cannot have presented"
     );
     assert_eq!(
-        park_swap_arm(false, true, PIN_PARK_SWAP_TIMEOUT),
+        park_swap_arm(ParkArm::Resize, false, true, PIN_PARK_SWAP_TIMEOUT),
         None,
         "and the swap bound is not a reason to swap one that never published a window: the swap \
          takes the parked flag down and the window up together, and with no window up it is the \
@@ -565,13 +580,13 @@ fn a_band_is_handed_back_on_a_player_and_given_up_on_a_cover_that_waits_for_neit
     // The cover's own bound is the case that must not be for ever, because an opaque band this
     // app's own window hit-tests answers every click in the video area for the life of the pin.
     assert_eq!(
-        park_swap_arm(false, true, PIN_PARK_COVER_TIMEOUT),
+        park_swap_arm(ParkArm::Step, false, true, PIN_PARK_COVER_TIMEOUT),
         Some(ParkSwap::Abandoned),
         "past the cover's own bound the cover is given up rather than held: the band goes back to \
          being the hole it is between films, which a player's window fills the moment it has one"
     );
     assert_eq!(
-        park_swap_arm(false, true, PIN_PARK_SWAP_TIMEOUT * 4),
+        park_swap_arm(ParkArm::Resize, false, true, PIN_PARK_SWAP_TIMEOUT * 4),
         Some(ParkSwap::Abandoned),
         "nor is four times the swap bound any different — the wait is extended rather than \
          restarted, so a window arriving late is still handed the band on the first tick that \
