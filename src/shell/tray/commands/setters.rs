@@ -669,8 +669,9 @@ pub(in super::super) enum PinShuffle {
 /// Nothing on screen is rebuilt either: a walk already in hand carries the shuffle it was
 /// planned with, and what a click here changes is the walk the next step is planned as —
 /// whether that step is a caption's next press, a forward key, or the end of a file the
-/// kind's own `End of File` row calls `Jump`. A step back is the file before it either
-/// way.
+/// kind's own `End of File` row calls `Jump`. A step back is the file the walk came from,
+/// shuffle or no shuffle: the order a shuffle picks the *next* file in is the only thing it
+/// is (see `PinStep::step`).
 pub(in super::super) fn toggle_pin_shuffle(kind: PinShuffle) {
     if let Ok(mut config) = CONFIG.lock() {
         match kind {
