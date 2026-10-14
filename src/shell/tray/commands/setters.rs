@@ -41,8 +41,8 @@ use crate::engines::document_cache;
 use crate::engines::office_render;
 use crate::formats::codecs;
 use crate::ui::preview_window::{
-    forget_video_geometry, refresh_preview, refresh_preview_types, trim_image_cache,
-    trim_subtitle_cache,
+    forget_video_geometry, publish_tray_volume, refresh_preview, refresh_preview_types,
+    trim_image_cache, trim_subtitle_cache,
 };
 use crate::{app::startup, CONFIG};
 use std::os::windows::ffi::OsStrExt;
@@ -558,6 +558,10 @@ pub(in super::super) fn set_video_volume(index: u16) {
         config.video_volume = volume;
         config.save();
     }
+
+    // A film already playing in a pin is playing at a level of its own, so it is told this one
+    // now rather than at the next file it is shown (see `tray_volume_moved`).
+    publish_tray_volume(false);
 }
 
 /// A level of the `Volume → Audio` submenu, by the position it was listed at: the volume a
@@ -572,6 +576,10 @@ pub(in super::super) fn set_audio_volume(index: u16) {
         config.audio_volume = volume;
         config.save();
     }
+
+    // A sound already playing in a pin is playing at a level of its own, so it is told this one
+    // now rather than at the next file it is shown (see `tray_volume_moved`).
+    publish_tray_volume(true);
 }
 
 /// A way of starting a sound, by the position it was listed at: where in a file a hover drops
