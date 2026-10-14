@@ -182,9 +182,27 @@ pub(super) fn spawn_player(command: &mut std::process::Command) -> Option<Player
     command.spawn().ok().map(PlayerProcess::Started)
 }
 
+/// Whether the test build spawns a real player where a test asks it to, the way the mpv pipe
+/// writes to a real one where one does (see `WRITE_TO_A_REAL_PIPE`): the noting above is what
+/// keeps every other test off the desktop, and a loop that watches real windows come and go is
+/// the one test that cannot run on noted ones.
+#[cfg(test)]
+static SPAWN_REAL_PLAYER: AtomicBool = AtomicBool::new(false);
+
+/// Begin real players until told otherwise, or note them again. Only a loop watching real
+/// windows sets this; every other test inherits noted players, which begin nothing, show
+/// nothing and can never end a real process (see `spawn_player`).
+#[cfg(test)]
+pub(super) fn spawn_real_player(real: bool) {
+    SPAWN_REAL_PLAYER.store(real, Ordering::SeqCst);
+}
+
 /// The test build's launch: note a player instead of beginning one (see `spawn_player`).
 #[cfg(test)]
-pub(super) fn spawn_player(_command: &mut std::process::Command) -> Option<PlayerProcess> {
+pub(super) fn spawn_player(command: &mut std::process::Command) -> Option<PlayerProcess> {
+    if SPAWN_REAL_PLAYER.load(Ordering::Acquire) {
+        return command.spawn().ok().map(PlayerProcess::Started);
+    }
     Some(PlayerProcess::Noted(next_noted_pid()))
 }
 

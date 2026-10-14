@@ -592,6 +592,12 @@ fn a_wait_that_ends_with_no_window_gives_the_cover_up() {
 /// file. That is a pin whose **Next** and **Previous** do nothing at all.
 #[test]
 fn a_hold_that_has_come_to_its_end_is_the_answer_the_tick_gives() {
+    // Serialized with the pin tests: a wait that ends with no window in it gives the cover up
+    // with it, so a settle here ends whatever cover is standing — and a cover another test is
+    // standing under is not this one's to end (see `settle_pin_swap`).
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let mut media = create_loading_media(200, 360);
     // A film a player of this app's own draws, which is the route whose wait is the player's
     // window — and a test has no player behind it at all, so nothing is alive to be waited for.
