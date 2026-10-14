@@ -274,6 +274,7 @@ mod hover;
 mod layout;
 mod media_scales;
 mod pin_audio_facts;
+mod pin_audio_pause;
 mod pin_audio_seek;
 mod pin_bubble_art;
 mod pin_bubble_space;
