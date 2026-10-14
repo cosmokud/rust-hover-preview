@@ -694,3 +694,19 @@ fn stand_native_video_media() {
         }
     }
 }
+
+/// A sound's level reaches the player's filter at every level including the top: the player's own
+/// `-volume` knob is silent at 100, so a sound at `Volume → Audio` 100% goes through `volume=1.00`
+/// like a film's — and a level of nothing is still a player playing silence, not no player at all
+/// (see `audio_volume_filter`).
+#[test]
+fn a_sounds_level_reaches_the_filter_at_every_level_including_the_top() {
+    assert_eq!(audio_volume_filter(100, None), "volume=1.00");
+    assert_eq!(audio_volume_filter(99, None), "volume=0.99");
+    assert_eq!(
+        audio_volume_filter(0, None),
+        "volume=0.00",
+        "silence that still plays, so the card's clock moves and the file stays seekable"
+    );
+    assert_eq!(audio_volume_filter(100, Some(1.5)), "volume=1.5000");
+}

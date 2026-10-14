@@ -827,9 +827,9 @@ pub(super) fn player_loops_itself(loop_: bool, start: f64) -> bool {
 }
 
 /// Start FFmpeg's player on a sound: no window at all, which is the whole of what this side asks
-/// of it, and the level the sound is played at — the player's own scale, `0` to `100`, where the
-/// file is played as it holds it, and the filter that carries the gain the tray's `Normalize`
-/// measured for it (see `Normalize`).
+/// of it, and the level the sound is played at — the filter's own scale, `0` to `100` taken as a
+/// share, where the file is played as it holds it, with the gain the tray's `Normalize` measured
+/// for it folded into it where one was (see `audio_volume_filter` and `Normalize`).
 ///
 /// A sound is looped while it is hovered, as a video is: what a hover is for is the file, and a
 /// sound that stopped under a pointer that had not moved would be a preview that ended on its
@@ -857,6 +857,25 @@ pub(super) fn player_loops_itself(loop_: bool, start: f64) -> bool {
 /// Which of the two a player is begun with is [`player_loops_itself`], and the card's clock is
 /// read by the same answer: a player that loops itself never exits, so there is no pass of it
 /// for this side to turn over and the clock is the thing that goes round (see `audio_clock`).
+/// The `-af` argument a sound's player is started with: the level, with the file's own measured
+/// gain folded into it where one was — the same filter a film's soundtrack goes through at every
+/// level (see `start_video_playback`).
+///
+/// The player's own `-volume` knob is never used: it is silent at 100, while the filter plays the
+/// whole of the scale — so a sound at `Volume → Audio` 100% is heard at full like a film.
+pub(super) fn audio_volume_filter(volume: u32, gain: Option<f64>) -> String {
+    match gain {
+        // What is handed to the filter is the whole of what the file is scaled by, so a
+        // normalized file at `Volume → Audio` 10% is heard at a tenth of the level rather than at ten
+        // times it.
+        Some(gain) => format!("volume={:.4}", f64::from(volume.min(100)) / 100.0 * gain),
+        // A level of nothing is a filter of nothing rather than no player at all: silence is what
+        // a player at zero is, so the sound goes on playing and stays seekable with nothing to
+        // hear (see `start_audio_playback_at`).
+        None => format!("volume={:.2}", f64::from(volume.min(100)) / 100.0),
+    }
+}
+
 pub(super) fn start_audio_player(
     path: &Path,
     volume: u32,
@@ -868,19 +887,9 @@ pub(super) fn start_audio_player(
     command.args(["-nodisp", "-autoexit", "-loglevel", "quiet"]);
 
     // The level the sound is played at, with the file's own measured gain folded into it where
-    // one was: FFmpeg's player has a scale of its own for a level and a filter for a gain, and the
-    // two multiply — what is handed to the filter is the whole of what the file is scaled by, so a
-    // normalized file at `Volume → Audio` 10% is heard at a tenth of the level rather than at ten
-    // times it.
-    match gain {
-        Some(gain) => {
-            let level = format!("volume={:.4}", f64::from(volume) / 100.0 * gain);
-            command.args(["-af", &level]);
-        }
-        None => {
-            command.args(["-volume", &volume.min(100).to_string()]);
-        }
-    }
+    // one was (see `audio_volume_filter`).
+    let level = audio_volume_filter(volume, gain);
+    command.args(["-af", &level]);
 
     if start.is_finite() && start > 0.0 {
         command.args(["-ss", &format!("{start:.3}")]);
