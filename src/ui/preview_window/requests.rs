@@ -33,6 +33,18 @@ pub fn request_pin_menu_dismiss() {
     PIN_MENU_DISMISS_REQUESTED.store(true, Ordering::Release);
 }
 
+/// One of the tray's two `Volume` rows was moved, and which half of it: the film's, or the
+/// sound's.
+///
+/// A pin is playing at a level of its own — the one it was taken up at, and whatever a hand
+/// has done on its knob since — so a row moved in the tray is the one road that has to reach
+/// past that and say the level out loud to whatever is already up. It is said to the loop,
+/// which is where the pin's player and its clock are, and a pin showing a file of the other
+/// half is left exactly where it is (see `tray_volume_moved`).
+pub fn publish_tray_volume(audio: bool) {
+    send_preview(PreviewMessage::TrayVolume { audio });
+}
+
 /// Whether a pin has been closed since this was last asked. The Explorer hook reads it once
 /// per tick to know that what is under the pointer is a hover it has not answered yet: the
 /// file it was on when the pin went up is not a file the pointer has left and come back to,

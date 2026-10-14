@@ -284,6 +284,7 @@ pub(crate) use requests::notify_peazip_ready;
 pub(crate) use requests::pinned;
 pub(crate) use requests::pinned_path;
 pub(crate) use requests::preview_screen_rect;
+pub(crate) use requests::publish_tray_volume;
 pub(crate) use requests::refresh_pin;
 pub(crate) use requests::refresh_preview;
 pub(crate) use requests::refresh_preview_types;

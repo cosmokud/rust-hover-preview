@@ -542,6 +542,148 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     clear_restart_count();
 }
 
+/// A level moved on one of the tray's two `Volume` rows is given to the pin that is already
+/// up, which is the one road a pin's own level does not open on its own.
+///
+/// A pin plays at the level it was taken up at and at whatever a hand has done on its knob since,
+/// and a row moved in the tray used to be the setting's alone: the film on screen went on being
+/// heard at what it was until the pin was closed and taken up again, which reads as a tray that
+/// has stopped working (see `tray_volume_moved`). Every route answers with what it always has,
+/// because it is the knob's own road and not a second one. The `Remember` rows are stood off so
+/// that a test never writes the configuration file a level would be remembered into.
+#[test]
+fn a_level_moved_in_the_tray_is_given_to_the_pin_that_is_up() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let mut levels = PinLevels::set(10, 50);
+    levels.remembering(false, false);
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+
+    let content = (100, 100, 420, 340);
+    let film = PathBuf::from("tray-live-volume-film.mkv");
+    let stand = |level: u32, playing_at: u32| {
+        let mut pin = overlay_pin(content, PinChrome::always());
+        pin.path = film.clone();
+        pin.transport.begun(30.0, true, false);
+        pin.transport.duration = Some(200.0);
+        pin.volume.level = level;
+        pin.volume.playing_at = playing_at;
+        stand_pin(Some(pin));
+    };
+
+    // FFmpeg's player, which is told nothing while it runs: the film the tray has turned down to
+    // nothing is begun again at nothing, from the second it was watching.
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    clear_restart_count();
+    stand(100, 100);
+    levels.set_levels(0, 50);
+    tray_volume_moved(false);
+    assert_eq!(pinned_volume_level(), 0, "the pin is playing at 0%");
+    assert_eq!(
+        restart_count(),
+        1,
+        "FFmpeg's player takes a level by being begun at one, so the row is a player begun again"
+    );
+
+    // mpv's, which can be told one while it plays: the level is written down its own pipe and
+    // nothing is begun again.
+    clear_restart_count();
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    // The player above was begun again, which wrote its own pid down: this half is about the one
+    // this app was holding before that.
+    VIDEO_PID.store(101, Ordering::SeqCst);
+    mpv_ipc::remember_pipe(101, "tray-live-volume-pipe");
+    mpv_ipc::clear_noted();
+    stand(0, 0);
+    levels.set_levels(100, 50);
+    tray_volume_moved(false);
+    assert_eq!(pinned_volume_level(), 100, "the pin is playing at 100%");
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![format!(
+            "{}\n",
+            r#"{"command":["set_property","volume",100],"async":true}"#
+        )],
+        "mpv is told the level while it runs, which is what makes the row free for it"
+    );
+    assert_eq!(restart_count(), 0, "and nothing is begun again");
+
+    // And the other half's row, which is about a sound: the film under it is left exactly where
+    // it is, the same answer a film stepped onto from a sound is given (see `pinned_level`).
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+    stand(100, 100);
+    levels.set_levels(100, 0);
+    tray_volume_moved(true);
+    assert_eq!(
+        pinned_volume_level(),
+        100,
+        "a sound's row is not a hand on the film on screen"
+    );
+    assert_eq!(restart_count(), 0);
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "and nothing is written to a pipe for it"
+    );
+
+    // And a sound's own row, which is the same road for a card: the level is the pin's own at
+    // once, and the player a card begins is owed the new one — the clock behind a card and its
+    // player are the loop's, so this is the loop's flag rather than a player begun here (see
+    // `settle_pinned_audio_volume`).
+    let mut sound = create_loading_media(320, 240);
+    sound.media_type = MediaType::Audio;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(sound);
+    }
+    PIN_AUDIO_VOLUME.store(false, Ordering::SeqCst);
+    stand_pin(Some(PinnedPreview {
+        volume: PinVolume {
+            audio: true,
+            level: 100,
+            playing_at: 100,
+            ..Default::default()
+        },
+        ..sound_pin()
+    }));
+    levels.set_levels(50, 0);
+    tray_volume_moved(true);
+    assert_eq!(
+        pinned_audio_level(),
+        0,
+        "the sound's own row is a hand on the card under it, and it is at 0%"
+    );
+    assert!(
+        PIN_AUDIO_VOLUME.load(Ordering::Acquire),
+        "and the loop is told to begin the player a card has at the new level"
+    );
+    PIN_AUDIO_VOLUME.store(false, Ordering::SeqCst);
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
 /// The media behind the pin, as the machine's own engine rather than a player of its own: the
 /// native arms of `set_pin_volume` and `settle_pin_volume` are read off the media's kind, so this
 /// is what a test about the other routes pins them with.
