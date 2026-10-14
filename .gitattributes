@@ -13,3 +13,9 @@
 # line. Same reason as the rule above, and the same fix - say the line ending out
 # rather than leaving it to whichever machine is cloning.
 .githooks/* text eol=lf
+
+# The wrapper cargo hands rustc to, which is a batch file: cmd.exe reads it with the line
+# endings it carries, so this says the ending out rather than leaving it to whichever
+# `core.autocrlf` the cloning machine has - a wrapper checked out with LF breaks every build
+# on that machine, and only there.
+tools/*.cmd text eol=crlf
