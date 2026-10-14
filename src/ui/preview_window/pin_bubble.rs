@@ -791,7 +791,11 @@ pub(super) fn bubble_playback_to_park(
                 *audio_started = None;
 
                 Some(BubblePause::Player(played))
-            } else if video_player::is_playing() {
+            } else if video_player::is_playing() && !video_player::is_paused() {
+                // What is not going is not parked, which is the same rule the sound's own key
+                // reads by: a sound the engine is already holding is one a restore must put back
+                // the way it found it, and a park of it would be a sound played again by the
+                // press that brought its window back (see `toggle_pinned_audio`).
                 video_player::set_paused(true);
 
                 Some(BubblePause::Engine)

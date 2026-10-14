@@ -523,6 +523,27 @@ pub fn is_playing() -> bool {
     })
 }
 
+/// Whether the engine is holding what it is playing where it stands, and would go on from there
+/// rather than stop.
+///
+/// [`is_playing`] is the wrong question for this one and has to be: a session that was asked to
+/// hold is a session that is still there, so it answers yes for a sound nobody can hear. That is
+/// the whole of what made a play/pause on a pinned sound ask a held one to hold again — a pause
+/// of a pause, which is a sound held for ever with no way to let it go — and what left the pause
+/// glyph on a card with nothing running behind it (see `toggle_pinned_audio` and
+/// `pinned_audio_chrome`). The hold is the engine's own state, and asking it is the only road to
+/// either answer.
+///
+/// Nothing at all is what a pin whose file has already been let go of answers, the same one
+/// [`is_playing`] gives there: no session is no sound being held.
+pub fn is_paused() -> bool {
+    SESSION.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|session| unsafe { session.engine.IsPaused() }.as_bool())
+    })
+}
+
 /// Whether a sound has ended, in the sense [`audio_ended`] uses the words: the
 /// engine's own word for the end of a file it was asked to play once, or a clock
 /// that has run to the length the engine says the file is while the sound is
