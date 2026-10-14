@@ -1546,17 +1546,13 @@ fn a_pinned_film_the_engine_failed_at_is_stepped_over_rather_than_closed() {
         at: PathBuf::from("C:\\folder\\next.mp4"),
         from: PathBuf::from("C:\\folder\\broken.mp4"),
         step: 1,
-        left: 1,
-        list: vec![
+        order: vec![
             PathBuf::from("C:\\folder\\broken.mp4"),
             PathBuf::from("C:\\folder\\next.mp4"),
         ],
+        missed: 0,
         shuffle: false,
-        pool: Vec::new(),
-        bag: Vec::new(),
         anchor: None,
-        back: Vec::new(),
-        forward: Vec::new(),
     });
     let load: Option<PinLoad> = None;
     let awaiting_box: Option<PathBuf> = None;

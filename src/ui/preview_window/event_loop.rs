@@ -2101,14 +2101,13 @@ pub fn run_preview_window() {
                                 PinPlanned::Walk(walk) => {
                                     pin_walk_wait = None;
                                     if pinned_path().as_deref() == Some(walk.from()) {
-                                        // And the draw it made is a draw off the pin's own
-                                        // bag, so the bag goes with it now rather than
-                                        // with the install a load away: a press made
-                                        // while the file is still being read is a step of
-                                        // the same permutation, and a bag that still holds
-                                        // what the last press drew is the same file shown
-                                        // twice (see `pin_walk_drew_its_file`).
-                                        pin_walk_drew_its_file(&walk);
+                                        // And the playlist it was answered with goes onto the
+                                        // pin's own walk now rather than with the install a
+                                        // load away: a press made while the file is still
+                                        // being read re-anchors to the file on screen in
+                                        // this order, so it steps the same playlist instead
+                                        // of starting another (see `pin_walk_synced_its_playlist`).
+                                        pin_walk_synced_its_playlist(&walk);
                                         pin_walk = Some(walk);
                                     }
                                 }

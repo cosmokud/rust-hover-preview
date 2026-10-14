@@ -140,8 +140,19 @@ pub fn step_to(current: &Path, list: &[PathBuf], step: i32) -> Option<PathBuf> {
 
 /// The folder's own entries, read on a miss and remembered after. The sort is read from what
 /// the view drawing the folder last said, and it is read *before* the files so that a walk
-/// is ordered by what the listing was showing when the pin went up rather than by what it
-/// shows now.
+/// is ordered by what the listing is showing rather than by name alone. A walk drops the
+/// cached scan before reading it, so additions and deletions since the last step join the
+/// playlist it reconciles rather than waiting for the next pin (see `forget_folder`).
+/// Drop the cached scan of a folder, so the next walk reads it as it is rather than as it
+/// was when the pin went up: a file copied into the folder joins the playlist and one moved
+/// or deleted leaves it (see `answer_pin_job`, which reconciles the playlist it carries
+/// against the fresh list on every step).
+pub(crate) fn forget_folder(folder: &Path) {
+    if let Ok(mut folders) = FOLDERS.lock() {
+        folders.remove(folder);
+    }
+}
+
 fn entries_for(folder: &Path, config: &AppConfig) -> Option<Vec<NavEntry>> {
     if let Ok(folders) = FOLDERS.lock() {
         if let Some(cached) = folders.get(folder) {

@@ -180,14 +180,12 @@ pub(super) struct PinUp {
     /// The window and what it is showing: the geometry, the chrome, the pointer's business
     /// and the player's, all of which is the pin's own and outlives every flag beside it.
     pin: PinnedPreview,
-    /// The walk the pin is standing on, and everything it is still holding: the list it read,
-    /// what is left of the shuffle permutation and the files it has stepped off (see
-    /// `PinStep`).
+    /// The walk the pin is standing on, and the playlist it steps through (see `PinStep`).
     ///
     /// A field of the pin rather than a loop local because a walk is the pin's *session* and
     /// not one ask's: a press, a film's end of file and a sound's are all one walk, and the
     /// loop is not the only thing that asks it for its next file — so a walk held in the loop
-    /// is a walk a sound's end of file cannot see, which is a permutation that starts again
+    /// is a walk a sound's end of file cannot see, which is a playlist that starts again
     /// every time a file ends and a **Previous** that has nowhere to go back to. It goes with
     /// the pin, which is what takes it down: a pin that is over holds no walk, and the one
     /// taken up after it is shown the file the user names rather than the rest of a walk
