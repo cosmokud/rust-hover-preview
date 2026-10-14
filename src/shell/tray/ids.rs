@@ -35,8 +35,9 @@ pub(super) const ID_TRAY_PIN: u16 = 1004; // Whether a preview can be pinned wit
 /// it, and the two questions belong together under the one row they hang from.
 pub(super) const ID_TRAY_PIN_UPDATE: u16 = 1016;
 pub(super) const ID_TRAY_PIN_UPDATE_HOVER: u16 = 1017;
-/// And the two rows of the `Pin Mode → Pause in Bubble` submenu: whether a pin collapsed into its
-/// bubble holds the sound it is playing where it is, and whether it holds a video. They sit in
+/// And the two rows of the `Pin Mode → Pause in Bubble` submenu, which now hang as
+/// `Pause Minimized` under each kind's own `Pin Mode`: whether a pin the minimize button put
+/// away holds the sound it is playing and whether it holds a video. They sit in
 /// the slack the same block left beside the update pair, for the same reason — both are the
 /// pin's own business and neither is a click on the row beside it.
 pub(super) const ID_TRAY_PIN_PAUSE_AUDIO: u16 = 1018;
@@ -187,11 +188,10 @@ pub(super) const ID_TRAY_AUDIO_SEEK_BASE: u16 = 1390;
 /// starting a sound is one of four, and a click on one of the
 /// pin's is never a click on one of the hover's.
 pub(super) const ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE: u16 = 1394;
-/// The first row of the `Video` half of the `Volume` submenu, above `Normalize`:
-/// whether a film's own subtitle tracks are probed for and copied out
-/// at all. It is a switch about a film's picture rather than a level of the
-/// list under it, so it takes an id of its own, beside the volume switches
-/// above it, where no level can be read from it.
+/// The row of `Preview Settings → Video` below its `Volume`: whether a film's own subtitle
+/// tracks are probed for and copied out at all. It is a switch about a film's picture rather
+/// than a level of the list under `Volume`, so it takes an id of its own, out with the volume
+/// switches where no level can be read from it.
 pub(super) const ID_TRAY_VIDEO_SUBTITLES: u16 = 1524;
 /// The `Volume → Audio` submenu's first row: whether a sound's measured loudness is brought to one
 /// level before it is played (see `Normalize`).
@@ -285,8 +285,14 @@ pub(super) const ID_TRAY_VIDEO_LOOP: u16 = 1041;
 pub(super) const ID_TRAY_AUDIO_LOOP: u16 = 1042;
 pub(super) const ID_TRAY_VIDEO_SHUFFLE: u16 = 1043;
 pub(super) const ID_TRAY_AUDIO_SHUFFLE: u16 = 1044;
-/// The `Video Preview → Pin Mode → End of File` and `Audio Preview → Pin Mode → End of
-/// File` submenus: one command per way a pinned film or sound can end, in the order they list
+/// The `Preview Settings → Image → Shuffle` row: whether a *pinned* picture's walk takes the
+/// next file at random. The same question the film's and the sound's own `Shuffle` rows ask,
+/// asked of the third kind that has a next file to take — a picture is the one kind whose
+/// walk has no end of file to jump from, so its shuffle is the caption's buttons and the
+/// keyboard's alone. It sits beside the other two, in the same slack.
+pub(super) const ID_TRAY_IMAGE_SHUFFLE: u16 = 1045;
+/// The `Video → Pin Mode → End of File` and `Audio → Pin Mode → End of File`
+/// submenus: one command per way a pinned film or sound can end, in the order they list
 /// them — `Pause`, `Loop` and `Jump`.
 ///
 /// Each is a base plus the position the choice was listed at, against the table of ends below,
@@ -331,7 +337,7 @@ pub(super) const CODEC_COMMANDS: u16 = 64;
 /// out — and is wider than any machine's install list is likely to be.
 pub(super) const ID_TRAY_MPV_BASE: u16 = 1664;
 pub(super) const MPV_COMMANDS: u16 = 8;
-/// The `Pin Mode → Navigation Files` rows: three anchors — Video, Audio, Others — each
+/// The `Pin Mode → Navigation` rows: three anchors — Video, Audio, Others — each
 /// with All and Same Category. They sit past every id the app hands out, so no click is
 /// read as another submenu's item (see `PinNavFileTypes`). The old single-pair ids
 /// 1014/1015 are retired, not reused.
@@ -443,7 +449,7 @@ pub(super) const ID_TRAY_THEME_LIGHT: u16 = 1050; // Atom One Light
 pub(super) const ID_TRAY_THEME_DARK: u16 = 1051; // One Dark Pro
 pub(super) const ID_TRAY_MARKDOWN_RENDERED: u16 = 1052; // Rendered document
 pub(super) const ID_TRAY_MARKDOWN_SOURCE: u16 = 1053; // Highlighted Markdown source
-/// The `Text Preview → Render HTML` row: whether a page of HTML is drawn by the browser
+/// The `Text → Render HTML` row: whether a page of HTML is drawn by the browser
 /// engine rather than shown as its markup.
 ///
 /// The id is the one the text preview's `Full Mode` item carried, which is a row of this
@@ -523,7 +529,7 @@ pub(super) const ID_TRAY_FONT_70: u16 = 1082;
 /// have left: the engine-idle ranges take 1083 up to 1096, and the `theme` folder's own
 /// items begin at 1100.
 pub(super) const ID_TRAY_FONT_110: u16 = 1097;
-/// The sizes the `Text Preview → Font Size` submenu offers, in the order it lists them —
+/// The sizes the `Text → Font Size` submenu offers, in the order it lists them —
 /// largest first — with the id each size carries. A size a hand-edited `config.ini` asks
 /// for that is not one of these is shown with nothing marked rather than rounded to the
 /// nearest.

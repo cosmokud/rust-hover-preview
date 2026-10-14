@@ -72,10 +72,8 @@ fn a_walk_offers_every_other_file_of_the_folder_once_and_then_ends() {
         // than looked up again on every step (see `PinStep`).
         list: list.clone(),
         shuffle: false,
-        sounds: Vec::new(),
-        shuffle_bag: Vec::new(),
-        videos: Vec::new(),
-        video_bag: Vec::new(),
+        pool: Vec::new(),
+        bag: Vec::new(),
         anchor: None,
     };
 
@@ -118,10 +116,8 @@ fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
         left: 1,
         list: vec![folder.join("a.png"), folder.join("b.png")],
         shuffle: false,
-        sounds: Vec::new(),
-        shuffle_bag: Vec::new(),
-        videos: Vec::new(),
-        video_bag: Vec::new(),
+        pool: Vec::new(),
+        bag: Vec::new(),
         anchor: None,
     };
 
@@ -323,30 +319,6 @@ fn sounded_folder(name: &str) -> PathBuf {
     folder
 }
 
-/// The pin's own shuffle switch, set for a test and put back when the
-/// guard is dropped, for the same reason `WalkEveryFile` is: the walk is
-/// read under the app's own configuration, so a test says what it wants
-/// walked rather than taking whatever the machine it runs on has set.
-struct ShuffleThePin(bool);
-
-impl ShuffleThePin {
-    fn set() -> Self {
-        let mut config = CONFIG.lock().expect("the configuration");
-        let was = config.pin_mode_audio_shuffle;
-        config.pin_mode_audio_shuffle = true;
-
-        ShuffleThePin(was)
-    }
-}
-
-impl Drop for ShuffleThePin {
-    fn drop(&mut self) {
-        if let Ok(mut config) = CONFIG.lock() {
-            config.pin_mode_audio_shuffle = self.0;
-        }
-    }
-}
-
 /// A shuffled step lands on a sound of the folder other than the one the
 /// pin is showing, and on nothing else: a shuffle is a walk through the
 /// folder's sounds in an order of their own choosing, so every roll names
@@ -422,14 +394,18 @@ fn a_folder_whose_only_sound_is_the_pinned_one_has_nowhere_to_shuffle() {
 #[test]
 fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
     let _every_file = WalkEveryFile::set();
-    let _shuffle = ShuffleThePin::set();
     let folder = sounded_folder("planner-shuffle");
+    // A configuration of this test's own rather than the app's: the shuffle is asked of the
+    // walk the planner is handed, so the switch is set on the copy rather than on the one
+    // every other test running beside this one reads.
+    let mut config = CONFIG.lock().expect("the configuration").clone();
+    config.pin_mode_audio_shuffle = true;
 
     let answer = answer_pin_job(&PinJob::Walk {
         at: folder.join("b.mp3"),
         step: 1,
         anchor: None,
-        config: Box::new(CONFIG.lock().expect("the configuration").clone()),
+        config: Box::new(config.clone()),
     });
     let Some(PinPlanned::Walk(walk)) = answer else {
         panic!("a walk is always answered");
@@ -437,7 +413,7 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
 
     assert!(walk.shuffle, "the walk shuffles when the pin's shuffle is on");
     assert_eq!(
-        walk.sounds,
+        walk.pool,
         vec![
             folder.join("a.mp3"),
             folder.join("b.mp3"),
@@ -448,7 +424,6 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
 
     // And a walk that does not shuffle carries no sounds to pick from,
     // which is the walk every step of a pin's was before the setting.
-    let mut config = CONFIG.lock().expect("the configuration");
     config.pin_mode_audio_shuffle = false;
     let answer = answer_pin_job(&PinJob::Walk {
         at: folder.join("b.mp3"),
@@ -461,8 +436,63 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
     };
     assert!(!walk.shuffle, "and the walk does not shuffle with the shuffle off");
     assert!(
-        walk.sounds.is_empty(),
+        walk.pool.is_empty(),
         "a walk that steps to the file beside it has no sounds to pick from"
+    );
+}
+
+/// The same walk anchored on a picture carries the folder's pictures and nothing else: the
+/// pool is the `[image]` category of the list, so a shuffled step through a folder of
+/// pictures is a random one of the pictures and never a sound that happens to be sitting
+/// beside them (see `Preview Settings → Image → Shuffle`).
+#[test]
+fn a_walk_that_shuffles_carries_the_pictures_of_the_folder() {
+    let _every_file = WalkEveryFile::set();
+    let folder = sounded_folder("planner-shuffle-pictures");
+    // A configuration of this test's own, the way the sound's own shuffle test takes one: the
+    // switch is set on the copy the planner is handed rather than on the app's.
+    let mut config = CONFIG.lock().expect("the configuration").clone();
+    config.pin_mode_image_shuffle = true;
+
+    let answer = answer_pin_job(&PinJob::Walk {
+        at: folder.join("b.png"),
+        step: 1,
+        anchor: None,
+        config: Box::new(config.clone()),
+    });
+    let Some(PinPlanned::Walk(walk)) = answer else {
+        panic!("a walk is always answered");
+    };
+
+    assert!(
+        walk.shuffle,
+        "the walk shuffles when the picture's shuffle is on"
+    );
+    assert_eq!(
+        walk.pool,
+        vec![folder.join("a.png"), folder.join("b.png")],
+        "the pool is the folder's `[image]` files, and no file of another kind is one"
+    );
+
+    // And with the picture's own switch off, the walk is the folder's own order again, with
+    // no pictures in hand to pick from — which is the walk a pinned picture always took.
+    config.pin_mode_image_shuffle = false;
+    let answer = answer_pin_job(&PinJob::Walk {
+        at: folder.join("b.png"),
+        step: 1,
+        anchor: None,
+        config: Box::new(config.clone()),
+    });
+    let Some(PinPlanned::Walk(walk)) = answer else {
+        panic!("a walk is always answered");
+    };
+    assert!(
+        !walk.shuffle,
+        "and the walk does not shuffle with the shuffle off"
+    );
+    assert!(
+        walk.pool.is_empty(),
+        "a walk that steps to the file beside it has no pictures to pick from"
     );
 }
 
@@ -662,10 +692,8 @@ fn a_walk_the_planner_answers_carries_the_list_it_walked() {
         left: walk_budget(&list),
         list: list.clone(),
         shuffle: false,
-        sounds: Vec::new(),
-        shuffle_bag: Vec::new(),
-        videos: Vec::new(),
-        video_bag: Vec::new(),
+        pool: Vec::new(),
+        bag: Vec::new(),
         anchor: None,
     };
 
@@ -900,10 +928,8 @@ fn a_shuffled_walk_hears_every_sound_once_before_repeating() {
         left: 10,
         list: sounds.clone(),
         shuffle: true,
-        sounds: sounds.clone(),
-        shuffle_bag: bag,
-        videos: Vec::new(),
-        video_bag: Vec::new(),
+        pool: sounds.clone(),
+        bag,
         anchor: None,
     };
 
@@ -913,7 +939,7 @@ fn a_shuffled_walk_hears_every_sound_once_before_repeating() {
     assert!(sounds.contains(&first) && sounds.contains(&second));
     assert_ne!(first, at, "the file on screen is not a step");
     assert_ne!(second, at, "neither the first time nor the second");
-    assert!(walk.shuffle_bag.is_empty(), "the permutation is spent");
+    assert!(walk.bag.is_empty(), "the permutation is spent");
 
     let third = walk.step().expect("a spent bag is rebuilt, not ended");
     assert!(sounds.contains(&third), "still only sounds");

@@ -842,7 +842,11 @@ pub(super) fn pinned_content() -> Option<ScreenRegion> {
 /// a lock this thread may already own: `toggle_pinned_playback` reaches `CURRENT_MEDIA.lock()`
 /// from paths that have been near the pin's, so the two are taken in this order everywhere and
 /// never the other way round.
-pub(super) fn pinned_audio_chrome(playing: bool) -> Option<CardChrome> {
+///
+/// `paused` is the loop's own record of where a player of this app's is being held, and is the
+/// only half of the play button's answer this side writes down: whether the engine is holding the
+/// sound is the engine's own, and is asked here (see `a_sound_that_is_held`).
+pub(super) fn pinned_audio_chrome(paused: Option<f64>) -> Option<CardChrome> {
     // The published flag rather than the state: this is asked on every tick that does a full
     // media look, and a run with nothing pinned pays one atomic read for it.
     if !pinned() {
@@ -856,6 +860,21 @@ pub(super) fn pinned_audio_chrome(playing: bool) -> Option<CardChrome> {
     if pin.collapsed {
         return None;
     }
+
+    // Whether a player is running behind the card, which is what the play button's glyph says:
+    // the engine's own answer where the engine is the one holding the sound, and the hold a key
+    // wrote down for a player of this app's, which was ended to hold it (see
+    // `a_sound_that_is_held`). It is asked behind the kind the pin is showing, because this is
+    // asked on every tick with a pin of any kind up and a card that is not on screen has no
+    // button to draw one either.
+    let playing = if pin_shows_an_audio_card(pin) {
+        let player = audio_track::playable(&pin.path)
+            .map_or(Player::Ffmpeg, |track| playing_player(&pin.path, &track));
+
+        !a_sound_that_is_held(paused, player, video_player::is_paused())
+    } else {
+        true
+    };
 
     Some(CardChrome {
         playing,

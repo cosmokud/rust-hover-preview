@@ -512,7 +512,7 @@ pub(in super::super) fn set_markdown_mode(mode: MarkdownMode) {
 /// held, and what it is made of is a question answered off the folder when a button is
 /// pressed — so the next step of a pin already up is the first one under the new setting,
 /// and a pin with no folder of its own to walk is not a walk at all either way.
-/// Which files a walk anchored on a video steps through (see `Navigation Files → Video`).
+/// Which files a walk anchored on a video steps through (see `Navigation → Video`).
 pub(in super::super) fn set_pin_nav_video(mode: PinNavFileTypes) {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_nav_video = mode;
@@ -520,7 +520,7 @@ pub(in super::super) fn set_pin_nav_video(mode: PinNavFileTypes) {
     }
 }
 
-/// Which files a walk anchored on a sound steps through (see `Navigation Files → Audio`).
+/// Which files a walk anchored on a sound steps through (see `Navigation → Audio`).
 pub(in super::super) fn set_pin_nav_audio(mode: PinNavFileTypes) {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_nav_audio = mode;
@@ -528,8 +528,7 @@ pub(in super::super) fn set_pin_nav_audio(mode: PinNavFileTypes) {
     }
 }
 
-/// Which files a walk anchored on any other file steps through (see `Navigation Files →
-/// Others`).
+/// Which files a walk anchored on any other file steps through (see `Navigation → Others`).
 pub(in super::super) fn set_pin_nav_others(mode: PinNavFileTypes) {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_nav_others = mode;
@@ -655,20 +654,29 @@ pub(in super::super) fn toggle_loop(video: bool) {
     }
 }
 
-/// Whether a *pinned* film or sound takes the next file of its walk at random rather than
-/// the one beside it, which is what the `Shuffle` row throws the other way round.
+/// The kind of pinned walk a `Shuffle` row asks about: the three anchors that have a
+/// shuffle of their own, one setting apiece, because the question is the same question asked
+/// of three different things to step through (see `PinStep`).
+pub(in super::super) enum PinShuffle {
+    Video,
+    Audio,
+    Image,
+}
+
+/// Whether a *pinned* film, sound or picture takes the next file of its walk at random rather
+/// than the one beside it, which is what the `Shuffle` row throws the other way round.
 ///
 /// Nothing on screen is rebuilt either: a walk already in hand carries the shuffle it was
 /// planned with, and what a click here changes is the walk the next step is planned as —
 /// whether that step is a caption's next press, a forward key, or the end of a file the
 /// kind's own `End of File` row calls `Jump`. A step back is the file before it either
 /// way.
-pub(in super::super) fn toggle_pin_shuffle(video: bool) {
+pub(in super::super) fn toggle_pin_shuffle(kind: PinShuffle) {
     if let Ok(mut config) = CONFIG.lock() {
-        if video {
-            config.pin_mode_video_shuffle = !config.pin_mode_video_shuffle;
-        } else {
-            config.pin_mode_audio_shuffle = !config.pin_mode_audio_shuffle;
+        match kind {
+            PinShuffle::Video => config.pin_mode_video_shuffle = !config.pin_mode_video_shuffle,
+            PinShuffle::Audio => config.pin_mode_audio_shuffle = !config.pin_mode_audio_shuffle,
+            PinShuffle::Image => config.pin_mode_image_shuffle = !config.pin_mode_image_shuffle,
         }
         config.save();
     }

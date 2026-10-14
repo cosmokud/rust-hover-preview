@@ -258,6 +258,7 @@ pub(crate) use hover_facts::cursor_preview_hover;
 pub(crate) use hover_facts::PreviewCursorHover;
 pub(crate) use image_cache::trim_image_cache;
 pub(crate) use media_types::PreviewMessage;
+pub(crate) use pin_bubble::PIN_BUBBLE_HWND;
 pub(crate) use pin_drag::publish_pin_media_press;
 pub(crate) use pin_lifecycle::PinCommand;
 pub(crate) use pin_model::pin_is_focused;

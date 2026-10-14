@@ -956,13 +956,13 @@ impl PinNavFileTypes {
 }
 
 /// What a walk anchored on a video steps through: only videos, so a film never steps
-/// into a song (see `Pin Mode → Navigation Files → Video`).
+/// into a song (see `Pin Mode → Navigation → Video`).
 pub const DEFAULT_PIN_NAV_VIDEO: PinNavFileTypes = PinNavFileTypes::Category;
 /// What a walk anchored on a sound steps through: only sounds (see `Pin Mode →
-/// Navigation Files → Audio`).
+/// Navigation → Audio`).
 pub const DEFAULT_PIN_NAV_AUDIO: PinNavFileTypes = PinNavFileTypes::Category;
 /// What a walk anchored on any other file steps through: every previewable file, so a
-/// document walks end to end (see `Pin Mode → Navigation Files → Others`).
+/// document walks end to end (see `Pin Mode → Navigation → Others`).
 pub const DEFAULT_PIN_NAV_OTHERS: PinNavFileTypes = PinNavFileTypes::All;
 
 /// What a pinned window's minimize button puts it away as, unless the configuration says
@@ -1061,6 +1061,9 @@ pub const DEFAULT_PIN_MODE_AUDIO_END_OF_FILE: PinEndOfFile = PinEndOfFile::Loop;
 pub const DEFAULT_PIN_MODE_VIDEO_SHUFFLE: bool = false;
 /// The same for a pinned sound's walk.
 pub const DEFAULT_PIN_MODE_AUDIO_SHUFFLE: bool = false;
+/// And the same for a pinned picture's walk: a folder of pictures is walked in the
+/// folder's own order until this is on, the way a film's and a sound's are.
+pub const DEFAULT_PIN_MODE_IMAGE_SHUFFLE: bool = false;
 /// Whether a hovered film loops: on, a hover goes round; off, it stops at the end.
 pub const DEFAULT_VIDEO_LOOP: bool = true;
 /// The same for a hovered sound.
