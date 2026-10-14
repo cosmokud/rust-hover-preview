@@ -302,8 +302,9 @@ pub(super) fn preview_background(kind: MediaType) -> TransparentBackground {
 /// value that says so is behind the pin's own lock; `pinned()` is the same answer published
 /// for the threads that ask it without wanting a lock.
 pub(super) struct PinnedPreview {
-    /// The file that is pinned — the hover the pin came from, kept by name so that a box that
-    /// changes can be laid out again without asking the Explorer hook anything.
+    /// The file the pin is showing, kept by name so that a box that changes can be laid out
+    /// again without asking the Explorer hook anything — and what a press answers from, so
+    /// every step is taken from the file on screen rather than the one the pin came up on.
     pub(super) path: PathBuf,
     /// The box the media occupies on screen. Everything the window draws besides the media is
     /// chrome over or around this box, which is why the box is what the pin remembers and what a

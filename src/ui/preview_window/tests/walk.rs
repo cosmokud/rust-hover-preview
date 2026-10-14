@@ -1683,38 +1683,239 @@ fn a_pick_retried_after_its_box_lands_carries_the_parked_walk() {
 
     // The wait over: the walk's own step, with the walk riding it.
     let mut walk = parked();
-    let Some((path, step)) =
+    let Some((path, step, user_named)) =
         take_pin_pick(&mut None, &mut None, &mut None, &mut walk, false)
     else {
         panic!("the walk's own step is the pick where the user named nothing");
     };
     assert_eq!(path, order[1]);
+    assert!(!user_named, "the walk's own step names nothing");
     assert!(step.is_some(), "with the playlist it is a step of");
     assert!(walk.is_none(), "taken, not copied");
 
     // The retried pick: the box landed, so the same file is picked with the same walk.
     let mut walk = parked();
     let mut retry = Some(order[1].clone());
-    let Some((path, step)) = take_pin_pick(&mut retry, &mut None, &mut None, &mut walk, false)
+    let Some((path, step, user_named)) =
+        take_pin_pick(&mut retry, &mut None, &mut None, &mut walk, false)
     else {
         panic!("the retried pick is taken up");
     };
     assert_eq!(path, order[1]);
     assert!(step.is_some(), "carrying the playlist across the wait");
+    assert!(user_named, "a retried pick is still a file the user named");
 
-    // But a file the user named behind the walk is not a step of it: the parked playlist
-    // is dropped, so the walk that follows is anchored on the picked file.
+    // A file the user named in the walk's own folder carries the playlist on: the next
+    // press re-anchors to the picked file rather than starting another playlist.
     let mut walk = parked();
     let mut named = Some(order[2].clone());
-    let Some((path, step)) = take_pin_pick(&mut named, &mut None, &mut None, &mut walk, false)
+    let Some((path, step, user_named)) =
+        take_pin_pick(&mut named, &mut None, &mut None, &mut walk, false)
     else {
         panic!("a file the user named is taken up");
     };
     assert_eq!(path, order[2]);
+    assert!(step.is_some(), "a listing pick moves the pointer, not the playlist");
+    assert!(user_named);
+
+    // But a file the user named in another folder drops it, so the walk that follows there
+    // is anchored on the picked file.
+    let mut walk = parked();
+    let elsewhere = folder.join(".." ).join("elsewhere").join("z.mp3");
+    let mut named = Some(elsewhere.clone());
+    let Some((path, step, _)) =
+        take_pin_pick(&mut named, &mut None, &mut None, &mut walk, false)
+    else {
+        panic!("a file the user named is taken up");
+    };
+    assert_eq!(path, elsewhere);
     assert!(
         step.is_none(),
-        "a listing pick drops the parked playlist rather than carrying it on"
+        "a pick in another folder starts fresh rather than carrying the playlist over"
     );
+}
+
+/// Installing a file the user named in the walk's own folder keeps the playlist: the next
+/// press re-anchors to the picked file rather than starting another — which is what keeps
+/// an Explorer pick behind a navigating pin from resetting the walk on every click.
+#[test]
+fn installing_a_pick_in_the_walks_folder_keeps_the_playlist() {
+    let folder = sounded_folder("install-keeps");
+    let order = vec![
+        folder.join("a.mp3"),
+        folder.join("b.mp3"),
+        folder.join("c.mp3"),
+    ];
+    let held = || {
+        Some(PinStep {
+            at: order[1].clone(),
+            from: order[0].clone(),
+            step: 1,
+            order: order.clone(),
+            missed: 0,
+            shuffle: true,
+            anchor: None,
+        })
+    };
+
+    // A step of the walk installs with the walk it is.
+    let installed = install_walk(held(), held(), &order[1]);
+    assert_eq!(installed.map(|walk| walk.at), Some(order[1].clone()));
+
+    // A file the user named in the same folder installs with the playlist it joins.
+    let installed = install_walk(held(), None, &order[2]);
+    let walk = installed.expect("the playlist rides behind a listing pick");
+    assert_eq!(walk.order, order, "the next press steps this order, not a fresh draw");
+
+    // Anywhere else starts fresh.
+    let elsewhere = PathBuf::from("C:\\elsewhere\\z.mp3");
+    assert!(
+        install_walk(held(), None, &elsewhere).is_none(),
+        "a pick in another folder anchors the walk that follows on itself"
+    );
+    assert!(
+        install_walk(None, None, &order[0]).is_none(),
+        "and a trigger with nothing behind it stays one"
+    );
+}
+
+/// A pin walks its playlist press after press through the pin's own session: every press
+/// asks with the walk the pin holds, the answer syncs its playlist, the pick carries it,
+/// and the install writes it back — so Next steps the order, Back lands on the file it came
+/// from, and forward lands on the file it was interrupted on. A file clicked in the listing
+/// behind it joins the same playlist rather than resetting it.
+#[test]
+fn a_pin_walks_its_playlist_press_after_press_through_its_own_session() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    if let Ok(mut pending) = PIN_JOBS.0.lock() {
+        *pending = None;
+    }
+    let _every_file = WalkEveryFile::set();
+    let was_shuffle = {
+        let mut config = CONFIG.lock().expect("the configuration");
+        let was = config.pin_mode_audio_shuffle;
+        config.pin_mode_audio_shuffle = true;
+        was
+    };
+    let folder = sounded_folder("press-after-press");
+    let sounds = vec![
+        folder.join("a.mp3"),
+        folder.join("b.mp3"),
+        folder.join("c.mp3"),
+    ];
+
+    // The trigger: a pin taken up on a sound, holding no walk.
+    let mut pin = overlay_pin((0, 0, 100, 100), PinChrome::always());
+    pin.path = folder.join("a.mp3");
+    stand_pin(Some(pin));
+    stand_pin_walk(None);
+
+    // One press through the loop's own roads: asked with the pin's session, answered by
+    // the planner, synced onto the pin, picked up, and installed back into the pin — with
+    // the pin standing on the file it landed on, the way an install leaves it.
+    let press = |step: i32| -> PinStep {
+        let at = pinned_path().expect("the pin is standing somewhere");
+        let anchor = pin_walk_anchor(&None);
+        assert!(
+            ask_pin_walk(at.clone(), step, anchor),
+            "the press is asked"
+        );
+        let job = PIN_JOBS
+            .0
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.take())
+            .expect("a job the planner is holding");
+        let Some(PinPlanned::Walk(walk)) = answer_pin_job(&job) else {
+            panic!("a walk is always answered");
+        };
+        assert_eq!(walk.from(), at, "the answer is to the press that asked");
+        pin_walk_synced_its_playlist(&walk);
+        let Some((path, step_walk, _)) =
+            take_pin_pick(&mut None, &mut None, &mut None, &mut Some(walk.clone()), false)
+        else {
+            panic!("the walk's own step is the pick");
+        };
+        assert_eq!(path, walk.at);
+        let held = pin_state().and_then(|state| state.walk().cloned());
+        let installed = install_walk(held, step_walk, &path);
+        stand_pin_walk(installed.clone());
+        if let Some(mut state) = pin_state() {
+            if let Some(pin) = state.pin_mut() {
+                pin.path = path;
+            }
+        }
+        installed.expect("the pin holds the walk it is standing on")
+    };
+
+    // `a.mp3 -> X -> Y`: two presses into the spawned playlist.
+    let first = press(1);
+    let second = press(1);
+    assert_ne!(first.at, folder.join("a.mp3"));
+    assert_ne!(second.at, first.at);
+    assert!(sounds.contains(&first.at) && sounds.contains(&second.at));
+    let order = second.order.clone();
+    assert_eq!(order.first(), Some(&folder.join("a.mp3")));
+
+    // A file clicked in the listing behind the pin joins the playlist: the preview moves
+    // to it, and what comes next is still according to the order.
+    let clicked = sounds
+        .iter()
+        .find(|sound| **sound != second.at && **sound != folder.join("a.mp3"))
+        .expect("a sound the walk has not stood on yet")
+        .clone();
+    let held = pin_state().and_then(|state| state.walk().cloned());
+    let mut pin_pick = Some(clicked.clone());
+    let Some((path, step_walk, _)) =
+        take_pin_pick(&mut pin_pick, &mut None, &mut None, &mut None, false)
+    else {
+        panic!("a file the user named is taken up");
+    };
+    assert_eq!(path, clicked);
+    // The pick arm installs with no walk of its own where nothing was parked: the install
+    // keeps the playlist the picked file joins.
+    let installed = install_walk(held, step_walk, &path);
+    assert!(installed.is_some(), "the playlist rides behind a listing pick");
+    stand_pin_walk(installed);
+    if let Some(mut state) = pin_state() {
+        if let Some(pin) = state.pin_mut() {
+            pin.path = clicked.clone();
+        }
+    }
+
+    // The next press steps the same playlist from the clicked file rather than drawing
+    // afresh: back lands on the file it came from in the order.
+    let back = press(-1);
+    let position = order
+        .iter()
+        .position(|file| file == &clicked)
+        .expect("the clicked file is on the playlist it joined");
+    let expected = if position == 0 {
+        order.last().expect("a playlist of sounds").clone()
+    } else {
+        order[position - 1].clone()
+    };
+    assert_eq!(
+        back.at, expected,
+        "a step back is the previous file of the playlist, even after a listing pick"
+    );
+    assert_eq!(back.order, order, "along the same playlist still");
+
+    // And forward lands on the file it was interrupted on.
+    let forward = press(1);
+    assert_eq!(
+        forward.at, clicked,
+        "a step forward lands on the file it was interrupted on"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_mode_audio_shuffle = was_shuffle;
+    }
+    stand_pin(None);
+    stand_pin(previous_pin);
 }
 
 /// Throwing the shuffle off walks the folder's own order again rather than the shuffled

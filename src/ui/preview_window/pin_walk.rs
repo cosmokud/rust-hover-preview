@@ -322,21 +322,26 @@ pub(super) fn pin_walk_synced_its_playlist(walk: &PinStep) {
     }
 }
 
-/// The file the pin is shown next and the walk it is a step of, if any.
+/// The file the pin is shown next, the walk it is a step of if any, and whether a file the
+/// user named is what picked it.
 ///
 /// A file the user named comes first — a listing pick, a held one, a bubble restored — and
 /// then the pin's own walk, which is a step of the playlist it holds. A walk parked for a
 /// file still waited on is not picked up until the wait ends: the plan would only find the
-/// same wait. And a parked walk is dropped where the pick is a file the user named rather
-/// than the file the walk steps onto, so the walk that follows is anchored on the picked
-/// file instead of carrying on a playlist behind it (see `PinUp::walk`).
+/// same wait. A pick in the walk's own folder carries the playlist on: the next press
+/// re-anchors to the file on screen in the order, so a file clicked in the listing moves the
+/// pointer rather than starting another playlist. Only a pick in another folder drops it, so
+/// the walk that follows there is anchored on the picked file (see `PinUp::walk`).
 pub(super) fn take_pin_pick(
     pin_pick: &mut Option<PathBuf>,
     held_pick: &mut Option<PathBuf>,
     swap_requested: &mut Option<PathBuf>,
     walk: &mut Option<PinStep>,
     awaiting: bool,
-) -> Option<(PathBuf, Option<PinStep>)> {
+) -> Option<(PathBuf, Option<PinStep>, bool)> {
+    // A held pick rides with the walk it was held with, and the walk's own pick is the
+    // walk's: only a listing pick and a bubble restored are files the user named.
+    let user_named = pin_pick.is_some() || swap_requested.is_some();
     let path = pin_pick
         .take()
         .or_else(|| held_pick.take())
@@ -347,13 +352,25 @@ pub(super) fn take_pin_pick(
                 .flatten()
         })?;
     let mut step = walk.take();
-    if step
-        .as_ref()
-        .is_some_and(|step| !pin_navigation::same_file(&step.at, &path))
-    {
+    if step.as_ref().is_some_and(|step| {
+        !pin_navigation::same_file(&step.at, &path)
+            && !pin_navigation::same_folder(&step.at, &path)
+    }) {
         step = None;
     }
-    Some((path, step))
+    Some((path, step, user_named))
+}
+
+/// The walk the pin holds after showing `path`: the walk the file arrived with, or the held
+/// playlist where the file joins it rather than starting another — a file the user named in
+/// the walk's own folder moves the pointer, so the next press re-anchors to it. Anywhere
+/// else starts fresh (see `take_pin_pick`).
+pub(super) fn install_walk(
+    held: Option<PinStep>,
+    walk: Option<PinStep>,
+    path: &Path,
+) -> Option<PinStep> {
+    walk.or_else(|| held.filter(|held| pin_navigation::same_folder(&held.at, path)))
 }
 
 /// Ask the planner for a walk, answering whether the question was asked at all.

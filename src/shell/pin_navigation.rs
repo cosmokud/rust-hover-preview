@@ -467,6 +467,17 @@ pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
     a == b || plain_path(a).eq_ignore_ascii_case(&plain_path(b))
 }
 
+/// Whether two files are in the same folder, told apart the way `same_file` tells files
+/// apart: a walk handed another spelling of a path must still recognise its own folder —
+/// which is what keeps a listing pick in the playlist rather than starting another.
+pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
+    match (a.parent(), b.parent()) {
+        (Some(x), Some(y)) => plain_path(x).eq_ignore_ascii_case(&plain_path(y)),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
