@@ -531,15 +531,23 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
 
     // The walk that made the file now on screen becomes the pin's own, kept rather than
     // spent with the load: an engine that takes this file and then never draws a frame of it
-    // says so a tick or three from here, with nothing left to step on. A pick that was not a
-    // walk's arms no walk, which is the same answer (see `pin_step_off`).
+    // says so a tick or three from here, with nothing left to step on. A file the user named
+    // in the walk's own folder keeps the playlist it joins instead (see `install_walk`).
     //
     // It is written to the pin rather than to a loop local because it is the pin's session and
     // not this install's: the next press — or a film's end of file, or a sound's — steps the
-    // same walk, with its permutation and its history in it (see `PinUp::walk`).
+    // same walk, with the playlist in it (see `PinUp::walk`).
+    //
+    // And the file the window is showing is the file it was just shown: a press answers from
+    // it rather than from the file the pin was taken up on, and everything the pin reads its
+    // own file for — the caption, the hand-off buttons, the player behind it — reads this one
+    // (see `step_pinned_file`).
     if let Some(mut state) = pin_state() {
         if let Some(held) = state.walk_mut() {
-            *held = walk;
+            *held = install_walk(held.take(), walk, &path);
+        }
+        if let Some(pin) = state.pin_mut() {
+            pin.path = path.clone();
         }
     }
 

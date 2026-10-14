@@ -2542,7 +2542,7 @@ pub fn run_preview_window() {
                 pin_bubble_pick = None;
             }
 
-            if let Some((path, walk)) = take_pin_pick(
+            if let Some((path, walk, user_named)) = take_pin_pick(
                 &mut pin_pick,
                 &mut pin_held_pick,
                 &mut pin_swap_requested,
@@ -2550,18 +2550,6 @@ pub fn run_preview_window() {
                 pin_awaiting_box.is_some(),
             ) {
                 pin_awaiting_box = None;
-                // And with no walk behind it there is no walk standing on what is on screen, so
-                // a failure on this file has nothing to step onto and the mark is what the pin
-                // is left standing over. The pick was a file the user named rather than a step
-                // of the walk, so the pin's own walk goes with it: the walk that follows is
-                // anchored on this file (see `PinUp::walk`).
-                if walk.is_none() {
-                    if let Some(mut state) = pin_state() {
-                        if let Some(held) = state.walk_mut() {
-                            *held = None;
-                        }
-                    }
-                }
                 // Whatever was loading is a load for a file nobody is asking for any more, and
                 // the answer it lands with is dropped with it: what the pin shows next is
                 // planned here, for this file, and taking up an answer for another one would
@@ -2585,7 +2573,7 @@ pub fn run_preview_window() {
                 // a file they did not ask to see (see `pin_bubble_pick`).
                 if pinned() && pin_is_collapsed() && walk.is_none() {
                     pin_bubble_pick = Some(path);
-                } else if pinned() && (pin_update_enabled() || walk.is_some()) {
+                } else if pinned() && (pin_update_enabled() || !user_named) {
                     if pending_load.is_some() {
                         // A hover somewhere behind the pin is loading, and a pick that arrived
                         // while it did was the user's first pick after the pin took the focus —
@@ -2703,6 +2691,11 @@ pub fn run_preview_window() {
                             pin_step_off(walk, &mut pin_walk);
                         }
                     }
+                } else if pinned() {
+                    // A pick the setting refused leaves a parked walk parked rather than
+                    // dropping it: the setting gates a file the user named, not the playlist
+                    // behind it, so the next press still steps the order it holds.
+                    pin_walk = walk;
                 }
             }
 
