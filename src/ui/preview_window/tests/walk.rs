@@ -772,10 +772,16 @@ fn the_shell_is_asked_once_per_format_and_a_dot_file_is_its_own() {
 #[test]
 fn a_walk_with_nowhere_to_go_is_answered_rather_than_left_outstanding() {
     let _every_file = WalkEveryFile::set();
-    let config = CONFIG
+    let mut config = CONFIG
         .lock()
         .expect("the configuration is not poisoned")
         .clone();
+    // The shuffle switches are this test's rather than the machine's: a shuffle would spawn
+    // a playlist starting on the file itself, which is a walk with somewhere to stand
+    // rather than nowhere to go.
+    config.pin_mode_audio_shuffle = false;
+    config.pin_mode_image_shuffle = false;
+    config.pin_mode_video_shuffle = false;
 
     // The case the planner most often finds, and the least dramatic: a folder holding
     // nothing but the file the pin is standing on. `walkable_folder` makes three, so
@@ -1000,6 +1006,11 @@ fn a_walk_is_anchored_on_the_first_file_pinned() {
     config.pin_nav_video = PinNavFileTypes::Category;
     config.pin_nav_audio = PinNavFileTypes::Category;
     config.pin_nav_others = PinNavFileTypes::All;
+    // And the shuffle switches are this test's: a shuffle narrows the walk to the anchor's
+    // own kind, which is the opposite of the end-to-end walk asked about below.
+    config.pin_mode_audio_shuffle = false;
+    config.pin_mode_image_shuffle = false;
+    config.pin_mode_video_shuffle = false;
 
     let from_sound = answer_pin_job(&PinJob::Walk {
         at: folder.join("b.mp3"),
@@ -1634,6 +1645,75 @@ fn a_press_after_a_sound_keeps_a_sound_anchor_sounds_only() {
         second_walk.order.iter().all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
         "anchored on a sound, the second press still walks sounds only: {:?}",
         second_walk.order
+    );
+}
+
+/// The pick the loop takes up is the walk's own step with the walk riding it, and a file
+/// the user named with none: the walk parked for a file still waited on stays parked until
+/// the wait ends, and a listing pick made behind it drops the playlist rather than carrying
+/// it on.
+#[test]
+fn a_pick_retried_after_its_box_lands_carries_the_parked_walk() {
+    let folder = sounded_folder("pick-parked");
+    let order = vec![
+        folder.join("a.mp3"),
+        folder.join("b.mp3"),
+        folder.join("c.mp3"),
+    ];
+    let parked = || {
+        Some(PinStep {
+            at: order[1].clone(),
+            from: order[0].clone(),
+            step: 1,
+            order: order.clone(),
+            missed: 0,
+            shuffle: true,
+            anchor: None,
+        })
+    };
+
+    // Awaiting the box: no pick at all, so the plan is not asked twice and the probe not
+    // spawned every tick.
+    let mut walk = parked();
+    assert!(
+        take_pin_pick(&mut None, &mut None, &mut None, &mut walk, true).is_none(),
+        "a walk parked for a file still waited on is not picked up until the wait ends"
+    );
+    assert!(walk.is_some(), "and the parked walk stays parked");
+
+    // The wait over: the walk's own step, with the walk riding it.
+    let mut walk = parked();
+    let Some((path, step)) =
+        take_pin_pick(&mut None, &mut None, &mut None, &mut walk, false)
+    else {
+        panic!("the walk's own step is the pick where the user named nothing");
+    };
+    assert_eq!(path, order[1]);
+    assert!(step.is_some(), "with the playlist it is a step of");
+    assert!(walk.is_none(), "taken, not copied");
+
+    // The retried pick: the box landed, so the same file is picked with the same walk.
+    let mut walk = parked();
+    let mut retry = Some(order[1].clone());
+    let Some((path, step)) = take_pin_pick(&mut retry, &mut None, &mut None, &mut walk, false)
+    else {
+        panic!("the retried pick is taken up");
+    };
+    assert_eq!(path, order[1]);
+    assert!(step.is_some(), "carrying the playlist across the wait");
+
+    // But a file the user named behind the walk is not a step of it: the parked playlist
+    // is dropped, so the walk that follows is anchored on the picked file.
+    let mut walk = parked();
+    let mut named = Some(order[2].clone());
+    let Some((path, step)) = take_pin_pick(&mut named, &mut None, &mut None, &mut walk, false)
+    else {
+        panic!("a file the user named is taken up");
+    };
+    assert_eq!(path, order[2]);
+    assert!(
+        step.is_none(),
+        "a listing pick drops the parked playlist rather than carrying it on"
     );
 }
 

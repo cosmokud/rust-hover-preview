@@ -2542,18 +2542,14 @@ pub fn run_preview_window() {
                 pin_bubble_pick = None;
             }
 
-            if let Some(path) = pin_pick
-                .take()
-                .or_else(|| pin_held_pick.take())
-                .or_else(|| pin_swap_requested.take())
-                .or_else(|| pin_walk.as_ref().map(|walk| walk.at.clone()))
-            {
+            if let Some((path, walk)) = take_pin_pick(
+                &mut pin_pick,
+                &mut pin_held_pick,
+                &mut pin_swap_requested,
+                &mut pin_walk,
+                pin_awaiting_box.is_some(),
+            ) {
                 pin_awaiting_box = None;
-                // A pick the pin's own walk made is a step of that walk, and the walk is
-                // carried with it: a file the pin cannot be shown is stepped over rather than
-                // stopped at. A pick from the listing is a file the user named, and has no
-                // walk to carry on from (see `PinStep`).
-                let walk = pin_walk.take();
                 // And with no walk behind it there is no walk standing on what is on screen, so
                 // a failure on this file has nothing to step onto and the mark is what the pin
                 // is left standing over. The pick was a file the user named rather than a step
@@ -2646,6 +2642,11 @@ pub fn run_preview_window() {
 
                                 if outstanding {
                                     pin_awaiting_box = Some(path.clone());
+                                    // The walk is parked, not dropped: the box it is a step of
+                                    // is still waited on, and the pick retried when the answer
+                                    // lands is a step of the same playlist rather than the
+                                    // start of another (see `take_pin_pick`).
+                                    pin_walk = walk.clone();
                                     None
                                 } else if page_is_on_the_way(&path) {
                                     // A file the layout reads as waiting on an engine that no
