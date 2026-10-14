@@ -332,6 +332,11 @@ pub(super) fn pin_walk_synced_its_playlist(walk: &PinStep) {
 /// re-anchors to the file on screen in the order, so a file clicked in the listing moves the
 /// pointer rather than starting another playlist. Only a pick in another folder drops it, so
 /// the walk that follows there is anchored on the picked file (see `PinUp::walk`).
+///
+/// What is "named" is the road and not the slot: a file a press of the pin's own was stepped
+/// onto is the walk's, asked for again where its box was not ready rather than named by
+/// anyone, so the setting that gates a file the user picked in the listing has nothing to
+/// refuse it for.
 pub(super) fn take_pin_pick(
     pin_pick: &mut Option<PathBuf>,
     held_pick: &mut Option<PathBuf>,
@@ -339,9 +344,9 @@ pub(super) fn take_pin_pick(
     walk: &mut Option<PinStep>,
     awaiting: bool,
 ) -> Option<(PathBuf, Option<PinStep>, bool)> {
-    // A held pick rides with the walk it was held with, and the walk's own pick is the
-    // walk's: only a listing pick and a bubble restored are files the user named.
-    let user_named = pin_pick.is_some() || swap_requested.is_some();
+    // The slots are emptied by the takes below, so which road the pick came in by is read
+    // here rather than after them.
+    let named = pin_pick.is_some() || swap_requested.is_some();
     let path = pin_pick
         .take()
         .or_else(|| held_pick.take())
@@ -351,6 +356,12 @@ pub(super) fn take_pin_pick(
                 .then(|| walk.as_ref().map(|step| step.at.clone()))
                 .flatten()
         })?;
+    // A held pick rides with the walk it was held with, and the walk's own pick is the
+    // walk's: only a listing pick and a bubble restored are files the user named.
+    let user_named = named
+        && !walk
+            .as_ref()
+            .is_some_and(|step| pin_navigation::same_file(&step.at, &path));
     let mut step = walk.take();
     if step.as_ref().is_some_and(|step| {
         !pin_navigation::same_file(&step.at, &path)

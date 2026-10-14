@@ -1693,7 +1693,10 @@ fn a_pick_retried_after_its_box_lands_carries_the_parked_walk() {
     assert!(step.is_some(), "with the playlist it is a step of");
     assert!(walk.is_none(), "taken, not copied");
 
-    // The retried pick: the box landed, so the same file is picked with the same walk.
+    // The retried pick: the box landed, so the same file is picked with the same walk — and
+    // it is the walk's own step, not a file the user named, whatever slot it arrived in: the
+    // step was asked for by a press on the window, so `Pin Mode → Update Preview` has
+    // nothing to refuse it for (see `step_pinned_file`).
     let mut walk = parked();
     let mut retry = Some(order[1].clone());
     let Some((path, step, user_named)) =
@@ -1703,8 +1706,10 @@ fn a_pick_retried_after_its_box_lands_carries_the_parked_walk() {
     };
     assert_eq!(path, order[1]);
     assert!(step.is_some(), "carrying the playlist across the wait");
-    assert!(user_named, "a retried pick is still a file the user named");
-
+    assert!(
+        !user_named,
+        "a retried step of the walk is the walk's own, not a file the user named"
+    );
     // A file the user named in the walk's own folder carries the playlist on: the next
     // press re-anchors to the picked file rather than starting another playlist.
     let mut walk = parked();
@@ -1845,9 +1850,15 @@ fn a_pin_walks_its_playlist_press_after_press_through_its_own_session() {
         stand_pin_walk(installed.clone());
         if let Some(mut state) = pin_state() {
             if let Some(pin) = state.pin_mut() {
-                pin.path = path;
+                pin.path = path.clone();
             }
         }
+        // And the take-up the install asks for, on the tick after it: the same window on
+        // the file it just put there, built whole — the road that put every press back at
+        // the first press of a session while it dropped the walk.
+        let mut again = overlay_pin((0, 0, 100, 100), PinChrome::always());
+        again.path = path;
+        install(again);
         installed.expect("the pin holds the walk it is standing on")
     };
 
@@ -1914,6 +1925,61 @@ fn a_pin_walks_its_playlist_press_after_press_through_its_own_session() {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_mode_audio_shuffle = was_shuffle;
     }
+    stand_pin(None);
+    stand_pin(previous_pin);
+}
+
+/// A pin re-taken up on the file it was just shown keeps the walk: every install asks for a
+/// window on the file it put there, and a take-up that dropped the walk would make the next
+/// press spawn a fresh playlist — the first press of a session, again and again, which is a
+/// **Previous** that wraps to a file nobody was shown. A file in another folder starts
+/// fresh, which is the one thing a take-up is a boundary for.
+#[test]
+fn a_pin_taken_up_again_on_its_own_file_keeps_the_walk() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let folder = sounded_folder("take-up-keeps");
+    let order = vec![
+        folder.join("a.mp3"),
+        folder.join("b.mp3"),
+        folder.join("c.mp3"),
+    ];
+    let walk = || PinStep {
+        at: order[1].clone(),
+        from: order[0].clone(),
+        step: 1,
+        order: order.clone(),
+        missed: 0,
+        shuffle: true,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    };
+
+    let mut pin = overlay_pin((0, 0, 100, 100), PinChrome::always());
+    pin.path = order[1].clone();
+    stand_pin(Some(pin));
+    stand_pin_walk(Some(walk()));
+
+    // The take-up the install asks for: the same window, the same file, a whole new pin.
+    let mut again = overlay_pin((0, 0, 100, 100), PinChrome::always());
+    again.path = order[1].clone();
+    install(again);
+
+    let held = pin_state().and_then(|state| state.walk().cloned());
+    let held = held.expect("the playlist the pin was navigating survives its own take-up");
+    assert_eq!(held.order, order, "and it is the same playlist, not another draw");
+    assert_eq!(held.at, order[1], "standing where the install left it");
+
+    // A take-up on a file in another folder is where a walk starts fresh.
+    let mut elsewhere = overlay_pin((0, 0, 100, 100), PinChrome::always());
+    elsewhere.path = PathBuf::from("C:\\elsewhere\\z.mp3");
+    install(elsewhere);
+    assert!(
+        pin_state().and_then(|state| state.walk().cloned()).is_none(),
+        "a take-up in another folder has nothing behind it to carry"
+    );
+
     stand_pin(None);
     stand_pin(previous_pin);
 }
