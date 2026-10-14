@@ -285,7 +285,7 @@ unsafe extern "system" fn tray_window_proc(
                     // player rather than by anything on screen.
                     ID_TRAY_REMEMBER_VOLUME => toggle_remember_audio_volume(),
                     ID_TRAY_REMEMBER_VIDEO_VOLUME => toggle_remember_video_volume(),
-                    // The row below the `Video` half's `Volume`: whether a film's own
+                    // The row under `Video Preview`'s `Volume`: whether a film's own
                     // subtitle tracks are probed for and copied out at all,
                     // which is read where a probe runs and where a player is started
                     // rather than by anything on screen.

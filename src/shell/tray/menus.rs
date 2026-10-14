@@ -465,7 +465,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // Whether a film's own subtitle tracks are probed for and copied out at all,
     // read the same way the two switches above the levels are: a switch about a
     // film's picture rather than a level of the list under it, so it is a row of
-    // the `Video` half, at its top (see `video_subtitles`).
+    // `Video Preview` under its `Volume` rather than a row of either list (see
+    // `video_subtitles`).
     let video_subtitles = CONFIG
         .lock()
         .map(|config| config.video_subtitles)
@@ -517,18 +518,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         };
 
     let video_levels = CreatePopupMenu().unwrap();
-    // The film's own row, at the top of the half: whether its own subtitle
-    // tracks are probed for and copied out at all — a switch about a film's
-    // picture rather than a level of the list under it, which is why it is a
-    // row of the `Video` half alone and not the sound's (see `video_subtitles`). What it is
-    // called is the engine's business rather than one cost for all three (see
-    // `subtitles_label`).
-    append_labeled_item(
-        video_levels,
-        MF_STRING | if video_subtitles { MF_CHECKED } else { MF_UNCHECKED },
-        ID_TRAY_VIDEO_SUBTITLES,
-        &subtitles_label(video_engine, VideoEngine::Mpv.installed()),
-    );
     append_switches(
         video_levels,
         normalize_video,
@@ -584,6 +573,17 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         video_levels.0 as usize,
         w!("Volume"),
+    );
+    // The film's own row, under its `Volume` and above `Loop`: whether its own subtitle tracks
+    // are probed for and copied out at all — a switch about a film's picture rather than a
+    // level, so it is a row of `Video Preview` beside `Volume` rather than inside it, and the
+    // film's alone and not the sound's (see `video_subtitles`). Its name is the engine's
+    // business rather than one cost for all three (see `subtitles_label`).
+    append_labeled_item(
+        video_preview,
+        MF_STRING | if video_subtitles { MF_CHECKED } else { MF_UNCHECKED },
+        ID_TRAY_VIDEO_SUBTITLES,
+        &subtitles_label(video_engine, VideoEngine::Mpv.installed()),
     );
     append_loop_item(
         video_preview,

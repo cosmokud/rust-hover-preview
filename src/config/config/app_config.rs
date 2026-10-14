@@ -498,7 +498,7 @@ pub struct AppConfig {
     /// list already.
     pub video_engine_fallback: bool,
     /// Whether a film's own subtitle tracks are probed for and copied out at
-    /// all, which is the tray's `Volume → Video → Subtitles` switch: off, so a
+    /// all, which is the tray's `Video Preview → Subtitles` switch: off, so a
     /// hover is a read of the film's header and nothing else, and a film is
     /// played without subtitles rather than paid for on every launch (see
     /// `preview_window::subtitle_files` and `video_probe`).

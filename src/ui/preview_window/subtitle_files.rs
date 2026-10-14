@@ -646,7 +646,7 @@ pub(super) fn request_extraction(path: &Path, geometry: Option<&VideoGeometry>) 
 /// Keep only the extraction of `keep` running, asking the one slot to drop every other one (see
 /// `Slot::keep` and `RUNNING`).
 ///
-/// `pub(crate)` for the same reason `trim_now` is: the tray's `Volume → Video
+/// `pub(crate)` for the same reason `trim_now` is: the tray's `Video Preview →
 /// Subtitles` switch reaches it through `preview_window`'s re-export, to drop an
 /// extraction running for a film the switch now says no subtitle will be drawn
 /// from (see `toggle_video_subtitles`).
@@ -883,7 +883,7 @@ fn folder_bytes(folder: &Path) -> u64 {
 #[cfg(test)]
 pub(super) static SUBTITLE_SWITCH_TESTS: Mutex<()> = Mutex::new(());
 
-/// The `Volume → Video → Subtitles` switch, stood where a test wants it and put
+/// The `Video Preview → Subtitles` switch, stood where a test wants it and put
 /// back when the guard is dropped — the house pattern (`CardFontSettings` in
 /// `tests::pin_cards`), because the configuration is process-global and these
 /// tests run beside others that answer against the machine's own setting.
