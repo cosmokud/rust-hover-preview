@@ -81,8 +81,8 @@ pub(super) struct VideoHeader {
     pub(super) attachment_codecs: Vec<String>,
 }
 
-/// Whether a film's subtitle tracks are wanted at all, which is the `Volume →
-/// Video → Subtitles` setting's own answer: off where the app starts, so a probe
+/// Whether a film's subtitle tracks are wanted at all, which is the `Preview Settings → Video
+/// → Subtitles` setting's own answer: off where the app starts, so a probe
 /// names no subtitle stream, a launch copies none out and a player draws none.
 pub(super) fn subtitles_wanted() -> bool {
     CONFIG

@@ -27,7 +27,8 @@ use super::setting_types::{
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
     DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
     DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
-    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
+    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
+    DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
     DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_TEXT_SCALE, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND,
@@ -242,6 +243,9 @@ pub struct AppConfig {
     pub pin_mode_video_end_of_file: PinEndOfFile,
     /// The same shuffle for a pinned film's walk.
     pub pin_mode_video_shuffle: bool,
+    /// The same shuffle for a pinned picture's walk: the folder's own order, or a random
+    /// picture of the folder, which is what the pin's next key and button step on to.
+    pub pin_mode_image_shuffle: bool,
     /// Whether a hovered film loops: on, it goes round; off, it stops at the end.
     pub video_loop: bool,
     /// Whether a hovered sound loops: on, it goes round; off, it stops at the end.
@@ -498,7 +502,7 @@ pub struct AppConfig {
     /// list already.
     pub video_engine_fallback: bool,
     /// Whether a film's own subtitle tracks are probed for and copied out at
-    /// all, which is the tray's `Volume → Video → Subtitles` switch: off, so a
+    /// all, which is the tray's `Preview Settings → Video → Subtitles` switch: off, so a
     /// hover is a read of the film's header and nothing else, and a film is
     /// played without subtitles rather than paid for on every launch (see
     /// `preview_window::subtitle_files` and `video_probe`).
@@ -675,6 +679,7 @@ impl Default for AppConfig {
             pin_mode_audio_shuffle: DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
             pin_mode_video_end_of_file: DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
             pin_mode_video_shuffle: DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
+            pin_mode_image_shuffle: DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
             video_loop: DEFAULT_VIDEO_LOOP,
             audio_loop: DEFAULT_AUDIO_LOOP,
             normalize_volume: DEFAULT_NORMALIZE_VOLUME,

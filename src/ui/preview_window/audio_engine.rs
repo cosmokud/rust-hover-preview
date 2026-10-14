@@ -89,7 +89,8 @@ pub(super) fn current_pin_mode_audio_end_of_file() -> PinEndOfFile {
 /// `audio_font_scale_percent`). The Audio Scaling setting decides the room the card
 /// is laid out over and the size the card is drawn at together (see `audio_box_room`),
 /// so the text font size no longer moves the card at all: the card's font is the
-/// share's own, and what a change to Text Preview → Font Size does to a text preview
+/// share's own, and what a change to Preview Settings → Text → Font Size does to a text
+/// preview
 /// is something a sound's card never does.
 pub(super) fn current_audio_options() -> AudioPreviewOptions {
     CONFIG
@@ -678,6 +679,34 @@ pub(super) fn player_for_gain(probed: Player, normalizing: bool, gain: Option<f6
     }
 
     probed
+}
+
+/// Whether a sound is being held where it stands, which is the one question both ends of a press
+/// on a pinned sound's card are answered from: a press turns a sound that is going into one held,
+/// and a sound that is held into one going again, and the play button's glyph says which of the
+/// two it is.
+///
+/// The engine's answer is the one this app cannot write down, and the whole of the fault that
+/// came of trying: a session that was asked to hold is a session that is still there, so asking
+/// whether one is *playing* answered yes for a sound nobody could hear — the press then asked a
+/// held sound to hold again, the pin was left with a sound paused for ever and no way to let it
+/// go, and the card went on drawing the glyph of a sound that was going. The hold is the engine's
+/// own state, so it is the engine that is asked (see [`video_player::is_paused`]).
+///
+/// A player of this app's is the other way round and was always this side's answer: it cannot be
+/// told anything once it is running, so a hold is that player ended with the second it had got to
+/// kept, and the sound is held at that second for the player that takes its place (see
+/// [`audio_clock`]).
+///
+/// Three arguments rather than a path because the engine is a thread-local the preview thread
+/// holds and a question that has to be asked with a borrow of it is a question that cannot be
+/// asked in a test at all (see `a_sound_that_has_played_to_its_end`).
+pub(super) fn a_sound_that_is_held(
+    paused: Option<f64>,
+    player: Player,
+    engine_paused: bool,
+) -> bool {
+    paused.is_some() || (player == Player::Native && engine_paused)
 }
 
 /// Start the player a sound's card is drawn against, answering whether a player that was

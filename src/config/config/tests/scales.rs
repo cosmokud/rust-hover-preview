@@ -963,7 +963,7 @@ fn reads_the_hover_loop_and_a_films_end_of_file_from_their_own_keys() {
 }
 
 /// Which files a pin's own previous/next buttons step through is three keys of its own, one
-/// per anchor, written under the names the tray's `Navigation Files` submenu shows:
+/// per anchor, written under the names the tray's `Navigation` submenu shows:
 /// `category` is the walk narrowed to the anchor's kind, and what a file that names
 /// neither — or names nothing at all — is read as is each anchor's fresh default.
 #[test]

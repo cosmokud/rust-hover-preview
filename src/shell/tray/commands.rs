@@ -36,8 +36,8 @@ pub(super) use setters::{
     set_pin_mode_audio_seek, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
     set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
     set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
-    set_video_scale, set_video_volume, set_webview_idle, toggle_loop,
-    toggle_pin_shuffle,
+    set_video_scale, set_video_volume, set_webview_idle, toggle_loop, toggle_pin_shuffle,
+    PinShuffle,
 };
 pub(super) use toggles::{
     toggle_check_for_updates, toggle_engine_persistent, toggle_normalize_video_volume,

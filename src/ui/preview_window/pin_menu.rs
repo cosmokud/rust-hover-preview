@@ -178,7 +178,7 @@ const END_OF_FILE_CHOICES: [PinEndOfFile; 3] = [
 /// What each of the end-of-file choices is listed as: the words the tray lists
 /// the same three under, without the mark that menu puts on the default — the
 /// card's menu marks the one in force instead (see `end_of_file_rows`).
-const END_OF_FILE_LABELS: [&str; 3] = ["Pause", "Loop", "Continue"];
+const END_OF_FILE_LABELS: [&str; 3] = ["Pause", "Loop", "Jump"];
 
 /// The rows the End of File row's flyout holds: the three ends the pin can have, in the order
 /// the tray lists them in, with the one the pin plays by carrying its disc.
@@ -668,6 +668,11 @@ pub(super) unsafe fn close_pin_menu(hwnd: HWND) -> bool {
 /// `PIN_MENU_DISMISS_REQUESTED`), and only the menu goes: the pin itself is left standing,
 /// which is what a press on another window means here (see
 /// `requests::request_pin_menu_dismiss`).
+///
+/// The bubble's own menu goes the same way and from the same ask, because with the pin's
+/// window hidden the bubble is the pin's own window: a press the hook read was outside the
+/// bubble's as surely as it was outside the card's (see `bubble_window_is_at` and
+/// `close_pin_bubble_menu`).
 pub(super) fn take_pin_menu_dismiss() -> bool {
     let asked = PIN_MENU_DISMISS_REQUESTED.swap(false, Ordering::AcqRel);
     if !asked {
@@ -681,16 +686,17 @@ pub(super) fn take_pin_menu_dismiss() -> bool {
             pin.menu.open = false;
         }
     });
+    let bubble_was_up = unsafe { close_pin_bubble_menu() };
 
     // The ask being taken, as this side of the seam sees it: the
-    // flag's value before the swap, and whether the menu was up to
+    // flag's value before the swap, and whether a menu was up to
     // put away. The hook's side of the same ask is the trace its
     // pinned tick writes (see `note_pin_click!`).
     crate::shell::explorer_hook::note_pin_click!(
         "DISMISS taken  asked {}  menu_up {}",
         asked as u8,
-        was_up as u8,
+        (was_up || bubble_was_up) as u8,
     );
 
-    was_up
+    was_up || bubble_was_up
 }

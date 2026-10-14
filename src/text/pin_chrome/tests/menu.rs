@@ -642,10 +642,10 @@ fn the_seek_flyout_flips_left_where_it_does_not_fit_right() {
 
     // A window the flyout does not fit in beside the menu
     // where the point anchored it: the menu's own right edge
-    // and the gap and the flyout's fixed width together run
+    // and the gap and the flyout's fixed room together run
     // past the window's own right, so the flyout goes to the
     // menu's left.
-    for (width, dpi, gap, panel_width) in [(400i32, 96u32, 4i32, 150i32), (500, 144, 6, 225)] {
+    for (width, dpi, gap) in [(400i32, 96u32, 4i32), (500, 144, 6)] {
         let placed = menu_flyout_from_menu(
             &menu_popup_from_point(a_point(), width, 300, dpi, &menu_rows),
             width,
@@ -661,9 +661,14 @@ fn the_seek_flyout_flips_left_where_it_does_not_fit_right() {
             "the Seek row's arrow points at the flyout on its left"
         );
         assert_eq!(
-            placed.popup.panel.left,
-            placed.menu.panel.left - gap - panel_width,
-            "the flyout sits a gap left of the menu's own left edge"
+            placed.popup.panel.right,
+            placed.menu.panel.left - gap,
+            "the flyout stands tight against the menu's own left edge, the same gap a flyout on its right stands off"
+        );
+        assert!(
+            placed.popup.panel.right - placed.popup.panel.left
+                < text_paint::scaled(MENU_PANEL_WIDTH_PIXELS as i32, dpi as f32 / 96.0),
+            "and it is its own rows' width, narrower than the fixed room the tier answered in"
         );
         assert!(
             placed.popup.panel.right <= placed.menu.panel.left,
@@ -689,6 +694,31 @@ fn the_seek_flyout_flips_left_where_it_does_not_fit_right() {
             assert!(panel.right <= width, "a panel is off the window's right");
             assert!(panel.top >= 0 && panel.bottom <= 300);
         }
+    }
+
+    // A flyout wider than the room the menu leaves, in a window too narrow for the two
+    // panels: it is narrowed to that room and held at the window's own left edge, so it stands
+    // beside the menu it came from rather than over it or off the window.
+    let wide = menu_flyout_from_menu(
+        &menu_popup_from_point(a_point(), 250, 300, 96, &menu_rows),
+        250,
+        300,
+        96,
+        last_row(&menu_rows),
+        &longer_flyout_rows(),
+    );
+    assert_eq!(
+        wide.menu.arrow,
+        MenuArrow::Left,
+        "the tier still sends the wide flyout left"
+    );
+    assert_eq!(
+        wide.popup.panel.left,
+        0,
+        "a flyout wider than the room beside the menu is held at the window's own left edge"
+    );
+    for panel in [wide.menu.panel, wide.popup.panel] {
+        assert!(panel.left >= 0 && panel.right <= 250, "a panel is off the window");
     }
 }
 
@@ -1061,6 +1091,72 @@ fn a_menu_opened_at_the_middle_of_a_card_stays_where_the_click_put_it() {
         assert!(
             panel.top >= 0 && panel.bottom <= height,
             "or off its top or bottom"
+        );
+    }
+}
+
+/// A window that leaves no room beside the menu for a panel a hand can read
+/// — narrower than the menu's own panel and the room a flyout is worth
+/// opening in, on either side of it — is the one case the two panels share the
+/// window: the menu at its own left edge and the flyout at its right, each the
+/// half the window leaves, rather than a flyout narrowed to a sliver beside
+/// the menu the click put up.
+#[test]
+fn a_window_that_leaves_no_room_for_a_flyout_splits_the_two_panels() {
+    let menu_rows = card_rows();
+    let flyout_rows = four_choices();
+
+    // A window narrower than the menu's own panel: the menu is held to the
+    // window's own width, and what it leaves either side of itself is less
+    // than a panel a hand can read.
+    let (width, height, dpi) = (160i32, 300i32, 96u32);
+    let point = (80, 40);
+    let gap = 4;
+    let floor = text_paint::scaled(MENU_PANEL_MIN_PIXELS as i32, 1.0);
+
+    let menu = menu_popup_from_point(point, width, height, dpi, &menu_rows);
+    let placed = menu_flyout_from_menu(
+        &menu,
+        width,
+        height,
+        dpi,
+        last_row(&menu_rows),
+        &flyout_rows,
+    );
+
+    assert!(
+        menu.panel.left.saturating_sub(gap) < floor
+            && width.saturating_sub(menu.panel.right + gap) < floor,
+        "the window leaves no side room for a flyout a hand can read"
+    );
+
+    // The two panels share the window between them: the menu at its own left
+    // edge, the flyout right of it at its own right edge.
+    assert_eq!(
+        placed.menu.panel.left, 0,
+        "the menu is held at the window's own left edge"
+    );
+    assert!(placed.popup.panel.left >= placed.menu.panel.right);
+    assert_eq!(
+        placed.popup.panel.right, width,
+        "and the flyout at its right"
+    );
+    assert_eq!(
+        placed.menu.arrow,
+        MenuArrow::Right,
+        "the arrows point at it"
+    );
+
+    // Both panels are inside the window they belong to, and neither is
+    // narrower than a panel a hand can read.
+    for panel in [placed.menu.panel, placed.popup.panel] {
+        assert!(
+            panel.left >= 0 && panel.right <= width,
+            "a panel is off the window"
+        );
+        assert!(
+            panel.right - panel.left >= floor,
+            "and neither is narrower than a panel a hand can read"
         );
     }
 }
