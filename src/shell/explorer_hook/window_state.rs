@@ -314,6 +314,14 @@ pub(super) fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -
     over_explorer || over_our_own
 }
 
+/// Whether `window` is the bubble's: the circle a collapsed pin leaves on screen, which is
+/// the only window of the pin's own a press can land on while the pin's window is hidden (see
+/// `pin_menu_dismiss_ask`).
+pub(super) fn bubble_window_is_at(window: HWND) -> bool {
+    let bubble = crate::ui::preview_window::PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    !window.is_invalid() && bubble != 0 && window.0 as isize == bubble
+}
+
 /// Whether a press read on a pinned tick is one the Explorer hook publishes so the card's
 /// menu is put away: a press that landed anywhere but the pin's own window. The pin window is
 /// `WS_EX_NOACTIVATE` and holds no capture, so a press on another window never reaches its
@@ -336,14 +344,21 @@ pub(super) fn press_is_outside_the_pin_window(pressed: bool, on_pin_window: bool
 /// press that activates it, and the two readings of one tick can name
 /// different windows. The rule itself, with the window's identity handed in,
 /// is `press_is_outside_the_pin_window`.
+///
+/// The bubble's own window counts as the pin's own here, and a press on it
+/// is not published: a collapsed pin leaves no window on screen but the
+/// bubble, the bubble carries the same menu a card does, and a press on it
+/// is answered there (see `bubble_window_is_at` and `bubble_menu_press`).
 pub(super) fn pin_menu_dismiss_ask(
     clicked: bool,
     tick_pointer: Option<&PointerTick>,
 ) -> bool {
-    let on_pin_window = clicked
-        && tick_pointer.is_some_and(|pointer| preview_window_is_at(pointer.window));
+    let on_the_pins_own_window = clicked
+        && tick_pointer.is_some_and(|pointer| {
+            preview_window_is_at(pointer.window) || bubble_window_is_at(pointer.window)
+        });
 
-    press_is_outside_the_pin_window(clicked, on_pin_window)
+    press_is_outside_the_pin_window(clicked, on_the_pins_own_window)
 }
 
 /// Whether a press read on this tick is one a listing can answer for: the window it landed

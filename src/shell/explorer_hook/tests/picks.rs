@@ -219,6 +219,55 @@ fn the_dismissal_verdict_answers_from_the_ticks_opening_pointer_read() {
     );
 }
 
+/// The bubble's handle put where a test asks, and put back when the guard is dropped.
+struct BubbleHwndPutBack;
+
+impl BubbleHwndPutBack {
+    fn put(hwnd: HWND) -> Self {
+        crate::ui::preview_window::PIN_BUBBLE_HWND
+            .store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for BubbleHwndPutBack {
+    fn drop(&mut self) {
+        crate::ui::preview_window::PIN_BUBBLE_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A press on the bubble is not published either: a collapsed pin leaves no window on
+/// screen but the bubble, the bubble carries the same menu a card does, and a press on it
+/// is answered there rather than out here (see `bubble_menu_press`). The bubble's handle
+/// is a slot rather than a window on somebody's screen, so this is the one identity of
+/// the pin's own a test can put in the reading.
+#[test]
+fn a_press_on_the_bubble_is_not_published() {
+    // Whatever the slot held before this test asked is put back when the test is done,
+    // even by a failure: a handle left in it is a handle every test after it reads (see
+    // `BubbleHwndPutBack`).
+    let _put_back = BubbleHwndPutBack::put(HWND(0x2000 as *mut _));
+    let on_bubble = PointerTick {
+        point: POINT { x: 12, y: 34 },
+        dpi: 96,
+        window: HWND(0x2000 as *mut _),
+    };
+    let elsewhere = PointerTick {
+        point: POINT { x: 12, y: 34 },
+        dpi: 96,
+        window: HWND(0x3000 as *mut _),
+    };
+
+    assert!(
+        !pin_menu_dismiss_ask(true, Some(&on_bubble)),
+        "a press on the bubble is a press on the pin's own window"
+    );
+    assert!(
+        pin_menu_dismiss_ask(true, Some(&elsewhere)),
+        "and one on anything else is still the press that puts the menu away"
+    );
+}
+
 /// A pointer that has left the item the preview on screen is about has moved,
 /// whether or not it went far enough to clear the threshold: the threshold is a
 /// hand's own jitter, and a row of the list crossed under it would otherwise
