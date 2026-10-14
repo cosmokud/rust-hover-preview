@@ -885,7 +885,16 @@ pub(super) fn settle_pin_swap(
     let mut swap: Option<PinSwap> = None;
 
     if let Some(mut held) = hold.take() {
-        swap = if held.settle().is_some() {
+        swap = if let Some(wait) = held.settle() {
+            // A wait that ended with no window in it has nothing to hand the band to, and the
+            // cover may not be left standing over the box this install is about to give the file:
+            // that is the last frame stretched into the new film's shape, which is the whole of
+            // what the hold was for. It is given up here, the way a player that would not start
+            // at all gives one up, and what is left is the hole the player's own window fills the
+            // moment it has one (see `give_up_pinned_park` and `PinSwapWait::Abandoned`).
+            if wait == PinSwapWait::Abandoned {
+                give_up_pinned_park();
+            }
             Some(PinSwap::Ready(held.into_installable()))
         } else {
             // An engine that has not drawn anything yet. The wait goes on, and the pin keeps
