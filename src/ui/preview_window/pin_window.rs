@@ -71,7 +71,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use super::{subtitle_files, PinCommand, PinnedPreview, ScreenRegion};
+use super::{subtitle_files, PinCommand, PinStep, PinnedPreview, ScreenRegion};
 
 mod window;
 
@@ -170,15 +170,33 @@ impl Reason {
 
 /// Everything a pin is holding while it is up.
 ///
-/// The three fields are three things that used to be globals with nothing saying they belonged
+/// The four fields are four things that used to be globals with nothing saying they belonged
 /// together, and each of them is a way a pin has outlived what it was holding: a keyboard
 /// claim that outlived the window (the watchdog's stranded caret), a command queue answered
-/// into whatever pin came next (the queue that stopped being a slot), and a collapsed flag read
-/// as `pin_is_collapsed` while the pin itself had gone.
+/// into whatever pin came next (the queue that stopped being a slot), a collapsed flag read
+/// as `pin_is_collapsed` while the pin itself had gone, and a walk that answered a press made
+/// on a window that was gone.
 pub(super) struct PinUp {
     /// The window and what it is showing: the geometry, the chrome, the pointer's business
     /// and the player's, all of which is the pin's own and outlives every flag beside it.
     pin: PinnedPreview,
+    /// The walk the pin is standing on, and everything it is still holding: the list it read,
+    /// what is left of the shuffle permutation and the files it has stepped off (see
+    /// `PinStep`).
+    ///
+    /// A field of the pin rather than a loop local because a walk is the pin's *session* and
+    /// not one ask's: a press, a film's end of file and a sound's are all one walk, and the
+    /// loop is not the only thing that asks it for its next file — so a walk held in the loop
+    /// is a walk a sound's end of file cannot see, which is a permutation that starts again
+    /// every time a file ends and a **Previous** that has nowhere to go back to. It goes with
+    /// the pin, which is what takes it down: a pin that is over holds no walk, and the one
+    /// taken up after it is shown the file the user names rather than the rest of a walk
+    /// behind it.
+    ///
+    /// What is *not* in here is the walk the planner is working on: that one is the
+    /// planner's, and its lock is held across a wait (see the module note). This is the walk
+    /// that has already answered, standing on the file on screen.
+    walk: Option<PinStep>,
     /// The keyboard this app took for this pin, or nothing while it holds none.
     ///
     /// One field and not a bit and a handle, because those are what it was: `PIN_FOCUSED` said
@@ -321,6 +339,10 @@ pub(super) fn install(pin: PinnedPreview) {
             pin,
             keyboard: None,
             commands,
+            // A pin taken up over another one is the same window showing another file, and
+            // the file was picked: it is not a step of the walk that was standing, so the
+            // walk does not come with it (see `PinUp::walk`).
+            walk: None,
         });
         PIN_UP.store(true, Ordering::Release);
     }
@@ -360,6 +382,28 @@ impl PinState {
     fn keyboard_mut(&mut self) -> Option<&mut Option<PinKeyboard>> {
         match self {
             PinState::Up(up) => Some(&mut up.keyboard),
+            _ => None,
+        }
+    }
+
+    /// The walk the pin is standing on, or nothing where it holds none.
+    ///
+    /// Borrowed rather than cloned, because the two things read of it — the anchor a fresh
+    /// press asks with, and the walk a job carries as the one it is a step of — are read on
+    /// every tick and every press, and a walk holds a whole folder's list in it (see
+    /// `pin_walk_anchor` and `ask_pin_walk`).
+    pub(super) fn walk(&self) -> Option<&PinStep> {
+        match self {
+            PinState::Up(up) => up.walk.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The walk the pin is standing on, mutably, for the install that writes the walk that
+    /// made the file on screen and for the step-off that carries it on.
+    pub(super) fn walk_mut(&mut self) -> Option<&mut Option<PinStep>> {
+        match self {
+            PinState::Up(up) => Some(&mut up.walk),
             _ => None,
         }
     }
@@ -718,6 +762,22 @@ pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
                 *state = PinState::Down;
                 PIN_UP.store(false, Ordering::Release);
             }
+        }
+    }
+}
+
+/// Put the walk the pin is standing on where the pin is, for the tests of a press that is a
+/// step of the walk it already holds (see `PinUp::walk`).
+///
+/// The companion to [`stand_pin`] rather than a way into `PinUp`: a walk the pin is standing
+/// on is the pin's, so a test that wants one has to be standing a pin with it — and `install`
+/// deliberately takes no walk, because a pin taken up over another one was shown a picked file
+/// rather than stepped onto one (see `install`).
+#[cfg(test)]
+pub(super) fn stand_pin_walk(walk: Option<PinStep>) {
+    if let Some(mut state) = pin_state() {
+        if let Some(held) = state.walk_mut() {
+            *held = walk;
         }
     }
 }
