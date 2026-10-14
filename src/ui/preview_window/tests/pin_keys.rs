@@ -524,22 +524,10 @@ fn a_gain_puts_a_probed_native_sound_on_ffmpegs_player() {
 /// the one thing a pause has to say.
 #[test]
 fn a_sound_a_key_held_is_drawn_where_it_was_held() {
-    let folder = std::env::temp_dir().join("rust-hover-preview-pin-held-sound");
-    std::fs::create_dir_all(&folder).expect("a test folder");
-    let path = folder.join("song.mp3");
-    std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
-        .expect("a written file");
-    audio_track::remember(
-        &path,
-        audio_track::Probed::Track(audio_track::Track {
-            player: audio_track::Player::Ffmpeg,
-            codec: Some("MP3".to_string()),
-            rate: Some(44_100),
-            channels: Some(2),
-            bitrate: Some(192_000),
-            duration: Some(180.0),
-        }),
-    );
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let (_folder, path) = a_sound_of_three_minutes();
 
     // A sound this app plays is measured by its own clock over the moment its player was
     // started, counted from the second it was started at — so a file dropped into the middle
@@ -579,6 +567,11 @@ fn a_sound_a_key_held_is_drawn_where_it_was_held() {
     // at 0:00 — with a sub-second position, which is a pixel or two of bar and a clock still
     // reading zero — a moment before the sound was really over, and the bar would then step
     // backwards as the pass turned over for real (see `wrap_audio_player`).
+    //
+    // A rule about a pass this side turns over, so the loop is off here: a player that takes
+    // the file round on its own has no exit for this side to turn a pass over at, and its
+    // clock is the thing that goes round instead (see `player_loops_itself`).
+    let _loop_off = LoopSwitch::put(false);
     let at = Instant::now() - Duration::from_secs(180);
     assert_eq!(
         audio_clock(&path, Some(at), 0.0, None).0,
@@ -593,7 +586,95 @@ fn a_sound_a_key_held_is_drawn_where_it_was_held() {
         "and a sound a moment past what the header said is still at the end of it, not at the start"
     );
 
-    let _ = std::fs::remove_dir_all(&folder);
+    let _ = std::fs::remove_dir_all(&_folder);
+}
+
+/// The sound's own loop switch, put where the two clock tests below ask and put back when the
+/// guard is dropped, so a test beside this one is answered with the machine's own — the way the
+/// two `Audio Seek` settings are put (see `pin_audio_seek::SeekSettings`).
+struct LoopSwitch {
+    was: bool,
+}
+
+impl LoopSwitch {
+    fn put(loop_: bool) -> Self {
+        let mut config = CONFIG.lock().expect("the configuration");
+        let was = std::mem::replace(&mut config.audio_loop, loop_);
+
+        Self { was }
+    }
+}
+
+impl Drop for LoopSwitch {
+    fn drop(&mut self) {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.audio_loop = self.was;
+        }
+    }
+}
+
+/// A sound the two clock tests below are measured for, written where a test asks and remembered
+/// the way every sound ever probed is: a three-minute file, so a pass of it is a number the
+/// assertions about it can be read against.
+fn a_sound_of_three_minutes() -> (PathBuf, PathBuf) {
+    let folder = std::env::temp_dir().join("rust-hover-preview-audio-clock");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("song.mp3");
+    std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
+        .expect("a written file");
+    audio_track::remember(
+        &path,
+        audio_track::Probed::Track(audio_track::Track {
+            player: audio_track::Player::Ffmpeg,
+            codec: Some("MP3".to_string()),
+            rate: Some(44_100),
+            channels: Some(2),
+            bitrate: Some(192_000),
+            duration: Some(180.0),
+        }),
+    );
+
+    (folder, path)
+}
+
+/// A player that takes the file round itself never exits, so the clock is the only thing that
+/// can say where the sound is — and a clock held at the whole of the file is a seekbar that
+/// has stopped moving under a sound still being heard.
+///
+/// This is the pin's `End of File → Loop` left alone on a file the player loops on its own:
+/// the pass after the first is the player's own, no process exits, nothing turns a pass over,
+/// and a card whose clock clamps at the length it is measured against stands at the end of the
+/// file for as long as the sound plays. Three passes on it says which second of the third pass
+/// the sound is at, which is the one thing that keeps the bar moving.
+#[test]
+fn the_clock_of_a_player_that_loops_itself_goes_round_with_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _loop_on = LoopSwitch::put(true);
+    let (_folder, path) = a_sound_of_three_minutes();
+
+    // Two whole passes and forty-two seconds on, counted from the beginning of the file the
+    // way a player begun there is: forty-two seconds into the third pass.
+    let three = Instant::now() - Duration::from_secs_f64(180.0 * 2.0 + 42.0);
+    let (playing, length) = audio_clock(&path, Some(three), 0.0, None);
+    assert_eq!(length, Some(180.0), "and the whole is still the file's own");
+    assert!(
+        playing.is_some_and(|at| (at - 42.0).abs() < 0.5),
+        "two passes and forty-two seconds on is forty-two seconds in: {playing:?}"
+    );
+
+    // And never the whole of the file, whatever the pass: that is the seekbar standing still
+    // at the end of a sound that is on its fourth time round.
+    let many = Instant::now() - Duration::from_secs_f64(180.0 * 6.0 + 179.7);
+    assert!(
+        audio_clock(&path, Some(many), 0.0, None)
+            .0
+            .is_some_and(|at| at < 180.0),
+        "a clock for a player that goes round itself is never left at the end of the file"
+    );
+
+    let _ = std::fs::remove_dir_all(&_folder);
 }
 
 /// The note that the keyboard was taken is dropped on every road out of a pin, and kept
