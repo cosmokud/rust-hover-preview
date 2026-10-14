@@ -322,6 +322,40 @@ pub(super) fn pin_walk_synced_its_playlist(walk: &PinStep) {
     }
 }
 
+/// The file the pin is shown next and the walk it is a step of, if any.
+///
+/// A file the user named comes first — a listing pick, a held one, a bubble restored — and
+/// then the pin's own walk, which is a step of the playlist it holds. A walk parked for a
+/// file still waited on is not picked up until the wait ends: the plan would only find the
+/// same wait. And a parked walk is dropped where the pick is a file the user named rather
+/// than the file the walk steps onto, so the walk that follows is anchored on the picked
+/// file instead of carrying on a playlist behind it (see `PinUp::walk`).
+pub(super) fn take_pin_pick(
+    pin_pick: &mut Option<PathBuf>,
+    held_pick: &mut Option<PathBuf>,
+    swap_requested: &mut Option<PathBuf>,
+    walk: &mut Option<PinStep>,
+    awaiting: bool,
+) -> Option<(PathBuf, Option<PinStep>)> {
+    let path = pin_pick
+        .take()
+        .or_else(|| held_pick.take())
+        .or_else(|| swap_requested.take())
+        .or_else(|| {
+            (!awaiting)
+                .then(|| walk.as_ref().map(|step| step.at.clone()))
+                .flatten()
+        })?;
+    let mut step = walk.take();
+    if step
+        .as_ref()
+        .is_some_and(|step| !pin_navigation::same_file(&step.at, &path))
+    {
+        step = None;
+    }
+    Some((path, step))
+}
+
 /// Ask the planner for a walk, answering whether the question was asked at all.
 ///
 /// The configuration is taken by copy and the lock let go before the job is queued: the
