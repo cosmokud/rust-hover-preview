@@ -39,7 +39,7 @@ use windows::Win32::Foundation::RECT;
 /// panel: every panel is measured from its own rows (see
 /// `menu_main_panel_width`), and this is the room the two panels' placement is
 /// decided against — whether the flyout fits right of the menu, left of it, or
-/// the two have to be narrowed to fit between the window's edges. It has to be
+/// has to be narrowed into the room one side leaves beside it. It has to be
 /// a fixed room rather than a panel's own width, because the main menu's own
 /// placement carries the arrow whether its flyout is up or not and has no
 /// flyout rows to measure (see `menu_popup_from_point`): a side that came from
@@ -314,8 +314,8 @@ fn menu_bands(rows: &[MenuRow], rows_top: i32, row_height: i32) -> Vec<MenuRowBa
 /// from them as well (`menu_bands`), so a rule between two groups of them takes
 /// the room the panel was measured with. A window
 /// too small to hold the panel at all is a panel held at its own top-left
-/// corner, with the pair narrowed to fit where a flyout is up beside it
-/// (see `menu_flyout_from_menu`).
+/// corner, with the two panels sharing the window where a flyout is up beside
+/// it and neither side has any room for it (see `menu_flyout_from_menu`).
 ///
 /// The panel carries the arrow on its door rows pointing the way the flyout
 /// opens, from the same tier the flyout's own placement asks
@@ -367,8 +367,8 @@ pub(crate) fn menu_popup_from_point(
 
     // Which way the arrow the door rows carry points: the tier the flyout's own
     // placement asks (`menu_flyout_tier`), of the panel as it stands
-    // here. The panel's placement is this function's alone — the tier's
-    // narrowing of the main menu stays a flyout-up concern — but the
+    // here. The panel's placement is this function's alone — the tier leaves the
+    // menu where it stands and moves only the flyout — but the
     // arrow is carried either way, so a door points the way its
     // flyout opens whether the flyout is up or not, and the answer the
     // flyout's placement gives is the one the menu carried without it.
@@ -384,11 +384,11 @@ pub(crate) fn menu_popup_from_point(
 /// beside it.
 pub(crate) struct MenuFlyout {
     /// The main menu's panel, as `menu_popup_from_point`
-    /// placed it — left where the anchor put it, moved only
-    /// where the window is too narrow to hold the two panels
-    /// at their own width, which is the one case the two are
-    /// narrowed to fit. Its door rows carry the arrows saying
-    /// which side the flyout ended up on.
+    /// placed it — left where the anchor put it, and moved only where the
+    /// window leaves no room beside it for a panel a hand can read, which is
+    /// the one case the two panels are split between the window's own edges.
+    /// Its door rows carry the arrows saying which side the flyout ended up
+    /// on.
     pub(crate) menu: MenuPopup,
     /// The flyout's own panel: beside the main menu — right
     /// of its right edge where it fits there, left of its
@@ -397,28 +397,40 @@ pub(crate) struct MenuFlyout {
     pub(crate) popup: MenuPopup,
 }
 
-/// Where the flyout's tier puts the two panels' own edges, and which way
-/// the door rows' arrows point because of it: the flyout's first place is
-/// a small gap right of the main menu's own right edge; where that does
-/// not fit it flips to a small gap left of the menu's own left edge; and
-/// where neither fits, the two are narrowed to half the room the window
-/// leaves between its own edges — the menu at the window's left edge and
-/// the flyout at its right, which points the arrows right.
+/// Where the flyout's tier puts the flyout's own edge, and which way the door
+/// rows' arrows point because of it: the flyout's first place is a small gap
+/// right of the main menu's own right edge; where that does not fit it flips
+/// to a small gap left of the menu's own left edge; and where the window is
+/// narrower than the two panels beside each other at the fixed room, the
+/// flyout takes the side with the more room in it and is narrowed to what
+/// that side leaves — which points the arrows that way. The one case the
+/// two panels are split between the window's own edges is a window that
+/// leaves no side room for a panel a hand can read at all, which is what a
+/// window narrower than the menu's own panel is.
+///
+/// The menu itself is never moved by the tier: the point the right-click
+/// landed is the user's own, and the menu's own placement holds it there
+/// (`menu_popup_from_point`). The tier answers where the *flyout* goes and
+/// which way the arrows point.
 ///
 /// The one computation of that tier, asked both by the main menu's own
 /// placement (`menu_popup_from_point`) and by the flyout's
 /// (`menu_flyout_from_menu`), so that the arrow the main menu's panel
 /// carries is always the side its flyout opens on, whether the flyout is
 /// up or not: the main menu's own placement takes the arrow from this
-/// and leaves the panel where it stands — the narrowing the tier answers
-/// for the main menu being a flyout-up concern — and the flyout's own
-/// placement applies the whole answer.
+/// and leaves the panel where it stands, and the flyout's own placement
+/// applies the whole answer.
 ///
 /// The room the two panels are placed in is the fixed one
 /// (`MENU_PANEL_WIDTH_PIXELS`) rather than the width either panel measures
 /// to, for that same reason: a side that came from the flyout's own measured
 /// width would not be answerable without flyout rows, which the main menu's own
 /// placement has none of, so it would move the moment the flyout came up.
+/// A window the fixed room does not fit in is therefore not a window the two
+/// panels do not fit in: the flyout's own panel is measured from its rows and
+/// is narrower than the room, so where the room falls short the flyout is
+/// narrowed into the side's own room rather than the menu being moved to
+/// make the room (see `menu_flyout_from_menu`).
 fn menu_flyout_tier(
     menu: &MenuPopup,
     width: i32,
@@ -426,21 +438,51 @@ fn menu_flyout_tier(
 ) -> (i32, i32, i32, MenuArrow) {
     let (panel_width, _row_height, _pad, gap) = menu_panel_sizes(width, dpi);
 
-    if menu.panel.right + gap + panel_width <= width {
+    // The room the window leaves the flyout on either side of the menu, a
+    // gap off the menu's own edge. A side that holds the fixed room is a
+    // side the flyout is placed in whole; a side that leaves room enough
+    // for a panel a hand can read is the one it is narrowed into, beside
+    // the menu rather than moving it; and a side that leaves less than that
+    // has no room for a flyout in it at all.
+    let left_room = menu.panel.left.saturating_sub(gap);
+    let right_room = width.saturating_sub(menu.panel.right + gap);
+    // The narrowest a flyout's own panel is ever held to, the floor every
+    // panel keeps (see `menu_main_panel_width`): a side leaving less than it
+    // would narrow the flyout past the floor rather than beside the menu.
+    let floor = text_paint::scaled(MENU_PANEL_MIN_PIXELS as i32, dpi as f32 / 96.0);
+
+    if right_room >= panel_width {
         (
             menu.panel.left,
             menu.panel.right,
             menu.panel.right + gap,
             MenuArrow::Right,
         )
-    } else if menu.panel.left - gap - panel_width >= 0 {
+    } else if left_room >= panel_width {
         (
             menu.panel.left,
             menu.panel.right,
             menu.panel.left - gap - panel_width,
             MenuArrow::Left,
         )
+    } else if right_room >= left_room && right_room >= floor {
+        (
+            menu.panel.left,
+            menu.panel.right,
+            menu.panel.right + gap,
+            MenuArrow::Right,
+        )
+    } else if left_room >= floor {
+        (
+            menu.panel.left,
+            menu.panel.right,
+            (menu.panel.left - gap - panel_width).max(0),
+            MenuArrow::Left,
+        )
     } else {
+        // No side leaves room enough for a flyout a hand can read: the two
+        // panels share the window between them — the menu at its left edge
+        // and the flyout at its right.
         let half = ((width - gap) / 2).max(8).min(width.max(8));
         (0, half, width - half, MenuArrow::Right)
     }
@@ -465,10 +507,16 @@ fn menu_flyout_tier(
 /// the user's own and only a window too narrow for the
 /// panel at all moves it.
 ///
-/// A window too narrow for the flyout on either side is
-/// the two panels narrowed to half the room the window
-/// leaves between its own edges — the menu at the window's
-/// left edge and the flyout right of it. Either way the
+/// A window too narrow for the two panels beside each other
+/// at the fixed room narrows the flyout rather than moving
+/// the menu: the flyout takes the side of the menu with the
+/// more room in it and is held at the width that side
+/// leaves beside the menu, so the menu stays where the click
+/// put it and as wide as its own rows measure to, and the
+/// flyout stays inside the window to be pressed. The two
+/// panels are split between the window's own edges only where
+/// the window is narrower than the menu's own panel, which
+/// leaves no room beside it at all. Either way the
 /// menu stays wholly visible and uncovered, and the flyout
 /// stays inside the window to be pressed, which is the
 /// same discipline the menu's own panel is placed by
@@ -507,23 +555,31 @@ pub(crate) fn menu_flyout_from_menu(
     // Where the two panels' own edges go, and which way the
     // Seek row's arrow points because of it: the tier the
     // main menu's own placement asks for the same arrow
-    // (`menu_flyout_tier`), applied whole here — the main
-    // menu narrowed where the window is too narrow for the
-    // two panels at their own width, the flyout at the
-    // tier's own place beside it — so the arrow does not
-    // move when the flyout comes up.
+    // (`menu_flyout_tier`), applied whole here — the flyout
+    // at the tier's own place beside the menu, narrowed into
+    // the room its side leaves where the window is narrower
+    // than the two panels at the fixed room — so the arrow
+    // does not move when the flyout comes up.
     let (menu_left, menu_right, flyout_left, arrow) = menu_flyout_tier(menu, width, dpi);
-    // The flyout's own width is the room the window leaves
-    // it, which is the panel's own measured width everywhere but the
-    // narrowed pair, where it is the half the window leaves.
-    let flyout_width = (width - flyout_left).min(menu_main_panel_width(flyout_rows, dpi, width));
+    // The flyout's own width is the panel's own measured width, held to the room the window
+    // leaves it where the tier put it: right of the menu that is the room to the window's
+    // own right edge, and on the menu's left it is the room the menu leaves between the
+    // window's left edge and its own. A flyout wider than that room is narrowed to it, so
+    // it stays inside the window and covers none of the menu (see `menu_flyout_tier`).
+    let room = match arrow {
+        MenuArrow::Left => menu.panel.left.saturating_sub(gap),
+        _ => width.saturating_sub(flyout_left),
+    };
+    let flyout_width = room.min(menu_main_panel_width(flyout_rows, dpi, width));
+
     // A flyout the tier sent to the menu's left stands the same small gap off the menu's own
     // left edge that a right-hand one stands off its right, rather than where the tier
     // answered in the fixed room: that room is what lets the menu's own placement carry the
     // same arrow with no flyout rows of its own, and a panel measured from short rows is
     // narrower than it — so the tier's own place would stand a room of empty space between
-    // the two panels. A flyout too wide for the room to the menu's left is held to the
-    // window's own left edge, where it covers the menu it came from either way.
+    // the two panels. A flyout wider than the room the menu leaves is narrowed to it and
+    // held at the window's own left edge, so it stands beside the menu it came from rather
+    // than over it or off the window.
     let flyout_left = match arrow {
         MenuArrow::Left => (menu_left - gap - flyout_width).max(0),
         _ => flyout_left,

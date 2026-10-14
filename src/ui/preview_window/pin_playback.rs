@@ -805,10 +805,12 @@ pub(super) fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
 /// The two players are answered the way each of them takes a pause, which is the same answer the
 /// bubble parks one with (see `bubble_playback_to_park`) because they are the same two players:
 /// the engine Windows has is told to hold where it is and keeps reporting that second for itself,
-/// so nothing is written down for it; a player this app started cannot be told anything and is
-/// ended instead, with the second it had got to kept — on the card, so that the sound is still
-/// drawn where the hand left it, and for the player that takes its place when the key is pressed
-/// again.
+/// so nothing is written down for it — and whether it is holding is asked of the engine itself,
+/// because a session that is paused is a session that is still there and the hold is the engine's
+/// own state (see `video_player::is_paused`); a player this app started cannot be told anything
+/// and is ended instead, with the second it had got to kept — on the card, so that the sound is
+/// still drawn where the hand left it, and for the player that takes its place when the key is
+/// pressed again.
 ///
 /// What this has in common with the bubble's is the mechanics and not the setting:
 /// `Pin Mode → Pause Preview` is about what a collapse does, and this is about a key pressed in
@@ -841,10 +843,17 @@ pub(super) fn toggle_pinned_audio(
                 video_player::play_audio(&path, pinned_audio_level(), 0.0, pin_audio_loops(&path));
                 *paused = None;
             } else {
-                // The engine is asked to hold, and to go on from where it is holding. A session that
-                // is not there — a file already let go — is asked to play, which begins no session
-                // rather than starting a sound nobody asked for.
-                video_player::set_paused(video_player::is_playing());
+                // A press is a toggle, and the engine's own answer is the only one there is about
+                // whether it is holding the sound: it is asked to hold where it stands, or to go
+                // on from where it is holding. A session that is paused is a session that is
+                // still there, so asking whether one is *playing* answered yes for a sound that
+                // was already held — a pause of a pause, which is a sound held for ever with no
+                // way to let it go (see `video_player::is_paused`). A session that is not there
+                // is asked to hold, which pauses nothing rather than starting a sound nobody
+                // asked for.
+                let held = a_sound_that_is_held(*paused, Player::Native, video_player::is_paused());
+
+                video_player::set_paused(!held);
             }
         }
         Player::Ffmpeg => {
