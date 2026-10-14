@@ -681,6 +681,34 @@ pub(super) fn player_for_gain(probed: Player, normalizing: bool, gain: Option<f6
     probed
 }
 
+/// Whether a sound is being held where it stands, which is the one question both ends of a press
+/// on a pinned sound's card are answered from: a press turns a sound that is going into one held,
+/// and a sound that is held into one going again, and the play button's glyph says which of the
+/// two it is.
+///
+/// The engine's answer is the one this app cannot write down, and the whole of the fault that
+/// came of trying: a session that was asked to hold is a session that is still there, so asking
+/// whether one is *playing* answered yes for a sound nobody could hear — the press then asked a
+/// held sound to hold again, the pin was left with a sound paused for ever and no way to let it
+/// go, and the card went on drawing the glyph of a sound that was going. The hold is the engine's
+/// own state, so it is the engine that is asked (see [`video_player::is_paused`]).
+///
+/// A player of this app's is the other way round and was always this side's answer: it cannot be
+/// told anything once it is running, so a hold is that player ended with the second it had got to
+/// kept, and the sound is held at that second for the player that takes its place (see
+/// [`audio_clock`]).
+///
+/// Three arguments rather than a path because the engine is a thread-local the preview thread
+/// holds and a question that has to be asked with a borrow of it is a question that cannot be
+/// asked in a test at all (see `a_sound_that_has_played_to_its_end`).
+pub(super) fn a_sound_that_is_held(
+    paused: Option<f64>,
+    player: Player,
+    engine_paused: bool,
+) -> bool {
+    paused.is_some() || (player == Player::Native && engine_paused)
+}
+
 /// Start the player a sound's card is drawn against, answering whether a player that was
 /// expected arrived.
 ///
@@ -781,6 +809,23 @@ pub(super) fn start_audio_playback_at(
     }
 }
 
+/// Whether the player a sound is begun in is the one that takes the file round itself, rather
+/// than a pass this side has to put round after it has ended.
+///
+/// It is `ffplay`'s own `-loop 0`, and the two facts it is made of are the two the player is
+/// begun with: a sound that is to be looped, begun at the beginning of its file. The position
+/// a loop of the player's seeks back to *is* the position it was begun at — `-ss` is the one
+/// value that seek-back reads — so a sound begun in the middle of its file is given no loop of
+/// its own, and the end of its pass is its exit instead (see `start_audio_player`).
+///
+/// The clock asks the same question of the same two facts, and for the same reason: a player
+/// that takes the file round itself never exits, so it never ends a pass for this side to turn
+/// over, and a clock held at the whole of the file would stand at the end of it for as long as
+/// the sound went on being heard (see `audio_clock`).
+pub(super) fn player_loops_itself(loop_: bool, start: f64) -> bool {
+    loop_ && !(start.is_finite() && start > 0.0)
+}
+
 /// Start FFmpeg's player on a sound: no window at all, which is the whole of what this side asks
 /// of it, and the level the sound is played at — the player's own scale, `0` to `100`, where the
 /// file is played as it holds it, and the filter that carries the gain the tray's `Normalize`
@@ -808,6 +853,10 @@ pub(super) fn start_audio_playback_at(
 ///
 /// A sound that starts at the beginning of its file is that second player already, so it is
 /// given that player's own loop rather than a pass for this side to restart after.
+///
+/// Which of the two a player is begun with is [`player_loops_itself`], and the card's clock is
+/// read by the same answer: a player that loops itself never exits, so there is no pass of it
+/// for this side to turn over and the clock is the thing that goes round (see `audio_clock`).
 pub(super) fn start_audio_player(
     path: &Path,
     volume: u32,
@@ -835,7 +884,7 @@ pub(super) fn start_audio_player(
 
     if start.is_finite() && start > 0.0 {
         command.args(["-ss", &format!("{start:.3}")]);
-    } else if loop_ {
+    } else if player_loops_itself(loop_, start) {
         // The whole file, looped by the player itself: with no position given to it, the
         // position its loop returns to is the beginning of the file. A pass that is not
         // to be looped is played once instead, and its exit is what the wrap answers —
@@ -1163,8 +1212,24 @@ pub(super) fn audio_clock(
     // card saying 0:00 and then stepped back to nothing as the player's exit turned the pass over
     // for real. A progress bar going backwards, once in a while, for a file whose header is a
     // little out — and this side's clock is not the thing that gets to say the pass ended.
+    //
+    // Which is a rule about a pass this side turns over: its end is the player's exit, and a
+    // clock that has run past the length before that exit is describing a sound still being
+    // heard. A player that takes the file round itself has no exit at all, so its clock is the
+    // only thing that can say where the sound is — and it says so by going round (see
+    // `player_loops_itself`).
     let position = match (elapsed, track.duration) {
-        (Some(elapsed), Some(duration)) if duration > 0.0 => Some(elapsed.min(duration)),
+        (Some(elapsed), Some(duration)) if duration > 0.0 => {
+            if player_loops_itself(pin_audio_loops(path), from) {
+                // The whole of the passes a player of its own has taken round, gone round with
+                // it: the same rule a pinned film's transport clock is read by (see
+                // `transport_clock`), and the one thing that keeps a seekbar moving under a
+                // sound that is still being heard.
+                Some(elapsed % duration)
+            } else {
+                Some(elapsed.min(duration))
+            }
+        }
         (elapsed, _) => elapsed,
     };
 

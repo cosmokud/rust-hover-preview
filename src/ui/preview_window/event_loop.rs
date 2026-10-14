@@ -1046,7 +1046,7 @@ pub fn run_preview_window() {
             // under it is the re-entrancy `toggle_pinned_playback` is written down for (see
             // `pinned_audio_chrome`). Nothing at all is asked of a tick with nothing pinned: the
             // published flag answers that in one atomic read.
-            let audio_chrome = pinned_audio_chrome(audio_paused.is_none());
+            let audio_chrome = pinned_audio_chrome(audio_paused);
 
             let media_lock = need_media_check.then(|| CURRENT_MEDIA.lock());
             if let Some(Ok(mut media_guard)) = media_lock {
@@ -3181,7 +3181,7 @@ pub fn run_preview_window() {
                                     .map(|scroll| scroll.offset())
                                     .unwrap_or(0),
                                 dpi: audio_card_dpi,
-                                chrome: pinned_audio_chrome(audio_paused.is_none()),
+                                chrome: pinned_audio_chrome(audio_paused),
                             };
                             if let Some((path, _)) = pinned_media_owner() {
                                 pin_relayout = relayout_pinned_media(
@@ -3217,7 +3217,7 @@ pub fn run_preview_window() {
                                 .map(|scroll| scroll.offset())
                                 .unwrap_or(0),
                             dpi: audio_card_dpi,
-                            chrome: pinned_audio_chrome(audio_paused.is_none()),
+                            chrome: pinned_audio_chrome(audio_paused),
                         };
 
                         if let Some((path, dpi)) = pinned_media_owner() {
