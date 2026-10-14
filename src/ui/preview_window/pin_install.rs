@@ -42,6 +42,14 @@ pub(super) static PIN_ARC_BASE: Lazy<Instant> = Lazy::new(Instant::now);
 /// backdrop the tray keeps for pictures every time a caption's **Next** steps onto a film. So
 /// that one is started here and held, and the file the pin is already showing keeps drawing
 /// until the engine has actually drawn something (see `PinSwapHold`).
+///
+/// **And a film FFmpeg's player or mpv draws is waited for the same way — where there is a
+/// cover raised over the frame it is replacing, which is the one case with a picture to keep.** Its
+/// first frame is on screen when the player's own window is, and the install is what gives the
+/// window its new box — so a swap that installed at once resized the band the outgoing frame is
+/// held in into the shape of a film that had drawn nothing yet, which is the last frame stretched
+/// from a portrait box to a landscape one under the user's eyes. With no cover the band has no
+/// picture of its own to stretch, and the file goes in now the way it always did.
 pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     let PinAnswer {
         path,
@@ -104,7 +112,17 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     // the film (see `give_up_pinned_park`) — and neither is a film no engine on this machine will
     // draw, which is answered the same way for the same reason (see `pinned_player_is_coming`).
     let player_coming = pinned_player_is_coming(file.media.media_type, &file.path);
-    cover_step_swap_for_video(player_coming);
+    // Whether a cover is standing over the outgoing frame, which is the whole of what the hold
+    // below has to keep: it is the picture the pin is showing for as long as the wait is out, and
+    // a wait with nothing under it is a hole rather than a hold (see `PinSwapHold`).
+    //
+    // **And a cover already standing counts, and not only where this call raised it.** A second
+    // pick landing while an earlier swap is still being held for finds the first one's cover
+    // standing with the player it was raised over confirmed gone — the second pick's arrival is
+    // what killed it — so the cover question is answered no while the frame that cover captured is
+    // still the picture on screen. The hold is for that frame, whichever swap raised the cover
+    // over it, and an install over it is the last film stretched into the new one's shape.
+    let covered = cover_step_swap_for_video(player_coming) || pin_player_is_parked();
     if file.media.media_type.is_native_video() {
         stop_pinned_player();
     } else {
@@ -173,7 +191,11 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
         // The arc is the load's own, carried into the hold rather than dropped with the load: the
         // pin is still waiting for a file, and what the user is shown while it does is the file
         // it already had with the arc turning over it.
-        return PinSwap::Holding(PinSwapHold { file, arc });
+        return PinSwap::Holding(PinSwapHold {
+            file,
+            arc,
+            started: Instant::now(),
+        });
     }
 
     if player_coming {
@@ -210,6 +232,27 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
         };
 
         file.media.video_process = Some(process);
+
+        // Where a cover is standing over the outgoing frame, the file is not installed yet, for
+        // the reason the engine's own arm above does not: a film of this kind exists only as the
+        // player's own window, and the first frame of it is on screen when that window is and not
+        // before. The install is what gives the window its new box — so a swap that installed now
+        // would resize the band the outgoing frame is being held in into the shape of a film that
+        // had drawn nothing yet, which is the last frame stretched over a box it was never laid out
+        // for: the whole of what the hold exists to delete, and the reason a native video never
+        // showed it. The pin keeps the file it is showing, at the box and the frame the cover is
+        // holding, with the arc the load put up still turning over it, until the player's window
+        // says the next film is on screen (see `PinSwapHold`).
+        //
+        // With no cover there is nothing to keep and nothing to stretch, so the file goes in now
+        // the way it always did.
+        if covered {
+            return PinSwap::Holding(PinSwapHold {
+                file,
+                arc,
+                started: Instant::now(),
+            });
+        }
 
         return PinSwap::Ready(file);
     }

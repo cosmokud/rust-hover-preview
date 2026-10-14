@@ -585,8 +585,8 @@ pub(super) fn pin_bound_after(
 }
 
 /// What a swap of a pinned window's file has come to, in whichever of the three shapes it can
-/// take: the file the window is shown next, a video the pin is held for until the engine has
-/// drawn a frame of it, or a file there is nothing to show.
+/// take: the file the window is shown next, a video the pin is held for until its first frame is
+/// on screen, or a file there is nothing to show.
 ///
 /// The three are an enum rather than an `Option` because the middle one is the whole of what
 /// this arm is for, and an `Option` cannot say it. `None` written as "not yet" would be the same
@@ -600,9 +600,11 @@ pub(super) enum PinSwap {
     /// comes to, and what a video comes to once the engine has drawn a frame of it (see
     /// `PinSwapHold`).
     Ready(PinInstallable),
-    /// A video the media engine has been started for, whose first frame is not in hand: the pin
-    /// keeps showing the file it was showing, at the frame it had stopped on, and the swap goes
-    /// on being waited for by the loop's own tick rather than by anything in this call.
+    /// A video the media engine has been started for, or a film a player of its own has been
+    /// begun for, whose first frame is not on screen yet: the pin keeps showing the file it was
+    /// showing, at the frame it had stopped on and the box it had, and the swap goes on being
+    /// waited for by the loop's own tick rather than by anything in this call (see
+    /// `PinSwapHold`).
     Holding(PinSwapHold),
     /// Nothing of this file to show: a player that would not start, or a file nothing could read
     /// at all. The file and the walk it was a step of are carried rather than dropped, because
@@ -753,16 +755,21 @@ pub(super) fn pin_swap_wait(
     None
 }
 
-/// A swap of a pinned window's file that is waiting for the media engine's first frame, and what
-/// is to be installed when it comes.
+/// A swap of a pinned window's file that is waiting for the film it was started for to reach
+/// the screen, and what is to be installed when it does.
 ///
 /// It is the hover's own `FirstFrameWait` in the shape a *swap* needs rather than a hover's. That
 /// one holds back a window that has not been put up yet, and so has to know the hover it was for
 /// is still wanted — which is what its generation and its hide count are. None of that is in
 /// question here: the window is up, it belongs to the user rather than to the pointer, and the
 /// file the swap is for is the file the walk landed on. What is in question is only whether the
-/// engine has drawn anything yet, which is why this is an ordinary tick's question answered in
+/// film has reached the screen yet, which is why this is an ordinary tick's question answered in
 /// one place rather than a wait matched against anything.
+///
+/// Two kinds are waited for and they are waited for differently, because a film reaches the
+/// screen by one of two roads: the media engine draws into this app's own surface and hands the
+/// frame over, and a player of this app's own draws into a window of its own and the frame is on
+/// screen when that window is (see `settle`).
 ///
 /// The file being installed is carried whole rather than a name to be looked up. It is the frame
 /// the engine plays into, and it is the whole of what the loop's own per-tick take must not be
@@ -782,25 +789,56 @@ pub(super) struct PinSwapHold {
     /// is the file it already had with the arc turning over it — so the arc stays up across the
     /// hold, and comes down with the install (see `pin_arc_set`).
     pub(super) arc: PinArc,
+    /// When the wait began, which is the only bound the player route's wait has (see `settle`).
+    /// It is written once, where the hold is made, rather than read off the file: the wait is for
+    /// one file's window and not for however long this app has been running.
+    pub(super) started: Instant,
 }
 
 impl PinSwapHold {
-    /// Take whatever frame the engine has ready into the held file's own buffer, answering
-    /// whether the wait is over either way.
+    /// Answer whether the wait for this file's film is over either way, and how.
     ///
     /// The take is this file's, and never the standing one's: a frame pulled into the media the
     /// pin is still showing is a frame of the new film in the old file's buffer at the old file's
     /// size, which is what the loop's own per-tick take would be doing if this were not here to
     /// do it first. What it hands the decision is the one question the wait is about — has the
-    /// engine drawn anything — and it is asked of this file's engine and no other, so the standing
-    /// file's player is not consulted about a session that has nothing to do with it (see
-    /// `video_player::failing_before_a_frame`).
+    /// film reached the screen — and it is asked of this file's engine and no other, so the
+    /// standing file's player is not consulted about a session that has nothing to do with it
+    /// (see `video_player::failing_before_a_frame`).
     pub(super) fn settle(&mut self) -> Option<PinSwapWait> {
-        let frame_in_hand = self.file.media.take_native_video_frame();
-        let playing = video_player::is_playing();
-        let failing = video_player::failing_before_a_frame().is_some();
+        // A video of this app's own media engine hands its first frame over directly, so the wait
+        // is the engine's answer and nothing else: a frame in hand is the file, an engine that is
+        // gone or has refused the file is the end of it, and there is no bound on either (see
+        // `pin_swap_wait`).
+        if self.file.media.media_type.is_native_video() {
+            let frame_in_hand = self.file.media.take_native_video_frame();
+            let playing = video_player::is_playing();
+            let failing = video_player::failing_before_a_frame().is_some();
 
-        pin_swap_wait(frame_in_hand, playing, failing)
+            return pin_swap_wait(frame_in_hand, playing, failing);
+        }
+
+        // A film FFmpeg's player or mpv draws exists only as another program's window, and the
+        // first frame of it is on screen when that window is and not before — which is the same
+        // answer the cover a step raises is settled on, and the same bound, asked at the swap's
+        // own box rather than a hover's (see `player_swap_wait`).
+        //
+        // What the wait buys is the whole of the stretched frame this whole arrangement is for:
+        // the install is what gives the window its new box, so a swap that installed before the
+        // player's window was up resized the band the outgoing frame is being held in into the
+        // shape of a film that had not drawn anything yet (see `cover_step_swap_for_video`).
+        let alive = self
+            .file
+            .media
+            .video_process
+            .as_mut()
+            .is_some_and(|player| matches!(player.try_wait(), Ok(None)));
+        let window_up = video_window_for(VIDEO_PID.load(Ordering::SeqCst)).is_some();
+
+        player_swap_wait(window_up, alive, self.started.elapsed()).map(|wait| match wait {
+            PlayerWait::Arrived => PinSwapWait::Arrived,
+            PlayerWait::Abandoned => PinSwapWait::Abandoned,
+        })
     }
 
     /// The file to install, for a wait that has come to either of its ends.
@@ -847,7 +885,16 @@ pub(super) fn settle_pin_swap(
     let mut swap: Option<PinSwap> = None;
 
     if let Some(mut held) = hold.take() {
-        swap = if held.settle().is_some() {
+        swap = if let Some(wait) = held.settle() {
+            // A wait that ended with no window in it has nothing to hand the band to, and the
+            // cover may not be left standing over the box this install is about to give the file:
+            // that is the last frame stretched into the new film's shape, which is the whole of
+            // what the hold was for. It is given up here, the way a player that would not start
+            // at all gives one up, and what is left is the hole the player's own window fills the
+            // moment it has one (see `give_up_pinned_park` and `PinSwapWait::Abandoned`).
+            if wait == PinSwapWait::Abandoned {
+                give_up_pinned_park();
+            }
             Some(PinSwap::Ready(held.into_installable()))
         } else {
             // An engine that has not drawn anything yet. The wait goes on, and the pin keeps
