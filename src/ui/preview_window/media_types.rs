@@ -79,6 +79,13 @@ pub enum PreviewMessage {
     /// were turned off. A pin on screen is ended here rather than left as a window
     /// nothing would ever take down again.
     PinChanged,
+    /// One of the tray's two `Volume` rows was moved, and the one it is: the film's half or
+    /// the sound's. A pin already playing at a level of its own is told the new one here,
+    /// on the thread its player belongs to, rather than being left at what it was taken up
+    /// at (see `publish_tray_volume`).
+    TrayVolume {
+        audio: bool,
+    },
     /// The render tier is done with a document: a page is waiting in the cache,
     /// or there is no page. The generation is the hover that asked for it, so a
     /// render landing after the pointer has moved on is ignored — the page is
