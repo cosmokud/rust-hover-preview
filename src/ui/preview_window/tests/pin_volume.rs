@@ -256,8 +256,8 @@ fn a_level_moved_on_a_films_bar_is_the_films_and_not_the_sounds() {
     );
     assert_eq!(
         pinned_audio_level(),
-        99,
-        "and the sound it walked off is still at `Volume → Audio`, capped at 99, unmoved by the knob"
+        100,
+        "and the sound it walked off is still at `Volume → Audio`, which the knob was not on"
     );
 
     stand_pin(previous_pin);
@@ -278,7 +278,7 @@ fn a_level_moved_on_a_films_bar_is_the_films_and_not_the_sounds() {
 /// said before the drag. Anything that reads the setting back hands the pin a tray at 10% again:
 /// the watcher after `config.ini` is edited, or the next run. One slot cannot answer for both
 /// kinds at once, so a pin holding only the film's 0% by then plays the returning sound at 10%,
-/// out of a card its own knob was left at the top.
+/// out of a card its own knob was left at 100%.
 #[test]
 fn a_sound_stepped_back_onto_from_a_film_is_at_the_level_its_own_card_was_left_at() {
     // Serialized with the pin tests: this stands pins and takes the media, which unlocked is a
@@ -298,7 +298,7 @@ fn a_sound_stepped_back_onto_from_a_film_is_at_the_level_its_own_card_was_left_a
         *media = Some(sound);
     }
 
-    // The pin comes up on a sound at the tray's 10%, and a hand turns its knob to the top.
+    // The pin comes up on a sound at the tray's 10%, and a hand turns its knob to 100%.
     stand_pin(Some(PinnedPreview {
         volume: PinVolume {
             audio: true,
@@ -331,7 +331,7 @@ fn a_sound_stepped_back_onto_from_a_film_is_at_the_level_its_own_card_was_left_a
     }));
     assert_eq!(
         pinned_audio_level(),
-        99,
+        100,
         "the sound is at the level its own card was left at, and not at what the setting says"
     );
 
@@ -366,7 +366,7 @@ fn a_sound_stepped_back_onto_from_a_film_is_at_the_level_its_own_card_was_left_a
     assert_eq!(
         pinned_audio_level(),
         10,
-        "the knob's top went with the sound it was turned on, and the setting is what is left"
+        "the knob's 100% went with the sound it was turned on, and the setting is what is left"
     );
 
     stand_pin(previous_pin);
@@ -692,67 +692,5 @@ fn stand_native_video_media() {
         if let Some(media) = media.as_mut() {
             media.media_type = MediaType::NativeVideo;
         }
-    }
-}
-
-/// A sound is never played at 100%: the tray offers it but it is not heard, so the setting's
-/// own read and a hand on the card's knob both stop one short of it — while a film still goes
-/// to the whole of the scale (see `MAX_AUDIO_VOLUME`).
-#[test]
-fn a_sound_stops_one_short_of_one_hundred() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-
-    let _levels = PinLevels::set(100, 100);
-    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-    let previous_pin = take_pin_for_a_test();
-
-    // The tray holds 100, but what a sound is played at stops at 99.
-    assert_eq!(
-        current_audio_volume(),
-        99,
-        "a sound is read one short of the tray's top"
-    );
-
-    // A hand that drags a sound's knob to the top leaves it there too.
-    let mut sound = create_loading_media(320, 240);
-    sound.media_type = MediaType::Audio;
-    if let Ok(mut media) = CURRENT_MEDIA.lock() {
-        *media = Some(sound);
-    }
-    stand_pin(Some(PinnedPreview {
-        volume: PinVolume {
-            audio: true,
-            level: 10,
-            playing_at: 10,
-            ..Default::default()
-        },
-        ..sound_pin()
-    }));
-    set_pin_volume(100);
-    assert_eq!(
-        pinned_audio_level(),
-        99,
-        "and so does the knob on the card"
-    );
-
-    // A film's knob still reaches the whole of the scale.
-    let mut video = create_loading_media(320, 240);
-    video.media_type = MediaType::NativeVideo;
-    if let Ok(mut media) = CURRENT_MEDIA.lock() {
-        *media = Some(video);
-    }
-    stand_pin(Some(overlay_pin((100, 100, 420, 340), PinChrome::always())));
-    set_pin_volume(100);
-    assert_eq!(
-        pinned_volume_level(),
-        100,
-        "while a film is untouched by the cap"
-    );
-
-    stand_pin(previous_pin);
-    if let Ok(mut media) = CURRENT_MEDIA.lock() {
-        *media = previous_media;
     }
 }

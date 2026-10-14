@@ -13,19 +13,10 @@ pub(super) fn current_video_volume() -> u32 {
     CONFIG.lock().map(|cfg| cfg.video_volume).unwrap_or(0)
 }
 
-/// The loudest a sound is played at: the tray offers 100 but 100% is not heard, so what a
-/// player is started at stops one short of it.
-///
-/// shortcut: the cap, until the cause of the silent 100% is found.
-pub(super) const MAX_AUDIO_VOLUME: u32 = 99;
-
 /// The volume a sound is previewed at, read the way the video's is: from the configuration at
 /// the moment a player is started, so a change in the tray reaches the next hover.
 pub(super) fn current_audio_volume() -> u32 {
-    CONFIG
-        .lock()
-        .map(|cfg| cfg.audio_volume.min(MAX_AUDIO_VOLUME))
-        .unwrap_or(0)
+    CONFIG.lock().map(|cfg| cfg.audio_volume).unwrap_or(0)
 }
 
 /// Where a sound starts, read the way the volume is and at the same moment: from the

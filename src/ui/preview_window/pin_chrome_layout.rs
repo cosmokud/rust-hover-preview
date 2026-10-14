@@ -709,10 +709,8 @@ pub(super) fn settle_pinned_audio_seek(
 /// is answered by the tray, and a knob turned on the film's bar afterwards makes the level the
 /// film's, again.
 pub(super) fn set_pin_volume(level: u32) {
+    let level = level.min(100);
     let audio = matches!(current_media_type(), Some(MediaType::Audio));
-    // A sound's knob stops at `MAX_AUDIO_VOLUME` with the tray's own read (see
-    // `current_audio_volume`); a film's goes to the whole of the scale.
-    let level = level.min(if audio { MAX_AUDIO_VOLUME } else { 100 });
     with_pin(|pin| {
         pin.volume.level = level;
         pin.volume.audio = audio;
