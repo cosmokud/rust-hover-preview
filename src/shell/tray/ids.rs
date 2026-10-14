@@ -187,11 +187,10 @@ pub(super) const ID_TRAY_AUDIO_SEEK_BASE: u16 = 1390;
 /// starting a sound is one of four, and a click on one of the
 /// pin's is never a click on one of the hover's.
 pub(super) const ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE: u16 = 1394;
-/// The first row of the `Video` half of the `Volume` submenu, above `Normalize`:
-/// whether a film's own subtitle tracks are probed for and copied out
-/// at all. It is a switch about a film's picture rather than a level of the
-/// list under it, so it takes an id of its own, beside the volume switches
-/// above it, where no level can be read from it.
+/// The row of the `Video Preview` submenu below its `Volume`: whether a film's own subtitle
+/// tracks are probed for and copied out at all. It is a switch about a film's picture rather
+/// than a level of the list under `Volume`, so it takes an id of its own, out with the volume
+/// switches where no level can be read from it.
 pub(super) const ID_TRAY_VIDEO_SUBTITLES: u16 = 1524;
 /// The `Volume → Audio` submenu's first row: whether a sound's measured loudness is brought to one
 /// level before it is played (see `Normalize`).

@@ -258,8 +258,7 @@ pub(in super::super) fn toggle_video_engine_fallback() {
 }
 
 /// Whether a film's own subtitle tracks are probed for and copied out at all,
-/// from the `Subtitles` row at the top of the `Video` half of the `Volume`
-/// submenu.
+/// from the `Subtitles` row under `Video Preview → Volume`.
 ///
 /// Nothing on screen is rebuilt: the switch is read where a probe runs and
 /// where a player is started, on the next hover. What the probe holds is
