@@ -115,7 +115,14 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     // Whether a cover is standing over the outgoing frame, which is the whole of what the hold
     // below has to keep: it is the picture the pin is showing for as long as the wait is out, and
     // a wait with nothing under it is a hole rather than a hold (see `PinSwapHold`).
-    let covered = cover_step_swap_for_video(player_coming);
+    //
+    // **And a cover already standing counts, and not only where this call raised it.** A second
+    // pick landing while an earlier swap is still being held for finds the first one's cover
+    // standing with the player it was raised over confirmed gone — the second pick's arrival is
+    // what killed it — so the cover question is answered no while the frame that cover captured is
+    // still the picture on screen. The hold is for that frame, whichever swap raised the cover
+    // over it, and an install over it is the last film stretched into the new one's shape.
+    let covered = cover_step_swap_for_video(player_coming) || pin_player_is_parked();
     if file.media.media_type.is_native_video() {
         stop_pinned_player();
     } else {

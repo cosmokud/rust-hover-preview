@@ -351,7 +351,10 @@ fn a_swap_onto_a_players_film_is_held_where_a_cover_is_standing() {
     }
 
     // The same swap with nothing of a film on screen to cover: the file goes in now, the way it
-    // always did.
+    // always did. The cover the swap above raised is given up with the film it was raised over,
+    // because what the hold is for is the frame under the band and here there is none left — the
+    // frame goes where the cover does (see `give_up_pinned_park`).
+    give_up_pinned_park();
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = None;
     }
@@ -371,6 +374,209 @@ fn a_swap_onto_a_players_film_is_held_where_a_cover_is_standing() {
     clear_pending_pinned_relaunch();
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}
+
+/// The same question one pick later, which is where the fast case lives: a second pick
+/// lands while the first swap is still being held for, and the cover the first one raised is
+/// standing with the player it was raised over confirmed gone — the second pick's arrival is what
+/// killed it. The cover question is answered no for a pid that is gone, while the frame that cover
+/// captured is still the picture on screen.
+///
+/// What the hold is for is the frame, whichever swap raised the cover over it: the install gives
+/// the incoming file its box, so a file that went in now would resize the band holding the first
+/// film's last frame into the shape of a film that has drawn nothing yet (see
+/// `swap_pinned_media` and `PinSwapHold`).
+#[test]
+fn a_second_pick_over_a_standing_cover_is_held_for_the_frame_it_holds() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    stand_mpv_in(Some(false));
+
+    // The pin the first pick landed on, standing on the portrait film that pick's cover is over.
+    stand_pin(Some(overlay_pin((100, 80, 220, 500), PinChrome::always())));
+    let mut standing = create_loading_media(120, 420);
+    standing.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(standing);
+    }
+
+    // The first pick's cover, standing — and the player it was raised over is gone by now, which
+    // is what the second pick's arrival did to it.
+    forget_pin_park_swap();
+    assert!(
+        cover_step_swap_for_video(true),
+        "the first pick covers the outgoing frame"
+    );
+    VIDEO_PID.store(0, Ordering::SeqCst);
+
+    // The second pick, a landscape file, landing while that cover is the picture on screen.
+    let mut media = create_loading_media(320, 240);
+    media.media_type = MediaType::Video;
+    let swap = swap_pinned_media(PinAnswer {
+        path: PathBuf::from("the-landscape-one-picked-second.mp4"),
+        update: PinUpdate {
+            content: (100, 80, 680, 320),
+            dpi: 96,
+            volume: 100,
+        },
+        media: Some(media),
+        walk: None,
+        arc: PinArc::new(),
+    });
+    assert!(
+        matches!(swap, PinSwap::Holding(_)),
+        "the first film's frame is the picture the pin is showing, so the install that would \
+         resize the band holding it is held for this file's own window"
+    );
+    assert!(
+        pin_player_is_parked(),
+        "and the cover stands until the second replacement's window says its film is on screen"
+    );
+    if let PinSwap::Holding(held) = swap {
+        abandon_pin_swap(&mut Some(held));
+    }
+
+    // And with the cover down there is no frame under the band to keep: the file goes in now, the
+    // way it always did.
+    give_up_pinned_park();
+    VIDEO_PID.store(0, Ordering::SeqCst);
+    let mut standing = create_loading_media(120, 420);
+    standing.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(standing);
+    }
+    let mut media = create_loading_media(240, 320);
+    media.media_type = MediaType::Video;
+    let swap = swap_pinned_media(PinAnswer {
+        path: PathBuf::from("the-portrait-one-picked-third.mp4"),
+        update: PinUpdate {
+            content: (100, 80, 220, 500),
+            dpi: 96,
+            volume: 100,
+        },
+        media: Some(media),
+        walk: None,
+        arc: PinArc::new(),
+    });
+    assert!(
+        matches!(swap, PinSwap::Ready(_)),
+        "with nothing under the band there is nothing to keep, so the file is installed at once"
+    );
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    take_gesture_snapshot();
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    clear_pending_pinned_relaunch();
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}
+
+/// A wait that has come to its end with no window in it: the player this app began has put nothing
+/// up by the swap's own bound, and the file it was holding for is installed the way a swap with no
+/// hold installs one. What may not be installed with it is the cover — the install gives the file
+/// its box, and a cover left standing over a band that has moved is the last frame stretched into
+/// the new film's shape, which is the whole of what the hold was for.
+///
+/// So the band is given up with the wait: nothing has arrived to hand it to, and what is left is
+/// the hole the player's own window fills the moment it has one, which is the same answer a cover
+/// whose own bound has gone by is given (see `give_up_pinned_park` and `PinSwapWait::Abandoned`).
+#[test]
+fn a_wait_that_ends_with_no_window_gives_the_cover_up() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    // The pin standing on the film the cover is raised over, the film itself, and the cover.
+    stand_pin(Some(overlay_pin((100, 80, 220, 500), PinChrome::always())));
+    let mut standing = create_loading_media(120, 420);
+    standing.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(standing);
+    }
+    forget_pin_park_swap();
+    assert!(
+        cover_step_swap_for_video(true),
+        "the pick covers the outgoing frame"
+    );
+
+    // The hold for the replacement: a player a test noted instead of beginning one, so nothing
+    // ever puts a window up for it.
+    let mut media = create_loading_media(320, 240);
+    media.media_type = MediaType::Video;
+    media.video_process = Some(PlayerProcess::Noted(3));
+    let mut hold = Some(PinSwapHold {
+        file: PinInstallable {
+            path: PathBuf::from("the-replacement-that-never-puts-a-window-up.mp4"),
+            update: PinUpdate {
+                content: (100, 80, 680, 320),
+                dpi: 96,
+                volume: 100,
+            },
+            media,
+            audio: None,
+            walk: None,
+        },
+        arc: PinArc::new(),
+        started: Instant::now(),
+    });
+    let mut load = None;
+
+    // A player still starting is a wait that goes on, and the cover is the picture the pin is
+    // showing for as long as it is out.
+    let swap = settle_pin_swap(&mut hold, &mut load);
+    assert!(
+        swap.is_none(),
+        "a player with no window yet is a start that is still going"
+    );
+    assert!(
+        pin_park_carried_forward(),
+        "and the cover stands over it for as long as the wait is out"
+    );
+
+    // The bound gone by: the file is installed, and the cover goes with the wait rather than
+    // standing over the box the install is about to give the window.
+    if let Some(held) = hold.as_mut() {
+        held.started = Instant::now() - PIN_PARK_SWAP_TIMEOUT - Duration::from_millis(1);
+    }
+    let swap = settle_pin_swap(&mut hold, &mut load);
+    assert!(
+        matches!(swap, Some(PinSwap::Ready(_))),
+        "the wait is over and the file it was holding for is installed"
+    );
+    assert!(
+        !pin_player_is_parked(),
+        "and the cover is not left standing over the band: nothing has arrived to hand it to, and \
+         the frame it holds would be stretched into the shape the install just gave the window"
+    );
+
+    take_gesture_snapshot();
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    clear_pending_pinned_relaunch();
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = previous_media;
     }
