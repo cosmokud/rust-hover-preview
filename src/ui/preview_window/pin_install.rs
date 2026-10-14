@@ -411,11 +411,6 @@ pub(super) struct PinInstall<'a> {
     /// installed came from is put back into as the walk behind what is on screen (see
     /// `pin_step_off`).
     pub(super) walk: &'a mut Option<PinStep>,
-    /// The walk that made the file now on screen, kept rather than spent with the load: an engine
-    /// that takes a file and then never draws a frame of it says so a tick or three later, long
-    /// after the walk that reached it is gone, and without this a corrupted film ends the walk
-    /// rather than the walk stepping past it.
-    pub(super) walk_of_current: &'a mut Option<PinStep>,
     /// The load the mark for a file that could not be shown is queued as, which a refusal queues
     /// one of where the walk has nothing left to offer (see `show_pin_failure`).
     pub(super) load: &'a mut Option<PinLoad>,
@@ -466,7 +461,6 @@ pub(super) struct PinInstall<'a> {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn pin_install<'a>(
     walk: &'a mut Option<PinStep>,
-    walk_of_current: &'a mut Option<PinStep>,
     load: &'a mut Option<PinLoad>,
     player_started: &'a mut Option<Instant>,
     audio_started: &'a mut Option<Instant>,
@@ -483,7 +477,6 @@ pub(super) fn pin_install<'a>(
 ) -> PinInstall<'a> {
     PinInstall {
         walk,
-        walk_of_current,
         load,
         player_started,
         audio_started,
@@ -536,11 +529,19 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     // is asking, and one of them is on screen for as long as it is left there (see `pin_arc_set`).
     pin_arc_set(None);
 
-    // The walk that made the file now on screen is kept rather than spent with the load: an
-    // engine that takes this file and then never draws a frame of it says so a tick or three
-    // from here, with nothing left to step on. A pick that was not a walk's arms no walk, which
-    // is the same answer (see `pin_step_off`).
-    *install.walk_of_current = walk;
+    // The walk that made the file now on screen becomes the pin's own, kept rather than
+    // spent with the load: an engine that takes this file and then never draws a frame of it
+    // says so a tick or three from here, with nothing left to step on. A pick that was not a
+    // walk's arms no walk, which is the same answer (see `pin_step_off`).
+    //
+    // It is written to the pin rather than to a loop local because it is the pin's session and
+    // not this install's: the next press — or a film's end of file, or a sound's — steps the
+    // same walk, with its permutation and its history in it (see `PinUp::walk`).
+    if let Some(mut state) = pin_state() {
+        if let Some(held) = state.walk_mut() {
+            *held = walk;
+        }
+    }
 
     // A volume popup floating over the media belongs to the box it was opened over, and that box
     // has just been given another file: it is put away rather than left where the hand left it

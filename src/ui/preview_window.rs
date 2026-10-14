@@ -247,7 +247,8 @@ use pin_window::{
 };
 #[cfg(test)]
 use pin_window::{
-    pin_holds_a_keyboard, stand_pin, take_pin_for_a_test, PinWindowCall, RecordedPinWindow,
+    pin_holds_a_keyboard, stand_pin, stand_pin_walk, take_pin_for_a_test, PinWindowCall,
+    RecordedPinWindow,
 };
 
 // What the rest of the crate asks for by name.

@@ -236,12 +236,6 @@ pub fn run_preview_window() {
         // asked for on a tick of its own, with the walk carried onto it. What the walk stands
         // on is the file to be shown next (see `PinStep`).
         let mut pin_walk: Option<PinStep> = None;
-        // The walk whose file is the one on screen now, kept so that a failure has something to
-        // step on: `PinLoad` spends the walk that made the file it loaded, and an engine that
-        // takes the file and then never draws a frame of it says so a tick or three later, long
-        // after the walk that reached it is gone. Without this a corrupted film ends the walk
-        // rather than the walk stepping past it (see `pin_step_off`).
-        let mut pin_walk_of_current: Option<PinStep> = None;
         // When FFmpeg's player behind the file the pin is showing now was started, which is what
         // says a player that is gone was one that refused the file rather than one that was
         // watched to its end or closed by the user. `None` for every other kind, and for a pin
@@ -483,7 +477,7 @@ pub fn run_preview_window() {
                         || pin_awaiting_box.is_some()
                         || pin_held_pick.is_some();
                     loop_ended_pinned_player(
-                        pin_walk_anchor(&pin_walk, &pin_walk_of_current),
+                        pin_walk_anchor(&pin_walk),
                         &mut pin_walk_wait,
                         advance_busy,
                     );
@@ -529,7 +523,7 @@ pub fn run_preview_window() {
                     video_player::mark_unplayable(&failing);
                     engine_failed = None;
 
-                    pin_step_off(pin_walk_of_current.take(), &mut pin_walk);
+                    pin_step_off(take_pin_walk(), &mut pin_walk);
 
                     // And where the walk has nothing left to offer, the mark for the file is
                     // what is shown instead of nothing being queued: a window with no file in
@@ -596,7 +590,7 @@ pub fn run_preview_window() {
                     &mut audio_start_offset,
                     &mut audio_paused,
                     a_file_is_on_its_way,
-                    pin_walk_anchor(&pin_walk, &pin_walk_of_current),
+                    pin_walk_anchor(&pin_walk),
                 ) {
                     pin_walk = Some(walk);
                 }
@@ -1111,7 +1105,7 @@ pub fn run_preview_window() {
                             answer_native_pass_end(
                                 pinned_native_video_end(path),
                                 path,
-                                pin_walk_anchor(&pin_walk, &pin_walk_of_current),
+                                pin_walk_anchor(&pin_walk),
                                 &mut pin_walk_wait,
                             );
                         }
@@ -1152,7 +1146,7 @@ pub fn run_preview_window() {
                                 &mut audio_start_offset,
                                 &mut audio_paused,
                                 &mut pin_walk_wait,
-                                pin_walk_anchor(&pin_walk, &pin_walk_of_current),
+                                pin_walk_anchor(&pin_walk),
                             );
 
                             // A sound the engine Windows has was asked to play the pinned
@@ -1170,11 +1164,7 @@ pub fn run_preview_window() {
                             match pinned_native_audio_end(path) {
                                 Some(PinPassEnd::Walk) => {
                                     video_player::stop();
-                                    ask_pin_walk(
-                                        path.to_path_buf(),
-                                        1,
-                                        pin_walk_anchor(&pin_walk, &pin_walk_of_current),
-                                    );
+                                    ask_pin_walk(path.to_path_buf(), 1, pin_walk_anchor(&pin_walk));
                                     pin_walk_wait = Some(PinWait::new());
                                 }
                                 Some(PinPassEnd::Held) => {
@@ -2111,6 +2101,14 @@ pub fn run_preview_window() {
                                 PinPlanned::Walk(walk) => {
                                     pin_walk_wait = None;
                                     if pinned_path().as_deref() == Some(walk.from()) {
+                                        // And the draw it made is a draw off the pin's own
+                                        // bag, so the bag goes with it now rather than
+                                        // with the install a load away: a press made
+                                        // while the file is still being read is a step of
+                                        // the same permutation, and a bag that still holds
+                                        // what the last press drew is the same file shown
+                                        // twice (see `pin_walk_drew_its_file`).
+                                        pin_walk_drew_its_file(&walk);
                                         pin_walk = Some(walk);
                                     }
                                 }
@@ -2530,10 +2528,6 @@ pub fn run_preview_window() {
                 // belongs to the window it was pressed on, and the pin that follows is shown
                 // whatever the user picks rather than the rest of a walk behind it.
                 pin_walk = None;
-                // And so is the walk that made the file it ended up showing: it is about a
-                // window that is gone, and a pin taken up later is shown the file the user
-                // names rather than the rest of a walk behind it (see `pin_step_off`).
-                pin_walk_of_current = None;
                 pin_player_started = None;
                 // And the walk it was reading the folder for is a wait on a window that is
                 // gone: it is not waited for, and the arc it may have put up goes down with
@@ -2563,9 +2557,15 @@ pub fn run_preview_window() {
                 let walk = pin_walk.take();
                 // And with no walk behind it there is no walk standing on what is on screen, so
                 // a failure on this file has nothing to step onto and the mark is what the pin
-                // is left standing over.
+                // is left standing over. The pick was a file the user named rather than a step
+                // of the walk, so the pin's own walk goes with it: the walk that follows is
+                // anchored on this file (see `PinUp::walk`).
                 if walk.is_none() {
-                    pin_walk_of_current = None;
+                    if let Some(mut state) = pin_state() {
+                        if let Some(held) = state.walk_mut() {
+                            *held = None;
+                        }
+                    }
                 }
                 // Whatever was loading is a load for a file nobody is asking for any more, and
                 // the answer it lands with is dropped with it: what the pin shows next is
@@ -2734,7 +2734,6 @@ pub fn run_preview_window() {
                 // `pin_install`'s (see `PinInstall`).
                 let install = pin_install(
                     &mut pin_walk,
-                    &mut pin_walk_of_current,
                     &mut pin_load,
                     &mut pin_player_started,
                     &mut audio_started,
