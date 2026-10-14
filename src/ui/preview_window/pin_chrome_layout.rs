@@ -159,6 +159,40 @@ pub(super) fn pin_level_is_remembered(audio: bool) -> bool {
         .unwrap_or(false)
 }
 
+/// A level one of the tray's `Volume` rows names was moved, and the pin up on that kind is
+/// told it now rather than at the next file it is shown.
+///
+/// A pin's level is its own, which is the whole of what a knob is for and why the setting is
+/// not read back where a level is needed: the two are separate on purpose, and a level moved
+/// on a knob never belongs to the tray (see `PinVolume`). What this is for is the one road the
+/// other way — a row moved in the tray is a hand on the level whatever is already up should
+/// be heard at, and a pin left at the level it was taken up at goes on being heard at that
+/// until the window is closed and opened again, which reads as a tray that has stopped
+/// working.
+///
+/// It is the knob's own road rather than a second one beside it: the level is moved exactly as
+/// a drag moves it and settled exactly as a release settles it, so every route answers with
+/// what it always has — mpv and the media engine are told the level while they run, FFmpeg's
+/// player is begun again at the second it was watching, and a *held* film is left holding its
+/// level for the player that begins when it is let go of (see `set_pin_volume` and
+/// `settle_pin_volume`).
+///
+/// The other half's row is about the other kind of file, and a pin answers only the half it is
+/// playing: a sound's level moved is not a hand on a film, which is the same answer a film
+/// stepped onto from a sound is given (see `pinned_level`).
+pub(super) fn tray_volume_moved(audio: bool) {
+    if pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.volume.audio)) != Some(audio) {
+        return;
+    }
+
+    set_pin_volume(if audio {
+        current_audio_volume()
+    } else {
+        current_video_volume()
+    });
+    settle_pin_volume();
+}
+
 /// Whether the pin that is up has its volume popup open, which is what the tick's re-assertion of
 /// the player's window is held off by: the popup is drawn over the media, and the media of a video
 /// FFmpeg plays is that window.

@@ -2025,6 +2025,11 @@ pub fn run_preview_window() {
                             pin_request = Some(end_pin_state(Reason::SwitchedOff));
                         }
                     }
+                    // One of the tray's two `Volume` rows was moved, and a pin up on a file of
+                    // that half is owed the level at once rather than at the next file: the
+                    // pin's player is this thread's, so the level is given here rather than
+                    // where the row was clicked (see `tray_volume_moved`).
+                    PreviewMessage::TrayVolume { audio } => tray_volume_moved(audio),
                     // The file the user picked while a preview was pinned, which the pin is to be
                     // shown instead of the one it has (see the tray's `Pin Mode → Update Preview`).
                     // It is held rather than handled here, the way a hover is: what the loop acts on
@@ -3042,6 +3047,11 @@ pub fn run_preview_window() {
                     // configuration now says, and what it does with the answer is take a pin
                     // down where there is one (see `PinChanged`).
                     PreviewMessage::PinChanged => {}
+                    // Likewise answered above: a level moved in one of the tray's two `Volume`
+                    // halves is given to the pin that is up there, and it is not a hover — a
+                    // level is not a thing a layout is made for (see
+                    // `PreviewMessage::TrayVolume`).
+                    PreviewMessage::TrayVolume { .. } => {}
                     // A preview that stopped being a hover: the media stays exactly where it
                     // is, and the window grows around it — the caption above it, and the
                     // transport bar below it where the kind has one. A kind whose chrome is
