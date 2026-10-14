@@ -326,21 +326,30 @@ pub(super) fn take_pin_resumed() -> bool {
 /// pressed nothing — so a swap taken over a pin with the caret on it leaves the caret on the
 /// window and stops the pin claiming it, which is what `pin_take_focus` decides again on the
 /// next press.
+///
+/// The walk *is* carried over where the file being taken up is in the standing file's own
+/// folder, whatever road brought it here: every install asks for a window on the file it put
+/// on screen, so a take-up that dropped the walk would put the next press back at the first
+/// press of a session — a playlist drawn afresh, which is a **Previous** that lands on a file
+/// nobody was shown. A file in another folder starts fresh (see `install_walk`).
 pub(super) fn install(pin: PinnedPreview) {
     if let Some(mut state) = pin_state() {
-        let commands = match &mut *state {
-            PinState::Up(up) => std::mem::take(&mut up.commands),
-            _ => VecDeque::new(),
+        let (commands, standing) = match &mut *state {
+            PinState::Up(up) => (
+                std::mem::take(&mut up.commands),
+                Some((up.pin.path.clone(), up.walk.take())),
+            ),
+            _ => (VecDeque::new(), None),
         };
+        let walk = standing
+            .filter(|(path, _)| super::pin_navigation::same_folder(path, &pin.path))
+            .and_then(|(_, walk)| walk);
 
         *state = PinState::Up(PinUp {
             pin,
             keyboard: None,
             commands,
-            // A pin taken up over another one is the same window showing another file, and
-            // the file was picked: it is not a step of the walk that was standing, so the
-            // walk does not come with it (see `PinUp::walk`).
-            walk: None,
+            walk,
         });
         PIN_UP.store(true, Ordering::Release);
     }
@@ -769,8 +778,9 @@ pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
 ///
 /// The companion to [`stand_pin`] rather than a way into `PinUp`: a walk the pin is standing
 /// on is the pin's, so a test that wants one has to be standing a pin with it — and `install`
-/// deliberately takes no walk, because a pin taken up over another one was shown a picked file
-/// rather than stepped onto one (see `install`).
+/// carries only the walk of a take-up in the standing file's own folder, so a pin taken up
+/// over another one in another folder has nothing to stand a test's walk beside (see
+/// `install`).
 #[cfg(test)]
 pub(super) fn stand_pin_walk(walk: Option<PinStep>) {
     if let Some(mut state) = pin_state() {
