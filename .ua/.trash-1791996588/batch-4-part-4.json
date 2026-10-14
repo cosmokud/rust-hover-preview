@@ -1,0 +1,359 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/paths.rs",
+      "type": "file",
+      "name": "paths.rs",
+      "filePath": "src/paths.rs",
+      "summary": "paths.rs (undefined, 44 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "paths.rs"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/paths.rs:plain_path",
+      "type": "function",
+      "name": "plain_path",
+      "filePath": "src/paths.rs",
+      "lineRange": [
+        11,
+        18
+      ],
+      "summary": "Function plain_path in src/paths.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/video_player.rs",
+      "type": "file",
+      "name": "video_player.rs",
+      "filePath": "src/readers/video_player.rs",
+      "summary": "video_player.rs (undefined, 255 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:src/readers/video_player/session.rs",
+      "type": "file",
+      "name": "session.rs",
+      "filePath": "src/readers/video_player/session.rs",
+      "summary": "session.rs (undefined, 537 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "readers"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:src/readers/video_player/session.rs:Session",
+      "type": "class",
+      "name": "Session",
+      "filePath": "src/readers/video_player/session.rs",
+      "lineRange": [
+        26,
+        103
+      ],
+      "summary": "Class Session defined in src/readers/video_player/session.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/readers/video_player/session.rs:Take",
+      "type": "class",
+      "name": "Take",
+      "filePath": "src/readers/video_player/session.rs",
+      "lineRange": [
+        500,
+        514
+      ],
+      "summary": "Class Take defined in src/readers/video_player/session.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/video_player/session.rs:begin",
+      "type": "function",
+      "name": "begin",
+      "filePath": "src/readers/video_player/session.rs",
+      "lineRange": [
+        106,
+        242
+      ],
+      "summary": "Function begin in src/readers/video_player/session.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/video_player/session.rs:seek",
+      "type": "function",
+      "name": "seek",
+      "filePath": "src/readers/video_player/session.rs",
+      "lineRange": [
+        248,
+        261
+      ],
+      "summary": "Function seek in src/readers/video_player/session.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/video_player/session.rs:take_pending",
+      "type": "function",
+      "name": "take_pending",
+      "filePath": "src/readers/video_player/session.rs",
+      "lineRange": [
+        275,
+        305
+      ],
+      "summary": "Function take_pending in src/readers/video_player/session.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/readers/video_player/session.rs:copy_into",
+      "type": "function",
+      "name": "copy_into",
+      "filePath": "src/readers/video_player/session.rs",
+      "lineRange": [
+        315,
+        467
+      ],
+      "summary": "Function copy_into in src/readers/video_player/session.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/readers/video_player/session.rs:refused",
+      "type": "function",
+      "name": "refused",
+      "filePath": "src/readers/video_player/session.rs",
+      "lineRange": [
+        479,
+        489
+      ],
+      "summary": "Function refused in src/readers/video_player/session.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/video_player/session.rs:is_a_new_frame",
+      "type": "function",
+      "name": "is_a_new_frame",
+      "filePath": "src/readers/video_player/session.rs",
+      "lineRange": [
+        535,
+        537
+      ],
+      "summary": "Function is_a_new_frame in src/readers/video_player/session.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/ui/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "src/ui/mod.rs",
+      "summary": "mod.rs (undefined, 1 lines).",
+      "tags": [
+        "entry-point",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/paths.rs",
+      "target": "function:src/paths.rs:plain_path",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/paths.rs",
+      "target": "function:src/paths.rs:plain_path",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/video_player.rs",
+      "target": "file:src/paths.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "class:src/readers/video_player/session.rs:Session",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "class:src/readers/video_player/session.rs:Session",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "class:src/readers/video_player/session.rs:Take",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "class:src/readers/video_player/session.rs:Take",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:begin",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:begin",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:seek",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:seek",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:take_pending",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:take_pending",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:copy_into",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:copy_into",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:refused",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:refused",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:is_a_new_frame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "function:src/readers/video_player/session.rs:is_a_new_frame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/video_player/session.rs",
+      "target": "file:src/paths.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/ui/mod.rs",
+      "target": "file:src/ui/preview_window.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

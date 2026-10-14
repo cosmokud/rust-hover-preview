@@ -1,0 +1,1693 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/shell/explorer_hook/window_state.rs",
+      "type": "file",
+      "name": "window_state.rs",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "summary": "window_state.rs (undefined, 497 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:is_foreground_explorer",
+      "type": "function",
+      "name": "is_foreground_explorer",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        17,
+        25
+      ],
+      "summary": "Function is_foreground_explorer in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:engine_owns_the_keyboard",
+      "type": "function",
+      "name": "engine_owns_the_keyboard",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        41,
+        56
+      ],
+      "summary": "Function engine_owns_the_keyboard in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:is_window_maximized",
+      "type": "function",
+      "name": "is_window_maximized",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        59,
+        70
+      ],
+      "summary": "Function is_window_maximized in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:is_window_fullscreen",
+      "type": "function",
+      "name": "is_window_fullscreen",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        81,
+        112
+      ],
+      "summary": "Function is_window_fullscreen in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:foreground_cover_rect",
+      "type": "function",
+      "name": "foreground_cover_rect",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        128,
+        144
+      ],
+      "summary": "Function foreground_cover_rect in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:window_is_behind_cover",
+      "type": "function",
+      "name": "window_is_behind_cover",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        152,
+        163
+      ],
+      "summary": "Function window_is_behind_cover in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:rect_contains",
+      "type": "function",
+      "name": "rect_contains",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        166,
+        171
+      ],
+      "summary": "Function rect_contains in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:is_window_minimized",
+      "type": "function",
+      "name": "is_window_minimized",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        174,
+        176
+      ],
+      "summary": "Function is_window_minimized in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:utf16_contains_ascii_ignore_case",
+      "type": "function",
+      "name": "utf16_contains_ascii_ignore_case",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        181,
+        192
+      ],
+      "summary": "Function utf16_contains_ascii_ignore_case in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:explorer_browser_class_matches",
+      "type": "function",
+      "name": "explorer_browser_class_matches",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        194,
+        206
+      ],
+      "summary": "Function explorer_browser_class_matches in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:enum_explorer_windows_callback",
+      "type": "function",
+      "name": "enum_explorer_windows_callback",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        208,
+        225
+      ],
+      "summary": "Function enum_explorer_windows_callback in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:get_explorer_window_counts",
+      "type": "function",
+      "name": "get_explorer_window_counts",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        231,
+        247
+      ],
+      "summary": "Function get_explorer_window_counts in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:get_explorer_state",
+      "type": "function",
+      "name": "get_explorer_state",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        266,
+        276
+      ],
+      "summary": "Function get_explorer_state in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:is_our_own_window",
+      "type": "function",
+      "name": "is_our_own_window",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        288,
+        299
+      ],
+      "summary": "Function is_our_own_window in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:preview_window_is_at",
+      "type": "function",
+      "name": "preview_window_is_at",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        303,
+        305
+      ],
+      "summary": "Function preview_window_is_at in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:click_is_over_a_listing",
+      "type": "function",
+      "name": "click_is_over_a_listing",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        313,
+        315
+      ],
+      "summary": "Function click_is_over_a_listing in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:bubble_window_is_at",
+      "type": "function",
+      "name": "bubble_window_is_at",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        320,
+        323
+      ],
+      "summary": "Function bubble_window_is_at in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:press_is_outside_the_pin_window",
+      "type": "function",
+      "name": "press_is_outside_the_pin_window",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        334,
+        336
+      ],
+      "summary": "Function press_is_outside_the_pin_window in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:pin_menu_dismiss_ask",
+      "type": "function",
+      "name": "pin_menu_dismiss_ask",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        352,
+        362
+      ],
+      "summary": "Function pin_menu_dismiss_ask in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:press_is_a_listing",
+      "type": "function",
+      "name": "press_is_a_listing",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        378,
+        389
+      ],
+      "summary": "Function press_is_a_listing in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:window_is_menu_popup_chrome",
+      "type": "function",
+      "name": "window_is_menu_popup_chrome",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        404,
+        406
+      ],
+      "summary": "Function window_is_menu_popup_chrome in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:class_is_menu_popup_chrome",
+      "type": "function",
+      "name": "class_is_menu_popup_chrome",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        411,
+        417
+      ],
+      "summary": "Function class_is_menu_popup_chrome in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:window_is_gone",
+      "type": "function",
+      "name": "window_is_gone",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        422,
+        424
+      ],
+      "summary": "Function window_is_gone in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:explorer_state_from_counts",
+      "type": "function",
+      "name": "explorer_state_from_counts",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        433,
+        464
+      ],
+      "summary": "Function explorer_state_from_counts in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:explorer_pace",
+      "type": "function",
+      "name": "explorer_pace",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        471,
+        479
+      ],
+      "summary": "Function explorer_pace in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/explorer_hook/window_state.rs:read_explorer_state",
+      "type": "function",
+      "name": "read_explorer_state",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        488,
+        497
+      ],
+      "summary": "Function read_explorer_state in window_state.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/shell/explorer_hook/window_state.rs:ExplorerState",
+      "type": "class",
+      "name": "ExplorerState",
+      "filePath": "src/shell/explorer_hook/window_state.rs",
+      "lineRange": [
+        251,
+        263
+      ],
+      "summary": "Class ExplorerState in window_state.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/shell/tray/commands.rs",
+      "type": "file",
+      "name": "commands.rs",
+      "filePath": "src/shell/tray/commands.rs",
+      "summary": "commands.rs (undefined, 57 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/shell/tray/tests.rs",
+      "type": "file",
+      "name": "tests.rs",
+      "filePath": "src/shell/tray/tests.rs",
+      "summary": "tests.rs (undefined, 1608 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "test",
+        "source",
+        "shell"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:engine_idle_is_offered_longest_first",
+      "type": "function",
+      "name": "engine_idle_is_offered_longest_first",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        9,
+        22
+      ],
+      "summary": "Function engine_idle_is_offered_longest_first in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:every_offered_background_is_one_the_setting_keeps",
+      "type": "function",
+      "name": "every_offered_background_is_one_the_setting_keeps",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        30,
+        95
+      ],
+      "summary": "Function every_offered_background_is_one_the_setting_keeps in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_six_halves_of_the_background_submenu_carry_different_ids",
+      "type": "function",
+      "name": "the_six_halves_of_the_background_submenu_carry_different_ids",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        102,
+        167
+      ],
+      "summary": "Function the_six_halves_of_the_background_submenu_carry_different_ids in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_pin_mode_rows_are_ids_of_their_own",
+      "type": "function",
+      "name": "the_pin_mode_rows_are_ids_of_their_own",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        178,
+        284
+      ],
+      "summary": "Function the_pin_mode_rows_are_ids_of_their_own in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_trigger_keys_pin_row_starts_off_and_is_an_id_of_its_own",
+      "type": "function",
+      "name": "the_trigger_keys_pin_row_starts_off_and_is_an_id_of_its_own",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        302,
+        321
+      ],
+      "summary": "Function the_trigger_keys_pin_row_starts_off_and_is_an_id_of_its_own in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_two_volume_submenus_carry_a_range_apiece",
+      "type": "function",
+      "name": "the_two_volume_submenus_carry_a_range_apiece",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        332,
+        384
+      ],
+      "summary": "Function the_two_volume_submenus_carry_a_range_apiece in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:every_offered_way_of_starting_a_sound_is_one_the_setting_keeps",
+      "type": "function",
+      "name": "every_offered_way_of_starting_a_sound_is_one_the_setting_keeps",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        391,
+        437
+      ],
+      "summary": "Function every_offered_way_of_starting_a_sound_is_one_the_setting_keeps in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:every_offered_way_of_starting_a_pinned_sound_is_one_the_setting_keeps",
+      "type": "function",
+      "name": "every_offered_way_of_starting_a_pinned_sound_is_one_the_setting_keeps",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        447,
+        506
+      ],
+      "summary": "Function every_offered_way_of_starting_a_pinned_sound_is_one_the_setting_keeps in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:every_end_of_a_pinned_file_says_what_it_does",
+      "type": "function",
+      "name": "every_end_of_a_pinned_file_says_what_it_does",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        512,
+        527
+      ],
+      "summary": "Function every_end_of_a_pinned_file_says_what_it_does in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_three_timing_submenus_carry_a_range_apiece",
+      "type": "function",
+      "name": "the_three_timing_submenus_carry_a_range_apiece",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        534,
+        592
+      ],
+      "summary": "Function the_three_timing_submenus_carry_a_range_apiece in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:every_offered_avoid_mode_is_one_the_setting_keeps",
+      "type": "function",
+      "name": "every_offered_avoid_mode_is_one_the_setting_keeps",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        598,
+        630
+      ],
+      "summary": "Function every_offered_avoid_mode_is_one_the_setting_keeps in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_avoid_submenu_carries_ids_of_its_own",
+      "type": "function",
+      "name": "the_avoid_submenu_carries_ids_of_its_own",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        636,
+        669
+      ],
+      "summary": "Function the_avoid_submenu_carries_ids_of_its_own in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_render_html_row_is_an_id_of_its_own",
+      "type": "function",
+      "name": "the_render_html_row_is_an_id_of_its_own",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        680,
+        733
+      ],
+      "summary": "Function the_render_html_row_is_an_id_of_its_own in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:every_offered_document_scale_is_one_the_setting_keeps",
+      "type": "function",
+      "name": "every_offered_document_scale_is_one_the_setting_keeps",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        740,
+        791
+      ],
+      "summary": "Function every_offered_document_scale_is_one_the_setting_keeps in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:every_offered_document_scale_round_trips_through_the_file",
+      "type": "function",
+      "name": "every_offered_document_scale_round_trips_through_the_file",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        796,
+        806
+      ],
+      "summary": "Function every_offered_document_scale_round_trips_through_the_file in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_document_scale_ranges_are_not_another_submenus_range",
+      "type": "function",
+      "name": "the_document_scale_ranges_are_not_another_submenus_range",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        812,
+        850
+      ],
+      "summary": "Function the_document_scale_ranges_are_not_another_submenus_range in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_bitmap_scaling_submenus_carry_ids_of_their_own",
+      "type": "function",
+      "name": "the_bitmap_scaling_submenus_carry_ids_of_their_own",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        861,
+        969
+      ],
+      "summary": "Function the_bitmap_scaling_submenus_carry_ids_of_their_own in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_renamed_rows_say_what_they_do",
+      "type": "function",
+      "name": "the_renamed_rows_say_what_they_do",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        975,
+        988
+      ],
+      "summary": "Function the_renamed_rows_say_what_they_do in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_audio_scaling_range_sits_apart_from_every_other_id",
+      "type": "function",
+      "name": "the_audio_scaling_range_sits_apart_from_every_other_id",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        1003,
+        1200
+      ],
+      "summary": "Function the_audio_scaling_range_sits_apart_from_every_other_id in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:every_offered_bitmap_scale_is_one_the_setting_keeps",
+      "type": "function",
+      "name": "every_offered_bitmap_scale_is_one_the_setting_keeps",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        1211,
+        1273
+      ],
+      "summary": "Function every_offered_bitmap_scale_is_one_the_setting_keeps in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:every_offered_audio_scale_is_one_the_setting_keeps",
+      "type": "function",
+      "name": "every_offered_audio_scale_is_one_the_setting_keeps",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        1283,
+        1317
+      ],
+      "summary": "Function every_offered_audio_scale_is_one_the_setting_keeps in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_font_sizes_are_listed_largest_first",
+      "type": "function",
+      "name": "the_font_sizes_are_listed_largest_first",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        1323,
+        1342
+      ],
+      "summary": "Function the_font_sizes_are_listed_largest_first in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:every_offered_idle_time_is_one_the_setting_keeps",
+      "type": "function",
+      "name": "every_offered_idle_time_is_one_the_setting_keeps",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        1347,
+        1358
+      ],
+      "summary": "Function every_offered_idle_time_is_one_the_setting_keeps in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_video_engine_rows_are_ids_of_their_own",
+      "type": "function",
+      "name": "the_video_engine_rows_are_ids_of_their_own",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        1368,
+        1472
+      ],
+      "summary": "Function the_video_engine_rows_are_ids_of_their_own in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_subtitles_row_is_named_for_the_engine_that_plays",
+      "type": "function",
+      "name": "the_subtitles_row_is_named_for_the_engine_that_plays",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        1479,
+        1511
+      ],
+      "summary": "Function the_subtitles_row_is_named_for_the_engine_that_plays in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_mpv_submenu_lists_the_installs_with_the_one_in_use_marked",
+      "type": "function",
+      "name": "the_mpv_submenu_lists_the_installs_with_the_one_in_use_marked",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        1517,
+        1541
+      ],
+      "summary": "Function the_mpv_submenu_lists_the_installs_with_the_one_in_use_marked in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:the_mpv_submenu_opens_from_the_row_named_mpv",
+      "type": "function",
+      "name": "the_mpv_submenu_opens_from_the_row_named_mpv",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        1548,
+        1572
+      ],
+      "summary": "Function the_mpv_submenu_opens_from_the_row_named_mpv in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/tests.rs:mpv_labels_keep_the_tail_and_shorten_from_the_front",
+      "type": "function",
+      "name": "mpv_labels_keep_the_tail_and_shorten_from_the_front",
+      "filePath": "src/shell/tray/tests.rs",
+      "lineRange": [
+        1579,
+        1608
+      ],
+      "summary": "Function mpv_labels_keep_the_tail_and_shorten_from_the_front in tests.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/text/pin_chrome/tests/bubble.rs",
+      "type": "file",
+      "name": "bubble.rs",
+      "filePath": "src/text/pin_chrome/tests/bubble.rs",
+      "summary": "bubble.rs (undefined, 242 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "test",
+        "source",
+        "text"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/bubble.rs:a_picture_gives_the_ring_its_own_average_colour",
+      "type": "function",
+      "name": "a_picture_gives_the_ring_its_own_average_colour",
+      "filePath": "src/text/pin_chrome/tests/bubble.rs",
+      "lineRange": [
+        67,
+        125
+      ],
+      "summary": "Function a_picture_gives_the_ring_its_own_average_colour in bubble.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/bubble.rs:the_average_of_a_picture_is_the_average_of_what_is_drawn_in_it",
+      "type": "function",
+      "name": "the_average_of_a_picture_is_the_average_of_what_is_drawn_in_it",
+      "filePath": "src/text/pin_chrome/tests/bubble.rs",
+      "lineRange": [
+        128,
+        143
+      ],
+      "summary": "Function the_average_of_a_picture_is_the_average_of_what_is_drawn_in_it in bubble.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/bubble.rs:the_bars_of_a_sound_are_drawn_inside_the_circle",
+      "type": "function",
+      "name": "the_bars_of_a_sound_are_drawn_inside_the_circle",
+      "filePath": "src/text/pin_chrome/tests/bubble.rs",
+      "lineRange": [
+        146,
+        189
+      ],
+      "summary": "Function the_bars_of_a_sound_are_drawn_inside_the_circle in bubble.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/bubble.rs:a_playing_file_and_a_paused_one_are_two_different_marks",
+      "type": "function",
+      "name": "a_playing_file_and_a_paused_one_are_two_different_marks",
+      "filePath": "src/text/pin_chrome/tests/bubble.rs",
+      "lineRange": [
+        192,
+        213
+      ],
+      "summary": "Function a_playing_file_and_a_paused_one_are_two_different_marks in bubble.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/bubble.rs:a_mark_goes_over_a_picture_only_where_the_picture_can_be_playing",
+      "type": "function",
+      "name": "a_mark_goes_over_a_picture_only_where_the_picture_can_be_playing",
+      "filePath": "src/text/pin_chrome/tests/bubble.rs",
+      "lineRange": [
+        216,
+        242
+      ],
+      "summary": "Function a_mark_goes_over_a_picture_only_where_the_picture_can_be_playing in bubble.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:is_foreground_explorer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:is_foreground_explorer",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:engine_owns_the_keyboard",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:engine_owns_the_keyboard",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:is_window_maximized",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:is_window_maximized",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:is_window_fullscreen",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:is_window_fullscreen",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:foreground_cover_rect",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:foreground_cover_rect",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:window_is_behind_cover",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:window_is_behind_cover",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:rect_contains",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:rect_contains",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:is_window_minimized",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:is_window_minimized",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:utf16_contains_ascii_ignore_case",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:utf16_contains_ascii_ignore_case",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:explorer_browser_class_matches",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:explorer_browser_class_matches",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:enum_explorer_windows_callback",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:enum_explorer_windows_callback",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:get_explorer_window_counts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:get_explorer_window_counts",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:get_explorer_state",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:get_explorer_state",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:is_our_own_window",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:is_our_own_window",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:preview_window_is_at",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:preview_window_is_at",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:click_is_over_a_listing",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:click_is_over_a_listing",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:bubble_window_is_at",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:bubble_window_is_at",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:press_is_outside_the_pin_window",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:press_is_outside_the_pin_window",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:pin_menu_dismiss_ask",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:pin_menu_dismiss_ask",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:press_is_a_listing",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:press_is_a_listing",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:window_is_menu_popup_chrome",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:window_is_menu_popup_chrome",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:class_is_menu_popup_chrome",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:class_is_menu_popup_chrome",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:window_is_gone",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:window_is_gone",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:explorer_state_from_counts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:explorer_state_from_counts",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:explorer_pace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:explorer_pace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:read_explorer_state",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "function:src/shell/explorer_hook/window_state.rs:read_explorer_state",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "class:src/shell/explorer_hook/window_state.rs:ExplorerState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/explorer_hook/window_state.rs",
+      "target": "class:src/shell/explorer_hook/window_state.rs:ExplorerState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:engine_idle_is_offered_longest_first",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:every_offered_background_is_one_the_setting_keeps",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_six_halves_of_the_background_submenu_carry_different_ids",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_pin_mode_rows_are_ids_of_their_own",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_trigger_keys_pin_row_starts_off_and_is_an_id_of_its_own",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_two_volume_submenus_carry_a_range_apiece",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:every_offered_way_of_starting_a_sound_is_one_the_setting_keeps",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:every_offered_way_of_starting_a_pinned_sound_is_one_the_setting_keeps",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:every_end_of_a_pinned_file_says_what_it_does",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_three_timing_submenus_carry_a_range_apiece",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:every_offered_avoid_mode_is_one_the_setting_keeps",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_avoid_submenu_carries_ids_of_its_own",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_render_html_row_is_an_id_of_its_own",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:every_offered_document_scale_is_one_the_setting_keeps",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:every_offered_document_scale_round_trips_through_the_file",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_document_scale_ranges_are_not_another_submenus_range",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_bitmap_scaling_submenus_carry_ids_of_their_own",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_renamed_rows_say_what_they_do",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_audio_scaling_range_sits_apart_from_every_other_id",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:every_offered_bitmap_scale_is_one_the_setting_keeps",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:every_offered_audio_scale_is_one_the_setting_keeps",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_font_sizes_are_listed_largest_first",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:every_offered_idle_time_is_one_the_setting_keeps",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_video_engine_rows_are_ids_of_their_own",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_subtitles_row_is_named_for_the_engine_that_plays",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_mpv_submenu_lists_the_installs_with_the_one_in_use_marked",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:the_mpv_submenu_opens_from_the_row_named_mpv",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/tests.rs",
+      "target": "function:src/shell/tray/tests.rs:mpv_labels_keep_the_tail_and_shorten_from_the_front",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/bubble.rs",
+      "target": "function:src/text/pin_chrome/tests/bubble.rs:a_picture_gives_the_ring_its_own_average_colour",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/bubble.rs",
+      "target": "function:src/text/pin_chrome/tests/bubble.rs:the_average_of_a_picture_is_the_average_of_what_is_drawn_in_it",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/bubble.rs",
+      "target": "function:src/text/pin_chrome/tests/bubble.rs:the_bars_of_a_sound_are_drawn_inside_the_circle",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/bubble.rs",
+      "target": "function:src/text/pin_chrome/tests/bubble.rs:a_playing_file_and_a_paused_one_are_two_different_marks",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/bubble.rs",
+      "target": "function:src/text/pin_chrome/tests/bubble.rs:a_mark_goes_over_a_picture_only_where_the_picture_can_be_playing",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    }
+  ]
+}

@@ -1,0 +1,206 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/formats/content_type.rs",
+      "type": "file",
+      "name": "content_type.rs",
+      "filePath": "src/formats/content_type.rs",
+      "summary": "content_type.rs (undefined, 117 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/formats/ebook_formats.rs",
+      "type": "file",
+      "name": "ebook_formats.rs",
+      "filePath": "src/formats/ebook_formats.rs",
+      "summary": "ebook_formats.rs (undefined, 231 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/ebook_formats.rs:page_spelling",
+      "type": "function",
+      "name": "page_spelling",
+      "filePath": "src/formats/ebook_formats.rs",
+      "lineRange": [
+        30,
+        35
+      ],
+      "summary": "Function page_spelling in src/formats/ebook_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/formats/font_formats.rs",
+      "type": "file",
+      "name": "font_formats.rs",
+      "filePath": "src/formats/font_formats.rs",
+      "summary": "font_formats.rs (undefined, 74 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/formats/font_formats.rs:is_font_file",
+      "type": "function",
+      "name": "is_font_file",
+      "filePath": "src/formats/font_formats.rs",
+      "lineRange": [
+        27,
+        32
+      ],
+      "summary": "Function is_font_file in src/formats/font_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/formats/libre_formats.rs",
+      "type": "file",
+      "name": "libre_formats.rs",
+      "filePath": "src/formats/libre_formats.rs",
+      "summary": "libre_formats.rs (undefined, 307 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/libre_formats.rs:engine_page_kind",
+      "type": "function",
+      "name": "engine_page_kind",
+      "filePath": "src/formats/libre_formats.rs",
+      "lineRange": [
+        50,
+        82
+      ],
+      "summary": "Function engine_page_kind in src/formats/libre_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/formats/lists.rs",
+      "type": "file",
+      "name": "lists.rs",
+      "filePath": "src/formats/lists.rs",
+      "summary": "lists.rs (undefined, 74 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/formats/content_type.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/ebook_formats.rs",
+      "target": "function:src/formats/ebook_formats.rs:page_spelling",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/ebook_formats.rs",
+      "target": "function:src/formats/ebook_formats.rs:page_spelling",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/ebook_formats.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/font_formats.rs",
+      "target": "function:src/formats/font_formats.rs:is_font_file",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/font_formats.rs",
+      "target": "function:src/formats/font_formats.rs:is_font_file",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/font_formats.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/libre_formats.rs",
+      "target": "function:src/formats/libre_formats.rs:engine_page_kind",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/libre_formats.rs",
+      "target": "function:src/formats/libre_formats.rs:engine_page_kind",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/libre_formats.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/libre_formats.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/lists.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

@@ -1,0 +1,1554 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/formats/magick_formats.rs",
+      "type": "file",
+      "name": "magick_formats.rs",
+      "filePath": "src/formats/magick_formats.rs",
+      "summary": "magick_formats.rs (undefined, 277 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/magick_formats.rs:is_engine_picture",
+      "type": "function",
+      "name": "is_engine_picture",
+      "filePath": "src/formats/magick_formats.rs",
+      "lineRange": [
+        90,
+        106
+      ],
+      "summary": "Function is_engine_picture in src/formats/magick_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/formats/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "src/formats/mod.rs",
+      "summary": "mod.rs (undefined, 17 lines).",
+      "tags": [
+        "entry-point",
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/formats/routing.rs",
+      "type": "file",
+      "name": "routing.rs",
+      "filePath": "src/formats/routing.rs",
+      "summary": "routing.rs (undefined, 932 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:src/formats/routing.rs:Asked",
+      "type": "class",
+      "name": "Asked",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        56,
+        61
+      ],
+      "summary": "Class Asked defined in src/formats/routing.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/routing.rs:NavCategory",
+      "type": "class",
+      "name": "NavCategory",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        75,
+        84
+      ],
+      "summary": "Class NavCategory defined in src/formats/routing.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/routing.rs:Route",
+      "type": "class",
+      "name": "Route",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        185,
+        196
+      ],
+      "summary": "Class Route defined in src/formats/routing.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/routing.rs:DrawnBy",
+      "type": "class",
+      "name": "DrawnBy",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        210,
+        222
+      ],
+      "summary": "Class DrawnBy defined in src/formats/routing.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/routing.rs:WebPage",
+      "type": "class",
+      "name": "WebPage",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        230,
+        237
+      ],
+      "summary": "Class WebPage defined in src/formats/routing.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/routing.rs:Backdrop",
+      "type": "class",
+      "name": "Backdrop",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        247,
+        261
+      ],
+      "summary": "Class Backdrop defined in src/formats/routing.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/routing.rs:Page",
+      "type": "class",
+      "name": "Page",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        639,
+        644
+      ],
+      "summary": "Class Page defined in src/formats/routing.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/routing.rs:Drawing",
+      "type": "class",
+      "name": "Drawing",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        832,
+        839
+      ],
+      "summary": "Class Drawing defined in src/formats/routing.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:nav_category",
+      "type": "function",
+      "name": "nav_category",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        96,
+        109
+      ],
+      "summary": "Function nav_category in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:backdrop_of",
+      "type": "function",
+      "name": "backdrop_of",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        270,
+        299
+      ],
+      "summary": "Function backdrop_of in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/formats/routing.rs:backdrop_value",
+      "type": "function",
+      "name": "backdrop_value",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        302,
+        311
+      ],
+      "summary": "Function backdrop_value in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:resolve",
+      "type": "function",
+      "name": "resolve",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        323,
+        346
+      ],
+      "summary": "Function resolve in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/formats/routing.rs:drawn_by_of",
+      "type": "function",
+      "name": "drawn_by_of",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        359,
+        436
+      ],
+      "summary": "Function drawn_by_of in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/formats/routing.rs:kind_of",
+      "type": "function",
+      "name": "kind_of",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        449,
+        451
+      ],
+      "summary": "Function kind_of in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:kind_of_with_facts",
+      "type": "function",
+      "name": "kind_of_with_facts",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        460,
+        466
+      ],
+      "summary": "Function kind_of_with_facts in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:kind_of_name",
+      "type": "function",
+      "name": "kind_of_name",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        474,
+        476
+      ],
+      "summary": "Function kind_of_name in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:named_as",
+      "type": "function",
+      "name": "named_as",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        495,
+        517
+      ],
+      "summary": "Function named_as in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/formats/routing.rs:previewed_as",
+      "type": "function",
+      "name": "previewed_as",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        530,
+        532
+      ],
+      "summary": "Function previewed_as in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claims",
+      "type": "function",
+      "name": "claims",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        534,
+        567
+      ],
+      "summary": "Function claims in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_video",
+      "type": "function",
+      "name": "claim_video",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        576,
+        599
+      ],
+      "summary": "Function claim_video in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_audio",
+      "type": "function",
+      "name": "claim_audio",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        608,
+        623
+      ],
+      "summary": "Function claim_audio in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:page_of",
+      "type": "function",
+      "name": "page_of",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        657,
+        673
+      ],
+      "summary": "Function page_of in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_ebook",
+      "type": "function",
+      "name": "claim_ebook",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        682,
+        691
+      ],
+      "summary": "Function claim_ebook in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_archives",
+      "type": "function",
+      "name": "claim_archives",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        694,
+        703
+      ],
+      "summary": "Function claim_archives in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_peazip",
+      "type": "function",
+      "name": "claim_peazip",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        708,
+        717
+      ],
+      "summary": "Function claim_peazip in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_calibre",
+      "type": "function",
+      "name": "claim_calibre",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        720,
+        729
+      ],
+      "summary": "Function claim_calibre in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_document",
+      "type": "function",
+      "name": "claim_document",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        734,
+        743
+      ],
+      "summary": "Function claim_document in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_libre",
+      "type": "function",
+      "name": "claim_libre",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        747,
+        756
+      ],
+      "summary": "Function claim_libre in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_magick",
+      "type": "function",
+      "name": "claim_magick",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        760,
+        769
+      ],
+      "summary": "Function claim_magick in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_design",
+      "type": "function",
+      "name": "claim_design",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        773,
+        782
+      ],
+      "summary": "Function claim_design in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_vector",
+      "type": "function",
+      "name": "claim_vector",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        785,
+        794
+      ],
+      "summary": "Function claim_vector in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_fonts",
+      "type": "function",
+      "name": "claim_fonts",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        810,
+        819
+      ],
+      "summary": "Function claim_fonts in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:drawing_of",
+      "type": "function",
+      "name": "drawing_of",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        847,
+        853
+      ],
+      "summary": "Function drawing_of in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:claim_images",
+      "type": "function",
+      "name": "claim_images",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        863,
+        878
+      ],
+      "summary": "Function claim_images in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/routing.rs:chain",
+      "type": "function",
+      "name": "chain",
+      "filePath": "src/formats/routing.rs",
+      "lineRange": [
+        892,
+        929
+      ],
+      "summary": "Function chain in src/formats/routing.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/formats/text_formats.rs",
+      "type": "file",
+      "name": "text_formats.rs",
+      "filePath": "src/formats/text_formats.rs",
+      "summary": "text_formats.rs (undefined, 158 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/formats/text_formats.rs:is_html_extension",
+      "type": "function",
+      "name": "is_html_extension",
+      "filePath": "src/formats/text_formats.rs",
+      "lineRange": [
+        40,
+        45
+      ],
+      "summary": "Function is_html_extension in src/formats/text_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/text_formats.rs:lookup_extension",
+      "type": "function",
+      "name": "lookup_extension",
+      "filePath": "src/formats/text_formats.rs",
+      "lineRange": [
+        58,
+        66
+      ],
+      "summary": "Function lookup_extension in src/formats/text_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/text_formats.rs:matches_configured_extension",
+      "type": "function",
+      "name": "matches_configured_extension",
+      "filePath": "src/formats/text_formats.rs",
+      "lineRange": [
+        79,
+        85
+      ],
+      "summary": "Function matches_configured_extension in src/formats/text_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/text_formats.rs:matches_configured_name",
+      "type": "function",
+      "name": "matches_configured_name",
+      "filePath": "src/formats/text_formats.rs",
+      "lineRange": [
+        88,
+        94
+      ],
+      "summary": "Function matches_configured_name in src/formats/text_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/readers/tone_map.rs",
+      "type": "file",
+      "name": "tone_map.rs",
+      "filePath": "src/readers/tone_map.rs",
+      "summary": "tone_map.rs (undefined, 151 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "readers"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/readers/tone_map.rs:ToneMap",
+      "type": "class",
+      "name": "ToneMap",
+      "filePath": "src/readers/tone_map.rs",
+      "lineRange": [
+        33,
+        38
+      ],
+      "summary": "Class ToneMap defined in src/readers/tone_map.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/readers/tone_map.rs:Curve",
+      "type": "class",
+      "name": "Curve",
+      "filePath": "src/readers/tone_map.rs",
+      "lineRange": [
+        42,
+        57
+      ],
+      "summary": "Class Curve defined in src/readers/tone_map.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/tone_map.rs:from_str",
+      "type": "function",
+      "name": "from_str",
+      "filePath": "src/readers/tone_map.rs",
+      "lineRange": [
+        61,
+        69
+      ],
+      "summary": "Function from_str in src/readers/tone_map.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/tone_map.rs:as_str",
+      "type": "function",
+      "name": "as_str",
+      "filePath": "src/readers/tone_map.rs",
+      "lineRange": [
+        72,
+        79
+      ],
+      "summary": "Function as_str in src/readers/tone_map.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/tone_map.rs:current",
+      "type": "function",
+      "name": "current",
+      "filePath": "src/readers/tone_map.rs",
+      "lineRange": [
+        86,
+        97
+      ],
+      "summary": "Function current in src/readers/tone_map.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/readers/tone_map.rs:encode",
+      "type": "function",
+      "name": "encode",
+      "filePath": "src/readers/tone_map.rs",
+      "lineRange": [
+        100,
+        139
+      ],
+      "summary": "Function encode in src/readers/tone_map.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/formats/magick_formats.rs",
+      "target": "function:src/formats/magick_formats.rs:is_engine_picture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/magick_formats.rs",
+      "target": "function:src/formats/magick_formats.rs:is_engine_picture",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/magick_formats.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/magick_formats.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/archive_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/audio_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/calibre_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/codecs.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/content_type.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/ebook_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/font_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/head.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/libre_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/lists.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/magick_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/native_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/office_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/peazip_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/routing.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/text_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/mod.rs",
+      "target": "file:src/formats/video_formats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:Asked",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:Asked",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:NavCategory",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:NavCategory",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:Route",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:Route",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:DrawnBy",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:DrawnBy",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:WebPage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:WebPage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:Backdrop",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:Backdrop",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:Page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:Page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:Drawing",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "class:src/formats/routing.rs:Drawing",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:nav_category",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:nav_category",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:backdrop_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:backdrop_of",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:backdrop_value",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:backdrop_value",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:resolve",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:resolve",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:drawn_by_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:kind_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:kind_of",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:kind_of_with_facts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:kind_of_with_facts",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:kind_of_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:kind_of_name",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:named_as",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:named_as",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:previewed_as",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:previewed_as",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claims",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_video",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_audio",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:page_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:page_of",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_ebook",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_archives",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_peazip",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_calibre",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_document",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_libre",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_magick",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_design",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_vector",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_fonts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:drawing_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:drawing_of",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:claim_images",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:chain",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "function:src/formats/routing.rs:chain",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/routing.rs",
+      "target": "file:src/readers/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/text_formats.rs",
+      "target": "function:src/formats/text_formats.rs:is_html_extension",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/text_formats.rs",
+      "target": "function:src/formats/text_formats.rs:is_html_extension",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/text_formats.rs",
+      "target": "function:src/formats/text_formats.rs:lookup_extension",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/text_formats.rs",
+      "target": "function:src/formats/text_formats.rs:lookup_extension",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/text_formats.rs",
+      "target": "function:src/formats/text_formats.rs:matches_configured_extension",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/text_formats.rs",
+      "target": "function:src/formats/text_formats.rs:matches_configured_extension",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/text_formats.rs",
+      "target": "function:src/formats/text_formats.rs:matches_configured_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/text_formats.rs",
+      "target": "function:src/formats/text_formats.rs:matches_configured_name",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/text_formats.rs",
+      "target": "file:src/formats/lists.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "class:src/readers/tone_map.rs:ToneMap",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "class:src/readers/tone_map.rs:ToneMap",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "class:src/readers/tone_map.rs:Curve",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "class:src/readers/tone_map.rs:Curve",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "function:src/readers/tone_map.rs:from_str",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "function:src/readers/tone_map.rs:from_str",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "function:src/readers/tone_map.rs:as_str",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "function:src/readers/tone_map.rs:as_str",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "function:src/readers/tone_map.rs:current",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "function:src/readers/tone_map.rs:current",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "function:src/readers/tone_map.rs:encode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/readers/tone_map.rs",
+      "target": "function:src/readers/tone_map.rs:encode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

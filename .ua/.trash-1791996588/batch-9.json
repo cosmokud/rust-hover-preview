@@ -1,0 +1,57 @@
+{
+  "nodes": [
+    {
+      "id": "config:.github/ISSUE_TEMPLATE/bug_report.yml",
+      "type": "config",
+      "name": "bug_report.yml",
+      "filePath": ".github/ISSUE_TEMPLATE/bug_report.yml",
+      "summary": "GitHub issue template for bug reports.",
+      "tags": [
+        "config",
+        "configuration",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:.github/ISSUE_TEMPLATE/config.yml",
+      "type": "config",
+      "name": "config.yml",
+      "filePath": ".github/ISSUE_TEMPLATE/config.yml",
+      "summary": "GitHub issue template configuration: disables blank issues and sets contact links.",
+      "tags": [
+        "config",
+        "configuration",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:.github/ISSUE_TEMPLATE/feature_request.yml",
+      "type": "config",
+      "name": "feature_request.yml",
+      "filePath": ".github/ISSUE_TEMPLATE/feature_request.yml",
+      "summary": "GitHub issue template for feature requests.",
+      "tags": [
+        "config",
+        "configuration",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:.github/ISSUE_TEMPLATE/question.yml",
+      "type": "config",
+      "name": "question.yml",
+      "filePath": ".github/ISSUE_TEMPLATE/question.yml",
+      "summary": "GitHub issue template for questions.",
+      "tags": [
+        "config",
+        "configuration",
+        "general"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": []
+}

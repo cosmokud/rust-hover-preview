@@ -1,0 +1,5872 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 11,
+  "filesSkipped": [],
+  "filesUnreadable": [],
+  "analysisOutcomes": {
+    "structure": {
+      "succeeded": 11,
+      "failed": 0
+    },
+    "callGraph": {
+      "succeeded": 11,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "results": [
+    {
+      "path": "src/formats/video_formats.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 419,
+      "nonEmptyLines": 373,
+      "functions": [
+        {
+          "name": "list_matches_video",
+          "startLine": 26,
+          "endLine": 39,
+          "params": [
+            "extension",
+            "path",
+            "extensions"
+          ]
+        },
+        {
+          "name": "list_claims_video_name",
+          "startLine": 43,
+          "endLine": 47,
+          "params": [
+            "extension",
+            "extensions"
+          ]
+        },
+        {
+          "name": "matches_any_video_list",
+          "startLine": 64,
+          "endLine": 80,
+          "params": [
+            "path",
+            "config"
+          ]
+        },
+        {
+          "name": "matches_any_video_list_in",
+          "startLine": 92,
+          "endLine": 99,
+          "params": [
+            "path",
+            "video",
+            "ffmpeg"
+          ]
+        },
+        {
+          "name": "claims_any_video_name",
+          "startLine": 102,
+          "endLine": 108,
+          "params": [
+            "path",
+            "config"
+          ]
+        },
+        {
+          "name": "claims_any_video_name_in",
+          "startLine": 116,
+          "endLine": 123,
+          "params": [
+            "path",
+            "video",
+            "ffmpeg"
+          ]
+        },
+        {
+          "name": "claims_video_name",
+          "startLine": 134,
+          "endLine": 140,
+          "params": [
+            "path",
+            "extensions"
+          ]
+        },
+        {
+          "name": "is_video_file",
+          "startLine": 161,
+          "endLine": 171,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "looks_like_mpegts",
+          "startLine": 173,
+          "endLine": 184,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "has_mpegts_packets",
+          "startLine": 186,
+          "endLine": 198,
+          "params": [
+            "probe"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "matches_any_video_list",
+          "line": 64,
+          "isDefault": false
+        },
+        {
+          "name": "matches_any_video_list_in",
+          "line": 92,
+          "isDefault": false
+        },
+        {
+          "name": "claims_any_video_name",
+          "line": 102,
+          "isDefault": false
+        },
+        {
+          "name": "claims_any_video_name_in",
+          "line": 116,
+          "isDefault": false
+        },
+        {
+          "name": "claims_video_name",
+          "line": 134,
+          "isDefault": false
+        },
+        {
+          "name": "is_video_file",
+          "line": 161,
+          "isDefault": false
+        },
+        {
+          "name": "has_mpegts_packets",
+          "line": 186,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "list_matches_video",
+          "callee": "extensions\n        .iter().any",
+          "lineNumber": 27
+        },
+        {
+          "caller": "list_matches_video",
+          "callee": "extensions.iter",
+          "lineNumber": 27
+        },
+        {
+          "caller": "list_matches_video",
+          "callee": "claimed.as_str",
+          "lineNumber": 29
+        },
+        {
+          "caller": "list_matches_video",
+          "callee": "TYPESCRIPT_SHARED_EXTENSIONS.contains",
+          "lineNumber": 34
+        },
+        {
+          "caller": "list_matches_video",
+          "callee": "looks_like_mpegts",
+          "lineNumber": 35
+        },
+        {
+          "caller": "list_claims_video_name",
+          "callee": "extensions\n        .iter().any",
+          "lineNumber": 44
+        },
+        {
+          "caller": "list_claims_video_name",
+          "callee": "extensions.iter",
+          "lineNumber": 44
+        },
+        {
+          "caller": "list_claims_video_name",
+          "callee": "claimed.as_str",
+          "lineNumber": 46
+        },
+        {
+          "caller": "matches_any_video_list",
+          "callee": "crate::formats::text_formats::lookup_extension",
+          "lineNumber": 67
+        },
+        {
+          "caller": "matches_any_video_list",
+          "callee": "list_matches_video",
+          "lineNumber": 71
+        },
+        {
+          "caller": "matches_any_video_list",
+          "callee": "crate::formats::lists::VIDEO.entries",
+          "lineNumber": 74
+        },
+        {
+          "caller": "matches_any_video_list",
+          "callee": "list_matches_video",
+          "lineNumber": 75
+        },
+        {
+          "caller": "matches_any_video_list",
+          "callee": "crate::formats::lists::FFMPEG.entries",
+          "lineNumber": 78
+        },
+        {
+          "caller": "matches_any_video_list_in",
+          "callee": "crate::formats::text_formats::lookup_extension",
+          "lineNumber": 94
+        },
+        {
+          "caller": "matches_any_video_list_in",
+          "callee": "list_matches_video",
+          "lineNumber": 98
+        },
+        {
+          "caller": "matches_any_video_list_in",
+          "callee": "list_matches_video",
+          "lineNumber": 98
+        },
+        {
+          "caller": "claims_any_video_name",
+          "callee": "claims_any_video_name_in",
+          "lineNumber": 103
+        },
+        {
+          "caller": "claims_any_video_name",
+          "callee": "crate::formats::lists::VIDEO.entries",
+          "lineNumber": 105
+        },
+        {
+          "caller": "claims_any_video_name",
+          "callee": "crate::formats::lists::FFMPEG.entries",
+          "lineNumber": 106
+        },
+        {
+          "caller": "claims_any_video_name_in",
+          "callee": "crate::formats::text_formats::lookup_extension",
+          "lineNumber": 118
+        },
+        {
+          "caller": "claims_any_video_name_in",
+          "callee": "list_claims_video_name",
+          "lineNumber": 122
+        },
+        {
+          "caller": "claims_any_video_name_in",
+          "callee": "list_claims_video_name",
+          "lineNumber": 122
+        },
+        {
+          "caller": "claims_video_name",
+          "callee": "crate::formats::text_formats::lookup_extension",
+          "lineNumber": 135
+        },
+        {
+          "caller": "claims_video_name",
+          "callee": "list_claims_video_name",
+          "lineNumber": 139
+        },
+        {
+          "caller": "is_video_file",
+          "callee": "CONFIG.lock",
+          "lineNumber": 162
+        },
+        {
+          "caller": "is_video_file",
+          "callee": "config.video_extensions.clone",
+          "lineNumber": 166
+        },
+        {
+          "caller": "is_video_file",
+          "callee": "config.ffmpeg_extensions.clone",
+          "lineNumber": 167
+        },
+        {
+          "caller": "is_video_file",
+          "callee": "drop",
+          "lineNumber": 168
+        },
+        {
+          "caller": "is_video_file",
+          "callee": "matches_any_video_list_in",
+          "lineNumber": 170
+        },
+        {
+          "caller": "looks_like_mpegts",
+          "callee": "File::open",
+          "lineNumber": 174
+        },
+        {
+          "caller": "looks_like_mpegts",
+          "callee": "file.read",
+          "lineNumber": 180
+        },
+        {
+          "caller": "looks_like_mpegts",
+          "callee": "has_mpegts_packets",
+          "lineNumber": 181
+        },
+        {
+          "caller": "has_mpegts_packets",
+          "callee": "MPEGTS_PACKET_SIZES.iter().any",
+          "lineNumber": 187
+        },
+        {
+          "caller": "has_mpegts_packets",
+          "callee": "MPEGTS_PACKET_SIZES.iter",
+          "lineNumber": 187
+        },
+        {
+          "caller": "has_mpegts_packets",
+          "callee": "probe.len",
+          "lineNumber": 189
+        },
+        {
+          "caller": "has_mpegts_packets",
+          "callee": "(probe.len() - span - 1).min",
+          "lineNumber": 193
+        },
+        {
+          "caller": "has_mpegts_packets",
+          "callee": "probe.len",
+          "lineNumber": 193
+        },
+        {
+          "caller": "has_mpegts_packets",
+          "callee": "(0..=last_start).any",
+          "lineNumber": 194
+        },
+        {
+          "caller": "has_mpegts_packets",
+          "callee": "(0..MPEGTS_SYNC_RUN).all",
+          "lineNumber": 195
+        },
+        {
+          "caller": "the_two_video_lists_partition_the_one_list_they_were",
+          "callee": "crate::formats::text_formats::sanitize_extension_list",
+          "lineNumber": 210
+        },
+        {
+          "caller": "the_two_video_lists_partition_the_one_list_they_were",
+          "callee": "crate::formats::text_formats::sanitize_extension_list",
+          "lineNumber": 213
+        },
+        {
+          "caller": "the_two_video_lists_partition_the_one_list_they_were",
+          "callee": "crate::formats::text_formats::sanitize_extension_list",
+          "lineNumber": 216
+        },
+        {
+          "caller": "the_video_lists_are_written_in_order",
+          "callee": "crate::formats::text_formats::sanitize_extension_list",
+          "lineNumber": 248
+        },
+        {
+          "caller": "the_video_lists_are_written_in_order",
+          "callee": "entries.clone",
+          "lineNumber": 249
+        },
+        {
+          "caller": "the_video_lists_are_written_in_order",
+          "callee": "sorted.sort",
+          "lineNumber": 250
+        },
+        {
+          "caller": "the_two_lists_put_each_engine_where_it_belongs",
+          "callee": "AppConfig::default",
+          "lineNumber": 261
+        },
+        {
+          "caller": "the_two_lists_put_each_engine_where_it_belongs",
+          "callee": "claims_video_name",
+          "lineNumber": 263
+        },
+        {
+          "caller": "the_two_lists_put_each_engine_where_it_belongs",
+          "callee": "Path::new",
+          "lineNumber": 264
+        },
+        {
+          "caller": "the_two_lists_put_each_engine_where_it_belongs",
+          "callee": "crate::formats::lists::VIDEO.entries",
+          "lineNumber": 265
+        },
+        {
+          "caller": "a_name_in_either_list_is_a_video",
+          "callee": "AppConfig::default",
+          "lineNumber": 300
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "AppConfig::default",
+          "lineNumber": 331
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "crate::formats::lists::VIDEO.entries(&config).to_vec",
+          "lineNumber": 332
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "crate::formats::lists::VIDEO.entries",
+          "lineNumber": 332
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "crate::formats::lists::FFMPEG.entries(&config).to_vec",
+          "lineNumber": 333
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "crate::formats::lists::FFMPEG.entries",
+          "lineNumber": 333
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "video.clone",
+          "lineNumber": 335
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "names.extend",
+          "lineNumber": 336
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "ffmpeg.iter().cloned",
+          "lineNumber": 336
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "ffmpeg.iter",
+          "lineNumber": 336
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "PathBuf::from",
+          "lineNumber": 344
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "TYPESCRIPT_SHARED_EXTENSIONS.contains",
+          "lineNumber": 351
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "name.as_str",
+          "lineNumber": 351
+        },
+        {
+          "caller": "both_forms_of_the_question_answer_the_same_for_every_shipped_name",
+          "callee": "Path::new",
+          "lineNumber": 360
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "AppConfig::default",
+          "lineNumber": 380
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "crate::formats::lists::VIDEO.entries(&config).to_vec",
+          "lineNumber": 381
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "crate::formats::lists::VIDEO.entries",
+          "lineNumber": 381
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "crate::formats::lists::FFMPEG.entries(&config).to_vec",
+          "lineNumber": 382
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "crate::formats::lists::FFMPEG.entries",
+          "lineNumber": 382
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "std::env::temp_dir().join",
+          "lineNumber": 383
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "std::env::temp_dir",
+          "lineNumber": 383
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "std::fs::create_dir_all(&folder).expect",
+          "lineNumber": 384
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "std::fs::create_dir_all",
+          "lineNumber": 384
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "stream.as_slice",
+          "lineNumber": 395
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "folder.join",
+          "lineNumber": 396
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "std::fs::write(&path, bytes).expect",
+          "lineNumber": 397
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "std::fs::write",
+          "lineNumber": 397
+        },
+        {
+          "caller": "both_forms_settle_the_two_shared_names_by_the_file_behind_them",
+          "callee": "std::fs::remove_dir_all",
+          "lineNumber": 417
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 7,
+        "functionCount": 10,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "src/readers/pdf_preview.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 878,
+      "nonEmptyLines": 762,
+      "functions": [
+        {
+          "name": "initialize_apartment",
+          "startLine": 62,
+          "endLine": 66,
+          "params": []
+        },
+        {
+          "name": "named",
+          "startLine": 69,
+          "endLine": 74,
+          "params": [
+            "path",
+            "extension"
+          ]
+        },
+        {
+          "name": "is_pdf_file",
+          "startLine": 100,
+          "endLine": 105,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "is_pdf_file_in",
+          "startLine": 116,
+          "endLine": 118,
+          "params": [
+            "path",
+            "extensions"
+          ]
+        },
+        {
+          "name": "is_pdf_file_in_of",
+          "startLine": 127,
+          "endLine": 139,
+          "params": [
+            "path",
+            "extensions",
+            "remote"
+          ]
+        },
+        {
+          "name": "is_pdf_preview",
+          "startLine": 143,
+          "endLine": 145,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "page_dimensions",
+          "startLine": 151,
+          "endLine": 163,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "page_dimension_key",
+          "startLine": 168,
+          "endLine": 178,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "remember_page_dimensions",
+          "startLine": 186,
+          "endLine": 193,
+          "params": [
+            "key",
+            "dimensions"
+          ]
+        },
+        {
+          "name": "remember_book_page",
+          "startLine": 196,
+          "endLine": 203,
+          "params": [
+            "key",
+            "page"
+          ]
+        },
+        {
+          "name": "render_first_page",
+          "startLine": 213,
+          "endLine": 225,
+          "params": [
+            "path",
+            "max_width",
+            "max_height"
+          ]
+        },
+        {
+          "name": "render_opened_first_page",
+          "startLine": 228,
+          "endLine": 240,
+          "params": [
+            "document",
+            "max_width",
+            "max_height"
+          ]
+        },
+        {
+          "name": "book_page",
+          "startLine": 283,
+          "endLine": 295,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "probe_book_page",
+          "startLine": 297,
+          "endLine": 334,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "is_flat_page",
+          "startLine": 344,
+          "endLine": 353,
+          "params": [
+            "page"
+          ]
+        },
+        {
+          "name": "is_one_colour",
+          "startLine": 356,
+          "endLine": 363,
+          "params": [
+            "image"
+          ]
+        },
+        {
+          "name": "render_book_page",
+          "startLine": 370,
+          "endLine": 390,
+          "params": [
+            "path",
+            "max_width",
+            "max_height"
+          ]
+        },
+        {
+          "name": "decode_rendered_page",
+          "startLine": 399,
+          "endLine": 416,
+          "params": [
+            "bytes",
+            "render_width",
+            "render_height"
+          ]
+        },
+        {
+          "name": "remember_opened_dimensions",
+          "startLine": 423,
+          "endLine": 431,
+          "params": [
+            "path",
+            "document"
+          ]
+        },
+        {
+          "name": "probe_page_dimensions",
+          "startLine": 433,
+          "endLine": 441,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "page_size_in_dips",
+          "startLine": 443,
+          "endLine": 452,
+          "params": [
+            "width",
+            "height"
+          ]
+        },
+        {
+          "name": "fit_page",
+          "startLine": 456,
+          "endLine": 471,
+          "params": [
+            "width",
+            "height",
+            "max_width",
+            "max_height"
+          ]
+        },
+        {
+          "name": "fit_drawn_page",
+          "startLine": 489,
+          "endLine": 501,
+          "params": [
+            "image",
+            "max_width",
+            "max_height"
+          ]
+        },
+        {
+          "name": "open_document",
+          "startLine": 517,
+          "endLine": 535,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "render_page",
+          "startLine": 537,
+          "endLine": 564,
+          "params": [
+            "page",
+            "width",
+            "height"
+          ]
+        },
+        {
+          "name": "read_stream_bytes",
+          "startLine": 566,
+          "endLine": 579,
+          "params": [
+            "stream"
+          ]
+        },
+        {
+          "name": "opaque_bgra",
+          "startLine": 585,
+          "endLine": 596,
+          "params": [
+            "rgba"
+          ]
+        },
+        {
+          "name": "has_pdf_header",
+          "startLine": 600,
+          "endLine": 612,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "has_pdf_header_in",
+          "startLine": 615,
+          "endLine": 621,
+          "params": [
+            "bytes"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "PageDimensionKey",
+          "startLine": 38,
+          "endLine": 42,
+          "methods": [],
+          "properties": [
+            "path",
+            "modified",
+            "len"
+          ]
+        },
+        {
+          "name": "BookPage",
+          "startLine": 257,
+          "endLine": 260,
+          "methods": [],
+          "properties": [
+            "index",
+            "size"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "initialize_apartment",
+          "line": 62,
+          "isDefault": false
+        },
+        {
+          "name": "is_pdf_file",
+          "line": 100,
+          "isDefault": false
+        },
+        {
+          "name": "is_pdf_file_in",
+          "line": 116,
+          "isDefault": false
+        },
+        {
+          "name": "is_pdf_file_in_of",
+          "line": 127,
+          "isDefault": false
+        },
+        {
+          "name": "is_pdf_preview",
+          "line": 143,
+          "isDefault": false
+        },
+        {
+          "name": "page_dimensions",
+          "line": 151,
+          "isDefault": false
+        },
+        {
+          "name": "render_first_page",
+          "line": 213,
+          "isDefault": false
+        },
+        {
+          "name": "BookPage",
+          "line": 257,
+          "isDefault": false
+        },
+        {
+          "name": "book_page",
+          "line": 283,
+          "isDefault": false
+        },
+        {
+          "name": "render_book_page",
+          "line": 370,
+          "isDefault": false
+        },
+        {
+          "name": "opaque_bgra",
+          "line": 585,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "initialize_apartment",
+          "callee": "CoInitializeEx",
+          "lineNumber": 64
+        },
+        {
+          "caller": "named",
+          "callee": "path.extension()\n        .and_then(|ext| ext.to_str())\n        .map(|ext| ext.eq_ignore_ascii_case(extension)).unwrap_or",
+          "lineNumber": 70
+        },
+        {
+          "caller": "named",
+          "callee": "path.extension()\n        .and_then(|ext| ext.to_str()).map",
+          "lineNumber": 70
+        },
+        {
+          "caller": "named",
+          "callee": "path.extension().and_then",
+          "lineNumber": 70
+        },
+        {
+          "caller": "named",
+          "callee": "path.extension",
+          "lineNumber": 70
+        },
+        {
+          "caller": "named",
+          "callee": "ext.to_str",
+          "lineNumber": 71
+        },
+        {
+          "caller": "named",
+          "callee": "ext.eq_ignore_ascii_case",
+          "lineNumber": 72
+        },
+        {
+          "caller": "is_pdf_file",
+          "callee": "CONFIG\n        .lock()\n        .map(|config| is_pdf_file_in(path, &config.ebook_extensions)).unwrap_or",
+          "lineNumber": 101
+        },
+        {
+          "caller": "is_pdf_file",
+          "callee": "CONFIG\n        .lock().map",
+          "lineNumber": 101
+        },
+        {
+          "caller": "is_pdf_file",
+          "callee": "CONFIG.lock",
+          "lineNumber": 101
+        },
+        {
+          "caller": "is_pdf_file",
+          "callee": "is_pdf_file_in",
+          "lineNumber": 103
+        },
+        {
+          "caller": "is_pdf_file_in",
+          "callee": "is_pdf_file_in_of",
+          "lineNumber": 117
+        },
+        {
+          "caller": "is_pdf_file_in",
+          "callee": "cloud_files::needs_download",
+          "lineNumber": 117
+        },
+        {
+          "caller": "is_pdf_file_in_of",
+          "callee": "crate::formats::text_formats::matches_configured_extension",
+          "lineNumber": 132
+        },
+        {
+          "caller": "is_pdf_file_in_of",
+          "callee": "crate::formats::ebook_formats::page_spelling",
+          "lineNumber": 133
+        },
+        {
+          "caller": "is_pdf_file_in_of",
+          "callee": "named",
+          "lineNumber": 138
+        },
+        {
+          "caller": "is_pdf_file_in_of",
+          "callee": "has_pdf_header",
+          "lineNumber": 138
+        },
+        {
+          "caller": "is_pdf_preview",
+          "callee": "is_pdf_file",
+          "lineNumber": 144
+        },
+        {
+          "caller": "is_pdf_preview",
+          "callee": "PreviewType::Ebook.enabled",
+          "lineNumber": 144
+        },
+        {
+          "caller": "page_dimensions",
+          "callee": "page_dimension_key",
+          "lineNumber": 152
+        },
+        {
+          "caller": "page_dimensions",
+          "callee": "PAGE_DIMENSIONS.lock",
+          "lineNumber": 153
+        },
+        {
+          "caller": "page_dimensions",
+          "callee": "cache.get",
+          "lineNumber": 154
+        },
+        {
+          "caller": "page_dimensions",
+          "callee": "probe_page_dimensions",
+          "lineNumber": 159
+        },
+        {
+          "caller": "page_dimensions",
+          "callee": "remember_page_dimensions",
+          "lineNumber": 160
+        },
+        {
+          "caller": "page_dimension_key",
+          "callee": "std::fs::metadata(path).ok",
+          "lineNumber": 169
+        },
+        {
+          "caller": "page_dimension_key",
+          "callee": "std::fs::metadata",
+          "lineNumber": 169
+        },
+        {
+          "caller": "page_dimension_key",
+          "callee": "path.to_path_buf",
+          "lineNumber": 172
+        },
+        {
+          "caller": "page_dimension_key",
+          "callee": "metadata\n            .as_ref().and_then",
+          "lineNumber": 173
+        },
+        {
+          "caller": "page_dimension_key",
+          "callee": "metadata.as_ref",
+          "lineNumber": 173
+        },
+        {
+          "caller": "page_dimension_key",
+          "callee": "metadata.modified().ok",
+          "lineNumber": 175
+        },
+        {
+          "caller": "page_dimension_key",
+          "callee": "metadata.modified",
+          "lineNumber": 175
+        },
+        {
+          "caller": "page_dimension_key",
+          "callee": "metadata.map(|metadata| metadata.len()).unwrap_or",
+          "lineNumber": 176
+        },
+        {
+          "caller": "page_dimension_key",
+          "callee": "metadata.map",
+          "lineNumber": 176
+        },
+        {
+          "caller": "page_dimension_key",
+          "callee": "metadata.len",
+          "lineNumber": 176
+        },
+        {
+          "caller": "remember_page_dimensions",
+          "callee": "PAGE_DIMENSIONS.lock",
+          "lineNumber": 187
+        },
+        {
+          "caller": "remember_page_dimensions",
+          "callee": "cache.contains_key",
+          "lineNumber": 188
+        },
+        {
+          "caller": "remember_page_dimensions",
+          "callee": "cache.len",
+          "lineNumber": 188
+        },
+        {
+          "caller": "remember_page_dimensions",
+          "callee": "cache.clear",
+          "lineNumber": 189
+        },
+        {
+          "caller": "remember_page_dimensions",
+          "callee": "cache.insert",
+          "lineNumber": 191
+        },
+        {
+          "caller": "remember_book_page",
+          "callee": "BOOK_PAGES.lock",
+          "lineNumber": 197
+        },
+        {
+          "caller": "remember_book_page",
+          "callee": "cache.contains_key",
+          "lineNumber": 198
+        },
+        {
+          "caller": "remember_book_page",
+          "callee": "cache.len",
+          "lineNumber": 198
+        },
+        {
+          "caller": "remember_book_page",
+          "callee": "cache.clear",
+          "lineNumber": 199
+        },
+        {
+          "caller": "remember_book_page",
+          "callee": "cache.insert",
+          "lineNumber": 201
+        },
+        {
+          "caller": "render_first_page",
+          "callee": "has_pdf_header",
+          "lineNumber": 218
+        },
+        {
+          "caller": "render_first_page",
+          "callee": "open_document",
+          "lineNumber": 222
+        },
+        {
+          "caller": "render_first_page",
+          "callee": "remember_opened_dimensions",
+          "lineNumber": 223
+        },
+        {
+          "caller": "render_first_page",
+          "callee": "render_opened_first_page",
+          "lineNumber": 224
+        },
+        {
+          "caller": "render_opened_first_page",
+          "callee": "document.GetPage(0).ok",
+          "lineNumber": 233
+        },
+        {
+          "caller": "render_opened_first_page",
+          "callee": "document.GetPage",
+          "lineNumber": 233
+        },
+        {
+          "caller": "render_opened_first_page",
+          "callee": "page.Size().ok",
+          "lineNumber": 234
+        },
+        {
+          "caller": "render_opened_first_page",
+          "callee": "page.Size",
+          "lineNumber": 234
+        },
+        {
+          "caller": "render_opened_first_page",
+          "callee": "fit_page",
+          "lineNumber": 235
+        },
+        {
+          "caller": "render_opened_first_page",
+          "callee": "render_page",
+          "lineNumber": 237
+        },
+        {
+          "caller": "render_opened_first_page",
+          "callee": "decode_rendered_page",
+          "lineNumber": 239
+        },
+        {
+          "caller": "book_page",
+          "callee": "page_dimension_key",
+          "lineNumber": 284
+        },
+        {
+          "caller": "book_page",
+          "callee": "BOOK_PAGES.lock",
+          "lineNumber": 285
+        },
+        {
+          "caller": "book_page",
+          "callee": "cache.get",
+          "lineNumber": 286
+        },
+        {
+          "caller": "book_page",
+          "callee": "probe_book_page",
+          "lineNumber": 291
+        },
+        {
+          "caller": "book_page",
+          "callee": "remember_book_page",
+          "lineNumber": 292
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "has_pdf_header",
+          "lineNumber": 298
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "open_document",
+          "lineNumber": 302
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "remember_opened_dimensions",
+          "lineNumber": 306
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "document.GetPage",
+          "lineNumber": 311
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "page\n            .Size()\n            .ok().and_then",
+          "lineNumber": 314
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "page\n            .Size().ok",
+          "lineNumber": 314
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "page.Size",
+          "lineNumber": 314
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "page_size_in_dips",
+          "lineNumber": 317
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "first.is_none",
+          "lineNumber": 324
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "Some",
+          "lineNumber": 325
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "is_flat_page",
+          "lineNumber": 328
+        },
+        {
+          "caller": "probe_book_page",
+          "callee": "Some",
+          "lineNumber": 329
+        },
+        {
+          "caller": "is_flat_page",
+          "callee": "render_page",
+          "lineNumber": 345
+        },
+        {
+          "caller": "is_flat_page",
+          "callee": "image::load_from_memory",
+          "lineNumber": 348
+        },
+        {
+          "caller": "is_flat_page",
+          "callee": "is_one_colour",
+          "lineNumber": 352
+        },
+        {
+          "caller": "is_flat_page",
+          "callee": "image.to_rgba8",
+          "lineNumber": 352
+        },
+        {
+          "caller": "is_one_colour",
+          "callee": "image.pixels",
+          "lineNumber": 357
+        },
+        {
+          "caller": "is_one_colour",
+          "callee": "pixels.next",
+          "lineNumber": 358
+        },
+        {
+          "caller": "is_one_colour",
+          "callee": "pixels.all",
+          "lineNumber": 362
+        },
+        {
+          "caller": "render_book_page",
+          "callee": "book_page",
+          "lineNumber": 375
+        },
+        {
+          "caller": "render_book_page",
+          "callee": "open_document",
+          "lineNumber": 377
+        },
+        {
+          "caller": "render_book_page",
+          "callee": "document.GetPage(book.index).ok",
+          "lineNumber": 378
+        },
+        {
+          "caller": "render_book_page",
+          "callee": "document.GetPage",
+          "lineNumber": 378
+        },
+        {
+          "caller": "render_book_page",
+          "callee": "fit_page",
+          "lineNumber": 380
+        },
+        {
+          "caller": "render_book_page",
+          "callee": "render_page",
+          "lineNumber": 387
+        },
+        {
+          "caller": "render_book_page",
+          "callee": "decode_rendered_page",
+          "lineNumber": 389
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "image::ImageReader::new(std::io::Cursor::new(bytes))\n        .with_guessed_format().ok",
+          "lineNumber": 404
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format",
+          "lineNumber": 404
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "image::ImageReader::new",
+          "lineNumber": 404
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "std::io::Cursor::new",
+          "lineNumber": 404
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "reader.limits",
+          "lineNumber": 407
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "image_decode_limits",
+          "lineNumber": 407
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "fit_drawn_page(reader.decode().ok()?, render_width, render_height).to_rgba8",
+          "lineNumber": 409
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "fit_drawn_page",
+          "lineNumber": 409
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "reader.decode().ok",
+          "lineNumber": 409
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "reader.decode",
+          "lineNumber": 409
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "image.width",
+          "lineNumber": 410
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "image.height",
+          "lineNumber": 410
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "Some",
+          "lineNumber": 415
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "opaque_bgra",
+          "lineNumber": 415
+        },
+        {
+          "caller": "decode_rendered_page",
+          "callee": "image.as_raw",
+          "lineNumber": 415
+        },
+        {
+          "caller": "remember_opened_dimensions",
+          "callee": "document\n        .GetPage(0)\n        .ok()\n        .and_then(|page| page.Size().ok()).and_then",
+          "lineNumber": 424
+        },
+        {
+          "caller": "remember_opened_dimensions",
+          "callee": "document\n        .GetPage(0)\n        .ok().and_then",
+          "lineNumber": 424
+        },
+        {
+          "caller": "remember_opened_dimensions",
+          "callee": "document\n        .GetPage(0).ok",
+          "lineNumber": 424
+        },
+        {
+          "caller": "remember_opened_dimensions",
+          "callee": "document.GetPage",
+          "lineNumber": 424
+        },
+        {
+          "caller": "remember_opened_dimensions",
+          "callee": "page.Size().ok",
+          "lineNumber": 427
+        },
+        {
+          "caller": "remember_opened_dimensions",
+          "callee": "page.Size",
+          "lineNumber": 427
+        },
+        {
+          "caller": "remember_opened_dimensions",
+          "callee": "page_size_in_dips",
+          "lineNumber": 428
+        },
+        {
+          "caller": "remember_opened_dimensions",
+          "callee": "remember_page_dimensions",
+          "lineNumber": 430
+        },
+        {
+          "caller": "remember_opened_dimensions",
+          "callee": "page_dimension_key",
+          "lineNumber": 430
+        },
+        {
+          "caller": "probe_page_dimensions",
+          "callee": "has_pdf_header",
+          "lineNumber": 434
+        },
+        {
+          "caller": "probe_page_dimensions",
+          "callee": "open_document",
+          "lineNumber": 438
+        },
+        {
+          "caller": "probe_page_dimensions",
+          "callee": "document.GetPage(0).ok()?.Size().ok",
+          "lineNumber": 439
+        },
+        {
+          "caller": "probe_page_dimensions",
+          "callee": "document.GetPage(0).ok()?.Size",
+          "lineNumber": 439
+        },
+        {
+          "caller": "probe_page_dimensions",
+          "callee": "document.GetPage(0).ok",
+          "lineNumber": 439
+        },
+        {
+          "caller": "probe_page_dimensions",
+          "callee": "document.GetPage",
+          "lineNumber": 439
+        },
+        {
+          "caller": "probe_page_dimensions",
+          "callee": "page_size_in_dips",
+          "lineNumber": 440
+        },
+        {
+          "caller": "page_size_in_dips",
+          "callee": "width.is_finite",
+          "lineNumber": 444
+        },
+        {
+          "caller": "page_size_in_dips",
+          "callee": "height.is_finite",
+          "lineNumber": 444
+        },
+        {
+          "caller": "page_size_in_dips",
+          "callee": "Some",
+          "lineNumber": 448
+        },
+        {
+          "caller": "page_size_in_dips",
+          "callee": "(width.round() as u32).max",
+          "lineNumber": 449
+        },
+        {
+          "caller": "page_size_in_dips",
+          "callee": "width.round",
+          "lineNumber": 449
+        },
+        {
+          "caller": "page_size_in_dips",
+          "callee": "(height.round() as u32).max",
+          "lineNumber": 450
+        },
+        {
+          "caller": "page_size_in_dips",
+          "callee": "height.round",
+          "lineNumber": 450
+        },
+        {
+          "caller": "fit_page",
+          "callee": "page_size_in_dips",
+          "lineNumber": 457
+        },
+        {
+          "caller": "fit_page",
+          "callee": "(max_width as f32 / page_width as f32).min",
+          "lineNumber": 462
+        },
+        {
+          "caller": "fit_page",
+          "callee": "(page_width as f32 * scale)\n        .round().clamp",
+          "lineNumber": 463
+        },
+        {
+          "caller": "fit_page",
+          "callee": "(page_width as f32 * scale).round",
+          "lineNumber": 463
+        },
+        {
+          "caller": "fit_page",
+          "callee": "(page_height as f32 * scale)\n        .round().clamp",
+          "lineNumber": 466
+        },
+        {
+          "caller": "fit_page",
+          "callee": "(page_height as f32 * scale).round",
+          "lineNumber": 466
+        },
+        {
+          "caller": "fit_page",
+          "callee": "Some",
+          "lineNumber": 470
+        },
+        {
+          "caller": "fit_drawn_page",
+          "callee": "max_width.max",
+          "lineNumber": 494
+        },
+        {
+          "caller": "fit_drawn_page",
+          "callee": "max_height.max",
+          "lineNumber": 494
+        },
+        {
+          "caller": "fit_drawn_page",
+          "callee": "image.width",
+          "lineNumber": 496
+        },
+        {
+          "caller": "fit_drawn_page",
+          "callee": "image.height",
+          "lineNumber": 496
+        },
+        {
+          "caller": "fit_drawn_page",
+          "callee": "image.thumbnail",
+          "lineNumber": 500
+        },
+        {
+          "caller": "open_document",
+          "callee": "path.as_os_str().encode_wide().collect",
+          "lineNumber": 518
+        },
+        {
+          "caller": "open_document",
+          "callee": "path.as_os_str().encode_wide",
+          "lineNumber": 518
+        },
+        {
+          "caller": "open_document",
+          "callee": "path.as_os_str",
+          "lineNumber": 518
+        },
+        {
+          "caller": "open_document",
+          "callee": "wide.push",
+          "lineNumber": 519
+        },
+        {
+          "caller": "open_document",
+          "callee": "SHCreateStreamOnFileEx(\n            PCWSTR(wide.as_ptr()),\n            STGM_READ.0 | STGM_SHARE_DENY_NONE.0,\n            0,\n            false,\n            None::<&IStream>,\n        ).ok",
+          "lineNumber": 522
+        },
+        {
+          "caller": "open_document",
+          "callee": "SHCreateStreamOnFileEx",
+          "lineNumber": 522
+        },
+        {
+          "caller": "open_document",
+          "callee": "PCWSTR",
+          "lineNumber": 523
+        },
+        {
+          "caller": "open_document",
+          "callee": "wide.as_ptr",
+          "lineNumber": 523
+        },
+        {
+          "caller": "open_document",
+          "callee": "CreateRandomAccessStreamOverStream(&file, BSOS_DEFAULT).ok",
+          "lineNumber": 531
+        },
+        {
+          "caller": "open_document",
+          "callee": "CreateRandomAccessStreamOverStream",
+          "lineNumber": 531
+        },
+        {
+          "caller": "open_document",
+          "callee": "PdfDocument::LoadFromStreamAsync(&stream).ok()?.get().ok",
+          "lineNumber": 534
+        },
+        {
+          "caller": "open_document",
+          "callee": "PdfDocument::LoadFromStreamAsync(&stream).ok()?.get",
+          "lineNumber": 534
+        },
+        {
+          "caller": "open_document",
+          "callee": "PdfDocument::LoadFromStreamAsync(&stream).ok",
+          "lineNumber": 534
+        },
+        {
+          "caller": "open_document",
+          "callee": "PdfDocument::LoadFromStreamAsync",
+          "lineNumber": 534
+        },
+        {
+          "caller": "render_page",
+          "callee": "PdfPageRenderOptions::new().ok",
+          "lineNumber": 538
+        },
+        {
+          "caller": "render_page",
+          "callee": "PdfPageRenderOptions::new",
+          "lineNumber": 538
+        },
+        {
+          "caller": "render_page",
+          "callee": "options.SetDestinationWidth(width).ok",
+          "lineNumber": 539
+        },
+        {
+          "caller": "render_page",
+          "callee": "options.SetDestinationWidth",
+          "lineNumber": 539
+        },
+        {
+          "caller": "render_page",
+          "callee": "options.SetDestinationHeight(height).ok",
+          "lineNumber": 540
+        },
+        {
+          "caller": "render_page",
+          "callee": "options.SetDestinationHeight",
+          "lineNumber": 540
+        },
+        {
+          "caller": "render_page",
+          "callee": "options\n        .SetBackgroundColor(Color {\n            A: 255,\n            R: 255,\n            G: 255,\n            B: 255,\n        }).ok",
+          "lineNumber": 543
+        },
+        {
+          "caller": "render_page",
+          "callee": "options.SetBackgroundColor",
+          "lineNumber": 543
+        },
+        {
+          "caller": "render_page",
+          "callee": "options\n        .SetBitmapEncoderId(BitmapEncoder::BmpEncoderId().ok()?).ok",
+          "lineNumber": 553
+        },
+        {
+          "caller": "render_page",
+          "callee": "options.SetBitmapEncoderId",
+          "lineNumber": 553
+        },
+        {
+          "caller": "render_page",
+          "callee": "BitmapEncoder::BmpEncoderId().ok",
+          "lineNumber": 554
+        },
+        {
+          "caller": "render_page",
+          "callee": "BitmapEncoder::BmpEncoderId",
+          "lineNumber": 554
+        },
+        {
+          "caller": "render_page",
+          "callee": "InMemoryRandomAccessStream::new().ok",
+          "lineNumber": 557
+        },
+        {
+          "caller": "render_page",
+          "callee": "InMemoryRandomAccessStream::new",
+          "lineNumber": 557
+        },
+        {
+          "caller": "render_page",
+          "callee": "page.RenderWithOptionsToStreamAsync(&stream, &options)\n        .ok()?\n        .get().ok",
+          "lineNumber": 558
+        },
+        {
+          "caller": "render_page",
+          "callee": "page.RenderWithOptionsToStreamAsync(&stream, &options)\n        .ok()?.get",
+          "lineNumber": 558
+        },
+        {
+          "caller": "render_page",
+          "callee": "page.RenderWithOptionsToStreamAsync(&stream, &options).ok",
+          "lineNumber": 558
+        },
+        {
+          "caller": "render_page",
+          "callee": "page.RenderWithOptionsToStreamAsync",
+          "lineNumber": 558
+        },
+        {
+          "caller": "render_page",
+          "callee": "read_stream_bytes",
+          "lineNumber": 563
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "stream.Size().ok",
+          "lineNumber": 567
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "stream.Size",
+          "lineNumber": 567
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "stream.GetInputStreamAt(0).ok",
+          "lineNumber": 572
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "stream.GetInputStreamAt",
+          "lineNumber": 572
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "DataReader::CreateDataReader(&input).ok",
+          "lineNumber": 573
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "DataReader::CreateDataReader",
+          "lineNumber": 573
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "reader.LoadAsync(length as u32).ok()?.get().ok",
+          "lineNumber": 574
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "reader.LoadAsync(length as u32).ok()?.get",
+          "lineNumber": 574
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "reader.LoadAsync(length as u32).ok",
+          "lineNumber": 574
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "reader.LoadAsync",
+          "lineNumber": 574
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "reader.ReadBytes(&mut bytes).ok",
+          "lineNumber": 577
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "reader.ReadBytes",
+          "lineNumber": 577
+        },
+        {
+          "caller": "read_stream_bytes",
+          "callee": "Some",
+          "lineNumber": 578
+        },
+        {
+          "caller": "opaque_bgra",
+          "callee": "Vec::with_capacity",
+          "lineNumber": 586
+        },
+        {
+          "caller": "opaque_bgra",
+          "callee": "rgba.len",
+          "lineNumber": 586
+        },
+        {
+          "caller": "opaque_bgra",
+          "callee": "rgba.chunks",
+          "lineNumber": 587
+        },
+        {
+          "caller": "opaque_bgra",
+          "callee": "chunk.len",
+          "lineNumber": 588
+        },
+        {
+          "caller": "opaque_bgra",
+          "callee": "bgra.push",
+          "lineNumber": 589
+        },
+        {
+          "caller": "opaque_bgra",
+          "callee": "bgra.push",
+          "lineNumber": 590
+        },
+        {
+          "caller": "opaque_bgra",
+          "callee": "bgra.push",
+          "lineNumber": 591
+        },
+        {
+          "caller": "opaque_bgra",
+          "callee": "bgra.push",
+          "lineNumber": 592
+        },
+        {
+          "caller": "has_pdf_header",
+          "callee": "File::open",
+          "lineNumber": 601
+        },
+        {
+          "caller": "has_pdf_header",
+          "callee": "file.read",
+          "lineNumber": 606
+        },
+        {
+          "caller": "has_pdf_header",
+          "callee": "has_pdf_header_in",
+          "lineNumber": 611
+        },
+        {
+          "caller": "has_pdf_header_in",
+          "callee": "bytes.len().min",
+          "lineNumber": 616
+        },
+        {
+          "caller": "has_pdf_header_in",
+          "callee": "bytes.len",
+          "lineNumber": 616
+        },
+        {
+          "caller": "has_pdf_header_in",
+          "callee": "probe\n        .windows(PDF_HEADER.len()).any",
+          "lineNumber": 618
+        },
+        {
+          "caller": "has_pdf_header_in",
+          "callee": "probe.windows",
+          "lineNumber": 618
+        },
+        {
+          "caller": "has_pdf_header_in",
+          "callee": "PDF_HEADER.len",
+          "lineNumber": 619
+        },
+        {
+          "caller": "reads_a_page_name_out_of_the_list_it_is_given",
+          "callee": "crate::formats::text_formats::sanitize_extension_list",
+          "lineNumber": 633
+        },
+        {
+          "caller": "reads_a_page_name_out_of_the_list_it_is_given",
+          "callee": "crate::formats::text_formats::sanitize_extension_list",
+          "lineNumber": 650
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::env::temp_dir()\n            .join(\"rust-hover-preview-pdf-tests\").join",
+          "lineNumber": 661
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::env::temp_dir().join",
+          "lineNumber": 661
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::env::temp_dir",
+          "lineNumber": 661
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::fs::create_dir_all(&folder).expect",
+          "lineNumber": 664
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::fs::create_dir_all",
+          "lineNumber": 664
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "crate::formats::text_formats::sanitize_extension_list",
+          "lineNumber": 666
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "folder.join",
+          "lineNumber": 670
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::fs::write(&compatible, b\"%PDF-1.7\\none page\").expect",
+          "lineNumber": 671
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::fs::write",
+          "lineNumber": 671
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "folder.join",
+          "lineNumber": 677
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::fs::write(&postscript, b\"%!PS-Adobe-3.0\\n\").expect",
+          "lineNumber": 678
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::fs::write",
+          "lineNumber": 678
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::fs::remove_file",
+          "lineNumber": 684
+        },
+        {
+          "caller": "reads_an_illustrator_document_by_its_own_header",
+          "callee": "std::fs::remove_file",
+          "lineNumber": 685
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "std::env::temp_dir()\n            .join(\"rust-hover-preview-pdf-tests\").join",
+          "lineNumber": 693
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "std::env::temp_dir().join",
+          "lineNumber": 693
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "std::env::temp_dir",
+          "lineNumber": 693
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "std::fs::create_dir_all(&folder).expect",
+          "lineNumber": 696
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "std::fs::create_dir_all",
+          "lineNumber": 696
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "folder.join",
+          "lineNumber": 697
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "std::fs::write(&path, b\"one page\").expect",
+          "lineNumber": 698
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "std::fs::write",
+          "lineNumber": 698
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "page_dimension_key",
+          "lineNumber": 700
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "std::fs::write(&path, b\"another page, and a longer one\").expect",
+          "lineNumber": 703
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "std::fs::write",
+          "lineNumber": 703
+        },
+        {
+          "caller": "measures_a_page_again_when_the_file_is_saved_again",
+          "callee": "std::fs::remove_file",
+          "lineNumber": 710
+        },
+        {
+          "caller": "draws_a_page_the_engine_overscaled_into_the_box_it_was_given",
+          "callee": "image::DynamicImage::ImageRgba8",
+          "lineNumber": 723
+        },
+        {
+          "caller": "draws_a_page_the_engine_overscaled_into_the_box_it_was_given",
+          "callee": "image::RgbaImage::from_pixel",
+          "lineNumber": 723
+        },
+        {
+          "caller": "draws_a_page_the_engine_overscaled_into_the_box_it_was_given",
+          "callee": "image::Rgba",
+          "lineNumber": 726
+        },
+        {
+          "caller": "draws_a_page_the_engine_overscaled_into_the_box_it_was_given",
+          "callee": "fit_drawn_page",
+          "lineNumber": 729
+        },
+        {
+          "caller": "draws_a_page_the_engine_overscaled_into_the_box_it_was_given",
+          "callee": "drawn.width",
+          "lineNumber": 730
+        },
+        {
+          "caller": "draws_a_page_the_engine_overscaled_into_the_box_it_was_given",
+          "callee": "drawn.height",
+          "lineNumber": 730
+        },
+        {
+          "caller": "keeps_the_pages_own_shape_when_fitting_it_into_the_box",
+          "callee": "image::DynamicImage::ImageRgba8",
+          "lineNumber": 747
+        },
+        {
+          "caller": "keeps_the_pages_own_shape_when_fitting_it_into_the_box",
+          "callee": "image::RgbaImage::from_pixel",
+          "lineNumber": 747
+        },
+        {
+          "caller": "keeps_the_pages_own_shape_when_fitting_it_into_the_box",
+          "callee": "image::Rgba",
+          "lineNumber": 750
+        },
+        {
+          "caller": "keeps_the_pages_own_shape_when_fitting_it_into_the_box",
+          "callee": "fit_drawn_page",
+          "lineNumber": 753
+        },
+        {
+          "caller": "hands_a_page_that_is_already_inside_the_box_on_untouched",
+          "callee": "image::RgbaImage::from_fn",
+          "lineNumber": 763
+        },
+        {
+          "caller": "hands_a_page_that_is_already_inside_the_box_on_untouched",
+          "callee": "image::Rgba",
+          "lineNumber": 763
+        },
+        {
+          "caller": "hands_a_page_that_is_already_inside_the_box_on_untouched",
+          "callee": "fit_drawn_page",
+          "lineNumber": 765
+        },
+        {
+          "caller": "hands_a_page_that_is_already_inside_the_box_on_untouched",
+          "callee": "image::DynamicImage::ImageRgba8",
+          "lineNumber": 765
+        },
+        {
+          "caller": "hands_a_page_that_is_already_inside_the_box_on_untouched",
+          "callee": "page.clone",
+          "lineNumber": 765
+        },
+        {
+          "caller": "reads_a_page_of_one_colour_as_a_page_with_nothing_on_it",
+          "callee": "image::RgbaImage::from_pixel",
+          "lineNumber": 782
+        },
+        {
+          "caller": "reads_a_page_of_one_colour_as_a_page_with_nothing_on_it",
+          "callee": "image::Rgba",
+          "lineNumber": 782
+        },
+        {
+          "caller": "reads_a_page_of_one_colour_as_a_page_with_nothing_on_it",
+          "callee": "image::RgbaImage::from_pixel",
+          "lineNumber": 788
+        },
+        {
+          "caller": "reads_a_page_of_one_colour_as_a_page_with_nothing_on_it",
+          "callee": "image::Rgba",
+          "lineNumber": 788
+        },
+        {
+          "caller": "reads_a_page_of_one_colour_as_a_page_with_nothing_on_it",
+          "callee": "flat.clone",
+          "lineNumber": 791
+        },
+        {
+          "caller": "reads_a_page_of_one_colour_as_a_page_with_nothing_on_it",
+          "callee": "lined.put_pixel",
+          "lineNumber": 792
+        },
+        {
+          "caller": "reads_a_page_of_one_colour_as_a_page_with_nothing_on_it",
+          "callee": "image::Rgba",
+          "lineNumber": 792
+        },
+        {
+          "caller": "pdf_engine_probe",
+          "callee": "std::env::var",
+          "lineNumber": 826
+        },
+        {
+          "caller": "pdf_engine_probe",
+          "callee": "initialize_apartment",
+          "lineNumber": 831
+        },
+        {
+          "caller": "pdf_engine_probe",
+          "callee": "list\n            .split(';')\n            .map(str::trim)\n            .filter(|path| !path.is_empty()).map",
+          "lineNumber": 834
+        },
+        {
+          "caller": "pdf_engine_probe",
+          "callee": "list\n            .split(';')\n            .map(str::trim).filter",
+          "lineNumber": 834
+        },
+        {
+          "caller": "pdf_engine_probe",
+          "callee": "list\n            .split(';').map",
+          "lineNumber": 834
+        },
+        {
+          "caller": "pdf_engine_probe",
+          "callee": "list.split",
+          "lineNumber": 834
+        },
+        {
+          "caller": "pdf_engine_probe",
+          "callee": "path.is_empty",
+          "lineNumber": 837
+        },
+        {
+          "caller": "pdf_engine_probe",
+          "callee": "render_first_page",
+          "lineNumber": 847
+        },
+        {
+          "caller": "pdf_engine_probe",
+          "callee": "render_book_page",
+          "lineNumber": 864
+        }
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 11,
+        "functionCount": 29,
+        "classCount": 2
+      }
+    },
+    {
+      "path": "src/shell/cloud_files.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 50,
+      "nonEmptyLines": 44,
+      "functions": [
+        {
+          "name": "needs_download",
+          "startLine": 36,
+          "endLine": 42,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "is_remote",
+          "startLine": 48,
+          "endLine": 50,
+          "params": [
+            "attributes"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "needs_download",
+          "line": 36,
+          "isDefault": false
+        },
+        {
+          "name": "is_remote",
+          "line": 48,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "needs_download",
+          "callee": "std::fs::metadata",
+          "lineNumber": 37
+        },
+        {
+          "caller": "needs_download",
+          "callee": "is_remote",
+          "lineNumber": 41
+        },
+        {
+          "caller": "needs_download",
+          "callee": "metadata.file_attributes",
+          "lineNumber": 41
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 2,
+        "functionCount": 2,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "src/shell/explorer_hook.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 141,
+      "nonEmptyLines": 136,
+      "metrics": {
+        "importCount": 6,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "src/shell/hook_thread.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 71,
+      "nonEmptyLines": 62,
+      "functions": [
+        {
+          "name": "spawn",
+          "startLine": 21,
+          "endLine": 37,
+          "params": [
+            "thread_id",
+            "hook",
+            "proc",
+            "what"
+          ]
+        },
+        {
+          "name": "request_stop",
+          "startLine": 40,
+          "endLine": 47,
+          "params": [
+            "thread_id"
+          ]
+        },
+        {
+          "name": "run",
+          "startLine": 49,
+          "endLine": 71,
+          "params": [
+            "thread_id",
+            "hook_id",
+            "proc",
+            "what"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "spawn",
+          "line": 21,
+          "isDefault": false
+        },
+        {
+          "name": "request_stop",
+          "line": 40,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "spawn",
+          "callee": "std::thread::spawn",
+          "lineNumber": 27
+        },
+        {
+          "caller": "spawn",
+          "callee": "run",
+          "lineNumber": 27
+        },
+        {
+          "caller": "spawn",
+          "callee": "thread_id.load",
+          "lineNumber": 30
+        },
+        {
+          "caller": "spawn",
+          "callee": "handle.is_finished",
+          "lineNumber": 30
+        },
+        {
+          "caller": "spawn",
+          "callee": "std::thread::sleep",
+          "lineNumber": 33
+        },
+        {
+          "caller": "spawn",
+          "callee": "Duration::from_millis",
+          "lineNumber": 33
+        },
+        {
+          "caller": "request_stop",
+          "callee": "thread_id.load",
+          "lineNumber": 41
+        },
+        {
+          "caller": "request_stop",
+          "callee": "PostThreadMessageW",
+          "lineNumber": 44
+        },
+        {
+          "caller": "request_stop",
+          "callee": "WPARAM",
+          "lineNumber": 44
+        },
+        {
+          "caller": "request_stop",
+          "callee": "LPARAM",
+          "lineNumber": 44
+        },
+        {
+          "caller": "run",
+          "callee": "thread_id.store",
+          "lineNumber": 51
+        },
+        {
+          "caller": "run",
+          "callee": "GetCurrentThreadId",
+          "lineNumber": 51
+        },
+        {
+          "caller": "run",
+          "callee": "GetModuleHandleW(None)\n            .map(|handle| HINSTANCE(handle.0)).unwrap_or_default",
+          "lineNumber": 53
+        },
+        {
+          "caller": "run",
+          "callee": "GetModuleHandleW(None).map",
+          "lineNumber": 53
+        },
+        {
+          "caller": "run",
+          "callee": "GetModuleHandleW",
+          "lineNumber": 53
+        },
+        {
+          "caller": "run",
+          "callee": "HINSTANCE",
+          "lineNumber": 54
+        },
+        {
+          "caller": "run",
+          "callee": "SetWindowsHookExW",
+          "lineNumber": 56
+        },
+        {
+          "caller": "run",
+          "callee": "thread_id.store",
+          "lineNumber": 60
+        },
+        {
+          "caller": "run",
+          "callee": "MSG::default",
+          "lineNumber": 65
+        },
+        {
+          "caller": "run",
+          "callee": "GetMessageW(&mut msg, None, 0, 0).as_bool",
+          "lineNumber": 66
+        },
+        {
+          "caller": "run",
+          "callee": "GetMessageW",
+          "lineNumber": 66
+        },
+        {
+          "caller": "run",
+          "callee": "UnhookWindowsHookEx",
+          "lineNumber": 68
+        },
+        {
+          "caller": "run",
+          "callee": "thread_id.store",
+          "lineNumber": 69
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 2,
+        "functionCount": 3,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "src/shell/key_input.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 667,
+      "nonEmptyLines": 614,
+      "functions": [
+        {
+          "name": "pin_key_command",
+          "startLine": 94,
+          "endLine": 99,
+          "params": [
+            "vk"
+          ]
+        },
+        {
+          "name": "publish_pin_key_owner",
+          "startLine": 106,
+          "endLine": 109,
+          "params": [
+            "owner",
+            "video"
+          ]
+        },
+        {
+          "name": "take_pin_key_presses",
+          "startLine": 132,
+          "endLine": 140,
+          "params": []
+        },
+        {
+          "name": "pin_key_press_is_a_command",
+          "startLine": 152,
+          "endLine": 154,
+          "params": [
+            "command",
+            "toggle_was_down"
+          ]
+        },
+        {
+          "name": "pin_key_message_acts",
+          "startLine": 170,
+          "endLine": 172,
+          "params": [
+            "message"
+          ]
+        },
+        {
+          "name": "pin_toggle_held_after",
+          "startLine": 189,
+          "endLine": 213,
+          "params": [
+            "command",
+            "message",
+            "owns_caret",
+            "toggle_was_down"
+          ]
+        },
+        {
+          "name": "pin_owns_caret",
+          "startLine": 240,
+          "endLine": 242,
+          "params": [
+            "owner",
+            "video",
+            "foreground"
+          ]
+        },
+        {
+          "name": "key_to_vk",
+          "startLine": 254,
+          "endLine": 305,
+          "params": [
+            "key"
+          ]
+        },
+        {
+          "name": "refresh",
+          "startLine": 312,
+          "endLine": 326,
+          "params": []
+        },
+        {
+          "name": "take_presses",
+          "startLine": 330,
+          "endLine": 332,
+          "params": []
+        },
+        {
+          "name": "spawn_key_watcher",
+          "startLine": 335,
+          "endLine": 342,
+          "params": []
+        },
+        {
+          "name": "request_stop",
+          "startLine": 345,
+          "endLine": 347,
+          "params": []
+        },
+        {
+          "name": "key_hook_proc",
+          "startLine": 349,
+          "endLine": 426,
+          "params": [
+            "code",
+            "wparam",
+            "lparam"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "pin_key_command",
+          "line": 94,
+          "isDefault": false
+        },
+        {
+          "name": "publish_pin_key_owner",
+          "line": 106,
+          "isDefault": false
+        },
+        {
+          "name": "take_pin_key_presses",
+          "line": 132,
+          "isDefault": false
+        },
+        {
+          "name": "pin_key_message_acts",
+          "line": 170,
+          "isDefault": false
+        },
+        {
+          "name": "key_to_vk",
+          "line": 254,
+          "isDefault": false
+        },
+        {
+          "name": "refresh",
+          "line": 312,
+          "isDefault": false
+        },
+        {
+          "name": "take_presses",
+          "line": 330,
+          "isDefault": false
+        },
+        {
+          "name": "spawn_key_watcher",
+          "line": 335,
+          "isDefault": false
+        },
+        {
+          "name": "request_stop",
+          "line": 345,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "pin_key_command",
+          "callee": "PIN_KEY_COMMANDS\n        .iter()\n        .find(|(key, _)| *key == vk).map",
+          "lineNumber": 95
+        },
+        {
+          "caller": "pin_key_command",
+          "callee": "PIN_KEY_COMMANDS\n        .iter().find",
+          "lineNumber": 95
+        },
+        {
+          "caller": "pin_key_command",
+          "callee": "PIN_KEY_COMMANDS.iter",
+          "lineNumber": 95
+        },
+        {
+          "caller": "publish_pin_key_owner",
+          "callee": "PIN_KEYS_OWNER.store",
+          "lineNumber": 107
+        },
+        {
+          "caller": "publish_pin_key_owner",
+          "callee": "PIN_KEYS_VIDEO.store",
+          "lineNumber": 108
+        },
+        {
+          "caller": "take_pin_key_presses",
+          "callee": "PIN_KEY_PRESSES\n        .iter()\n        .enumerate()\n        .flat_map(|(command, count)| {\n            std::iter::repeat_n(command as u8, count.swap(0, Ordering::AcqRel) as usize)\n        }).collect",
+          "lineNumber": 133
+        },
+        {
+          "caller": "take_pin_key_presses",
+          "callee": "PIN_KEY_PRESSES\n        .iter()\n        .enumerate().flat_map",
+          "lineNumber": 133
+        },
+        {
+          "caller": "take_pin_key_presses",
+          "callee": "PIN_KEY_PRESSES\n        .iter().enumerate",
+          "lineNumber": 133
+        },
+        {
+          "caller": "take_pin_key_presses",
+          "callee": "PIN_KEY_PRESSES.iter",
+          "lineNumber": 133
+        },
+        {
+          "caller": "take_pin_key_presses",
+          "callee": "std::iter::repeat_n",
+          "lineNumber": 137
+        },
+        {
+          "caller": "take_pin_key_presses",
+          "callee": "count.swap",
+          "lineNumber": 137
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "key.trim().to_ascii_lowercase",
+          "lineNumber": 255
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "key.trim",
+          "lineNumber": 255
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "key.as_str",
+          "lineNumber": 256
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "key.len",
+          "lineNumber": 283
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "key.as_bytes",
+          "lineNumber": 284
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "byte.is_ascii_alphabetic",
+          "lineNumber": 285
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "byte.to_ascii_uppercase",
+          "lineNumber": 286
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "byte.is_ascii_digit",
+          "lineNumber": 287
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "key.starts_with",
+          "lineNumber": 293
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "key[1..].parse::<i32>().ok",
+          "lineNumber": 294
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "key[1..].parse::<i32>",
+          "lineNumber": 294
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "(1..=24).contains",
+          "lineNumber": 295
+        },
+        {
+          "caller": "key_to_vk",
+          "callee": "Some",
+          "lineNumber": 304
+        },
+        {
+          "caller": "refresh",
+          "callee": "CONFIG\n        .lock()\n        .ok()\n        .filter(|config| config.pin_enabled)\n        .and_then(|config| key_to_vk(&config.pin_key)).unwrap_or",
+          "lineNumber": 313
+        },
+        {
+          "caller": "refresh",
+          "callee": "CONFIG\n        .lock()\n        .ok()\n        .filter(|config| config.pin_enabled).and_then",
+          "lineNumber": 313
+        },
+        {
+          "caller": "refresh",
+          "callee": "CONFIG\n        .lock()\n        .ok().filter",
+          "lineNumber": 313
+        },
+        {
+          "caller": "refresh",
+          "callee": "CONFIG\n        .lock().ok",
+          "lineNumber": 313
+        },
+        {
+          "caller": "refresh",
+          "callee": "CONFIG.lock",
+          "lineNumber": 313
+        },
+        {
+          "caller": "refresh",
+          "callee": "key_to_vk",
+          "lineNumber": 317
+        },
+        {
+          "caller": "refresh",
+          "callee": "PIN_VK.swap",
+          "lineNumber": 323
+        },
+        {
+          "caller": "refresh",
+          "callee": "PIN_DOWN.store",
+          "lineNumber": 324
+        },
+        {
+          "caller": "take_presses",
+          "callee": "PIN_PRESSES.swap",
+          "lineNumber": 331
+        },
+        {
+          "caller": "spawn_key_watcher",
+          "callee": "super::hook_thread::spawn",
+          "lineNumber": 336
+        },
+        {
+          "caller": "spawn_key_watcher",
+          "callee": "Some",
+          "lineNumber": 339
+        },
+        {
+          "caller": "request_stop",
+          "callee": "super::hook_thread::request_stop",
+          "lineNumber": 346
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "CallNextHookEx",
+          "lineNumber": 355
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "PIN_VK.load",
+          "lineNumber": 362
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "PIN_DOWN.swap",
+          "lineNumber": 367
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "PIN_PRESSES.fetch_add",
+          "lineNumber": 368
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "PIN_DOWN.store",
+          "lineNumber": 370
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "CallNextHookEx",
+          "lineNumber": 374
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "pin_key_command",
+          "lineNumber": 381
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "PIN_KEYS_OWNER.load",
+          "lineNumber": 382
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "PIN_KEYS_VIDEO.load",
+          "lineNumber": 383
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "pin_owns_caret",
+          "lineNumber": 384
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "GetForegroundWindow",
+          "lineNumber": 384
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "(command as usize == PIN_COMMAND_TOGGLE_PLAYBACK)\n            .then(|| PIN_KEY_DOWN.load(Ordering::Acquire)).unwrap_or",
+          "lineNumber": 390
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "(command as usize == PIN_COMMAND_TOGGLE_PLAYBACK).then",
+          "lineNumber": 390
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "PIN_KEY_DOWN.load",
+          "lineNumber": 391
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "pin_toggle_held_after",
+          "lineNumber": 394
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "PIN_KEY_DOWN.store",
+          "lineNumber": 396
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "pin_key_message_acts",
+          "lineNumber": 403
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "pin_key_press_is_a_command",
+          "lineNumber": 406
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "PIN_KEY_PRESSES[command as usize].fetch_add",
+          "lineNumber": 407
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "LRESULT",
+          "lineNumber": 409
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "LRESULT",
+          "lineNumber": 420
+        },
+        {
+          "caller": "key_hook_proc",
+          "callee": "CallNextHookEx",
+          "lineNumber": 425
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 9,
+        "functionCount": 13,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "src/shell/mod.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 7,
+      "nonEmptyLines": 7,
+      "metrics": {
+        "importCount": 7,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "src/shell/pin_navigation.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 981,
+      "nonEmptyLines": 887,
+      "functions": [
+        {
+          "name": "list_for",
+          "startLine": 58,
+          "endLine": 81,
+          "params": [
+            "current",
+            "anchor",
+            "config"
+          ]
+        },
+        {
+          "name": "wanted_category",
+          "startLine": 86,
+          "endLine": 88,
+          "params": [
+            "current",
+            "config"
+          ]
+        },
+        {
+          "name": "nav_mode_for",
+          "startLine": 94,
+          "endLine": 100,
+          "params": [
+            "wanted",
+            "config"
+          ]
+        },
+        {
+          "name": "walks",
+          "startLine": 104,
+          "endLine": 107,
+          "params": [
+            "kind",
+            "wanted",
+            "mode"
+          ]
+        },
+        {
+          "name": "step_to",
+          "startLine": 120,
+          "endLine": 139,
+          "params": [
+            "current",
+            "list",
+            "step"
+          ]
+        },
+        {
+          "name": "forget_folder",
+          "startLine": 150,
+          "endLine": 154,
+          "params": [
+            "folder"
+          ]
+        },
+        {
+          "name": "entries_for",
+          "startLine": 156,
+          "endLine": 186,
+          "params": [
+            "folder",
+            "config"
+          ]
+        },
+        {
+          "name": "scan",
+          "startLine": 194,
+          "endLine": 285,
+          "params": [
+            "folder",
+            "config",
+            "sort"
+          ]
+        },
+        {
+          "name": "order",
+          "startLine": 302,
+          "endLine": 347,
+          "params": [
+            "entries",
+            "sort"
+          ]
+        },
+        {
+          "name": "kind_rank",
+          "startLine": 353,
+          "endLine": 370,
+          "params": [
+            "kind"
+          ]
+        },
+        {
+          "name": "natural_cmp",
+          "startLine": 385,
+          "endLine": 396,
+          "params": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "name": "natural_str_cmp",
+          "startLine": 399,
+          "endLine": 447,
+          "params": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "name": "take_digits",
+          "startLine": 450,
+          "endLine": 460,
+          "params": [
+            "chars"
+          ]
+        },
+        {
+          "name": "same_file",
+          "startLine": 466,
+          "endLine": 468,
+          "params": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "name": "same_folder",
+          "startLine": 473,
+          "endLine": 479,
+          "params": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "NavEntry",
+          "startLine": 41,
+          "endLine": 45,
+          "methods": [],
+          "properties": [
+            "path",
+            "kind",
+            "facts"
+          ]
+        },
+        {
+          "name": "Facts",
+          "startLine": 290,
+          "endLine": 293,
+          "methods": [],
+          "properties": [
+            "modified",
+            "bytes"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "list_for",
+          "line": 58,
+          "isDefault": false
+        },
+        {
+          "name": "wanted_category",
+          "line": 86,
+          "isDefault": false
+        },
+        {
+          "name": "nav_mode_for",
+          "line": 94,
+          "isDefault": false
+        },
+        {
+          "name": "step_to",
+          "line": 120,
+          "isDefault": false
+        },
+        {
+          "name": "forget_folder",
+          "line": 150,
+          "isDefault": false
+        },
+        {
+          "name": "same_file",
+          "line": 466,
+          "isDefault": false
+        },
+        {
+          "name": "same_folder",
+          "line": 473,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "list_for",
+          "callee": "current.parent",
+          "lineNumber": 63
+        },
+        {
+          "caller": "list_for",
+          "callee": "entries_for",
+          "lineNumber": 65
+        },
+        {
+          "caller": "list_for",
+          "callee": "anchor.or_else",
+          "lineNumber": 71
+        },
+        {
+          "caller": "list_for",
+          "callee": "wanted_category",
+          "lineNumber": 71
+        },
+        {
+          "caller": "list_for",
+          "callee": "nav_mode_for",
+          "lineNumber": 72
+        },
+        {
+          "caller": "list_for",
+          "callee": "Some",
+          "lineNumber": 74
+        },
+        {
+          "caller": "list_for",
+          "callee": "entries\n            .iter()\n            .filter(|entry| walks(entry.kind, wanted, mode))\n            .map(|entry| entry.path.clone()).collect",
+          "lineNumber": 75
+        },
+        {
+          "caller": "list_for",
+          "callee": "entries\n            .iter()\n            .filter(|entry| walks(entry.kind, wanted, mode)).map",
+          "lineNumber": 75
+        },
+        {
+          "caller": "list_for",
+          "callee": "entries\n            .iter().filter",
+          "lineNumber": 75
+        },
+        {
+          "caller": "list_for",
+          "callee": "entries.iter",
+          "lineNumber": 75
+        },
+        {
+          "caller": "list_for",
+          "callee": "walks",
+          "lineNumber": 77
+        },
+        {
+          "caller": "list_for",
+          "callee": "entry.path.clone",
+          "lineNumber": 78
+        },
+        {
+          "caller": "wanted_category",
+          "callee": "routing::kind_of(current, config).map",
+          "lineNumber": 87
+        },
+        {
+          "caller": "wanted_category",
+          "callee": "routing::kind_of",
+          "lineNumber": 87
+        },
+        {
+          "caller": "walks",
+          "callee": "wanted.is_some",
+          "lineNumber": 106
+        },
+        {
+          "caller": "walks",
+          "callee": "Some",
+          "lineNumber": 106
+        },
+        {
+          "caller": "walks",
+          "callee": "routing::nav_category",
+          "lineNumber": 106
+        },
+        {
+          "caller": "step_to",
+          "callee": "list.is_empty",
+          "lineNumber": 121
+        },
+        {
+          "caller": "step_to",
+          "callee": "list.iter().position",
+          "lineNumber": 125
+        },
+        {
+          "caller": "step_to",
+          "callee": "list.iter",
+          "lineNumber": 125
+        },
+        {
+          "caller": "step_to",
+          "callee": "same_file",
+          "lineNumber": 125
+        },
+        {
+          "caller": "step_to",
+          "callee": "list.first().cloned",
+          "lineNumber": 127
+        },
+        {
+          "caller": "step_to",
+          "callee": "list.first",
+          "lineNumber": 127
+        },
+        {
+          "caller": "step_to",
+          "callee": "list.last().cloned",
+          "lineNumber": 129
+        },
+        {
+          "caller": "step_to",
+          "callee": "list.last",
+          "lineNumber": 129
+        },
+        {
+          "caller": "step_to",
+          "callee": "list.len",
+          "lineNumber": 133
+        },
+        {
+          "caller": "step_to",
+          "callee": "(from + step).rem_euclid",
+          "lineNumber": 137
+        },
+        {
+          "caller": "step_to",
+          "callee": "list.get(next as usize).cloned",
+          "lineNumber": 138
+        },
+        {
+          "caller": "step_to",
+          "callee": "list.get",
+          "lineNumber": 138
+        },
+        {
+          "caller": "forget_folder",
+          "callee": "FOLDERS.lock",
+          "lineNumber": 151
+        },
+        {
+          "caller": "forget_folder",
+          "callee": "folders.remove",
+          "lineNumber": 152
+        },
+        {
+          "caller": "entries_for",
+          "callee": "FOLDERS.lock",
+          "lineNumber": 157
+        },
+        {
+          "caller": "entries_for",
+          "callee": "folders.get",
+          "lineNumber": 158
+        },
+        {
+          "caller": "entries_for",
+          "callee": "Some",
+          "lineNumber": 159
+        },
+        {
+          "caller": "entries_for",
+          "callee": "cached.clone",
+          "lineNumber": 159
+        },
+        {
+          "caller": "entries_for",
+          "callee": "view_sort_of",
+          "lineNumber": 163
+        },
+        {
+          "caller": "entries_for",
+          "callee": "scan",
+          "lineNumber": 164
+        },
+        {
+          "caller": "entries_for",
+          "callee": "order",
+          "lineNumber": 167
+        },
+        {
+          "caller": "entries_for",
+          "callee": "FOLDERS.lock",
+          "lineNumber": 171
+        },
+        {
+          "caller": "entries_for",
+          "callee": "Some",
+          "lineNumber": 172
+        },
+        {
+          "caller": "entries_for",
+          "callee": "folders.len",
+          "lineNumber": 175
+        },
+        {
+          "caller": "entries_for",
+          "callee": "folders.keys().next().cloned",
+          "lineNumber": 179
+        },
+        {
+          "caller": "entries_for",
+          "callee": "folders.keys().next",
+          "lineNumber": 179
+        },
+        {
+          "caller": "entries_for",
+          "callee": "folders.keys",
+          "lineNumber": 179
+        },
+        {
+          "caller": "entries_for",
+          "callee": "folders.remove",
+          "lineNumber": 180
+        },
+        {
+          "caller": "entries_for",
+          "callee": "folders.insert",
+          "lineNumber": 183
+        },
+        {
+          "caller": "entries_for",
+          "callee": "folder.to_path_buf",
+          "lineNumber": 183
+        },
+        {
+          "caller": "entries_for",
+          "callee": "ordered.clone",
+          "lineNumber": 183
+        },
+        {
+          "caller": "entries_for",
+          "callee": "Some",
+          "lineNumber": 185
+        },
+        {
+          "caller": "scan",
+          "callee": "std::fs::read_dir",
+          "lineNumber": 195
+        },
+        {
+          "caller": "scan",
+          "callee": "Vec::new",
+          "lineNumber": 196
+        },
+        {
+          "caller": "scan",
+          "callee": "HashMap::new",
+          "lineNumber": 206
+        },
+        {
+          "caller": "scan",
+          "callee": "Vec::new",
+          "lineNumber": 207
+        },
+        {
+          "caller": "scan",
+          "callee": "read.flatten",
+          "lineNumber": 209
+        },
+        {
+          "caller": "scan",
+          "callee": "entry.file_type().is_ok_and",
+          "lineNumber": 215
+        },
+        {
+          "caller": "scan",
+          "callee": "entry.file_type",
+          "lineNumber": 215
+        },
+        {
+          "caller": "scan",
+          "callee": "kind.is_file",
+          "lineNumber": 215
+        },
+        {
+          "caller": "scan",
+          "callee": "entry.path",
+          "lineNumber": 219
+        },
+        {
+          "caller": "scan",
+          "callee": "routing::kind_of_name",
+          "lineNumber": 234
+        },
+        {
+          "caller": "scan",
+          "callee": "kind.enabled_in",
+          "lineNumber": 241
+        },
+        {
+          "caller": "scan",
+          "callee": "installed.get",
+          "lineNumber": 248
+        },
+        {
+          "caller": "scan",
+          "callee": "routing::readers_for(kind, &path).is_empty",
+          "lineNumber": 251
+        },
+        {
+          "caller": "scan",
+          "callee": "routing::readers_for",
+          "lineNumber": 251
+        },
+        {
+          "caller": "scan",
+          "callee": "installed.insert",
+          "lineNumber": 252
+        },
+        {
+          "caller": "scan",
+          "callee": "entry.metadata",
+          "lineNumber": 264
+        },
+        {
+          "caller": "scan",
+          "callee": "entries.push",
+          "lineNumber": 265
+        },
+        {
+          "caller": "scan",
+          "callee": "Some",
+          "lineNumber": 268
+        },
+        {
+          "caller": "scan",
+          "callee": "metadata.modified().ok",
+          "lineNumber": 269
+        },
+        {
+          "caller": "scan",
+          "callee": "metadata.modified",
+          "lineNumber": 269
+        },
+        {
+          "caller": "scan",
+          "callee": "metadata.len",
+          "lineNumber": 270
+        },
+        {
+          "caller": "scan",
+          "callee": "entries.push",
+          "lineNumber": 277
+        },
+        {
+          "caller": "order",
+          "callee": "sort.map(|sort| sort.key).unwrap_or",
+          "lineNumber": 303
+        },
+        {
+          "caller": "order",
+          "callee": "sort.map",
+          "lineNumber": 303
+        },
+        {
+          "caller": "order",
+          "callee": "sort.map(|sort| sort.descending).unwrap_or",
+          "lineNumber": 304
+        },
+        {
+          "caller": "order",
+          "callee": "sort.map",
+          "lineNumber": 304
+        },
+        {
+          "caller": "order",
+          "callee": "entries.sort_by",
+          "lineNumber": 306
+        },
+        {
+          "caller": "order",
+          "callee": "natural_cmp",
+          "lineNumber": 316
+        },
+        {
+          "caller": "order",
+          "callee": "a.facts.as_ref().and_then",
+          "lineNumber": 321
+        },
+        {
+          "caller": "order",
+          "callee": "a.facts.as_ref",
+          "lineNumber": 321
+        },
+        {
+          "caller": "order",
+          "callee": "b.facts.as_ref().and_then",
+          "lineNumber": 322
+        },
+        {
+          "caller": "order",
+          "callee": "b.facts.as_ref",
+          "lineNumber": 322
+        },
+        {
+          "caller": "order",
+          "callee": "left.cmp",
+          "lineNumber": 323
+        },
+        {
+          "caller": "order",
+          "callee": "a.facts.as_ref().map",
+          "lineNumber": 326
+        },
+        {
+          "caller": "order",
+          "callee": "a.facts.as_ref",
+          "lineNumber": 326
+        },
+        {
+          "caller": "order",
+          "callee": "b.facts.as_ref().map",
+          "lineNumber": 327
+        },
+        {
+          "caller": "order",
+          "callee": "b.facts.as_ref",
+          "lineNumber": 327
+        },
+        {
+          "caller": "order",
+          "callee": "left.cmp",
+          "lineNumber": 328
+        },
+        {
+          "caller": "order",
+          "callee": "kind_rank(a.kind).cmp",
+          "lineNumber": 334
+        },
+        {
+          "caller": "order",
+          "callee": "kind_rank",
+          "lineNumber": 334
+        },
+        {
+          "caller": "order",
+          "callee": "kind_rank",
+          "lineNumber": 334
+        },
+        {
+          "caller": "order",
+          "callee": "by_key.reverse",
+          "lineNumber": 343
+        },
+        {
+          "caller": "order",
+          "callee": "by_key.then_with",
+          "lineNumber": 345
+        },
+        {
+          "caller": "order",
+          "callee": "natural_cmp",
+          "lineNumber": 345
+        },
+        {
+          "caller": "natural_cmp",
+          "callee": "a\n        .file_name()\n        .and_then(|name| name.to_str()).unwrap_or_default",
+          "lineNumber": 386
+        },
+        {
+          "caller": "natural_cmp",
+          "callee": "a\n        .file_name().and_then",
+          "lineNumber": 386
+        },
+        {
+          "caller": "natural_cmp",
+          "callee": "a.file_name",
+          "lineNumber": 386
+        },
+        {
+          "caller": "natural_cmp",
+          "callee": "name.to_str",
+          "lineNumber": 388
+        },
+        {
+          "caller": "natural_cmp",
+          "callee": "b\n        .file_name()\n        .and_then(|name| name.to_str()).unwrap_or_default",
+          "lineNumber": 390
+        },
+        {
+          "caller": "natural_cmp",
+          "callee": "b\n        .file_name().and_then",
+          "lineNumber": 390
+        },
+        {
+          "caller": "natural_cmp",
+          "callee": "b.file_name",
+          "lineNumber": 390
+        },
+        {
+          "caller": "natural_cmp",
+          "callee": "name.to_str",
+          "lineNumber": 392
+        },
+        {
+          "caller": "natural_cmp",
+          "callee": "natural_str_cmp",
+          "lineNumber": 395
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "a.chars().peekable",
+          "lineNumber": 400
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "a.chars",
+          "lineNumber": 400
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "b.chars().peekable",
+          "lineNumber": 401
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "b.chars",
+          "lineNumber": 401
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "left.peek().copied",
+          "lineNumber": 404
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "left.peek",
+          "lineNumber": 404
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "right.peek().copied",
+          "lineNumber": 404
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "right.peek",
+          "lineNumber": 404
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "l.is_ascii_digit",
+          "lineNumber": 409
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "r.is_ascii_digit",
+          "lineNumber": 410
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "take_digits",
+          "lineNumber": 413
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "take_digits",
+          "lineNumber": 414
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "left_run.trim_start_matches",
+          "lineNumber": 417
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "right_run.trim_start_matches",
+          "lineNumber": 418
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "left_number\n                        .len()\n                        .cmp(&right_number.len()).then_with",
+          "lineNumber": 420
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "left_number\n                        .len().cmp",
+          "lineNumber": 420
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "left_number.len",
+          "lineNumber": 420
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "right_number.len",
+          "lineNumber": 422
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "left_number.cmp",
+          "lineNumber": 423
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "l\n                        .to_ascii_lowercase()\n                        .cmp(&r.to_ascii_lowercase()).then_with",
+          "lineNumber": 432
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "l\n                        .to_ascii_lowercase().cmp",
+          "lineNumber": 432
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "l.to_ascii_lowercase",
+          "lineNumber": 432
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "r.to_ascii_lowercase",
+          "lineNumber": 434
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "l.cmp",
+          "lineNumber": 435
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "left.next",
+          "lineNumber": 438
+        },
+        {
+          "caller": "natural_str_cmp",
+          "callee": "right.next",
+          "lineNumber": 439
+        },
+        {
+          "caller": "take_digits",
+          "callee": "String::new",
+          "lineNumber": 451
+        },
+        {
+          "caller": "take_digits",
+          "callee": "chars.peek().copied",
+          "lineNumber": 452
+        },
+        {
+          "caller": "take_digits",
+          "callee": "chars.peek",
+          "lineNumber": 452
+        },
+        {
+          "caller": "take_digits",
+          "callee": "c.is_ascii_digit",
+          "lineNumber": 453
+        },
+        {
+          "caller": "take_digits",
+          "callee": "run.push",
+          "lineNumber": 456
+        },
+        {
+          "caller": "take_digits",
+          "callee": "chars.next",
+          "lineNumber": 457
+        },
+        {
+          "caller": "same_file",
+          "callee": "plain_path(a).eq_ignore_ascii_case",
+          "lineNumber": 467
+        },
+        {
+          "caller": "same_file",
+          "callee": "plain_path",
+          "lineNumber": 467
+        },
+        {
+          "caller": "same_file",
+          "callee": "plain_path",
+          "lineNumber": 467
+        },
+        {
+          "caller": "same_folder",
+          "callee": "a.parent",
+          "lineNumber": 474
+        },
+        {
+          "caller": "same_folder",
+          "callee": "b.parent",
+          "lineNumber": 474
+        },
+        {
+          "caller": "same_folder",
+          "callee": "plain_path(x).eq_ignore_ascii_case",
+          "lineNumber": 475
+        },
+        {
+          "caller": "same_folder",
+          "callee": "plain_path",
+          "lineNumber": 475
+        },
+        {
+          "caller": "same_folder",
+          "callee": "plain_path",
+          "lineNumber": 475
+        },
+        {
+          "caller": "folder_named",
+          "callee": "std::env::temp_dir()\n            .join(\"rust-hover-preview-pin-navigation-tests\").join",
+          "lineNumber": 489
+        },
+        {
+          "caller": "folder_named",
+          "callee": "std::env::temp_dir().join",
+          "lineNumber": 489
+        },
+        {
+          "caller": "folder_named",
+          "callee": "std::env::temp_dir",
+          "lineNumber": 489
+        },
+        {
+          "caller": "folder_named",
+          "callee": "std::fs::remove_dir_all",
+          "lineNumber": 492
+        },
+        {
+          "caller": "folder_named",
+          "callee": "std::fs::create_dir_all(&folder).expect",
+          "lineNumber": 493
+        },
+        {
+          "caller": "folder_named",
+          "callee": "std::fs::create_dir_all",
+          "lineNumber": 493
+        },
+        {
+          "caller": "file_of",
+          "callee": "folder.join",
+          "lineNumber": 502
+        },
+        {
+          "caller": "file_of",
+          "callee": "std::fs::write(&path, vec![0u8; bytes]).expect",
+          "lineNumber": 503
+        },
+        {
+          "caller": "file_of",
+          "callee": "std::fs::write",
+          "lineNumber": 503
+        },
+        {
+          "caller": "names",
+          "callee": "list.iter()\n            .map(|path| {\n                path.file_name()\n                    .map(|name| name.to_string_lossy().into_owned())\n                    .unwrap_or_default()\n            }).collect",
+          "lineNumber": 509
+        },
+        {
+          "caller": "names",
+          "callee": "list.iter().map",
+          "lineNumber": 509
+        },
+        {
+          "caller": "names",
+          "callee": "list.iter",
+          "lineNumber": 509
+        },
+        {
+          "caller": "names",
+          "callee": "path.file_name()\n                    .map(|name| name.to_string_lossy().into_owned()).unwrap_or_default",
+          "lineNumber": 511
+        },
+        {
+          "caller": "names",
+          "callee": "path.file_name().map",
+          "lineNumber": 511
+        },
+        {
+          "caller": "names",
+          "callee": "path.file_name",
+          "lineNumber": 511
+        },
+        {
+          "caller": "names",
+          "callee": "name.to_string_lossy().into_owned",
+          "lineNumber": 512
+        },
+        {
+          "caller": "names",
+          "callee": "name.to_string_lossy",
+          "lineNumber": 512
+        },
+        {
+          "caller": "walked",
+          "callee": "walked_in",
+          "lineNumber": 522
+        },
+        {
+          "caller": "walked_in",
+          "callee": "FOLDERS.lock().expect(\"the walk's own map\").clear",
+          "lineNumber": 532
+        },
+        {
+          "caller": "walked_in",
+          "callee": "FOLDERS.lock().expect",
+          "lineNumber": 532
+        },
+        {
+          "caller": "walked_in",
+          "callee": "FOLDERS.lock",
+          "lineNumber": 532
+        },
+        {
+          "caller": "walked_in",
+          "callee": "AppConfig::default",
+          "lineNumber": 538
+        },
+        {
+          "caller": "walked_in",
+          "callee": "scan",
+          "lineNumber": 541
+        },
+        {
+          "caller": "walked_in",
+          "callee": "order",
+          "lineNumber": 543
+        },
+        {
+          "caller": "walked_in",
+          "callee": "wanted_category",
+          "lineNumber": 547
+        },
+        {
+          "caller": "walked_in",
+          "callee": "nav_mode_for",
+          "lineNumber": 548
+        },
+        {
+          "caller": "walked_in",
+          "callee": "ordered\n            .iter()\n            .filter(|entry| walks(entry.kind, wanted, mode))\n            .map(|entry| entry.path.clone()).collect",
+          "lineNumber": 549
+        },
+        {
+          "caller": "walked_in",
+          "callee": "ordered\n            .iter()\n            .filter(|entry| walks(entry.kind, wanted, mode)).map",
+          "lineNumber": 549
+        },
+        {
+          "caller": "walked_in",
+          "callee": "ordered\n            .iter().filter",
+          "lineNumber": 549
+        },
+        {
+          "caller": "walked_in",
+          "callee": "ordered.iter",
+          "lineNumber": 549
+        },
+        {
+          "caller": "walked_in",
+          "callee": "walks",
+          "lineNumber": 551
+        },
+        {
+          "caller": "walked_in",
+          "callee": "entry.path.clone",
+          "lineNumber": 552
+        },
+        {
+          "caller": "walked_in",
+          "callee": "names",
+          "lineNumber": 555
+        },
+        {
+          "caller": "entry",
+          "callee": "PathBuf::from",
+          "lineNumber": 563
+        },
+        {
+          "caller": "entry",
+          "callee": "Some",
+          "lineNumber": 565
+        },
+        {
+          "caller": "entry",
+          "callee": "Some",
+          "lineNumber": 566
+        },
+        {
+          "caller": "entry",
+          "callee": "std::time::Duration::from_secs",
+          "lineNumber": 567
+        },
+        {
+          "caller": "ordered",
+          "callee": "order",
+          "lineNumber": 577
+        },
+        {
+          "caller": "ordered",
+          "callee": "names",
+          "lineNumber": 578
+        },
+        {
+          "caller": "ordered",
+          "callee": "entries\n                .iter()\n                .map(|entry| entry.path.clone())\n                .collect::<Vec<PathBuf>>",
+          "lineNumber": 579
+        },
+        {
+          "caller": "ordered",
+          "callee": "entries\n                .iter().map",
+          "lineNumber": 579
+        },
+        {
+          "caller": "ordered",
+          "callee": "entries.iter",
+          "lineNumber": 579
+        },
+        {
+          "caller": "ordered",
+          "callee": "entry.path.clone",
+          "lineNumber": 581
+        },
+        {
+          "caller": "a_folder_of_numbered_names_is_walked_in_the_order_they_are_read_in",
+          "callee": "folder_named",
+          "lineNumber": 614
+        },
+        {
+          "caller": "a_folder_of_numbered_names_is_walked_in_the_order_they_are_read_in",
+          "callee": "file_of",
+          "lineNumber": 615
+        },
+        {
+          "caller": "a_folder_of_numbered_names_is_walked_in_the_order_they_are_read_in",
+          "callee": "file_of",
+          "lineNumber": 616
+        },
+        {
+          "caller": "a_folder_of_numbered_names_is_walked_in_the_order_they_are_read_in",
+          "callee": "file_of",
+          "lineNumber": 617
+        },
+        {
+          "caller": "a_folder_of_numbered_names_is_walked_in_the_order_they_are_read_in",
+          "callee": "walked",
+          "lineNumber": 619
+        },
+        {
+          "caller": "a_folder_of_numbered_names_is_walked_in_the_order_they_are_read_in",
+          "callee": "folder.join",
+          "lineNumber": 619
+        },
+        {
+          "caller": "a_folder_of_numbered_names_is_walked_in_the_order_they_are_read_in",
+          "callee": "by_byte.sort",
+          "lineNumber": 627
+        },
+        {
+          "caller": "every_column_a_listing_is_sorted_by_is_reproduced_both_ways_round",
+          "callee": "ordered",
+          "lineNumber": 677
+        },
+        {
+          "caller": "every_column_a_listing_is_sorted_by_is_reproduced_both_ways_round",
+          "callee": "entries",
+          "lineNumber": 678
+        },
+        {
+          "caller": "every_column_a_listing_is_sorted_by_is_reproduced_both_ways_round",
+          "callee": "Some",
+          "lineNumber": 679
+        },
+        {
+          "caller": "every_column_a_listing_is_sorted_by_is_reproduced_both_ways_round",
+          "callee": "ordered",
+          "lineNumber": 684
+        },
+        {
+          "caller": "every_column_a_listing_is_sorted_by_is_reproduced_both_ways_round",
+          "callee": "entries",
+          "lineNumber": 685
+        },
+        {
+          "caller": "every_column_a_listing_is_sorted_by_is_reproduced_both_ways_round",
+          "callee": "Some",
+          "lineNumber": 686
+        },
+        {
+          "caller": "every_column_a_listing_is_sorted_by_is_reproduced_both_ways_round",
+          "callee": "up.clone",
+          "lineNumber": 698
+        },
+        {
+          "caller": "every_column_a_listing_is_sorted_by_is_reproduced_both_ways_round",
+          "callee": "reversed.reverse",
+          "lineNumber": 699
+        },
+        {
+          "caller": "a_listing_with_no_order_to_copy_is_walked_in_name_order",
+          "callee": "folder_named",
+          "lineNumber": 744
+        },
+        {
+          "caller": "a_listing_with_no_order_to_copy_is_walked_in_name_order",
+          "callee": "file_of",
+          "lineNumber": 745
+        },
+        {
+          "caller": "a_listing_with_no_order_to_copy_is_walked_in_name_order",
+          "callee": "file_of",
+          "lineNumber": 746
+        },
+        {
+          "caller": "a_listing_with_no_order_to_copy_is_walked_in_name_order",
+          "callee": "file_of",
+          "lineNumber": 747
+        },
+        {
+          "caller": "the_two_answers_narrow_the_same_walk_by_different_rules",
+          "callee": "folder_named",
+          "lineNumber": 779
+        },
+        {
+          "caller": "the_two_answers_narrow_the_same_walk_by_different_rules",
+          "callee": "file_of",
+          "lineNumber": 780
+        },
+        {
+          "caller": "the_two_answers_narrow_the_same_walk_by_different_rules",
+          "callee": "file_of",
+          "lineNumber": 781
+        },
+        {
+          "caller": "the_two_answers_narrow_the_same_walk_by_different_rules",
+          "callee": "file_of",
+          "lineNumber": 782
+        },
+        {
+          "caller": "the_two_answers_narrow_the_same_walk_by_different_rules",
+          "callee": "file_of",
+          "lineNumber": 783
+        },
+        {
+          "caller": "the_two_answers_narrow_the_same_walk_by_different_rules",
+          "callee": "folder.join",
+          "lineNumber": 785
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "folder_named",
+          "lineNumber": 805
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "file_of",
+          "lineNumber": 806
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "file_of",
+          "lineNumber": 807
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "FOLDERS.lock().expect(\"the walk's own map\").clear",
+          "lineNumber": 809
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "FOLDERS.lock().expect",
+          "lineNumber": 809
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "FOLDERS.lock",
+          "lineNumber": 809
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "Default::default",
+          "lineNumber": 813
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "folder.join",
+          "lineNumber": 815
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "list_for(&current, None, &config)\n            .map(|list| names(&list)).unwrap_or_default",
+          "lineNumber": 817
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "list_for(&current, None, &config).map",
+          "lineNumber": 817
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "list_for",
+          "lineNumber": 817
+        },
+        {
+          "caller": "a_kind_the_tray_has_switched_off_is_not_stepped_onto",
+          "callee": "names",
+          "lineNumber": 818
+        },
+        {
+          "caller": "a_file_nothing_on_this_machine_can_be_drawn_with_is_not_stepped_onto",
+          "callee": "folder_named",
+          "lineNumber": 830
+        },
+        {
+          "caller": "a_file_nothing_on_this_machine_can_be_drawn_with_is_not_stepped_onto",
+          "callee": "file_of",
+          "lineNumber": 831
+        },
+        {
+          "caller": "a_file_nothing_on_this_machine_can_be_drawn_with_is_not_stepped_onto",
+          "callee": "file_of",
+          "lineNumber": 832
+        },
+        {
+          "caller": "a_file_nothing_on_this_machine_can_be_drawn_with_is_not_stepped_onto",
+          "callee": "file_of",
+          "lineNumber": 833
+        },
+        {
+          "caller": "a_file_nothing_on_this_machine_can_be_drawn_with_is_not_stepped_onto",
+          "callee": "file_of",
+          "lineNumber": 834
+        },
+        {
+          "caller": "a_file_nothing_on_this_machine_can_be_drawn_with_is_not_stepped_onto",
+          "callee": "walked",
+          "lineNumber": 836
+        },
+        {
+          "caller": "a_file_nothing_on_this_machine_can_be_drawn_with_is_not_stepped_onto",
+          "callee": "folder.join",
+          "lineNumber": 836
+        },
+        {
+          "caller": "a_folder_is_walked_round_and_both_ends_come_back_to_the_other",
+          "callee": "folder_named",
+          "lineNumber": 864
+        },
+        {
+          "caller": "a_folder_is_walked_round_and_both_ends_come_back_to_the_other",
+          "callee": "file_of",
+          "lineNumber": 865
+        },
+        {
+          "caller": "a_folder_is_walked_round_and_both_ends_come_back_to_the_other",
+          "callee": "file_of",
+          "lineNumber": 866
+        },
+        {
+          "caller": "a_folder_is_walked_round_and_both_ends_come_back_to_the_other",
+          "callee": "file_of",
+          "lineNumber": 867
+        },
+        {
+          "caller": "a_folder_is_walked_round_and_both_ends_come_back_to_the_other",
+          "callee": "folder.join",
+          "lineNumber": 868
+        },
+        {
+          "caller": "a_folder_is_walked_round_and_both_ends_come_back_to_the_other",
+          "callee": "walked(&folder, &b, PinNavFileTypes::All)\n            .into_iter()\n            .map(|name| folder.join(name))\n            .collect::<Vec<PathBuf>>",
+          "lineNumber": 870
+        },
+        {
+          "caller": "a_folder_is_walked_round_and_both_ends_come_back_to_the_other",
+          "callee": "walked(&folder, &b, PinNavFileTypes::All)\n            .into_iter().map",
+          "lineNumber": 870
+        },
+        {
+          "caller": "a_folder_is_walked_round_and_both_ends_come_back_to_the_other",
+          "callee": "walked(&folder, &b, PinNavFileTypes::All).into_iter",
+          "lineNumber": 870
+        },
+        {
+          "caller": "a_folder_is_walked_round_and_both_ends_come_back_to_the_other",
+          "callee": "walked",
+          "lineNumber": 870
+        },
+        {
+          "caller": "a_folder_is_walked_round_and_both_ends_come_back_to_the_other",
+          "callee": "folder.join",
+          "lineNumber": 872
+        },
+        {
+          "caller": "a_file_the_walk_does_not_have_steps_on_from_the_end_it_points_at",
+          "callee": "folder_named",
+          "lineNumber": 902
+        },
+        {
+          "caller": "a_file_the_walk_does_not_have_steps_on_from_the_end_it_points_at",
+          "callee": "file_of",
+          "lineNumber": 903
+        },
+        {
+          "caller": "a_file_the_walk_does_not_have_steps_on_from_the_end_it_points_at",
+          "callee": "file_of",
+          "lineNumber": 904
+        },
+        {
+          "caller": "a_file_the_walk_does_not_have_steps_on_from_the_end_it_points_at",
+          "callee": "file_of",
+          "lineNumber": 905
+        },
+        {
+          "caller": "a_file_the_walk_does_not_have_steps_on_from_the_end_it_points_at",
+          "callee": "file_of",
+          "lineNumber": 908
+        },
+        {
+          "caller": "a_verbatim_path_is_the_same_file_as_the_plain_spelling_of_it",
+          "callee": "Path::new",
+          "lineNumber": 938
+        },
+        {
+          "caller": "a_verbatim_path_is_the_same_file_as_the_plain_spelling_of_it",
+          "callee": "Path::new",
+          "lineNumber": 939
+        }
+      ],
+      "metrics": {
+        "importCount": 4,
+        "exportCount": 7,
+        "functionCount": 15,
+        "classCount": 2
+      }
+    },
+    {
+      "path": "src/shell/tray.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 105,
+      "nonEmptyLines": 101,
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "src/shell/tray/event_loop.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 796,
+      "nonEmptyLines": 774,
+      "functions": [
+        {
+          "name": "tray_window_proc",
+          "startLine": 130,
+          "endLine": 623,
+          "params": [
+            "hwnd",
+            "msg",
+            "wparam",
+            "lparam"
+          ]
+        },
+        {
+          "name": "add_tray_icon",
+          "startLine": 625,
+          "endLine": 681,
+          "params": [
+            "hwnd"
+          ]
+        },
+        {
+          "name": "remove_tray_icon",
+          "startLine": 683,
+          "endLine": 691,
+          "params": [
+            "hwnd"
+          ]
+        },
+        {
+          "name": "run_tray",
+          "startLine": 701,
+          "endLine": 796,
+          "params": [
+            "trace"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "run_tray",
+          "line": 701,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "tray_window_proc",
+          "callee": "catch_unwind(|| {\n        match msg {\n            _ if TASKBAR_CREATED != 0 && msg == TASKBAR_CREATED => {\n                // Explorer (taskbar) restarted; re-add tray icon\n                remove_tray_icon(hwnd);\n                let _ = add_tray_icon(hwnd);\n                // The Shell objects the Explorer hook resolves items through are served\n                // by explorer.exe, so the ones it holds are proxies into the process\n                // that is gone: it has to build them again, or nothing resolves until\n                // the app itself is restarted.\n                explorer_hook::note_explorer_restart();\n                LRESULT(0)\n            }\n            WM_TRAYICON => {\n                let event = lparam.0 as u32;\n                // While one of the app's dialogs is on screen the tray answers nothing: a menu\n                // opened over it would be a second way into the same question, and a dialog —\n                // which owns no window of this app's — is not modal to anything.\n                if (event == WM_RBUTTONUP || event == WM_LBUTTONUP) && !dialogs::is_confirming() {\n                    show_context_menu(hwnd);\n                }\n                LRESULT(0)\n            }\n            WM_COMMAND => {\n                let cmd = (wparam.0 & 0xFFFF) as u16;\n                match cmd {\n                    ID_TRAY_EXIT => {\n                        RUNNING.store(false, Ordering::SeqCst);\n                        PostQuitMessage(0);\n                    }\n                    ID_TRAY_STARTUP => {\n                        toggle_startup();\n                    }\n                    ID_TRAY_UPDATE => {\n                        // The update row answers three ways, and only one of them ends this app:\n                        // `Auto` is the installer, which runs silently, replaces this app and\n                        // starts it again, so the app ends itself here rather than waiting to be\n                        // terminated by the installer it just started; `Manual` is the release\n                        // page opened in the user's own browser; `Cancel` is a click that does\n                        // nothing and a menu that stays as it was.\n                        match updates::ask() {\n                            updates::Answer::Auto => {\n                                if updates::install() {\n                                    RUNNING.store(false, Ordering::SeqCst);\n                                    PostQuitMessage(0);\n                                }\n                            }\n                            updates::Answer::Manual => updates::open_release_page(),\n                            updates::Answer::Cancel => {}\n                        }\n                    }\n                    // The `System → Check for Updates` switch: whether the app asks\n                    // GitHub for a newer release on its own. What a check finds is\n                    // offered on the row above this menu's `System` submenu, and\n                    // nowhere at all where there is nothing to put on.\n                    ID_TRAY_CHECK_UPDATES => {\n                        toggle_check_for_updates();\n                    }\n                    ID_TRAY_ENABLE => {\n                        toggle_preview_enabled();\n                    }\n                    ID_TRAY_PIN => {\n                        toggle_pin_enabled();\n                    }\n                    ID_TRAY_PIN_UPDATE => {\n                        toggle_pin_update_enabled();\n                    }\n                    ID_TRAY_PIN_UPDATE_HOVER => {\n                        toggle_pin_update_on_hover();\n                    }\n                    ID_TRAY_PIN_PAUSE_AUDIO => {\n                        toggle_pin_pause_audio();\n                    }\n                    ID_TRAY_PIN_PAUSE_VIDEO => {\n                        toggle_pin_pause_video();\n                    }\n                    ID_TRAY_PIN_MINIMIZE_BUBBLE => set_pin_minimize_to(PinMinimizeTo::Bubble),\n                    ID_TRAY_PIN_MINIMIZE_TASKBAR => set_pin_minimize_to(PinMinimizeTo::Taskbar),\n                    ID_TRAY_PIN_NAV_VIDEO_ALL => set_pin_nav_video(PinNavFileTypes::All),\n                    ID_TRAY_PIN_NAV_VIDEO_CATEGORY => set_pin_nav_video(PinNavFileTypes::Category),\n                    ID_TRAY_PIN_NAV_AUDIO_ALL => set_pin_nav_audio(PinNavFileTypes::All),\n                    ID_TRAY_PIN_NAV_AUDIO_CATEGORY => set_pin_nav_audio(PinNavFileTypes::Category),\n                    ID_TRAY_PIN_NAV_OTHERS_ALL => set_pin_nav_others(PinNavFileTypes::All),\n                    ID_TRAY_PIN_NAV_OTHERS_CATEGORY => {\n                        set_pin_nav_others(PinNavFileTypes::Category)\n                    }\n                    ID_TRAY_TRIGGER_DISABLE => set_trigger_key_mode(TriggerKeyMode::Disable),\n                    ID_TRAY_TRIGGER_ENABLE => set_trigger_key_mode(TriggerKeyMode::Enable),\n                    ID_TRAY_TRIGGER_ENABLED => toggle_trigger_key_enabled(),\n                    ID_TRAY_TRIGGER_AFFECT_PIN => toggle_trigger_key_affect_pin_mode(),\n                    ID_TRAY_PRIORITIZE_KEYBOARD => toggle_prioritize_keyboard(),\n                    ID_TRAY_ENGINE_OFFICE_MS => set_office_engine(OfficeEngine::MicrosoftOffice),\n                    ID_TRAY_ENGINE_OFFICE_LIBRE => set_office_engine(OfficeEngine::LibreOffice),\n                    ID_TRAY_VIDEO_ENGINE_FALLBACK => toggle_video_engine_fallback(),\n                    // Which engine plays a video, by the position it was listed at: the\n                    // `Video Engine` submenu is the same base-plus-position arrangement every value\n                    // menu here is.\n                    cmd if (ID_TRAY_VIDEO_ENGINE_BASE\n                        ..ID_TRAY_VIDEO_ENGINE_BASE + VIDEO_ENGINE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_video_engine(\n                            VIDEO_ENGINE_CHOICES[(cmd - ID_TRAY_VIDEO_ENGINE_BASE) as usize],\n                        )\n                    }\n                    // A backdrop, by the position it was listed at: an image's or a\n                    // document's, whichever half of the `Background` submenu it was in.\n                    cmd if (ID_TRAY_IMAGE_BACKGROUND_BASE\n                        ..ID_TRAY_IMAGE_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_image_background(cmd - ID_TRAY_IMAGE_BACKGROUND_BASE)\n                    }\n                    cmd if (ID_TRAY_FONT_BACKGROUND_BASE\n                        ..ID_TRAY_FONT_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_font_background(cmd - ID_TRAY_FONT_BACKGROUND_BASE)\n                    }\n                    cmd if (ID_TRAY_DDS_BACKGROUND_BASE\n                        ..ID_TRAY_DDS_BACKGROUND_BASE + DDS_BACKGROUND_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_dds_background(cmd - ID_TRAY_DDS_BACKGROUND_BASE)\n                    }\n                    cmd if (ID_TRAY_DESIGN_BACKGROUND_BASE\n                        ..ID_TRAY_DESIGN_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_design_background(cmd - ID_TRAY_DESIGN_BACKGROUND_BASE)\n                    }\n                    cmd if (ID_TRAY_VECTOR_BACKGROUND_BASE\n                        ..ID_TRAY_VECTOR_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_vector_background(cmd - ID_TRAY_VECTOR_BACKGROUND_BASE)\n                    }\n                    cmd if (ID_TRAY_HTML_BACKGROUND_BASE\n                        ..ID_TRAY_HTML_BACKGROUND_BASE + HTML_BACKGROUND_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_html_background(cmd - ID_TRAY_HTML_BACKGROUND_BASE)\n                    }\n                    // The row above the levels of each half of the `Volume` submenu, the sound's and\n                    // the video's: switches rather than levels, and read where a player is started\n                    // rather than here.\n                    ID_TRAY_NORMALIZE_VOLUME => toggle_normalize_volume(),\n                    ID_TRAY_NORMALIZE_VIDEO_VOLUME => toggle_normalize_video_volume(),\n                    // And the row under each of those: whether a level turned on a pin is the level\n                    // the next preview is played at, which is the same bargain — read by the next\n                    // player rather than by anything on screen.\n                    ID_TRAY_REMEMBER_VOLUME => toggle_remember_audio_volume(),\n                    ID_TRAY_REMEMBER_VIDEO_VOLUME => toggle_remember_video_volume(),\n                    // The row under `Preview Settings → Video`'s `Volume`: whether a\n                    // film's own subtitle tracks are probed for and copied out at all,\n                    // which is read where a probe runs and where a player is started\n                    // rather than by anything on screen.\n                    ID_TRAY_VIDEO_SUBTITLES => toggle_video_subtitles(),\n                    // Whether a hovered film or sound goes round at the end of it: the\n                    // `Loop` rows, one per kind.\n                    ID_TRAY_VIDEO_LOOP => toggle_loop(true),\n                    ID_TRAY_AUDIO_LOOP => toggle_loop(false),\n                    // Whether a *pinned* film, sound or picture takes the next file of its walk at\n                    // random: the `Shuffle` rows, one per kind, which its end of file and its\n                    // own next key and button all ask.\n                    ID_TRAY_VIDEO_SHUFFLE => toggle_pin_shuffle(PinShuffle::Video),\n                    ID_TRAY_AUDIO_SHUFFLE => toggle_pin_shuffle(PinShuffle::Audio),\n                    ID_TRAY_IMAGE_SHUFFLE => toggle_pin_shuffle(PinShuffle::Image),\n                    // What a pinned film or sound does at the end of it, by the position\n                    // the end of file was listed at — the film's own range and the sound's.\n                    cmd if (ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE\n                        ..ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE\n                            + PIN_END_OF_FILE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_pin_end_of_file(cmd - ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE, true)\n                    }\n                    cmd if (ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE\n                        ..ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE\n                            + PIN_END_OF_FILE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_pin_end_of_file(cmd - ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, false)\n                    }\n                    // A level of either half of the `Volume` rows inside `Preview Settings →\n                    // Video` and `→ Audio`, by the position it was\n                    // listed at. The two halves offer the same levels, so one table answers for\n                    // both and each range is what says which setting was meant.\n                    cmd if (ID_TRAY_VIDEO_VOLUME_BASE\n                        ..ID_TRAY_VIDEO_VOLUME_BASE + VOLUME_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_video_volume(cmd - ID_TRAY_VIDEO_VOLUME_BASE)\n                    }\n                    cmd if (ID_TRAY_AUDIO_VOLUME_BASE\n                        ..ID_TRAY_AUDIO_VOLUME_BASE + VOLUME_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_audio_volume(cmd - ID_TRAY_AUDIO_VOLUME_BASE)\n                    }\n                    // And where a sound starts, by the position the way it names was listed at —\n                    // its own range, below both halves of the volume in the menu and past them\n                    // here (see `AUDIO_SEEK_CHOICES`).\n                    cmd if (ID_TRAY_AUDIO_SEEK_BASE\n                        ..ID_TRAY_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_audio_seek(cmd - ID_TRAY_AUDIO_SEEK_BASE)\n                    }\n                    // And the pin's own answer to the same question, from the\n                    // range directly below the hover's: where a *pinned* sound\n                    // starts is the pin's setting's to decide (see\n                    // `pin_mode_audio_seek`).\n                    cmd if (ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE\n                        ..ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_pin_mode_audio_seek(cmd - ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE)\n                    }\n                    ID_TRAY_POSITION_FOLLOW => set_follow_cursor(true),\n                    ID_TRAY_POSITION_BEST => set_follow_cursor(false),\n                    // A way of keeping a preview off the hovered item, by the position it\n                    // was listed at.\n                    cmd if (ID_TRAY_AVOID_BASE\n                        ..ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_avoid_mode(cmd - ID_TRAY_AVOID_BASE)\n                    }\n                    // A delay of one of the three `Timing` submenus, by the position it was\n                    // listed at. The three offer the same delays, so one table answers for\n                    // all of them and each range is what says which setting was meant.\n                    cmd if (ID_TRAY_DELAY_BASE\n                        ..ID_TRAY_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_hover_delay(cmd - ID_TRAY_DELAY_BASE)\n                    }\n                    cmd if (ID_TRAY_REHOVER_DELAY_BASE\n                        ..ID_TRAY_REHOVER_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_same_file_rehover_delay(cmd - ID_TRAY_REHOVER_DELAY_BASE)\n                    }\n                    cmd if (ID_TRAY_SETTLING_DELAY_BASE\n                        ..ID_TRAY_SETTLING_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_settling_delay(cmd - ID_TRAY_SETTLING_DELAY_BASE)\n                    }\n                    // How often the loop looks at the pointer's world, by the position its\n                    // item was listed at: the one command here that sets the app's own rate\n                    // rather than a delay a hover waits out.\n                    cmd if (ID_TRAY_TICK_BASE\n                        ..ID_TRAY_TICK_BASE + TICK_CHOICES_MS.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_tick_ms(cmd - ID_TRAY_TICK_BASE)\n                    }\n                    ID_TRAY_OPEN_CONFIG => open_config_file(),\n                    ID_TRAY_RESET_SETTINGS => reset_settings_from_tray(),\n                    ID_TRAY_RESET_LISTS => reset_lists_from_tray(),\n                    // A row of the `Codecs` submenu, by the position it was listed at. Only the\n                    // rows this machine is missing and has a page for carry an id, and the row an\n                    // id stands for is read again from the machine rather than kept from the menu\n                    // build, so nothing has to be remembered between the click and the row (see\n                    // `open_codec_page`).\n                    cmd if (ID_TRAY_CODEC_BASE..ID_TRAY_CODEC_BASE + CODEC_COMMANDS)\n                        .contains(&cmd) =>\n                    {\n                        open_codec_page(cmd - ID_TRAY_CODEC_BASE)\n                    }\n                    // An mpv in the `Codecs → Videos → MPV` submenu, by the position its install\n                    // was listed at: the installs are re-enumerated in the same order the menu\n                    // listed them, so the id means the same thing on both sides (see\n                    // `set_mpv_path`).\n                    cmd if (ID_TRAY_MPV_BASE..ID_TRAY_MPV_BASE + MPV_COMMANDS).contains(&cmd) => {\n                        set_mpv_path(cmd - ID_TRAY_MPV_BASE)\n                    }\n                    // How large a picture is drawn, by the position its item was listed at.\n                    cmd if (ID_TRAY_SCALE_BASE\n                        ..ID_TRAY_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_preview_scale(cmd - ID_TRAY_SCALE_BASE)\n                    }\n                    ID_TRAY_THEME_LIGHT => set_theme(TextTheme::Light),\n                    ID_TRAY_THEME_DARK => set_theme(TextTheme::Dark),\n                    // The `theme` folder's items, by the position the submenu gave\n                    // them rather than any position in the folder.\n                    cmd if (ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE).contains(&cmd) => {\n                        set_theme_from_menu((cmd - ID_TRAY_THEME_CUSTOM_BASE) as usize)\n                    }\n                    ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),\n                    ID_TRAY_MARKDOWN_SOURCE => set_markdown_mode(MarkdownMode::Source),\n                    ID_TRAY_RENDER_HTML => toggle_render_html(),\n                    ID_TRAY_TYPE_IMAGES => toggle_preview_type(PreviewType::Images),\n                    ID_TRAY_TYPE_VIDEOS => toggle_preview_type(PreviewType::Videos),\n                    ID_TRAY_TYPE_AUDIO => toggle_preview_type(PreviewType::Audio),\n                    ID_TRAY_TYPE_TEXT => toggle_preview_type(PreviewType::Text),\n                    ID_TRAY_TYPE_EBOOK => toggle_preview_type(PreviewType::Ebook),\n                    ID_TRAY_TYPE_ARCHIVES => toggle_preview_type(PreviewType::Archives),\n                    ID_TRAY_TYPE_DOCUMENT => toggle_preview_type(PreviewType::Document),\n                    ID_TRAY_TYPE_FONTS => toggle_preview_type(PreviewType::Fonts),\n                    ID_TRAY_TYPE_DESIGN => toggle_preview_type(PreviewType::Design),\n                    ID_TRAY_TYPE_VECTOR => toggle_preview_type(PreviewType::Vector),\n                    // An Office engine's idle time, by the position it was listed at.\n                    cmd if (ID_TRAY_ENGINE_IDLE_BASE\n                        ..ID_TRAY_ENGINE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_office_engine_idle(cmd - ID_TRAY_ENGINE_IDLE_BASE)\n                    }\n                    // The browser engine's idle time, the same way.\n                    cmd if (ID_TRAY_WEBVIEW_IDLE_BASE\n                        ..ID_TRAY_WEBVIEW_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_webview_idle(cmd - ID_TRAY_WEBVIEW_IDLE_BASE)\n                    }\n                    // And the render engine's, in the range of its own.\n                    cmd if (ID_TRAY_LIBREOFFICE_IDLE_BASE\n                        ..ID_TRAY_LIBREOFFICE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_libreoffice_idle(cmd - ID_TRAY_LIBREOFFICE_IDLE_BASE)\n                    }\n                    // An away time for the `Away Timer`, by the position it was listed at.\n                    cmd if (ID_TRAY_AFK_TIMER_BASE\n                        ..ID_TRAY_AFK_TIMER_BASE + AFK_TIMER_CHOICES_SECS.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_afk_timer(cmd - ID_TRAY_AFK_TIMER_BASE)\n                    }\n                    // A `Persistent` toggle, by the submenu it heads: the Office engines, then\n                    // the render engine's, then the browser's.\n                    cmd if (ID_TRAY_ENGINE_PERSISTENT_BASE..ID_TRAY_ENGINE_PERSISTENT_BASE + 3)\n                        .contains(&cmd) =>\n                    {\n                        toggle_engine_persistent(cmd - ID_TRAY_ENGINE_PERSISTENT_BASE)\n                    }\n                    // Whether a video is decoded on the graphics card, which is the\n                    // `Hardware Acceleration (Video)` row of the `Performance`\n                    // submenu and so has an id of its own rather than\n                    // a range.\n                    ID_TRAY_VIDEO_HW_ACCEL => toggle_video_hw_accel(),\n                    // A cache size, by the position it was listed at. Each cache is bounded by the\n                    // sizes it offers rather than by the base of the next one, so an item of a\n                    // submenu added past these is not read as a cache size.\n                    cmd if (ID_TRAY_IMAGE_CACHE_BASE\n                        ..ID_TRAY_IMAGE_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_image_cache_mb(cmd - ID_TRAY_IMAGE_CACHE_BASE)\n                    }\n                    cmd if (ID_TRAY_DOCUMENT_CACHE_BASE\n                        ..ID_TRAY_DOCUMENT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_document_cache_mb(cmd - ID_TRAY_DOCUMENT_CACHE_BASE)\n                    }\n                    cmd if (ID_TRAY_IMAGE_DISK_CACHE_BASE\n                        ..ID_TRAY_IMAGE_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_image_disk_cache_mb(cmd - ID_TRAY_IMAGE_DISK_CACHE_BASE)\n                    }\n                    cmd if (ID_TRAY_GENERAL_DISK_CACHE_BASE\n                        ..ID_TRAY_GENERAL_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_general_disk_cache_mb(cmd - ID_TRAY_GENERAL_DISK_CACHE_BASE)\n                    }\n                    // The ceiling one hover is answered under, by the position it was\n                    // listed at.\n                    cmd if (ID_TRAY_DECODE_BUDGET_BASE\n                        ..ID_TRAY_DECODE_BUDGET_BASE + DECODE_BUDGET_CHOICES_GB.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_decode_budget_gb(cmd - ID_TRAY_DECODE_BUDGET_BASE)\n                    }\n                    // A share of the display a document is drawn at, by the position it\n                    // was listed at: the vector scale, and the two page scales beside it.\n                    cmd if (ID_TRAY_VECTOR_SCALE_BASE\n                        ..ID_TRAY_VECTOR_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_vector_scale(cmd - ID_TRAY_VECTOR_SCALE_BASE)\n                    }\n                    cmd if (ID_TRAY_EBOOK_SCALE_BASE\n                        ..ID_TRAY_EBOOK_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_ebook_scale(cmd - ID_TRAY_EBOOK_SCALE_BASE)\n                    }\n                    cmd if (ID_TRAY_DOCUMENT_SCALE_BASE\n                        ..ID_TRAY_DOCUMENT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_document_scale(cmd - ID_TRAY_DOCUMENT_SCALE_BASE)\n                    }\n                    cmd if (ID_TRAY_FONT_SCALE_BASE\n                        ..ID_TRAY_FONT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_font_scale(cmd - ID_TRAY_FONT_SCALE_BASE)\n                    }\n                    // And how much of the display a design document is drawn over, the same\n                    // question asked of the picture a file keeps of the whole of one.\n                    cmd if (ID_TRAY_DESIGN_SCALE_BASE\n                        ..ID_TRAY_DESIGN_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_design_scale(cmd - ID_TRAY_DESIGN_SCALE_BASE)\n                    }\n                    // And how much of the display a page of text is measured in, the same\n                    // question the rows above it are asked of a document.\n                    cmd if (ID_TRAY_TEXT_SCALE_BASE\n                        ..ID_TRAY_TEXT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_text_scale(cmd - ID_TRAY_TEXT_SCALE_BASE)\n                    }\n                    // How large a video is drawn, by the position its item was listed at: the\n                    // same shares the pictures above it are offered, in a range of their own\n                    // because the two settings are read one each.\n                    cmd if (ID_TRAY_VIDEO_SCALE_BASE\n                        ..ID_TRAY_VIDEO_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_video_scale(cmd - ID_TRAY_VIDEO_SCALE_BASE)\n                    }\n                    // And how large an animated picture is drawn, the same way again. Which\n                    // files that is — a GIF or a WebP that moves, a PNG that does — is settled\n                    // by the file's own content when its hover is laid out.\n                    cmd if (ID_TRAY_ANIMATED_SCALE_BASE\n                        ..ID_TRAY_ANIMATED_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_animated_scale(cmd - ID_TRAY_ANIMATED_SCALE_BASE)\n                    }\n                    // And how much of the display a sound's card is laid out over,\n                    // the same question the document scales beside it answer — a card\n                    // holds no bitmap of the file to take a share of, so the share is\n                    // of the room the display has, and the setting written is the\n                    // sound's own.\n                    cmd if (ID_TRAY_AUDIO_SCALE_BASE\n                        ..ID_TRAY_AUDIO_SCALE_BASE + AUDIO_SCALE_CHOICES.len() as u16)\n                        .contains(&cmd) =>\n                    {\n                        set_audio_scale(cmd - ID_TRAY_AUDIO_SCALE_BASE)\n                    }\n                    ID_TRAY_FONT_400 => set_text_font_scale(400),\n                    ID_TRAY_FONT_300 => set_text_font_scale(300),\n                    ID_TRAY_FONT_250 => set_text_font_scale(250),\n                    ID_TRAY_FONT_200 => set_text_font_scale(200),\n                    ID_TRAY_FONT_175 => set_text_font_scale(175),\n                    ID_TRAY_FONT_150 => set_text_font_scale(150),\n                    ID_TRAY_FONT_125 => set_text_font_scale(125),\n                    ID_TRAY_FONT_110 => set_text_font_scale(110),\n                    ID_TRAY_FONT_100 => set_text_font_scale(100),\n                    ID_TRAY_FONT_90 => set_text_font_scale(90),\n                    ID_TRAY_FONT_80 => set_text_font_scale(80),\n                    ID_TRAY_FONT_70 => set_text_font_scale(70),\n                    _ => {}\n                }\n                LRESULT(0)\n            }\n            WM_DESTROY => {\n                remove_tray_icon(hwnd);\n                PostQuitMessage(0);\n                LRESULT(0)\n            }\n            WM_POWERBROADCAST => {\n                let power_event = wparam.0 as u32;\n                if power_event == PBT_APMRESUMEAUTOMATIC || power_event == PBT_APMRESUMESUSPEND {\n                    // System resumed from sleep — re-add tray icon in case\n                    // DWM/Explorer restart affected its visibility.\n                    remove_tray_icon(hwnd);\n                    let _ = add_tray_icon(hwnd);\n                }\n                LRESULT(0)\n            }\n            _ => DefWindowProcW(hwnd, msg, wparam, lparam),\n        }\n    }).unwrap_or",
+          "lineNumber": 136
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "catch_unwind",
+          "lineNumber": 136
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "remove_tray_icon",
+          "lineNumber": 140
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "add_tray_icon",
+          "lineNumber": 141
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "explorer_hook::note_explorer_restart",
+          "lineNumber": 146
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "LRESULT",
+          "lineNumber": 147
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "dialogs::is_confirming",
+          "lineNumber": 154
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "show_context_menu",
+          "lineNumber": 155
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "LRESULT",
+          "lineNumber": 157
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "RUNNING.store",
+          "lineNumber": 163
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "PostQuitMessage",
+          "lineNumber": 164
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_startup",
+          "lineNumber": 167
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "updates::ask",
+          "lineNumber": 176
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "updates::install",
+          "lineNumber": 178
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "RUNNING.store",
+          "lineNumber": 179
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "PostQuitMessage",
+          "lineNumber": 180
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "updates::open_release_page",
+          "lineNumber": 183
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_check_for_updates",
+          "lineNumber": 192
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_enabled",
+          "lineNumber": 195
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_pin_enabled",
+          "lineNumber": 198
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_pin_update_enabled",
+          "lineNumber": 201
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_pin_update_on_hover",
+          "lineNumber": 204
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_pin_pause_audio",
+          "lineNumber": 207
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_pin_pause_video",
+          "lineNumber": 210
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_minimize_to",
+          "lineNumber": 212
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_minimize_to",
+          "lineNumber": 213
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_nav_video",
+          "lineNumber": 214
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_nav_video",
+          "lineNumber": 215
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_nav_audio",
+          "lineNumber": 216
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_nav_audio",
+          "lineNumber": 217
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_nav_others",
+          "lineNumber": 218
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_nav_others",
+          "lineNumber": 220
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_trigger_key_mode",
+          "lineNumber": 222
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_trigger_key_mode",
+          "lineNumber": 223
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_trigger_key_enabled",
+          "lineNumber": 224
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_trigger_key_affect_pin_mode",
+          "lineNumber": 225
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_prioritize_keyboard",
+          "lineNumber": 226
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_office_engine",
+          "lineNumber": 227
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_office_engine",
+          "lineNumber": 228
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_video_engine_fallback",
+          "lineNumber": 229
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_VIDEO_ENGINE_BASE\n                        ..ID_TRAY_VIDEO_ENGINE_BASE + VIDEO_ENGINE_CHOICES.len() as u16).contains",
+          "lineNumber": 233
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "VIDEO_ENGINE_CHOICES.len",
+          "lineNumber": 234
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_video_engine",
+          "lineNumber": 237
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_IMAGE_BACKGROUND_BASE\n                        ..ID_TRAY_IMAGE_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16).contains",
+          "lineNumber": 243
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "BACKGROUND_CHOICES.len",
+          "lineNumber": 244
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_image_background",
+          "lineNumber": 247
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_FONT_BACKGROUND_BASE\n                        ..ID_TRAY_FONT_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16).contains",
+          "lineNumber": 249
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "BACKGROUND_CHOICES.len",
+          "lineNumber": 250
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_font_background",
+          "lineNumber": 253
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_DDS_BACKGROUND_BASE\n                        ..ID_TRAY_DDS_BACKGROUND_BASE + DDS_BACKGROUND_CHOICES.len() as u16).contains",
+          "lineNumber": 255
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "DDS_BACKGROUND_CHOICES.len",
+          "lineNumber": 256
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_dds_background",
+          "lineNumber": 259
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_DESIGN_BACKGROUND_BASE\n                        ..ID_TRAY_DESIGN_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16).contains",
+          "lineNumber": 261
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "BACKGROUND_CHOICES.len",
+          "lineNumber": 262
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_design_background",
+          "lineNumber": 265
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_VECTOR_BACKGROUND_BASE\n                        ..ID_TRAY_VECTOR_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16).contains",
+          "lineNumber": 267
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "BACKGROUND_CHOICES.len",
+          "lineNumber": 268
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_vector_background",
+          "lineNumber": 271
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_HTML_BACKGROUND_BASE\n                        ..ID_TRAY_HTML_BACKGROUND_BASE + HTML_BACKGROUND_CHOICES.len() as u16).contains",
+          "lineNumber": 273
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "HTML_BACKGROUND_CHOICES.len",
+          "lineNumber": 274
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_html_background",
+          "lineNumber": 277
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_normalize_volume",
+          "lineNumber": 282
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_normalize_video_volume",
+          "lineNumber": 283
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_remember_audio_volume",
+          "lineNumber": 287
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_remember_video_volume",
+          "lineNumber": 288
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_video_subtitles",
+          "lineNumber": 293
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_loop",
+          "lineNumber": 296
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_loop",
+          "lineNumber": 297
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_pin_shuffle",
+          "lineNumber": 301
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_pin_shuffle",
+          "lineNumber": 302
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_pin_shuffle",
+          "lineNumber": 303
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE\n                        ..ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE\n                            + PIN_END_OF_FILE_CHOICES.len() as u16).contains",
+          "lineNumber": 306
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "PIN_END_OF_FILE_CHOICES.len",
+          "lineNumber": 308
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_end_of_file",
+          "lineNumber": 311
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE\n                        ..ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE\n                            + PIN_END_OF_FILE_CHOICES.len() as u16).contains",
+          "lineNumber": 313
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "PIN_END_OF_FILE_CHOICES.len",
+          "lineNumber": 315
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_end_of_file",
+          "lineNumber": 318
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_VIDEO_VOLUME_BASE\n                        ..ID_TRAY_VIDEO_VOLUME_BASE + VOLUME_CHOICES.len() as u16).contains",
+          "lineNumber": 324
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "VOLUME_CHOICES.len",
+          "lineNumber": 325
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_video_volume",
+          "lineNumber": 328
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_AUDIO_VOLUME_BASE\n                        ..ID_TRAY_AUDIO_VOLUME_BASE + VOLUME_CHOICES.len() as u16).contains",
+          "lineNumber": 330
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "VOLUME_CHOICES.len",
+          "lineNumber": 331
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_audio_volume",
+          "lineNumber": 334
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_AUDIO_SEEK_BASE\n                        ..ID_TRAY_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16).contains",
+          "lineNumber": 339
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "AUDIO_SEEK_CHOICES.len",
+          "lineNumber": 340
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_audio_seek",
+          "lineNumber": 343
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE\n                        ..ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE + AUDIO_SEEK_CHOICES.len() as u16).contains",
+          "lineNumber": 349
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "AUDIO_SEEK_CHOICES.len",
+          "lineNumber": 350
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_pin_mode_audio_seek",
+          "lineNumber": 353
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_follow_cursor",
+          "lineNumber": 355
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_follow_cursor",
+          "lineNumber": 356
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_AVOID_BASE\n                        ..ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16).contains",
+          "lineNumber": 359
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "AVOID_CHOICES.len",
+          "lineNumber": 360
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_avoid_mode",
+          "lineNumber": 363
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_DELAY_BASE\n                        ..ID_TRAY_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16).contains",
+          "lineNumber": 368
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "TIMING_DELAY_CHOICES_MS.len",
+          "lineNumber": 369
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_hover_delay",
+          "lineNumber": 372
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_REHOVER_DELAY_BASE\n                        ..ID_TRAY_REHOVER_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16).contains",
+          "lineNumber": 374
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "TIMING_DELAY_CHOICES_MS.len",
+          "lineNumber": 375
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_same_file_rehover_delay",
+          "lineNumber": 378
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_SETTLING_DELAY_BASE\n                        ..ID_TRAY_SETTLING_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16).contains",
+          "lineNumber": 380
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "TIMING_DELAY_CHOICES_MS.len",
+          "lineNumber": 381
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_settling_delay",
+          "lineNumber": 384
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_TICK_BASE\n                        ..ID_TRAY_TICK_BASE + TICK_CHOICES_MS.len() as u16).contains",
+          "lineNumber": 389
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "TICK_CHOICES_MS.len",
+          "lineNumber": 390
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_tick_ms",
+          "lineNumber": 393
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "open_config_file",
+          "lineNumber": 395
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "reset_settings_from_tray",
+          "lineNumber": 396
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "reset_lists_from_tray",
+          "lineNumber": 397
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_CODEC_BASE..ID_TRAY_CODEC_BASE + CODEC_COMMANDS).contains",
+          "lineNumber": 403
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "open_codec_page",
+          "lineNumber": 406
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_MPV_BASE..ID_TRAY_MPV_BASE + MPV_COMMANDS).contains",
+          "lineNumber": 412
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_mpv_path",
+          "lineNumber": 413
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_SCALE_BASE\n                        ..ID_TRAY_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16).contains",
+          "lineNumber": 416
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "BITMAP_SCALE_CHOICES.len",
+          "lineNumber": 417
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_preview_scale",
+          "lineNumber": 420
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_theme",
+          "lineNumber": 422
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_theme",
+          "lineNumber": 423
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE).contains",
+          "lineNumber": 426
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_theme_from_menu",
+          "lineNumber": 427
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_markdown_mode",
+          "lineNumber": 429
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_markdown_mode",
+          "lineNumber": 430
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_render_html",
+          "lineNumber": 431
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_type",
+          "lineNumber": 432
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_type",
+          "lineNumber": 433
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_type",
+          "lineNumber": 434
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_type",
+          "lineNumber": 435
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_type",
+          "lineNumber": 436
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_type",
+          "lineNumber": 437
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_type",
+          "lineNumber": 438
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_type",
+          "lineNumber": 439
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_type",
+          "lineNumber": 440
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_preview_type",
+          "lineNumber": 441
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_ENGINE_IDLE_BASE\n                        ..ID_TRAY_ENGINE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16).contains",
+          "lineNumber": 443
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "ENGINE_IDLE_CHOICES.len",
+          "lineNumber": 444
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_office_engine_idle",
+          "lineNumber": 447
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_WEBVIEW_IDLE_BASE\n                        ..ID_TRAY_WEBVIEW_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16).contains",
+          "lineNumber": 450
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "ENGINE_IDLE_CHOICES.len",
+          "lineNumber": 451
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_webview_idle",
+          "lineNumber": 454
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_LIBREOFFICE_IDLE_BASE\n                        ..ID_TRAY_LIBREOFFICE_IDLE_BASE + ENGINE_IDLE_CHOICES.len() as u16).contains",
+          "lineNumber": 457
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "ENGINE_IDLE_CHOICES.len",
+          "lineNumber": 458
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_libreoffice_idle",
+          "lineNumber": 461
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_AFK_TIMER_BASE\n                        ..ID_TRAY_AFK_TIMER_BASE + AFK_TIMER_CHOICES_SECS.len() as u16).contains",
+          "lineNumber": 464
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "AFK_TIMER_CHOICES_SECS.len",
+          "lineNumber": 465
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_afk_timer",
+          "lineNumber": 468
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_ENGINE_PERSISTENT_BASE..ID_TRAY_ENGINE_PERSISTENT_BASE + 3).contains",
+          "lineNumber": 472
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_engine_persistent",
+          "lineNumber": 475
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "toggle_video_hw_accel",
+          "lineNumber": 481
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_IMAGE_CACHE_BASE\n                        ..ID_TRAY_IMAGE_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16).contains",
+          "lineNumber": 485
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "CACHE_SIZE_CHOICES_MB.len",
+          "lineNumber": 486
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_image_cache_mb",
+          "lineNumber": 489
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_DOCUMENT_CACHE_BASE\n                        ..ID_TRAY_DOCUMENT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16).contains",
+          "lineNumber": 491
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "CACHE_SIZE_CHOICES_MB.len",
+          "lineNumber": 492
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_document_cache_mb",
+          "lineNumber": 495
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_IMAGE_DISK_CACHE_BASE\n                        ..ID_TRAY_IMAGE_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16).contains",
+          "lineNumber": 497
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "CACHE_SIZE_CHOICES_MB.len",
+          "lineNumber": 498
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_image_disk_cache_mb",
+          "lineNumber": 501
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_GENERAL_DISK_CACHE_BASE\n                        ..ID_TRAY_GENERAL_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16).contains",
+          "lineNumber": 503
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "CACHE_SIZE_CHOICES_MB.len",
+          "lineNumber": 504
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_general_disk_cache_mb",
+          "lineNumber": 507
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_DECODE_BUDGET_BASE\n                        ..ID_TRAY_DECODE_BUDGET_BASE + DECODE_BUDGET_CHOICES_GB.len() as u16).contains",
+          "lineNumber": 511
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "DECODE_BUDGET_CHOICES_GB.len",
+          "lineNumber": 512
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_decode_budget_gb",
+          "lineNumber": 515
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_VECTOR_SCALE_BASE\n                        ..ID_TRAY_VECTOR_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16).contains",
+          "lineNumber": 519
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "DOCUMENT_SCALE_CHOICES.len",
+          "lineNumber": 520
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_vector_scale",
+          "lineNumber": 523
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_EBOOK_SCALE_BASE\n                        ..ID_TRAY_EBOOK_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16).contains",
+          "lineNumber": 525
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "DOCUMENT_SCALE_CHOICES.len",
+          "lineNumber": 526
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_ebook_scale",
+          "lineNumber": 529
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_DOCUMENT_SCALE_BASE\n                        ..ID_TRAY_DOCUMENT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16).contains",
+          "lineNumber": 531
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "DOCUMENT_SCALE_CHOICES.len",
+          "lineNumber": 532
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_document_scale",
+          "lineNumber": 535
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_FONT_SCALE_BASE\n                        ..ID_TRAY_FONT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16).contains",
+          "lineNumber": 537
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "DOCUMENT_SCALE_CHOICES.len",
+          "lineNumber": 538
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_font_scale",
+          "lineNumber": 541
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_DESIGN_SCALE_BASE\n                        ..ID_TRAY_DESIGN_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16).contains",
+          "lineNumber": 545
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "DOCUMENT_SCALE_CHOICES.len",
+          "lineNumber": 546
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_design_scale",
+          "lineNumber": 549
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_TEXT_SCALE_BASE\n                        ..ID_TRAY_TEXT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16).contains",
+          "lineNumber": 553
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "DOCUMENT_SCALE_CHOICES.len",
+          "lineNumber": 554
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_scale",
+          "lineNumber": 557
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_VIDEO_SCALE_BASE\n                        ..ID_TRAY_VIDEO_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16).contains",
+          "lineNumber": 562
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "BITMAP_SCALE_CHOICES.len",
+          "lineNumber": 563
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_video_scale",
+          "lineNumber": 566
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_ANIMATED_SCALE_BASE\n                        ..ID_TRAY_ANIMATED_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16).contains",
+          "lineNumber": 571
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "BITMAP_SCALE_CHOICES.len",
+          "lineNumber": 572
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_animated_scale",
+          "lineNumber": 575
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "(ID_TRAY_AUDIO_SCALE_BASE\n                        ..ID_TRAY_AUDIO_SCALE_BASE + AUDIO_SCALE_CHOICES.len() as u16).contains",
+          "lineNumber": 582
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "AUDIO_SCALE_CHOICES.len",
+          "lineNumber": 583
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_audio_scale",
+          "lineNumber": 586
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 588
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 589
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 590
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 591
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 592
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 593
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 594
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 595
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 596
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 597
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 598
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "set_text_font_scale",
+          "lineNumber": 599
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "LRESULT",
+          "lineNumber": 602
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "remove_tray_icon",
+          "lineNumber": 605
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "PostQuitMessage",
+          "lineNumber": 606
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "LRESULT",
+          "lineNumber": 607
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "remove_tray_icon",
+          "lineNumber": 614
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "add_tray_icon",
+          "lineNumber": 615
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "LRESULT",
+          "lineNumber": 617
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "DefWindowProcW",
+          "lineNumber": 619
+        },
+        {
+          "caller": "tray_window_proc",
+          "callee": "LRESULT",
+          "lineNumber": 622
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "GetModuleHandleW",
+          "lineNumber": 627
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "HINSTANCE",
+          "lineNumber": 628
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "LoadImageW",
+          "lineNumber": 629
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "PCWSTR",
+          "lineNumber": 634
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "std::ptr::without_provenance",
+          "lineNumber": 634
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "HICON",
+          "lineNumber": 640
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "HICON::default",
+          "lineNumber": 641
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "HICON::default",
+          "lineNumber": 644
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "hicon.0.is_null",
+          "lineNumber": 648
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "LoadImageW",
+          "lineNumber": 649
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "PCWSTR",
+          "lineNumber": 651
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "HICON",
+          "lineNumber": 657
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "HICON::default",
+          "lineNumber": 658
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "std::mem::size_of::<NOTIFYICONDATAW>",
+          "lineNumber": 665
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "Default::default",
+          "lineNumber": 671
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "tip.encode_utf16().chain(std::iter::once(0)).collect",
+          "lineNumber": 676
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "tip.encode_utf16().chain",
+          "lineNumber": 676
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "tip.encode_utf16",
+          "lineNumber": 676
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "std::iter::once",
+          "lineNumber": 676
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "tip_wide.len().min",
+          "lineNumber": 677
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "tip_wide.len",
+          "lineNumber": 677
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "nid.szTip.len",
+          "lineNumber": 677
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "nid.szTip[..len].copy_from_slice",
+          "lineNumber": 678
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "Shell_NotifyIconW(NIM_ADD, &nid).as_bool",
+          "lineNumber": 680
+        },
+        {
+          "caller": "add_tray_icon",
+          "callee": "Shell_NotifyIconW",
+          "lineNumber": 680
+        },
+        {
+          "caller": "remove_tray_icon",
+          "callee": "std::mem::size_of::<NOTIFYICONDATAW>",
+          "lineNumber": 685
+        },
+        {
+          "caller": "remove_tray_icon",
+          "callee": "Default::default",
+          "lineNumber": 688
+        },
+        {
+          "caller": "remove_tray_icon",
+          "callee": "Shell_NotifyIconW",
+          "lineNumber": 690
+        },
+        {
+          "caller": "run_tray",
+          "callee": "GetModuleHandleW(None).unwrap",
+          "lineNumber": 703
+        },
+        {
+          "caller": "run_tray",
+          "callee": "GetModuleHandleW",
+          "lineNumber": 703
+        },
+        {
+          "caller": "run_tray",
+          "callee": "std::mem::size_of::<WNDCLASSEXW>",
+          "lineNumber": 707
+        },
+        {
+          "caller": "run_tray",
+          "callee": "Some",
+          "lineNumber": 709
+        },
+        {
+          "caller": "run_tray",
+          "callee": "hinstance.into",
+          "lineNumber": 710
+        },
+        {
+          "caller": "run_tray",
+          "callee": "Default::default",
+          "lineNumber": 712
+        },
+        {
+          "caller": "run_tray",
+          "callee": "RegisterClassExW",
+          "lineNumber": 715
+        },
+        {
+          "caller": "run_tray",
+          "callee": "RegisterWindowMessageW",
+          "lineNumber": 718
+        },
+        {
+          "caller": "run_tray",
+          "callee": "CreateWindowExW",
+          "lineNumber": 721
+        },
+        {
+          "caller": "run_tray",
+          "callee": "trace.step",
+          "lineNumber": 745
+        },
+        {
+          "caller": "run_tray",
+          "callee": "add_tray_icon",
+          "lineNumber": 748
+        },
+        {
+          "caller": "run_tray",
+          "callee": "RUNNING.load",
+          "lineNumber": 751
+        },
+        {
+          "caller": "run_tray",
+          "callee": "std::thread::sleep",
+          "lineNumber": 752
+        },
+        {
+          "caller": "run_tray",
+          "callee": "std::time::Duration::from_millis",
+          "lineNumber": 752
+        },
+        {
+          "caller": "run_tray",
+          "callee": "add_tray_icon",
+          "lineNumber": 753
+        },
+        {
+          "caller": "run_tray",
+          "callee": "RUNNING.store",
+          "lineNumber": 760
+        },
+        {
+          "caller": "run_tray",
+          "callee": "remove_tray_icon",
+          "lineNumber": 761
+        },
+        {
+          "caller": "run_tray",
+          "callee": "trace.step",
+          "lineNumber": 767
+        },
+        {
+          "caller": "run_tray",
+          "callee": "MSG::default",
+          "lineNumber": 780
+        },
+        {
+          "caller": "run_tray",
+          "callee": "RUNNING.load",
+          "lineNumber": 781
+        },
+        {
+          "caller": "run_tray",
+          "callee": "GetMessageW",
+          "lineNumber": 784
+        },
+        {
+          "caller": "run_tray",
+          "callee": "RUNNING.store",
+          "lineNumber": 785
+        },
+        {
+          "caller": "run_tray",
+          "callee": "TranslateMessage",
+          "lineNumber": 789
+        },
+        {
+          "caller": "run_tray",
+          "callee": "DispatchMessageW",
+          "lineNumber": 790
+        },
+        {
+          "caller": "run_tray",
+          "callee": "remove_tray_icon",
+          "lineNumber": 794
+        }
+      ],
+      "metrics": {
+        "importCount": 3,
+        "exportCount": 1,
+        "functionCount": 4,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "src/shell/wheel_input.rs",
+      "language": "rust",
+      "fileCategory": "code",
+      "totalLines": 92,
+      "nonEmptyLines": 80,
+      "functions": [
+        {
+          "name": "wheel_tick_count",
+          "startLine": 33,
+          "endLine": 35,
+          "params": []
+        },
+        {
+          "name": "take_text_scroll_delta",
+          "startLine": 39,
+          "endLine": 41,
+          "params": []
+        },
+        {
+          "name": "spawn_wheel_watcher",
+          "startLine": 44,
+          "endLine": 51,
+          "params": []
+        },
+        {
+          "name": "request_stop",
+          "startLine": 54,
+          "endLine": 56,
+          "params": []
+        },
+        {
+          "name": "wheel_hook_proc",
+          "startLine": 58,
+          "endLine": 87,
+          "params": [
+            "code",
+            "wparam",
+            "lparam"
+          ]
+        },
+        {
+          "name": "point_in_region",
+          "startLine": 89,
+          "endLine": 92,
+          "params": [
+            "point",
+            "region"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "wheel_tick_count",
+          "line": 33,
+          "isDefault": false
+        },
+        {
+          "name": "take_text_scroll_delta",
+          "line": 39,
+          "isDefault": false
+        },
+        {
+          "name": "spawn_wheel_watcher",
+          "line": 44,
+          "isDefault": false
+        },
+        {
+          "name": "request_stop",
+          "line": 54,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "wheel_tick_count",
+          "callee": "WHEEL_TICKS.load",
+          "lineNumber": 34
+        },
+        {
+          "caller": "take_text_scroll_delta",
+          "callee": "TEXT_SCROLL_DELTA.swap",
+          "lineNumber": 40
+        },
+        {
+          "caller": "spawn_wheel_watcher",
+          "callee": "super::hook_thread::spawn",
+          "lineNumber": 45
+        },
+        {
+          "caller": "spawn_wheel_watcher",
+          "callee": "Some",
+          "lineNumber": 48
+        },
+        {
+          "caller": "request_stop",
+          "callee": "super::hook_thread::request_stop",
+          "lineNumber": 55
+        },
+        {
+          "caller": "wheel_hook_proc",
+          "callee": "crate::ui::preview_window::text_scroll_keep_alive_try",
+          "lineNumber": 65
+        },
+        {
+          "caller": "wheel_hook_proc",
+          "callee": "point_in_region",
+          "lineNumber": 68
+        },
+        {
+          "caller": "wheel_hook_proc",
+          "callee": "TEXT_SCROLL_DELTA.fetch_add",
+          "lineNumber": 77
+        },
+        {
+          "caller": "wheel_hook_proc",
+          "callee": "LRESULT",
+          "lineNumber": 79
+        },
+        {
+          "caller": "wheel_hook_proc",
+          "callee": "WHEEL_TICKS.fetch_add",
+          "lineNumber": 83
+        },
+        {
+          "caller": "wheel_hook_proc",
+          "callee": "CallNextHookEx",
+          "lineNumber": 86
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 4,
+        "functionCount": 6,
+        "classCount": 0
+      }
+    }
+  ]
+}

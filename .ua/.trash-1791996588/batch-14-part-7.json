@@ -1,0 +1,175 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/ui/preview_window/message_utils.rs",
+      "type": "file",
+      "name": "message_utils.rs",
+      "filePath": "src/ui/preview_window/message_utils.rs",
+      "summary": "message_utils.rs (undefined, 106 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/message_utils.rs:copy_surface_rows_into",
+      "type": "function",
+      "name": "copy_surface_rows_into",
+      "filePath": "src/ui/preview_window/message_utils.rs",
+      "lineRange": [
+        9,
+        33
+      ],
+      "summary": "Function copy_surface_rows_into in message_utils.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/message_utils.rs:text_scroll_target",
+      "type": "function",
+      "name": "text_scroll_target",
+      "filePath": "src/ui/preview_window/message_utils.rs",
+      "lineRange": [
+        36,
+        43
+      ],
+      "summary": "Function text_scroll_target in message_utils.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/message_utils.rs:message_point",
+      "type": "function",
+      "name": "message_point",
+      "filePath": "src/ui/preview_window/message_utils.rs",
+      "lineRange": [
+        46,
+        50
+      ],
+      "summary": "Function message_point in message_utils.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/message_utils.rs:pin_point_is_volume_button",
+      "type": "function",
+      "name": "pin_point_is_volume_button",
+      "filePath": "src/ui/preview_window/message_utils.rs",
+      "lineRange": [
+        59,
+        79
+      ],
+      "summary": "Function pin_point_is_volume_button in message_utils.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/message_utils.rs:pinned_content_is_the_pins",
+      "type": "function",
+      "name": "pinned_content_is_the_pins",
+      "filePath": "src/ui/preview_window/message_utils.rs",
+      "lineRange": [
+        89,
+        106
+      ],
+      "summary": "Function pinned_content_is_the_pins in message_utils.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/ui/preview_window/message_utils.rs",
+      "target": "function:src/ui/preview_window/message_utils.rs:copy_surface_rows_into",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/message_utils.rs",
+      "target": "function:src/ui/preview_window/message_utils.rs:copy_surface_rows_into",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/message_utils.rs",
+      "target": "function:src/ui/preview_window/message_utils.rs:text_scroll_target",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/message_utils.rs",
+      "target": "function:src/ui/preview_window/message_utils.rs:text_scroll_target",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/message_utils.rs",
+      "target": "function:src/ui/preview_window/message_utils.rs:message_point",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/message_utils.rs",
+      "target": "function:src/ui/preview_window/message_utils.rs:message_point",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/message_utils.rs",
+      "target": "function:src/ui/preview_window/message_utils.rs:pin_point_is_volume_button",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/message_utils.rs",
+      "target": "function:src/ui/preview_window/message_utils.rs:pin_point_is_volume_button",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/message_utils.rs",
+      "target": "function:src/ui/preview_window/message_utils.rs:pinned_content_is_the_pins",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/message_utils.rs",
+      "target": "function:src/ui/preview_window/message_utils.rs:pinned_content_is_the_pins",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

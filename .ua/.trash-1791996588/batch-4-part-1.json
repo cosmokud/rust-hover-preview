@@ -1,0 +1,1349 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/app/afk.rs",
+      "type": "file",
+      "name": "afk.rs",
+      "filePath": "src/app/afk.rs",
+      "summary": "afk.rs (undefined, 67 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "app"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/app/afk.rs:note_explorer_reachable",
+      "type": "function",
+      "name": "note_explorer_reachable",
+      "filePath": "src/app/afk.rs",
+      "lineRange": [
+        38,
+        46
+      ],
+      "summary": "Function note_explorer_reachable in src/app/afk.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/afk.rs:expired",
+      "type": "function",
+      "name": "expired",
+      "filePath": "src/app/afk.rs",
+      "lineRange": [
+        54,
+        67
+      ],
+      "summary": "Function expired in src/app/afk.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/app/dialogs.rs",
+      "type": "file",
+      "name": "dialogs.rs",
+      "filePath": "src/app/dialogs.rs",
+      "summary": "dialogs.rs (undefined, 188 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "app"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/app/dialogs.rs:is_confirming",
+      "type": "function",
+      "name": "is_confirming",
+      "filePath": "src/app/dialogs.rs",
+      "lineRange": [
+        46,
+        48
+      ],
+      "summary": "Function is_confirming in src/app/dialogs.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/dialogs.rs:begin",
+      "type": "function",
+      "name": "begin",
+      "filePath": "src/app/dialogs.rs",
+      "lineRange": [
+        54,
+        56
+      ],
+      "summary": "Function begin in src/app/dialogs.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/dialogs.rs:end",
+      "type": "function",
+      "name": "end",
+      "filePath": "src/app/dialogs.rs",
+      "lineRange": [
+        58,
+        60
+      ],
+      "summary": "Function end in src/app/dialogs.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/dialogs.rs:set_button_names",
+      "type": "function",
+      "name": "set_button_names",
+      "filePath": "src/app/dialogs.rs",
+      "lineRange": [
+        64,
+        68
+      ],
+      "summary": "Function set_button_names in src/app/dialogs.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/dialogs.rs:hook",
+      "type": "function",
+      "name": "hook",
+      "filePath": "src/app/dialogs.rs",
+      "lineRange": [
+        79,
+        96
+      ],
+      "summary": "Function hook in src/app/dialogs.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/dialogs.rs:confirm",
+      "type": "function",
+      "name": "confirm",
+      "filePath": "src/app/dialogs.rs",
+      "lineRange": [
+        107,
+        134
+      ],
+      "summary": "Function confirm in src/app/dialogs.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/app/dialogs.rs:confirm_reset_settings",
+      "type": "function",
+      "name": "confirm_reset_settings",
+      "filePath": "src/app/dialogs.rs",
+      "lineRange": [
+        141,
+        155
+      ],
+      "summary": "Function confirm_reset_settings in src/app/dialogs.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/dialogs.rs:confirm_reset_lists",
+      "type": "function",
+      "name": "confirm_reset_lists",
+      "filePath": "src/app/dialogs.rs",
+      "lineRange": [
+        158,
+        167
+      ],
+      "summary": "Function confirm_reset_lists in src/app/dialogs.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/dialogs.rs:confirm_open_page",
+      "type": "function",
+      "name": "confirm_open_page",
+      "filePath": "src/app/dialogs.rs",
+      "lineRange": [
+        176,
+        183
+      ],
+      "summary": "Function confirm_open_page in src/app/dialogs.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/app/engine_processes.rs",
+      "type": "file",
+      "name": "engine_processes.rs",
+      "filePath": "src/app/engine_processes.rs",
+      "summary": "engine_processes.rs (undefined, 994 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "app"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:hidden_command",
+      "type": "function",
+      "name": "hidden_command",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        79,
+        89
+      ],
+      "summary": "Function hidden_command in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:create_job",
+      "type": "function",
+      "name": "create_job",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        121,
+        142
+      ],
+      "summary": "Function create_job in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:adopt",
+      "type": "function",
+      "name": "adopt",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        153,
+        168
+      ],
+      "summary": "Function adopt in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:record",
+      "type": "function",
+      "name": "record",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        212,
+        214
+      ],
+      "summary": "Function record in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:record_player",
+      "type": "function",
+      "name": "record_player",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        229,
+        231
+      ],
+      "summary": "Function record_player in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:record_as",
+      "type": "function",
+      "name": "record_as",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        233,
+        264
+      ],
+      "summary": "Function record_as in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:forget",
+      "type": "function",
+      "name": "forget",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        277,
+        281
+      ],
+      "summary": "Function forget in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:terminate_owned",
+      "type": "function",
+      "name": "terminate_owned",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        289,
+        302
+      ],
+      "summary": "Function terminate_owned in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:terminate_all_owned",
+      "type": "function",
+      "name": "terminate_all_owned",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        312,
+        316
+      ],
+      "summary": "Function terminate_all_owned in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:end_recorded",
+      "type": "function",
+      "name": "end_recorded",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        326,
+        351
+      ],
+      "summary": "Function end_recorded in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:recorded_pids",
+      "type": "function",
+      "name": "recorded_pids",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        364,
+        379
+      ],
+      "summary": "Function recorded_pids in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:state_folder",
+      "type": "function",
+      "name": "state_folder",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        389,
+        400
+      ],
+      "summary": "Function state_folder in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:persist",
+      "type": "function",
+      "name": "persist",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        414,
+        438
+      ],
+      "summary": "Function persist in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:reap_leftovers",
+      "type": "function",
+      "name": "reap_leftovers",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        446,
+        473
+      ],
+      "summary": "Function reap_leftovers in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:run_is_alive",
+      "type": "function",
+      "name": "run_is_alive",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        477,
+        487
+      ],
+      "summary": "Function run_is_alive in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:reap",
+      "type": "function",
+      "name": "reap",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        490,
+        502
+      ],
+      "summary": "Function reap in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:end_browsers_started_by",
+      "type": "function",
+      "name": "end_browsers_started_by",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        511,
+        519
+      ],
+      "summary": "Function end_browsers_started_by in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:end_our_browsers",
+      "type": "function",
+      "name": "end_our_browsers",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        529,
+        533
+      ],
+      "summary": "Function end_our_browsers in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:stale_run_pids",
+      "type": "function",
+      "name": "stale_run_pids",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        541,
+        553
+      ],
+      "summary": "Function stale_run_pids in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:run_line",
+      "type": "function",
+      "name": "run_line",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        556,
+        568
+      ],
+      "summary": "Function run_line in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:engine_line",
+      "type": "function",
+      "name": "engine_line",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        571,
+        583
+      ],
+      "summary": "Function engine_line in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:terminate_verified",
+      "type": "function",
+      "name": "terminate_verified",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        594,
+        616
+      ],
+      "summary": "Function terminate_verified in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:is_running",
+      "type": "function",
+      "name": "is_running",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        620,
+        632
+      ],
+      "summary": "Function is_running in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:process_matches",
+      "type": "function",
+      "name": "process_matches",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        636,
+        647
+      ],
+      "summary": "Function process_matches in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:processes_named",
+      "type": "function",
+      "name": "processes_named",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        650,
+        655
+      ],
+      "summary": "Function processes_named in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:processes_named_by_parent",
+      "type": "function",
+      "name": "processes_named_by_parent",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        658,
+        664
+      ],
+      "summary": "Function processes_named_by_parent in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:processes_with_parent",
+      "type": "function",
+      "name": "processes_with_parent",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        668,
+        697
+      ],
+      "summary": "Function processes_with_parent in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:creation_time_of",
+      "type": "function",
+      "name": "creation_time_of",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        716,
+        727
+      ],
+      "summary": "Function creation_time_of in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/engine_processes.rs:image_path",
+      "type": "function",
+      "name": "image_path",
+      "filePath": "src/app/engine_processes.rs",
+      "lineRange": [
+        729,
+        744
+      ],
+      "summary": "Function image_path in src/app/engine_processes.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/app/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "src/app/mod.rs",
+      "summary": "mod.rs (undefined, 6 lines).",
+      "tags": [
+        "entry-point",
+        "rust",
+        "source",
+        "app"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/app/single_instance.rs",
+      "type": "file",
+      "name": "single_instance.rs",
+      "filePath": "src/app/single_instance.rs",
+      "summary": "single_instance.rs (undefined, 56 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "app"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/app/single_instance.rs:InstanceGuard",
+      "type": "class",
+      "name": "InstanceGuard",
+      "filePath": "src/app/single_instance.rs",
+      "lineRange": [
+        13,
+        17
+      ],
+      "summary": "Class InstanceGuard defined in src/app/single_instance.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/single_instance.rs:acquire",
+      "type": "function",
+      "name": "acquire",
+      "filePath": "src/app/single_instance.rs",
+      "lineRange": [
+        31,
+        33
+      ],
+      "summary": "Function acquire in src/app/single_instance.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/app/single_instance.rs:claim",
+      "type": "function",
+      "name": "claim",
+      "filePath": "src/app/single_instance.rs",
+      "lineRange": [
+        35,
+        56
+      ],
+      "summary": "Function claim in src/app/single_instance.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/app/afk.rs",
+      "target": "function:src/app/afk.rs:note_explorer_reachable",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/afk.rs",
+      "target": "function:src/app/afk.rs:note_explorer_reachable",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/afk.rs",
+      "target": "function:src/app/afk.rs:expired",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/afk.rs",
+      "target": "function:src/app/afk.rs:expired",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/afk.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:is_confirming",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:is_confirming",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:begin",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:begin",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:end",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:end",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:set_button_names",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:set_button_names",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:hook",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:hook",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:confirm",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:confirm_reset_settings",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:confirm_reset_settings",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:confirm_reset_lists",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:confirm_reset_lists",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:confirm_open_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/dialogs.rs",
+      "target": "function:src/app/dialogs.rs:confirm_open_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:hidden_command",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:hidden_command",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:create_job",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:adopt",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:adopt",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:record",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:record",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:record_player",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:record_player",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:record_as",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:forget",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:forget",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:terminate_owned",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:terminate_owned",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:terminate_all_owned",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:terminate_all_owned",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:end_recorded",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:end_recorded",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:recorded_pids",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:state_folder",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:persist",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:reap_leftovers",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:reap_leftovers",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:run_is_alive",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:reap",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:end_browsers_started_by",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:end_browsers_started_by",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:end_our_browsers",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:end_our_browsers",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:stale_run_pids",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:stale_run_pids",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:run_line",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:engine_line",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:terminate_verified",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:terminate_verified",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:is_running",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:is_running",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:process_matches",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:processes_named",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:processes_named",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:processes_named_by_parent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:processes_named_by_parent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:processes_with_parent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:creation_time_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/engine_processes.rs",
+      "target": "function:src/app/engine_processes.rs:image_path",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/mod.rs",
+      "target": "file:src/app/afk.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/app/mod.rs",
+      "target": "file:src/app/dialogs.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/app/mod.rs",
+      "target": "file:src/app/engine_processes.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/app/mod.rs",
+      "target": "file:src/app/single_instance.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/app/mod.rs",
+      "target": "file:src/app/startup.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/app/mod.rs",
+      "target": "file:src/app/updates.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/app/single_instance.rs",
+      "target": "class:src/app/single_instance.rs:InstanceGuard",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/single_instance.rs",
+      "target": "class:src/app/single_instance.rs:InstanceGuard",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/single_instance.rs",
+      "target": "function:src/app/single_instance.rs:acquire",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/app/single_instance.rs",
+      "target": "function:src/app/single_instance.rs:acquire",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/app/single_instance.rs",
+      "target": "function:src/app/single_instance.rs:claim",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    }
+  ]
+}

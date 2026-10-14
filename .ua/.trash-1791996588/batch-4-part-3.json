@@ -1,0 +1,2308 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/engines/webview_preview/environment.rs",
+      "type": "file",
+      "name": "environment.rs",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "summary": "environment.rs (undefined, 425 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "engines"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:create_host_window",
+      "type": "function",
+      "name": "create_host_window",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        33,
+        51
+      ],
+      "summary": "Function create_host_window in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:register_class",
+      "type": "function",
+      "name": "register_class",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        53,
+        69
+      ],
+      "summary": "Function register_class in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:window_proc",
+      "type": "function",
+      "name": "window_proc",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        75,
+        86
+      ],
+      "summary": "Function window_proc in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:mouse_activate_answers",
+      "type": "function",
+      "name": "mouse_activate_answers",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        98,
+        107
+      ],
+      "summary": "Function mouse_activate_answers in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:ex_style_for",
+      "type": "function",
+      "name": "ex_style_for",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        119,
+        127
+      ],
+      "summary": "Function ex_style_for in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:pump_messages",
+      "type": "function",
+      "name": "pump_messages",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        130,
+        139
+      ],
+      "summary": "Function pump_messages in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:user_data_folder",
+      "type": "function",
+      "name": "user_data_folder",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        155,
+        161
+      ],
+      "summary": "Function user_data_folder in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:stale_profile_pids",
+      "type": "function",
+      "name": "stale_profile_pids",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        169,
+        171
+      ],
+      "summary": "Function stale_profile_pids in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:clear_stale_profiles",
+      "type": "function",
+      "name": "clear_stale_profiles",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        190,
+        207
+      ],
+      "summary": "Function clear_stale_profiles in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:create_environment",
+      "type": "function",
+      "name": "create_environment",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        209,
+        248
+      ],
+      "summary": "Function create_environment in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:remaining",
+      "type": "function",
+      "name": "remaining",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        265,
+        267
+      ],
+      "summary": "Function remaining in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:create_controller",
+      "type": "function",
+      "name": "create_controller",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        269,
+        297
+      ],
+      "summary": "Function create_controller in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:configure",
+      "type": "function",
+      "name": "configure",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        307,
+        325
+      ],
+      "summary": "Function configure in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:set_scripts",
+      "type": "function",
+      "name": "set_scripts",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        330,
+        334
+      ],
+      "summary": "Function set_scripts in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:file_version",
+      "type": "function",
+      "name": "file_version",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        344,
+        351
+      ],
+      "summary": "Function file_version in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:background_color",
+      "type": "function",
+      "name": "background_color",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        355,
+        387
+      ],
+      "summary": "Function background_color in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:file_url",
+      "type": "function",
+      "name": "file_url",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        397,
+        421
+      ],
+      "summary": "Function file_url in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/environment.rs:wide",
+      "type": "function",
+      "name": "wide",
+      "filePath": "src/engines/webview_preview/environment.rs",
+      "lineRange": [
+        423,
+        425
+      ],
+      "summary": "Function wide in src/engines/webview_preview/environment.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/engines/webview_preview/host.rs",
+      "type": "file",
+      "name": "host.rs",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "summary": "host.rs (undefined, 870 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "engines"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:src/engines/webview_preview/host.rs:Host",
+      "type": "class",
+      "name": "Host",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        39,
+        82
+      ],
+      "summary": "Class Host defined in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/engines/webview_preview/host.rs:Arrival",
+      "type": "class",
+      "name": "Arrival",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        712,
+        723
+      ],
+      "summary": "Class Arrival defined in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:create",
+      "type": "function",
+      "name": "create",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        85,
+        198
+      ],
+      "summary": "Function create in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:show",
+      "type": "function",
+      "name": "show",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        219,
+        351
+      ],
+      "summary": "Function show in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:put_window",
+      "type": "function",
+      "name": "put_window",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        358,
+        370
+      ],
+      "summary": "Function put_window in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:set_bounds",
+      "type": "function",
+      "name": "set_bounds",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        375,
+        384
+      ],
+      "summary": "Function set_bounds in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:holds",
+      "type": "function",
+      "name": "holds",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        390,
+        394
+      ],
+      "summary": "Function holds in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:needs_page",
+      "type": "function",
+      "name": "needs_page",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        405,
+        409
+      ],
+      "summary": "Function needs_page in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:place",
+      "type": "function",
+      "name": "place",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        431,
+        442
+      ],
+      "summary": "Function place in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:is_hung",
+      "type": "function",
+      "name": "is_hung",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        446,
+        448
+      ],
+      "summary": "Function is_hung in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:hide",
+      "type": "function",
+      "name": "hide",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        468,
+        495
+      ],
+      "summary": "Function hide in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:suspend",
+      "type": "function",
+      "name": "suspend",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        516,
+        560
+      ],
+      "summary": "Function suspend in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:wake",
+      "type": "function",
+      "name": "wake",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        581,
+        593
+      ],
+      "summary": "Function wake in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:close",
+      "type": "function",
+      "name": "close",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        595,
+        628
+      ],
+      "summary": "Function close in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:navigate",
+      "type": "function",
+      "name": "navigate",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        646,
+        707
+      ],
+      "summary": "Function navigate in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:pump_until",
+      "type": "function",
+      "name": "pump_until",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        770,
+        813
+      ],
+      "summary": "Function pump_until in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:wait_for_navigation",
+      "type": "function",
+      "name": "wait_for_navigation",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        821,
+        837
+      ],
+      "summary": "Function wait_for_navigation in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/host.rs:drop",
+      "type": "function",
+      "name": "drop",
+      "filePath": "src/engines/webview_preview/host.rs",
+      "lineRange": [
+        852,
+        869
+      ],
+      "summary": "Function drop in src/engines/webview_preview/host.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/engines/webview_preview/pages.rs",
+      "type": "file",
+      "name": "pages.rs",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "summary": "pages.rs (undefined, 667 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "engines"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:src/engines/webview_preview/pages.rs:BoxChange",
+      "type": "class",
+      "name": "BoxChange",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        583,
+        590
+      ],
+      "summary": "Class BoxChange defined in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:frame_page",
+      "type": "function",
+      "name": "frame_page",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        46,
+        61
+      ],
+      "summary": "Function frame_page in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:frame_html",
+      "type": "function",
+      "name": "frame_html",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        80,
+        95
+      ],
+      "summary": "Function frame_html in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:html_page",
+      "type": "function",
+      "name": "html_page",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        123,
+        145
+      ],
+      "summary": "Function html_page in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:font_page",
+      "type": "function",
+      "name": "font_page",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        171,
+        204
+      ],
+      "summary": "Function font_page in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:specimen_html",
+      "type": "function",
+      "name": "specimen_html",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        210,
+        261
+      ],
+      "summary": "Function specimen_html in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:checkerboard_style",
+      "type": "function",
+      "name": "checkerboard_style",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        286,
+        295
+      ],
+      "summary": "Function checkerboard_style in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:escape_attribute",
+      "type": "function",
+      "name": "escape_attribute",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        337,
+        339
+      ],
+      "summary": "Function escape_attribute in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:show",
+      "type": "function",
+      "name": "show",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        365,
+        417
+      ],
+      "summary": "Function show in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:hide",
+      "type": "function",
+      "name": "hide",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        430,
+        447
+      ],
+      "summary": "Function hide in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:hide_html_preview",
+      "type": "function",
+      "name": "hide_html_preview",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        455,
+        462
+      ],
+      "summary": "Function hide_html_preview in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:wanted_here",
+      "type": "function",
+      "name": "wanted_here",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        472,
+        478
+      ],
+      "summary": "Function wanted_here in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:place",
+      "type": "function",
+      "name": "place",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        497,
+        532
+      ],
+      "summary": "Function place in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:ask_place",
+      "type": "function",
+      "name": "ask_place",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        547,
+        573
+      ],
+      "summary": "Function ask_place in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:box_change",
+      "type": "function",
+      "name": "box_change",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        592,
+        608
+      ],
+      "summary": "Function box_change in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:publish_want_for_test",
+      "type": "function",
+      "name": "publish_want_for_test",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        617,
+        633
+      ],
+      "summary": "Function publish_want_for_test in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:clear_want_for_test",
+      "type": "function",
+      "name": "clear_want_for_test",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        637,
+        643
+      ],
+      "summary": "Function clear_want_for_test in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/engines/webview_preview/pages.rs:shutdown",
+      "type": "function",
+      "name": "shutdown",
+      "filePath": "src/engines/webview_preview/pages.rs",
+      "lineRange": [
+        647,
+        667
+      ],
+      "summary": "Function shutdown in src/engines/webview_preview/pages.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/formats/office_formats.rs",
+      "type": "file",
+      "name": "office_formats.rs",
+      "filePath": "src/formats/office_formats.rs",
+      "summary": "office_formats.rs (undefined, 299 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "formats"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:src/formats/office_formats.rs:OfficeContainer",
+      "type": "class",
+      "name": "OfficeContainer",
+      "filePath": "src/formats/office_formats.rs",
+      "lineRange": [
+        22,
+        27
+      ],
+      "summary": "Class OfficeContainer defined in src/formats/office_formats.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/formats/office_formats.rs:OfficeApp",
+      "type": "class",
+      "name": "OfficeApp",
+      "filePath": "src/formats/office_formats.rs",
+      "lineRange": [
+        32,
+        36
+      ],
+      "summary": "Class OfficeApp defined in src/formats/office_formats.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/office_formats.rs:prog_id",
+      "type": "function",
+      "name": "prog_id",
+      "filePath": "src/formats/office_formats.rs",
+      "lineRange": [
+        40,
+        46
+      ],
+      "summary": "Function prog_id in src/formats/office_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/office_formats.rs:image_name",
+      "type": "function",
+      "name": "image_name",
+      "filePath": "src/formats/office_formats.rs",
+      "lineRange": [
+        50,
+        56
+      ],
+      "summary": "Function image_name in src/formats/office_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/office_formats.rs:app_for",
+      "type": "function",
+      "name": "app_for",
+      "filePath": "src/formats/office_formats.rs",
+      "lineRange": [
+        65,
+        80
+      ],
+      "summary": "Function app_for in src/formats/office_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/office_formats.rs:app_installed",
+      "type": "function",
+      "name": "app_installed",
+      "filePath": "src/formats/office_formats.rs",
+      "lineRange": [
+        93,
+        95
+      ],
+      "summary": "Function app_installed in src/formats/office_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/office_formats.rs:for_document",
+      "type": "function",
+      "name": "for_document",
+      "filePath": "src/formats/office_formats.rs",
+      "lineRange": [
+        112,
+        128
+      ],
+      "summary": "Function for_document in src/formats/office_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/office_formats.rs:page_engine",
+      "type": "function",
+      "name": "page_engine",
+      "filePath": "src/formats/office_formats.rs",
+      "lineRange": [
+        141,
+        146
+      ],
+      "summary": "Function page_engine in src/formats/office_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/office_formats.rs:default_page_size",
+      "type": "function",
+      "name": "default_page_size",
+      "filePath": "src/formats/office_formats.rs",
+      "lineRange": [
+        157,
+        163
+      ],
+      "summary": "Function default_page_size in src/formats/office_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/formats/office_formats.rs:container_kind",
+      "type": "function",
+      "name": "container_kind",
+      "filePath": "src/formats/office_formats.rs",
+      "lineRange": [
+        171,
+        184
+      ],
+      "summary": "Function container_kind in src/formats/office_formats.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/main.rs",
+      "type": "file",
+      "name": "main.rs",
+      "filePath": "src/main.rs",
+      "summary": "main.rs (undefined, 333 lines).",
+      "tags": [
+        "rust",
+        "source",
+        "main.rs"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:src/main.rs:StartupTrace",
+      "type": "class",
+      "name": "StartupTrace",
+      "filePath": "src/main.rs",
+      "lineRange": [
+        54,
+        57
+      ],
+      "summary": "Class StartupTrace defined in src/main.rs.",
+      "tags": [
+        "class",
+        "data-model",
+        "type-definition"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/main.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "src/main.rs",
+      "lineRange": [
+        61,
+        74
+      ],
+      "summary": "Function new in src/main.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/main.rs:step",
+      "type": "function",
+      "name": "step",
+      "filePath": "src/main.rs",
+      "lineRange": [
+        77,
+        90
+      ],
+      "summary": "Function step in src/main.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/main.rs:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "src/main.rs",
+      "lineRange": [
+        104,
+        290
+      ],
+      "summary": "Function main in src/main.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/main.rs:sync_startup_setting",
+      "type": "function",
+      "name": "sync_startup_setting",
+      "filePath": "src/main.rs",
+      "lineRange": [
+        301,
+        333
+      ],
+      "summary": "Function sync_startup_setting in src/main.rs.",
+      "tags": [
+        "utility",
+        "function",
+        "general"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:create_host_window",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:create_host_window",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:register_class",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:register_class",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:window_proc",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:mouse_activate_answers",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:mouse_activate_answers",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:ex_style_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:ex_style_for",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:pump_messages",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:pump_messages",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:user_data_folder",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:user_data_folder",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:stale_profile_pids",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:stale_profile_pids",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:clear_stale_profiles",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:clear_stale_profiles",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:create_environment",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:create_environment",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:remaining",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:remaining",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:create_controller",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:create_controller",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:configure",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:configure",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:set_scripts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:set_scripts",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:file_version",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:file_version",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:background_color",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:background_color",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:file_url",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:file_url",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:wide",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "function:src/engines/webview_preview/environment.rs:wide",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "file:src/app/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/environment.rs",
+      "target": "file:src/paths.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "class:src/engines/webview_preview/host.rs:Host",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "class:src/engines/webview_preview/host.rs:Host",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "class:src/engines/webview_preview/host.rs:Arrival",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "class:src/engines/webview_preview/host.rs:Arrival",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:create",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:create",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:show",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:show",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:put_window",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:put_window",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:set_bounds",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:set_bounds",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:holds",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:holds",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:needs_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:needs_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:place",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:place",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:is_hung",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:is_hung",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:hide",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:hide",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:suspend",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:suspend",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:wake",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:wake",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:close",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:close",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:navigate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:navigate",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:pump_until",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:wait_for_navigation",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "function:src/engines/webview_preview/host.rs:drop",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "file:src/app/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/host.rs",
+      "target": "file:src/readers/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "class:src/engines/webview_preview/pages.rs:BoxChange",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "class:src/engines/webview_preview/pages.rs:BoxChange",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:frame_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:frame_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:frame_html",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:frame_html",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:html_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:html_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:font_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:font_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:specimen_html",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:specimen_html",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:checkerboard_style",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:escape_attribute",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:escape_attribute",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:show",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:show",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:hide",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:hide",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:hide_html_preview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:hide_html_preview",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:wanted_here",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:wanted_here",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:place",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:place",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:ask_place",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:ask_place",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:box_change",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:box_change",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:publish_want_for_test",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:publish_want_for_test",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:clear_want_for_test",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:clear_want_for_test",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:shutdown",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "function:src/engines/webview_preview/pages.rs:shutdown",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "file:src/app/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/engines/webview_preview/pages.rs",
+      "target": "file:src/readers/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "class:src/formats/office_formats.rs:OfficeContainer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "class:src/formats/office_formats.rs:OfficeContainer",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "class:src/formats/office_formats.rs:OfficeApp",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "class:src/formats/office_formats.rs:OfficeApp",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:prog_id",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:prog_id",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:image_name",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:image_name",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:app_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:app_for",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:app_installed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:app_installed",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:for_document",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:for_document",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:page_engine",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:page_engine",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:default_page_size",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:default_page_size",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:container_kind",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "function:src/formats/office_formats.rs:container_kind",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/formats/office_formats.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "class:src/main.rs:StartupTrace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "class:src/main.rs:StartupTrace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "function:src/main.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "function:src/main.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "function:src/main.rs:step",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "function:src/main.rs:step",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "function:src/main.rs:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "function:src/main.rs:sync_startup_setting",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "file:src/app/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "file:src/config/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "file:src/engines/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "file:src/paths.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "file:src/readers/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "file:src/shell/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "file:src/text/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/main.rs",
+      "target": "file:src/ui/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

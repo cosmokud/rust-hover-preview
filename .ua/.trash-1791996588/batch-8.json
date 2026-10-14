@@ -1,0 +1,87 @@
+{
+  "nodes": [
+    {
+      "id": "pipeline:.github/workflows/deploy.yml",
+      "type": "pipeline",
+      "name": "deploy.yml",
+      "filePath": ".github/workflows/deploy.yml",
+      "summary": "GitHub Actions release workflow: triggered on version tags, builds Windows installers with the github profile and publishes the release with artifacts and attribution.",
+      "tags": [
+        "infra",
+        "ci-cd",
+        "infrastructure"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "pipeline:.github/workflows/manual-ci.yml",
+      "type": "pipeline",
+      "name": "manual-ci.yml",
+      "filePath": ".github/workflows/manual-ci.yml",
+      "summary": "Manually dispatched CI workflow: runs formatting, lints and the test suite on the chosen ref without committing, pushing or releasing.",
+      "tags": [
+        "infra",
+        "ci-cd",
+        "infrastructure"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "pipeline:.github/workflows/manual-deploy.yml",
+      "type": "pipeline",
+      "name": "manual-deploy.yml",
+      "filePath": ".github/workflows/manual-deploy.yml",
+      "summary": "Manually dispatched release workflow: validates the input tag, builds Windows installers and publishes the release for that tag.",
+      "tags": [
+        "infra",
+        "ci-cd",
+        "infrastructure"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "pipeline:.github/workflows/test-deploy.yml",
+      "type": "pipeline",
+      "name": "test-deploy.yml",
+      "filePath": ".github/workflows/test-deploy.yml",
+      "summary": "Dry-run release workflow: exercises the tag/changelog guards, builds installers and uploads them as artifacts without publishing, testing the deploy path safely.",
+      "tags": [
+        "infra",
+        "test",
+        "ci-cd",
+        "infrastructure"
+      ],
+      "complexity": "complex"
+    }
+  ],
+  "edges": [
+    {
+      "source": "pipeline:.github/workflows/deploy.yml",
+      "target": "file:src/main.rs",
+      "type": "triggers",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "pipeline:.github/workflows/manual-ci.yml",
+      "target": "file:src/main.rs",
+      "type": "triggers",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "pipeline:.github/workflows/manual-deploy.yml",
+      "target": "file:src/main.rs",
+      "type": "triggers",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "pipeline:.github/workflows/test-deploy.yml",
+      "target": "file:src/main.rs",
+      "type": "triggers",
+      "direction": "forward",
+      "weight": 0.6
+    }
+  ]
+}

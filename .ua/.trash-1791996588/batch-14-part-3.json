@@ -1,0 +1,1551 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/text/pin_chrome/tests/caption.rs",
+      "type": "file",
+      "name": "caption.rs",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "summary": "caption.rs (undefined, 763 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "test",
+        "source",
+        "text"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:a_cut_name_is_the_whole_name_where_it_fits_and_the_longest_beginning_where_it_does_not",
+      "type": "function",
+      "name": "a_cut_name_is_the_whole_name_where_it_fits_and_the_longest_beginning_where_it_does_not",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        4,
+        19
+      ],
+      "summary": "Function a_cut_name_is_the_whole_name_where_it_fits_and_the_longest_beginning_where_it_does_not in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:a_cut_name_is_cut_on_a_character_rather_than_inside_one",
+      "type": "function",
+      "name": "a_cut_name_is_cut_on_a_character_rather_than_inside_one",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        22,
+        33
+      ],
+      "summary": "Function a_cut_name_is_cut_on_a_character_rather_than_inside_one in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:the_search_agrees_with_walking_it",
+      "type": "function",
+      "name": "the_search_agrees_with_walking_it",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        44,
+        75
+      ],
+      "summary": "Function the_search_agrees_with_walking_it in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:a_real_font_cuts_the_name_where_the_measured_width_runs_out",
+      "type": "function",
+      "name": "a_real_font_cuts_the_name_where_the_measured_width_runs_out",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        85,
+        132
+      ],
+      "summary": "Function a_real_font_cuts_the_name_where_the_measured_width_runs_out in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:every_button_of_a_caption_is_the_one_under_the_pointer",
+      "type": "function",
+      "name": "every_button_of_a_caption_is_the_one_under_the_pointer",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        138,
+        166
+      ],
+      "summary": "Function every_button_of_a_caption_is_the_one_under_the_pointer in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons",
+      "type": "function",
+      "name": "a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        173,
+        204
+      ],
+      "summary": "Function a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:a_caption_without_a_maximize_keeps_the_close_button_where_it_was",
+      "type": "function",
+      "name": "a_caption_without_a_maximize_keeps_the_close_button_where_it_was",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        212,
+        258
+      ],
+      "summary": "Function a_caption_without_a_maximize_keeps_the_close_button_where_it_was in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:a_caption_is_opaque_everywhere_it_is_painted",
+      "type": "function",
+      "name": "a_caption_is_opaque_everywhere_it_is_painted",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        272,
+        311
+      ],
+      "summary": "Function a_caption_is_opaque_everywhere_it_is_painted in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:a_caption_is_repainted_when_anything_it_is_drawn_from_changes",
+      "type": "function",
+      "name": "a_caption_is_repainted_when_anything_it_is_drawn_from_changes",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        323,
+        449
+      ],
+      "summary": "Function a_caption_is_repainted_when_anything_it_is_drawn_from_changes in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:draws_the_caption_glyphs",
+      "type": "function",
+      "name": "draws_the_caption_glyphs",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        457,
+        606
+      ],
+      "summary": "Function draws_the_caption_glyphs in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:the_two_walk_buttons_are_chevrons_pointing_opposite_ways",
+      "type": "function",
+      "name": "the_two_walk_buttons_are_chevrons_pointing_opposite_ways",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        618,
+        696
+      ],
+      "summary": "Function the_two_walk_buttons_are_chevrons_pointing_opposite_ways in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/caption.rs:the_two_steps_of_a_walk_are_mirrors_of_one_another",
+      "type": "function",
+      "name": "the_two_steps_of_a_walk_are_mirrors_of_one_another",
+      "filePath": "src/text/pin_chrome/tests/caption.rs",
+      "lineRange": [
+        708,
+        763
+      ],
+      "summary": "Function the_two_steps_of_a_walk_are_mirrors_of_one_another in caption.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/text/pin_chrome/tests/menu.rs",
+      "type": "file",
+      "name": "menu.rs",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "summary": "menu.rs (undefined, 1638 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "test",
+        "source",
+        "text"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:three_rows",
+      "type": "function",
+      "name": "three_rows",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        11,
+        26
+      ],
+      "summary": "Function three_rows in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:card_rows",
+      "type": "function",
+      "name": "card_rows",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        31,
+        46
+      ],
+      "summary": "Function card_rows in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:two_doors",
+      "type": "function",
+      "name": "two_doors",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        51,
+        66
+      ],
+      "summary": "Function two_doors in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:the_menu_opens_at_the_point_the_click_landed",
+      "type": "function",
+      "name": "the_menu_opens_at_the_point_the_click_landed",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        87,
+        108
+      ],
+      "summary": "Function the_menu_opens_at_the_point_the_click_landed in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:a_menu_that_would_run_off_the_window_stays_inside_it",
+      "type": "function",
+      "name": "a_menu_that_would_run_off_the_window_stays_inside_it",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        115,
+        161
+      ],
+      "summary": "Function a_menu_that_would_run_off_the_window_stays_inside_it in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:the_main_menu_is_only_as_wide_as_its_longest_row",
+      "type": "function",
+      "name": "the_main_menu_is_only_as_wide_as_its_longest_row",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        172,
+        221
+      ],
+      "summary": "Function the_main_menu_is_only_as_wide_as_its_longest_row in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:the_main_menu_panel_is_the_longest_row_plus_the_marks_and_the_rooms",
+      "type": "function",
+      "name": "the_main_menu_panel_is_the_longest_row_plus_the_marks_and_the_rooms",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        230,
+        254
+      ],
+      "summary": "Function the_main_menu_panel_is_the_longest_row_plus_the_marks_and_the_rooms in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:a_menu_of_one_character_rows_does_not_collapse_below_the_floor",
+      "type": "function",
+      "name": "a_menu_of_one_character_rows_does_not_collapse_below_the_floor",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        262,
+        304
+      ],
+      "summary": "Function a_menu_of_one_character_rows_does_not_collapse_below_the_floor in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:every_flyout_panel_is_measured_from_its_own_rows",
+      "type": "function",
+      "name": "every_flyout_panel_is_measured_from_its_own_rows",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        313,
+        370
+      ],
+      "summary": "Function every_flyout_panel_is_measured_from_its_own_rows in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:both_panels_stay_painted_inside_a_window_narrower_than_they_are",
+      "type": "function",
+      "name": "both_panels_stay_painted_inside_a_window_narrower_than_they_are",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        380,
+        460
+      ],
+      "summary": "Function both_panels_stay_painted_inside_a_window_narrower_than_they_are in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:four_choices",
+      "type": "function",
+      "name": "four_choices",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        465,
+        484
+      ],
+      "summary": "Function four_choices in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:longer_flyout_rows",
+      "type": "function",
+      "name": "longer_flyout_rows",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        490,
+        505
+      ],
+      "summary": "Function longer_flyout_rows in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row",
+      "type": "function",
+      "name": "the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        516,
+        591
+      ],
+      "summary": "Function the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:the_flyout_hangs_on_the_row_it_was_opened_from",
+      "type": "function",
+      "name": "the_flyout_hangs_on_the_row_it_was_opened_from",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        598,
+        630
+      ],
+      "summary": "Function the_flyout_hangs_on_the_row_it_was_opened_from in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:the_seek_flyout_flips_left_where_it_does_not_fit_right",
+      "type": "function",
+      "name": "the_seek_flyout_flips_left_where_it_does_not_fit_right",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        639,
+        723
+      ],
+      "summary": "Function the_seek_flyout_flips_left_where_it_does_not_fit_right in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:the_seek_row_carries_its_arrow_while_the_flyout_is_down",
+      "type": "function",
+      "name": "the_seek_row_carries_its_arrow_while_the_flyout_is_down",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        733,
+        765
+      ],
+      "summary": "Function the_seek_row_carries_its_arrow_while_the_flyout_is_down in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:the_arrow_while_the_flyout_is_down_is_the_side_the_flyout_opens_on",
+      "type": "function",
+      "name": "the_arrow_while_the_flyout_is_down_is_the_side_the_flyout_opens_on",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        774,
+        834
+      ],
+      "summary": "Function the_arrow_while_the_flyout_is_down_is_the_side_the_flyout_opens_on in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:both_panels_stay_inside_the_window_at_every_width",
+      "type": "function",
+      "name": "both_panels_stay_inside_the_window_at_every_width",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        846,
+        923
+      ],
+      "summary": "Function both_panels_stay_inside_the_window_at_every_width in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:every_menu_row_stays_visible_and_uncovered_while_the_flyout_is_up",
+      "type": "function",
+      "name": "every_menu_row_stays_visible_and_uncovered_while_the_flyout_is_up",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        935,
+        1001
+      ],
+      "summary": "Function every_menu_row_stays_visible_and_uncovered_while_the_flyout_is_up in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:a_menu_opened_at_the_middle_of_a_card_stays_where_the_click_put_it",
+      "type": "function",
+      "name": "a_menu_opened_at_the_middle_of_a_card_stays_where_the_click_put_it",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        1012,
+        1096
+      ],
+      "summary": "Function a_menu_opened_at_the_middle_of_a_card_stays_where_the_click_put_it in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:a_window_that_leaves_no_room_for_a_flyout_splits_the_two_panels",
+      "type": "function",
+      "name": "a_window_that_leaves_no_room_for_a_flyout_splits_the_two_panels",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        1105,
+        1162
+      ],
+      "summary": "Function a_window_that_leaves_no_room_for_a_flyout_splits_the_two_panels in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:a_point_is_a_row_only_inside_the_rows",
+      "type": "function",
+      "name": "a_point_is_a_row_only_inside_the_rows",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        1169,
+        1200
+      ],
+      "summary": "Function a_point_is_a_row_only_inside_the_rows in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:a_check_row_carries_a_check_alone_and_a_choice_its_disc",
+      "type": "function",
+      "name": "a_check_row_carries_a_check_alone_and_a_choice_its_disc",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        1208,
+        1350
+      ],
+      "summary": "Function a_check_row_carries_a_check_alone_and_a_choice_its_disc in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:the_row_under_the_pointer_is_washed",
+      "type": "function",
+      "name": "the_row_under_the_pointer_is_washed",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        1356,
+        1418
+      ],
+      "summary": "Function the_row_under_the_pointer_is_washed in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:a_door_row_carries_the_arrow_and_a_row_that_answers_carries_none",
+      "type": "function",
+      "name": "a_door_row_carries_the_arrow_and_a_row_that_answers_carries_none",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        1426,
+        1521
+      ],
+      "summary": "Function a_door_row_carries_the_arrow_and_a_row_that_answers_carries_none in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:the_flyout_s_panel_is_not_painted_while_the_flyout_is_down",
+      "type": "function",
+      "name": "the_flyout_s_panel_is_not_painted_while_the_flyout_is_down",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        1531,
+        1574
+      ],
+      "summary": "Function the_flyout_s_panel_is_not_painted_while_the_flyout_is_down in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/menu.rs:a_menu_is_painted_as_a_panel_of_the_theme_over_what_is_behind_it",
+      "type": "function",
+      "name": "a_menu_is_painted_as_a_panel_of_the_theme_over_what_is_behind_it",
+      "filePath": "src/text/pin_chrome/tests/menu.rs",
+      "lineRange": [
+        1581,
+        1638
+      ],
+      "summary": "Function a_menu_is_painted_as_a_panel_of_the_theme_over_what_is_behind_it in menu.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/text/pin_chrome/tests/transport.rs",
+      "type": "file",
+      "name": "transport.rs",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "summary": "transport.rs (undefined, 423 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "test",
+        "source",
+        "text"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/transport.rs:the_popup_hung_from_a_button_is_the_one_the_transport_bar_opens",
+      "type": "function",
+      "name": "the_popup_hung_from_a_button_is_the_one_the_transport_bar_opens",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "lineRange": [
+        8,
+        67
+      ],
+      "summary": "Function the_popup_hung_from_a_button_is_the_one_the_transport_bar_opens in transport.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/transport.rs:a_clock_is_written_the_way_a_player_writes_one",
+      "type": "function",
+      "name": "a_clock_is_written_the_way_a_player_writes_one",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "lineRange": [
+        70,
+        80
+      ],
+      "summary": "Function a_clock_is_written_the_way_a_player_writes_one in transport.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/transport.rs:the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them",
+      "type": "function",
+      "name": "the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "lineRange": [
+        83,
+        136
+      ],
+      "summary": "Function the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them in transport.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/transport.rs:a_transport_bar_is_taken_hold_of_where_it_was_pressed",
+      "type": "function",
+      "name": "a_transport_bar_is_taken_hold_of_where_it_was_pressed",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "lineRange": [
+        139,
+        152
+      ],
+      "summary": "Function a_transport_bar_is_taken_hold_of_where_it_was_pressed in transport.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/transport.rs:a_press_puts_the_thumb_under_the_hand_wherever_it_landed",
+      "type": "function",
+      "name": "a_press_puts_the_thumb_under_the_hand_wherever_it_landed",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "lineRange": [
+        161,
+        178
+      ],
+      "summary": "Function a_press_puts_the_thumb_under_the_hand_wherever_it_landed in transport.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/transport.rs:the_volume_button_answers_on_a_bar_with_no_other_controls",
+      "type": "function",
+      "name": "the_volume_button_answers_on_a_bar_with_no_other_controls",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "lineRange": [
+        184,
+        218
+      ],
+      "summary": "Function the_volume_button_answers_on_a_bar_with_no_other_controls in transport.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/transport.rs:a_volume_popup_is_placed_over_its_button_and_read_bottom_up",
+      "type": "function",
+      "name": "a_volume_popup_is_placed_over_its_button_and_read_bottom_up",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "lineRange": [
+        224,
+        285
+      ],
+      "summary": "Function a_volume_popup_is_placed_over_its_button_and_read_bottom_up in transport.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/transport.rs:a_volume_popup_is_centered_on_its_button",
+      "type": "function",
+      "name": "a_volume_popup_is_centered_on_its_button",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "lineRange": [
+        291,
+        353
+      ],
+      "summary": "Function a_volume_popup_is_centered_on_its_button in transport.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/transport.rs:the_parts_of_a_transport_bar_are_hit_where_they_are_drawn",
+      "type": "function",
+      "name": "the_parts_of_a_transport_bar_are_hit_where_they_are_drawn",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "lineRange": [
+        371,
+        388
+      ],
+      "summary": "Function the_parts_of_a_transport_bar_are_hit_where_they_are_drawn in transport.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/text/pin_chrome/tests/transport.rs:a_bar_with_no_controls_has_none_to_press",
+      "type": "function",
+      "name": "a_bar_with_no_controls_has_none_to_press",
+      "filePath": "src/text/pin_chrome/tests/transport.rs",
+      "lineRange": [
+        395,
+        423
+      ],
+      "summary": "Function a_bar_with_no_controls_has_none_to_press in transport.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/ui/preview_window/animated.rs",
+      "type": "file",
+      "name": "animated.rs",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "summary": "animated.rs (undefined, 821 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/animated.rs:await_frame_queue_room",
+      "type": "function",
+      "name": "await_frame_queue_room",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "lineRange": [
+        8,
+        24
+      ],
+      "summary": "Function await_frame_queue_room in animated.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/animated.rs:load_animated_gif",
+      "type": "function",
+      "name": "load_animated_gif",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "lineRange": [
+        26,
+        210
+      ],
+      "summary": "Function load_animated_gif in animated.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/animated.rs:apng_frames",
+      "type": "function",
+      "name": "apng_frames",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "lineRange": [
+        213,
+        222
+      ],
+      "summary": "Function apng_frames in animated.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/animated.rs:apng_frame_delay_ms",
+      "type": "function",
+      "name": "apng_frame_delay_ms",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "lineRange": [
+        226,
+        232
+      ],
+      "summary": "Function apng_frame_delay_ms in animated.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/animated.rs:decode_apng_frame_to_image",
+      "type": "function",
+      "name": "decode_apng_frame_to_image",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "lineRange": [
+        236,
+        256
+      ],
+      "summary": "Function decode_apng_frame_to_image in animated.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/animated.rs:load_animated_apng",
+      "type": "function",
+      "name": "load_animated_apng",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "lineRange": [
+        258,
+        424
+      ],
+      "summary": "Function load_animated_apng in animated.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/animated.rs:decode_webp_animation_frame_to_image",
+      "type": "function",
+      "name": "decode_webp_animation_frame_to_image",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "lineRange": [
+        426,
+        465
+      ],
+      "summary": "Function decode_webp_animation_frame_to_image in animated.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/animated.rs:load_animated_webp",
+      "type": "function",
+      "name": "load_animated_webp",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "lineRange": [
+        467,
+        667
+      ],
+      "summary": "Function load_animated_webp in animated.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/animated.rs:load_animated_heif",
+      "type": "function",
+      "name": "load_animated_heif",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "lineRange": [
+        683,
+        725
+      ],
+      "summary": "Function load_animated_heif in animated.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/animated.rs:load_animated_jxl",
+      "type": "function",
+      "name": "load_animated_jxl",
+      "filePath": "src/ui/preview_window/animated.rs",
+      "lineRange": [
+        736,
+        821
+      ],
+      "summary": "Function load_animated_jxl in animated.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:a_cut_name_is_the_whole_name_where_it_fits_and_the_longest_beginning_where_it_does_not",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:a_cut_name_is_cut_on_a_character_rather_than_inside_one",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:the_search_agrees_with_walking_it",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:a_real_font_cuts_the_name_where_the_measured_width_runs_out",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:every_button_of_a_caption_is_the_one_under_the_pointer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:a_caption_without_a_maximize_keeps_the_close_button_where_it_was",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:a_caption_is_opaque_everywhere_it_is_painted",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:a_caption_is_repainted_when_anything_it_is_drawn_from_changes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:draws_the_caption_glyphs",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:the_two_walk_buttons_are_chevrons_pointing_opposite_ways",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/caption.rs",
+      "target": "function:src/text/pin_chrome/tests/caption.rs:the_two_steps_of_a_walk_are_mirrors_of_one_another",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:three_rows",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:card_rows",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:two_doors",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:the_menu_opens_at_the_point_the_click_landed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:a_menu_that_would_run_off_the_window_stays_inside_it",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:the_main_menu_is_only_as_wide_as_its_longest_row",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:the_main_menu_panel_is_the_longest_row_plus_the_marks_and_the_rooms",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:a_menu_of_one_character_rows_does_not_collapse_below_the_floor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:every_flyout_panel_is_measured_from_its_own_rows",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:both_panels_stay_painted_inside_a_window_narrower_than_they_are",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:four_choices",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:longer_flyout_rows",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:the_seek_flyout_hangs_right_of_the_menu_on_the_seek_row",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:the_flyout_hangs_on_the_row_it_was_opened_from",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:the_seek_flyout_flips_left_where_it_does_not_fit_right",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:the_seek_row_carries_its_arrow_while_the_flyout_is_down",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:the_arrow_while_the_flyout_is_down_is_the_side_the_flyout_opens_on",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:both_panels_stay_inside_the_window_at_every_width",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:every_menu_row_stays_visible_and_uncovered_while_the_flyout_is_up",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:a_menu_opened_at_the_middle_of_a_card_stays_where_the_click_put_it",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:a_window_that_leaves_no_room_for_a_flyout_splits_the_two_panels",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:a_point_is_a_row_only_inside_the_rows",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:a_check_row_carries_a_check_alone_and_a_choice_its_disc",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:the_row_under_the_pointer_is_washed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:a_door_row_carries_the_arrow_and_a_row_that_answers_carries_none",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:the_flyout_s_panel_is_not_painted_while_the_flyout_is_down",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/menu.rs",
+      "target": "function:src/text/pin_chrome/tests/menu.rs:a_menu_is_painted_as_a_panel_of_the_theme_over_what_is_behind_it",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/transport.rs",
+      "target": "function:src/text/pin_chrome/tests/transport.rs:the_popup_hung_from_a_button_is_the_one_the_transport_bar_opens",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/transport.rs",
+      "target": "function:src/text/pin_chrome/tests/transport.rs:a_clock_is_written_the_way_a_player_writes_one",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/transport.rs",
+      "target": "function:src/text/pin_chrome/tests/transport.rs:the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/transport.rs",
+      "target": "function:src/text/pin_chrome/tests/transport.rs:a_transport_bar_is_taken_hold_of_where_it_was_pressed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/transport.rs",
+      "target": "function:src/text/pin_chrome/tests/transport.rs:a_press_puts_the_thumb_under_the_hand_wherever_it_landed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/transport.rs",
+      "target": "function:src/text/pin_chrome/tests/transport.rs:the_volume_button_answers_on_a_bar_with_no_other_controls",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/transport.rs",
+      "target": "function:src/text/pin_chrome/tests/transport.rs:a_volume_popup_is_placed_over_its_button_and_read_bottom_up",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/transport.rs",
+      "target": "function:src/text/pin_chrome/tests/transport.rs:a_volume_popup_is_centered_on_its_button",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/transport.rs",
+      "target": "function:src/text/pin_chrome/tests/transport.rs:the_parts_of_a_transport_bar_are_hit_where_they_are_drawn",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/text/pin_chrome/tests/transport.rs",
+      "target": "function:src/text/pin_chrome/tests/transport.rs:a_bar_with_no_controls_has_none_to_press",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:await_frame_queue_room",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:await_frame_queue_room",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:load_animated_gif",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:load_animated_gif",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:apng_frames",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:apng_frames",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:apng_frame_delay_ms",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:apng_frame_delay_ms",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:decode_apng_frame_to_image",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:decode_apng_frame_to_image",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:load_animated_apng",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:load_animated_apng",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:decode_webp_animation_frame_to_image",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:decode_webp_animation_frame_to_image",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:load_animated_webp",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:load_animated_webp",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:load_animated_heif",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:load_animated_heif",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:load_animated_jxl",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/animated.rs",
+      "target": "function:src/ui/preview_window/animated.rs:load_animated_jxl",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

@@ -1,0 +1,2573 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/ui/preview_window/ffplay_window.rs",
+      "type": "file",
+      "name": "ffplay_window.rs",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "summary": "ffplay_window.rs (undefined, 748 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:note_player_process",
+      "type": "function",
+      "name": "note_player_process",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        32,
+        38
+      ],
+      "summary": "Function note_player_process in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:video_process_image",
+      "type": "function",
+      "name": "video_process_image",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        47,
+        52
+      ],
+      "summary": "Function video_process_image in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:player_image",
+      "type": "function",
+      "name": "player_image",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        58,
+        63
+      ],
+      "summary": "Function player_image in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:enum_windows_callback",
+      "type": "function",
+      "name": "enum_windows_callback",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        81,
+        123
+      ],
+      "summary": "Function enum_windows_callback in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:player_ex_style_for",
+      "type": "function",
+      "name": "player_ex_style_for",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        151,
+        157
+      ],
+      "summary": "Function player_ex_style_for in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:apply_noactivate_to_hwnd",
+      "type": "function",
+      "name": "apply_noactivate_to_hwnd",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        160,
+        230
+      ],
+      "summary": "Function apply_noactivate_to_hwnd in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:try_apply_noactivate_style",
+      "type": "function",
+      "name": "try_apply_noactivate_style",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        234,
+        269
+      ],
+      "summary": "Function try_apply_noactivate_style in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:ensure_noactivate_monitor",
+      "type": "function",
+      "name": "ensure_noactivate_monitor",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        282,
+        328
+      ],
+      "summary": "Function ensure_noactivate_monitor in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:noactivate_wake_handle",
+      "type": "function",
+      "name": "noactivate_wake_handle",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        349,
+        351
+      ],
+      "summary": "Function noactivate_wake_handle in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:wait_for_noactivate_wake",
+      "type": "function",
+      "name": "wait_for_noactivate_wake",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        354,
+        368
+      ],
+      "summary": "Function wait_for_noactivate_wake in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:wake_noactivate_monitor",
+      "type": "function",
+      "name": "wake_noactivate_monitor",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        372,
+        374
+      ],
+      "summary": "Function wake_noactivate_monitor in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:set_noactivate_for_process",
+      "type": "function",
+      "name": "set_noactivate_for_process",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        376,
+        398
+      ],
+      "summary": "Function set_noactivate_for_process in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:ffplay_key_lparam",
+      "type": "function",
+      "name": "ffplay_key_lparam",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        421,
+        423
+      ],
+      "summary": "Function ffplay_key_lparam in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:video_window_for",
+      "type": "function",
+      "name": "video_window_for",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        450,
+        477
+      ],
+      "summary": "Function video_window_for in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:level_is_owed_to_the_next_player",
+      "type": "function",
+      "name": "level_is_owed_to_the_next_player",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        499,
+        507
+      ],
+      "summary": "Function level_is_owed_to_the_next_player in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:pinned_level_is_owed_to_the_next_player",
+      "type": "function",
+      "name": "pinned_level_is_owed_to_the_next_player",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        510,
+        520
+      ],
+      "summary": "Function pinned_level_is_owed_to_the_next_player in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:pause_posts",
+      "type": "function",
+      "name": "pause_posts",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        536,
+        538
+      ],
+      "summary": "Function pause_posts in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:clear_pause_posts",
+      "type": "function",
+      "name": "clear_pause_posts",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        542,
+        544
+      ],
+      "summary": "Function clear_pause_posts in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:video_key_pause",
+      "type": "function",
+      "name": "video_key_pause",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        563,
+        592
+      ],
+      "summary": "Function video_key_pause in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:is_video_process_running",
+      "type": "function",
+      "name": "is_video_process_running",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        596,
+        624
+      ],
+      "summary": "Function is_video_process_running in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:process_image_matches",
+      "type": "function",
+      "name": "process_image_matches",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        628,
+        646
+      ],
+      "summary": "Function process_image_matches in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:is_player_pid_alive",
+      "type": "function",
+      "name": "is_player_pid_alive",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        649,
+        658
+      ],
+      "summary": "Function is_player_pid_alive in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:terminate_player_pid",
+      "type": "function",
+      "name": "terminate_player_pid",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        662,
+        676
+      ],
+      "summary": "Function terminate_player_pid in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:kill_pinned_player_async",
+      "type": "function",
+      "name": "kill_pinned_player_async",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        689,
+        708
+      ],
+      "summary": "Function kill_pinned_player_async in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:clear_video_process_state",
+      "type": "function",
+      "name": "clear_video_process_state",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        711,
+        721
+      ],
+      "summary": "Function clear_video_process_state in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/ffplay_window.rs:kill_stray_video_process",
+      "type": "function",
+      "name": "kill_stray_video_process",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        732,
+        748
+      ],
+      "summary": "Function kill_stray_video_process in ffplay_window.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/ffplay_window.rs:EnumWindowsData",
+      "type": "class",
+      "name": "EnumWindowsData",
+      "filePath": "src/ui/preview_window/ffplay_window.rs",
+      "lineRange": [
+        74,
+        78
+      ],
+      "summary": "Class EnumWindowsData in ffplay_window.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/ui/preview_window/hover_facts.rs",
+      "type": "file",
+      "name": "hover_facts.rs",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "summary": "hover_facts.rs (undefined, 709 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:held_box",
+      "type": "function",
+      "name": "held_box",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        69,
+        80
+      ],
+      "summary": "Function held_box in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:hold_box",
+      "type": "function",
+      "name": "hold_box",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        83,
+        107
+      ],
+      "summary": "Function hold_box in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:begin_measure",
+      "type": "function",
+      "name": "begin_measure",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        110,
+        126
+      ],
+      "summary": "Function begin_measure in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:end_measure",
+      "type": "function",
+      "name": "end_measure",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        129,
+        135
+      ],
+      "summary": "Function end_measure in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:measure_waiting",
+      "type": "function",
+      "name": "measure_waiting",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        143,
+        148
+      ],
+      "summary": "Function measure_waiting in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:spawn_measure_probe",
+      "type": "function",
+      "name": "spawn_measure_probe",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        171,
+        189
+      ],
+      "summary": "Function spawn_measure_probe in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:notify_measured",
+      "type": "function",
+      "name": "notify_measured",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        196,
+        201
+      ],
+      "summary": "Function notify_measured in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:measured_off_the_tick",
+      "type": "function",
+      "name": "measured_off_the_tick",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        213,
+        230
+      ],
+      "summary": "Function measured_off_the_tick in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:any",
+      "type": "function",
+      "name": "any",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        253,
+        255
+      ],
+      "summary": "Function any in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:cursor_preview_hover",
+      "type": "function",
+      "name": "cursor_preview_hover",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        261,
+        319
+      ],
+      "summary": "Function cursor_preview_hover in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:current_hover_scales",
+      "type": "function",
+      "name": "current_hover_scales",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        324,
+        338
+      ],
+      "summary": "Function current_hover_scales in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:content_of",
+      "type": "function",
+      "name": "content_of",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        409,
+        411
+      ],
+      "summary": "Function content_of in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:content_names_another_kind",
+      "type": "function",
+      "name": "content_names_another_kind",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        414,
+        416
+      ],
+      "summary": "Function content_names_another_kind in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:read",
+      "type": "function",
+      "name": "read",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        426,
+        515
+      ],
+      "summary": "Function read in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:routed_kind",
+      "type": "function",
+      "name": "routed_kind",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        524,
+        530
+      ],
+      "summary": "Function routed_kind in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:book_job",
+      "type": "function",
+      "name": "book_job",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        537,
+        539
+      ],
+      "summary": "Function book_job in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:engine_archive",
+      "type": "function",
+      "name": "engine_archive",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        543,
+        550
+      ],
+      "summary": "Function engine_archive in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:names_another_kind",
+      "type": "function",
+      "name": "names_another_kind",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        558,
+        563
+      ],
+      "summary": "Function names_another_kind in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:svg_document",
+      "type": "function",
+      "name": "svg_document",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        570,
+        572
+      ],
+      "summary": "Function svg_document in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:html_drawn_by_the_engine",
+      "type": "function",
+      "name": "html_drawn_by_the_engine",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        579,
+        583
+      ],
+      "summary": "Function html_drawn_by_the_engine in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:is_text",
+      "type": "function",
+      "name": "is_text",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        607,
+        623
+      ],
+      "summary": "Function is_text in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:is_painted_page",
+      "type": "function",
+      "name": "is_painted_page",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        641,
+        648
+      ],
+      "summary": "Function is_painted_page in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:is_video",
+      "type": "function",
+      "name": "is_video",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        658,
+        670
+      ],
+      "summary": "Function is_video in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:is_audio",
+      "type": "function",
+      "name": "is_audio",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        679,
+        688
+      ],
+      "summary": "Function is_audio in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/hover_facts.rs:bytes",
+      "type": "function",
+      "name": "bytes",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        706,
+        708
+      ],
+      "summary": "Function bytes in hover_facts.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/hover_facts.rs:MeasureScope",
+      "type": "class",
+      "name": "MeasureScope",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        13,
+        25
+      ],
+      "summary": "Class MeasureScope in hover_facts.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/hover_facts.rs:MeasuredBox",
+      "type": "class",
+      "name": "MeasuredBox",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        28,
+        36
+      ],
+      "summary": "Class MeasuredBox in hover_facts.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/hover_facts.rs:PreviewCursorHover",
+      "type": "class",
+      "name": "PreviewCursorHover",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        234,
+        244
+      ],
+      "summary": "Class PreviewCursorHover in hover_facts.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/hover_facts.rs:HoverFacts",
+      "type": "class",
+      "name": "HoverFacts",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        363,
+        391
+      ],
+      "summary": "Class HoverFacts in hover_facts.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/hover_facts.rs:FrameBox",
+      "type": "class",
+      "name": "FrameBox",
+      "filePath": "src/ui/preview_window/hover_facts.rs",
+      "lineRange": [
+        697,
+        702
+      ],
+      "summary": "Class FrameBox in hover_facts.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/ui/preview_window/image_cache.rs",
+      "type": "file",
+      "name": "image_cache.rs",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "summary": "image_cache.rs (undefined, 165 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/image_cache.rs:file_version",
+      "type": "function",
+      "name": "file_version",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "lineRange": [
+        51,
+        62
+      ],
+      "summary": "Function file_version in image_cache.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/image_cache.rs:image_cache_limit_bytes",
+      "type": "function",
+      "name": "image_cache_limit_bytes",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "lineRange": [
+        66,
+        73
+      ],
+      "summary": "Function image_cache_limit_bytes in image_cache.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/image_cache.rs:image_cache_trim",
+      "type": "function",
+      "name": "image_cache_trim",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "lineRange": [
+        87,
+        105
+      ],
+      "summary": "Function image_cache_trim in image_cache.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/image_cache.rs:trim_image_cache",
+      "type": "function",
+      "name": "trim_image_cache",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "lineRange": [
+        110,
+        115
+      ],
+      "summary": "Function trim_image_cache in image_cache.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/image_cache.rs:image_cache_get",
+      "type": "function",
+      "name": "image_cache_get",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "lineRange": [
+        118,
+        131
+      ],
+      "summary": "Function image_cache_get in image_cache.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/image_cache.rs:image_cache_put",
+      "type": "function",
+      "name": "image_cache_put",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "lineRange": [
+        134,
+        165
+      ],
+      "summary": "Function image_cache_put in image_cache.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/ui/preview_window/image_cache.rs:ImageCacheEntry",
+      "type": "class",
+      "name": "ImageCacheEntry",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "lineRange": [
+        9,
+        17
+      ],
+      "summary": "Class ImageCacheEntry in image_cache.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/image_cache.rs:FileVersion",
+      "type": "class",
+      "name": "FileVersion",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "lineRange": [
+        22,
+        25
+      ],
+      "summary": "Class FileVersion in image_cache.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/image_cache.rs:ImageCacheKey",
+      "type": "class",
+      "name": "ImageCacheKey",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "lineRange": [
+        34,
+        39
+      ],
+      "summary": "Class ImageCacheKey in image_cache.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/image_cache.rs:ImageCache",
+      "type": "class",
+      "name": "ImageCache",
+      "filePath": "src/ui/preview_window/image_cache.rs",
+      "lineRange": [
+        42,
+        46
+      ],
+      "summary": "Class ImageCache in image_cache.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/ui/preview_window/load.rs",
+      "type": "file",
+      "name": "load.rs",
+      "filePath": "src/ui/preview_window/load.rs",
+      "summary": "load.rs (undefined, 756 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_static_image",
+      "type": "function",
+      "name": "load_static_image",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        11,
+        123
+      ],
+      "summary": "Function load_static_image in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_design_preview",
+      "type": "function",
+      "name": "load_design_preview",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        144,
+        194
+      ],
+      "summary": "Function load_design_preview in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_engine_page",
+      "type": "function",
+      "name": "load_engine_page",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        203,
+        225
+      ],
+      "summary": "Function load_engine_page in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_comic_page",
+      "type": "function",
+      "name": "load_comic_page",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        234,
+        255
+      ],
+      "summary": "Function load_comic_page in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_book_page",
+      "type": "function",
+      "name": "load_book_page",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        263,
+        285
+      ],
+      "summary": "Function load_book_page in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_engine_page_for_office",
+      "type": "function",
+      "name": "load_engine_page_for_office",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        302,
+        320
+      ],
+      "summary": "Function load_engine_page_for_office in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_magick_picture",
+      "type": "function",
+      "name": "load_magick_picture",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        342,
+        425
+      ],
+      "summary": "Function load_magick_picture in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:decode_png",
+      "type": "function",
+      "name": "decode_png",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        430,
+        437
+      ],
+      "summary": "Function decode_png in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_vector_preview",
+      "type": "function",
+      "name": "load_vector_preview",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        452,
+        491
+      ],
+      "summary": "Function load_vector_preview in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_pdf_first_page",
+      "type": "function",
+      "name": "load_pdf_first_page",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        494,
+        530
+      ],
+      "summary": "Function load_pdf_first_page in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_office_preview",
+      "type": "function",
+      "name": "load_office_preview",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        542,
+        577
+      ],
+      "summary": "Function load_office_preview in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_text_preview",
+      "type": "function",
+      "name": "load_text_preview",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        586,
+        629
+      ],
+      "summary": "Function load_text_preview in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_archive_preview",
+      "type": "function",
+      "name": "load_archive_preview",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        638,
+        665
+      ],
+      "summary": "Function load_archive_preview in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load.rs:load_video_thumbnail",
+      "type": "function",
+      "name": "load_video_thumbnail",
+      "filePath": "src/ui/preview_window/load.rs",
+      "lineRange": [
+        668,
+        756
+      ],
+      "summary": "Function load_video_thumbnail in load.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:note_player_process",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:note_player_process",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:video_process_image",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:video_process_image",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:player_image",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:player_image",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:enum_windows_callback",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:enum_windows_callback",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:player_ex_style_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:player_ex_style_for",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:apply_noactivate_to_hwnd",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:apply_noactivate_to_hwnd",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:try_apply_noactivate_style",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:try_apply_noactivate_style",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:ensure_noactivate_monitor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:ensure_noactivate_monitor",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:noactivate_wake_handle",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:noactivate_wake_handle",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:wait_for_noactivate_wake",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:wait_for_noactivate_wake",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:wake_noactivate_monitor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:wake_noactivate_monitor",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:set_noactivate_for_process",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:set_noactivate_for_process",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:ffplay_key_lparam",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:ffplay_key_lparam",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:video_window_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:video_window_for",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:level_is_owed_to_the_next_player",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:level_is_owed_to_the_next_player",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:pinned_level_is_owed_to_the_next_player",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:pinned_level_is_owed_to_the_next_player",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:pause_posts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:pause_posts",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:clear_pause_posts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:clear_pause_posts",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:video_key_pause",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:video_key_pause",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:is_video_process_running",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:is_video_process_running",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:process_image_matches",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:process_image_matches",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:is_player_pid_alive",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:is_player_pid_alive",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:terminate_player_pid",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:terminate_player_pid",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:kill_pinned_player_async",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:kill_pinned_player_async",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:clear_video_process_state",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:clear_video_process_state",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:kill_stray_video_process",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "function:src/ui/preview_window/ffplay_window.rs:kill_stray_video_process",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "class:src/ui/preview_window/ffplay_window.rs:EnumWindowsData",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/ffplay_window.rs",
+      "target": "class:src/ui/preview_window/ffplay_window.rs:EnumWindowsData",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:held_box",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:held_box",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:hold_box",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:hold_box",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:begin_measure",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:begin_measure",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:end_measure",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:end_measure",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:measure_waiting",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:measure_waiting",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:spawn_measure_probe",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:spawn_measure_probe",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:notify_measured",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:notify_measured",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:measured_off_the_tick",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:measured_off_the_tick",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:any",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:any",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:cursor_preview_hover",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:cursor_preview_hover",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:current_hover_scales",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:current_hover_scales",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:content_of",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:content_of",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:content_names_another_kind",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:content_names_another_kind",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:read",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:read",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:routed_kind",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:routed_kind",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:book_job",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:book_job",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:engine_archive",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:engine_archive",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:names_another_kind",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:names_another_kind",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:svg_document",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:svg_document",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:html_drawn_by_the_engine",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:html_drawn_by_the_engine",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:is_text",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:is_text",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:is_painted_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:is_painted_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:is_video",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:is_video",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:is_audio",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:is_audio",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:bytes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "function:src/ui/preview_window/hover_facts.rs:bytes",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "class:src/ui/preview_window/hover_facts.rs:MeasureScope",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "class:src/ui/preview_window/hover_facts.rs:MeasureScope",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "class:src/ui/preview_window/hover_facts.rs:MeasuredBox",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "class:src/ui/preview_window/hover_facts.rs:MeasuredBox",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "class:src/ui/preview_window/hover_facts.rs:PreviewCursorHover",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "class:src/ui/preview_window/hover_facts.rs:PreviewCursorHover",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "class:src/ui/preview_window/hover_facts.rs:HoverFacts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "class:src/ui/preview_window/hover_facts.rs:HoverFacts",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "class:src/ui/preview_window/hover_facts.rs:FrameBox",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/hover_facts.rs",
+      "target": "class:src/ui/preview_window/hover_facts.rs:FrameBox",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:file_version",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:file_version",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:image_cache_limit_bytes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:image_cache_limit_bytes",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:image_cache_trim",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:image_cache_trim",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:trim_image_cache",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:trim_image_cache",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:image_cache_get",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:image_cache_get",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:image_cache_put",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "function:src/ui/preview_window/image_cache.rs:image_cache_put",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "class:src/ui/preview_window/image_cache.rs:ImageCacheEntry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "class:src/ui/preview_window/image_cache.rs:ImageCacheEntry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "class:src/ui/preview_window/image_cache.rs:FileVersion",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "class:src/ui/preview_window/image_cache.rs:FileVersion",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "class:src/ui/preview_window/image_cache.rs:ImageCacheKey",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "class:src/ui/preview_window/image_cache.rs:ImageCacheKey",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "class:src/ui/preview_window/image_cache.rs:ImageCache",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/image_cache.rs",
+      "target": "class:src/ui/preview_window/image_cache.rs:ImageCache",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_static_image",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_static_image",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_design_preview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_design_preview",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_engine_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_engine_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_comic_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_comic_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_book_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_book_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_engine_page_for_office",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_engine_page_for_office",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_magick_picture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_magick_picture",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:decode_png",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:decode_png",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_vector_preview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_vector_preview",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_pdf_first_page",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_pdf_first_page",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_office_preview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_office_preview",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_text_preview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_text_preview",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_archive_preview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_archive_preview",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_video_thumbnail",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load.rs",
+      "target": "function:src/ui/preview_window/load.rs:load_video_thumbnail",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}

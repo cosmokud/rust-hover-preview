@@ -1,0 +1,793 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/shell/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "src/shell/mod.rs",
+      "summary": "mod.rs (undefined, 7 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/shell/pin_navigation.rs",
+      "type": "file",
+      "name": "pin_navigation.rs",
+      "filePath": "src/shell/pin_navigation.rs",
+      "summary": "pin_navigation.rs (undefined, 981 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:list_for",
+      "type": "function",
+      "name": "list_for",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        58,
+        81
+      ],
+      "summary": "Function list_for in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:wanted_category",
+      "type": "function",
+      "name": "wanted_category",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        86,
+        88
+      ],
+      "summary": "Function wanted_category in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:nav_mode_for",
+      "type": "function",
+      "name": "nav_mode_for",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        94,
+        100
+      ],
+      "summary": "Function nav_mode_for in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:step_to",
+      "type": "function",
+      "name": "step_to",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        120,
+        139
+      ],
+      "summary": "Function step_to in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:forget_folder",
+      "type": "function",
+      "name": "forget_folder",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        150,
+        154
+      ],
+      "summary": "Function forget_folder in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:entries_for",
+      "type": "function",
+      "name": "entries_for",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        156,
+        186
+      ],
+      "summary": "Function entries_for in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:scan",
+      "type": "function",
+      "name": "scan",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        194,
+        285
+      ],
+      "summary": "Function scan in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:order",
+      "type": "function",
+      "name": "order",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        302,
+        347
+      ],
+      "summary": "Function order in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:kind_rank",
+      "type": "function",
+      "name": "kind_rank",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        353,
+        370
+      ],
+      "summary": "Function kind_rank in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:natural_cmp",
+      "type": "function",
+      "name": "natural_cmp",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        385,
+        396
+      ],
+      "summary": "Function natural_cmp in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:natural_str_cmp",
+      "type": "function",
+      "name": "natural_str_cmp",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        399,
+        447
+      ],
+      "summary": "Function natural_str_cmp in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:take_digits",
+      "type": "function",
+      "name": "take_digits",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        450,
+        460
+      ],
+      "summary": "Function take_digits in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:same_file",
+      "type": "function",
+      "name": "same_file",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        466,
+        468
+      ],
+      "summary": "Function same_file in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/pin_navigation.rs:same_folder",
+      "type": "function",
+      "name": "same_folder",
+      "filePath": "src/shell/pin_navigation.rs",
+      "lineRange": [
+        473,
+        479
+      ],
+      "summary": "Function same_folder in pin_navigation.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/shell/tray.rs",
+      "type": "file",
+      "name": "tray.rs",
+      "filePath": "src/shell/tray.rs",
+      "summary": "tray.rs (undefined, 105 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/shell/tray/event_loop.rs",
+      "type": "file",
+      "name": "event_loop.rs",
+      "filePath": "src/shell/tray/event_loop.rs",
+      "summary": "event_loop.rs (undefined, 796 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/tray/event_loop.rs:tray_window_proc",
+      "type": "function",
+      "name": "tray_window_proc",
+      "filePath": "src/shell/tray/event_loop.rs",
+      "lineRange": [
+        130,
+        623
+      ],
+      "summary": "Function tray_window_proc in event_loop.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/shell/tray/event_loop.rs:add_tray_icon",
+      "type": "function",
+      "name": "add_tray_icon",
+      "filePath": "src/shell/tray/event_loop.rs",
+      "lineRange": [
+        625,
+        681
+      ],
+      "summary": "Function add_tray_icon in event_loop.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/tray/event_loop.rs:run_tray",
+      "type": "function",
+      "name": "run_tray",
+      "filePath": "src/shell/tray/event_loop.rs",
+      "lineRange": [
+        701,
+        796
+      ],
+      "summary": "Function run_tray in event_loop.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:src/shell/wheel_input.rs",
+      "type": "file",
+      "name": "wheel_input.rs",
+      "filePath": "src/shell/wheel_input.rs",
+      "summary": "wheel_input.rs (undefined, 92 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "shell"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/shell/wheel_input.rs:wheel_tick_count",
+      "type": "function",
+      "name": "wheel_tick_count",
+      "filePath": "src/shell/wheel_input.rs",
+      "lineRange": [
+        33,
+        35
+      ],
+      "summary": "Function wheel_tick_count in wheel_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/wheel_input.rs:take_text_scroll_delta",
+      "type": "function",
+      "name": "take_text_scroll_delta",
+      "filePath": "src/shell/wheel_input.rs",
+      "lineRange": [
+        39,
+        41
+      ],
+      "summary": "Function take_text_scroll_delta in wheel_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/wheel_input.rs:spawn_wheel_watcher",
+      "type": "function",
+      "name": "spawn_wheel_watcher",
+      "filePath": "src/shell/wheel_input.rs",
+      "lineRange": [
+        44,
+        51
+      ],
+      "summary": "Function spawn_wheel_watcher in wheel_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/wheel_input.rs:request_stop",
+      "type": "function",
+      "name": "request_stop",
+      "filePath": "src/shell/wheel_input.rs",
+      "lineRange": [
+        54,
+        56
+      ],
+      "summary": "Function request_stop in wheel_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/shell/wheel_input.rs:wheel_hook_proc",
+      "type": "function",
+      "name": "wheel_hook_proc",
+      "filePath": "src/shell/wheel_input.rs",
+      "lineRange": [
+        58,
+        87
+      ],
+      "summary": "Function wheel_hook_proc in wheel_input.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:list_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:list_for",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:wanted_category",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:wanted_category",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:nav_mode_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:nav_mode_for",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:step_to",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:step_to",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:forget_folder",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:forget_folder",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:entries_for",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:scan",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:order",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:kind_rank",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:natural_cmp",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:natural_str_cmp",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:take_digits",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:same_file",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:same_file",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:same_folder",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "function:src/shell/pin_navigation.rs:same_folder",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/tray/event_loop.rs",
+      "target": "function:src/shell/tray/event_loop.rs:tray_window_proc",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/event_loop.rs",
+      "target": "function:src/shell/tray/event_loop.rs:add_tray_icon",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/event_loop.rs",
+      "target": "function:src/shell/tray/event_loop.rs:run_tray",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/tray/event_loop.rs",
+      "target": "function:src/shell/tray/event_loop.rs:run_tray",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/wheel_input.rs",
+      "target": "function:src/shell/wheel_input.rs:wheel_tick_count",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/wheel_input.rs",
+      "target": "function:src/shell/wheel_input.rs:wheel_tick_count",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/wheel_input.rs",
+      "target": "function:src/shell/wheel_input.rs:take_text_scroll_delta",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/wheel_input.rs",
+      "target": "function:src/shell/wheel_input.rs:take_text_scroll_delta",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/wheel_input.rs",
+      "target": "function:src/shell/wheel_input.rs:spawn_wheel_watcher",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/wheel_input.rs",
+      "target": "function:src/shell/wheel_input.rs:spawn_wheel_watcher",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/wheel_input.rs",
+      "target": "function:src/shell/wheel_input.rs:request_stop",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/wheel_input.rs",
+      "target": "function:src/shell/wheel_input.rs:request_stop",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/shell/wheel_input.rs",
+      "target": "function:src/shell/wheel_input.rs:wheel_hook_proc",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/shell/mod.rs",
+      "target": "file:src/shell/cloud_files.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/mod.rs",
+      "target": "file:src/shell/explorer_hook.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/mod.rs",
+      "target": "file:src/shell/hook_thread.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/mod.rs",
+      "target": "file:src/shell/key_input.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/mod.rs",
+      "target": "file:src/shell/pin_navigation.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/mod.rs",
+      "target": "file:src/shell/tray.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/mod.rs",
+      "target": "file:src/shell/wheel_input.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "file:src/formats/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "file:src/paths.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/pin_navigation.rs",
+      "target": "file:src/shell/explorer_hook.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/tray.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/tray/event_loop.rs",
+      "target": "file:src/app/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/tray/event_loop.rs",
+      "target": "file:src/config/config.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/shell/tray/event_loop.rs",
+      "target": "file:src/shell/mod.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

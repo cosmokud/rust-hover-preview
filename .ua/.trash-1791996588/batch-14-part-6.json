@@ -1,0 +1,2752 @@
+{
+  "nodes": [
+    {
+      "id": "file:src/ui/preview_window/load_dispatch.rs",
+      "type": "file",
+      "name": "load_dispatch.rs",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "summary": "load_dispatch.rs (undefined, 661 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:load_media",
+      "type": "function",
+      "name": "load_media",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        21,
+        83
+      ],
+      "summary": "Function load_media in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:load_media_of_kind",
+      "type": "function",
+      "name": "load_media_of_kind",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        94,
+        198
+      ],
+      "summary": "Function load_media_of_kind in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:load_picture",
+      "type": "function",
+      "name": "load_picture",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        209,
+        300
+      ],
+      "summary": "Function load_picture in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:queue_load_request",
+      "type": "function",
+      "name": "queue_load_request",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        325,
+        331
+      ],
+      "summary": "Function queue_load_request in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:clear_load_request",
+      "type": "function",
+      "name": "clear_load_request",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        333,
+        338
+      ],
+      "summary": "Function clear_load_request in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:spawn_load_worker",
+      "type": "function",
+      "name": "spawn_load_worker",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        340,
+        427
+      ],
+      "summary": "Function spawn_load_worker in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:load_spinner_delay",
+      "type": "function",
+      "name": "load_spinner_delay",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        436,
+        443
+      ],
+      "summary": "Function load_spinner_delay in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:waiting_placement",
+      "type": "function",
+      "name": "waiting_placement",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        486,
+        493
+      ],
+      "summary": "Function waiting_placement in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:spinner_due",
+      "type": "function",
+      "name": "spinner_due",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        583,
+        585
+      ],
+      "summary": "Function spinner_due in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:follow_pointer",
+      "type": "function",
+      "name": "follow_pointer",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        600,
+        638
+      ],
+      "summary": "Function follow_pointer in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/load_dispatch.rs:answer_belongs_to_the_wait",
+      "type": "function",
+      "name": "answer_belongs_to_the_wait",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        652,
+        661
+      ],
+      "summary": "Function answer_belongs_to_the_wait in load_dispatch.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/load_dispatch.rs:LoadResult",
+      "type": "class",
+      "name": "LoadResult",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        303,
+        310
+      ],
+      "summary": "Class LoadResult in load_dispatch.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/load_dispatch.rs:LoadRequest",
+      "type": "class",
+      "name": "LoadRequest",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        313,
+        321
+      ],
+      "summary": "Class LoadRequest in load_dispatch.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/load_dispatch.rs:HoverPlacement",
+      "type": "class",
+      "name": "HoverPlacement",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        458,
+        472
+      ],
+      "summary": "Class HoverPlacement in load_dispatch.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/load_dispatch.rs:Followed",
+      "type": "class",
+      "name": "Followed",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        499,
+        502
+      ],
+      "summary": "Class Followed in load_dispatch.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/load_dispatch.rs:PendingLoad",
+      "type": "class",
+      "name": "PendingLoad",
+      "filePath": "src/ui/preview_window/load_dispatch.rs",
+      "lineRange": [
+        505,
+        573
+      ],
+      "summary": "Class PendingLoad in load_dispatch.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/ui/preview_window/loading_paint.rs",
+      "type": "file",
+      "name": "loading_paint.rs",
+      "filePath": "src/ui/preview_window/loading_paint.rs",
+      "summary": "loading_paint.rs (undefined, 388 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/loading_paint.rs:render_loading_frame",
+      "type": "function",
+      "name": "render_loading_frame",
+      "filePath": "src/ui/preview_window/loading_paint.rs",
+      "lineRange": [
+        18,
+        96
+      ],
+      "summary": "Function render_loading_frame in loading_paint.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/loading_paint.rs:create_loading_media",
+      "type": "function",
+      "name": "create_loading_media",
+      "filePath": "src/ui/preview_window/loading_paint.rs",
+      "lineRange": [
+        99,
+        115
+      ],
+      "summary": "Function create_loading_media in loading_paint.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/loading_paint.rs:pin_arc_set",
+      "type": "function",
+      "name": "pin_arc_set",
+      "filePath": "src/ui/preview_window/loading_paint.rs",
+      "lineRange": [
+        148,
+        155
+      ],
+      "summary": "Function pin_arc_set in loading_paint.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/loading_paint.rs:paint_pin_spinner",
+      "type": "function",
+      "name": "paint_pin_spinner",
+      "filePath": "src/ui/preview_window/loading_paint.rs",
+      "lineRange": [
+        168,
+        235
+      ],
+      "summary": "Function paint_pin_spinner in loading_paint.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/loading_paint.rs:blend_pin_arc_pixel",
+      "type": "function",
+      "name": "blend_pin_arc_pixel",
+      "filePath": "src/ui/preview_window/loading_paint.rs",
+      "lineRange": [
+        244,
+        259
+      ],
+      "summary": "Function blend_pin_arc_pixel in loading_paint.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/loading_paint.rs:spinner_overlay_box",
+      "type": "function",
+      "name": "spinner_overlay_box",
+      "filePath": "src/ui/preview_window/loading_paint.rs",
+      "lineRange": [
+        274,
+        301
+      ],
+      "summary": "Function spinner_overlay_box in loading_paint.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/loading_paint.rs:overlay_loading_spinner",
+      "type": "function",
+      "name": "overlay_loading_spinner",
+      "filePath": "src/ui/preview_window/loading_paint.rs",
+      "lineRange": [
+        311,
+        388
+      ],
+      "summary": "Function overlay_loading_spinner in loading_paint.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/ui/preview_window/media_data.rs",
+      "type": "file",
+      "name": "media_data.rs",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "summary": "media_data.rs (undefined, 686 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:video_geometry_cache",
+      "type": "function",
+      "name": "video_geometry_cache",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        43,
+        49
+      ],
+      "summary": "Function video_geometry_cache in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:fill_band_opaque",
+      "type": "function",
+      "name": "fill_band_opaque",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        108,
+        110
+      ],
+      "summary": "Function fill_band_opaque in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:fill_band_hit_testable",
+      "type": "function",
+      "name": "fill_band_hit_testable",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        121,
+        123
+      ],
+      "summary": "Function fill_band_hit_testable in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:fill_band",
+      "type": "function",
+      "name": "fill_band",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        127,
+        144
+      ],
+      "summary": "Function fill_band in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:current_frame",
+      "type": "function",
+      "name": "current_frame",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        148,
+        150
+      ],
+      "summary": "Function current_frame in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:current_pixels",
+      "type": "function",
+      "name": "current_pixels",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        152,
+        156
+      ],
+      "summary": "Function current_pixels in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:refresh_audio_card",
+      "type": "function",
+      "name": "refresh_audio_card",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        172,
+        213
+      ],
+      "summary": "Function refresh_audio_card in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:relayout_audio_card",
+      "type": "function",
+      "name": "relayout_audio_card",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        220,
+        255
+      ],
+      "summary": "Function relayout_audio_card in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:current_width",
+      "type": "function",
+      "name": "current_width",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        257,
+        259
+      ],
+      "summary": "Function current_width in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:current_height",
+      "type": "function",
+      "name": "current_height",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        261,
+        263
+      ],
+      "summary": "Function current_height in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:current_frame_is_opaque",
+      "type": "function",
+      "name": "current_frame_is_opaque",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        267,
+        269
+      ],
+      "summary": "Function current_frame_is_opaque in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:is_fully_loaded",
+      "type": "function",
+      "name": "is_fully_loaded",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        272,
+        277
+      ],
+      "summary": "Function is_fully_loaded in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:sync_shared_frames",
+      "type": "function",
+      "name": "sync_shared_frames",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        288,
+        306
+      ],
+      "summary": "Function sync_shared_frames in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:frames_were_released",
+      "type": "function",
+      "name": "frames_were_released",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        309,
+        314
+      ],
+      "summary": "Function frames_were_released in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:release_played_frames",
+      "type": "function",
+      "name": "release_played_frames",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        330,
+        363
+      ],
+      "summary": "Function release_played_frames in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:advance_frame",
+      "type": "function",
+      "name": "advance_frame",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        365,
+        434
+      ],
+      "summary": "Function advance_frame in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:is_streaming",
+      "type": "function",
+      "name": "is_streaming",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        437,
+        446
+      ],
+      "summary": "Function is_streaming in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:should_draw_streaming_overlay",
+      "type": "function",
+      "name": "should_draw_streaming_overlay",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        448,
+        456
+      ],
+      "summary": "Function should_draw_streaming_overlay in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:update_loading_frame",
+      "type": "function",
+      "name": "update_loading_frame",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        458,
+        477
+      ],
+      "summary": "Function update_loading_frame in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:cancel_background_work",
+      "type": "function",
+      "name": "cancel_background_work",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        479,
+        483
+      ],
+      "summary": "Function cancel_background_work in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:take_native_video_frame",
+      "type": "function",
+      "name": "take_native_video_frame",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        493,
+        517
+      ],
+      "summary": "Function take_native_video_frame in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:current_text_options",
+      "type": "function",
+      "name": "current_text_options",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        528,
+        545
+      ],
+      "summary": "Function current_text_options in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:current_archive_options",
+      "type": "function",
+      "name": "current_archive_options",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        549,
+        560
+      ],
+      "summary": "Function current_archive_options in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:current_media_is_painted",
+      "type": "function",
+      "name": "current_media_is_painted",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        564,
+        574
+      ],
+      "summary": "Function current_media_is_painted in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:current_media_kind",
+      "type": "function",
+      "name": "current_media_kind",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        581,
+        587
+      ],
+      "summary": "Function current_media_kind in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:engine_svg_media",
+      "type": "function",
+      "name": "engine_svg_media",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        621,
+        635
+      ],
+      "summary": "Function engine_svg_media in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:engine_font_media",
+      "type": "function",
+      "name": "engine_font_media",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        639,
+        644
+      ],
+      "summary": "Function engine_font_media in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:pinned_engine_media",
+      "type": "function",
+      "name": "pinned_engine_media",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        659,
+        665
+      ],
+      "summary": "Function pinned_engine_media in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_data.rs:static_image_media",
+      "type": "function",
+      "name": "static_image_media",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        672,
+        686
+      ],
+      "summary": "Function static_image_media in media_data.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_data.rs:VideoGeometryKey",
+      "type": "class",
+      "name": "VideoGeometryKey",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        13,
+        16
+      ],
+      "summary": "Class VideoGeometryKey in media_data.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_data.rs:ProbedGeometry",
+      "type": "class",
+      "name": "ProbedGeometry",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        22,
+        30
+      ],
+      "summary": "Class ProbedGeometry in media_data.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_data.rs:MediaData",
+      "type": "class",
+      "name": "MediaData",
+      "filePath": "src/ui/preview_window/media_data.rs",
+      "lineRange": [
+        52,
+        95
+      ],
+      "summary": "Class MediaData in media_data.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/ui/preview_window/media_types.rs",
+      "type": "file",
+      "name": "media_types.rs",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "summary": "media_types.rs (undefined, 742 lines).",
+      "tags": [
+        "code",
+        "rust",
+        "source",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:kind",
+      "type": "function",
+      "name": "kind",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        285,
+        335
+      ],
+      "summary": "Function kind in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:is_loading",
+      "type": "function",
+      "name": "is_loading",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        338,
+        340
+      ],
+      "summary": "Function is_loading in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:is_engine",
+      "type": "function",
+      "name": "is_engine",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        344,
+        346
+      ],
+      "summary": "Function is_engine in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:is_native_video",
+      "type": "function",
+      "name": "is_native_video",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        350,
+        352
+      ],
+      "summary": "Function is_native_video in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:draws_in_a_window_of_its_own",
+      "type": "function",
+      "name": "draws_in_a_window_of_its_own",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        364,
+        366
+      ],
+      "summary": "Function draws_in_a_window_of_its_own in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:is_audio",
+      "type": "function",
+      "name": "is_audio",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        370,
+        372
+      ],
+      "summary": "Function is_audio in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:is_painted",
+      "type": "function",
+      "name": "is_painted",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        377,
+        382
+      ],
+      "summary": "Function is_painted in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:has_bubble_picture",
+      "type": "function",
+      "name": "has_bubble_picture",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        388,
+        410
+      ],
+      "summary": "Function has_bubble_picture in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:bubble_mark",
+      "type": "function",
+      "name": "bubble_mark",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        418,
+        430
+      ],
+      "summary": "Function bubble_mark in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        462,
+        472
+      ],
+      "summary": "Function new in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:set_pixels",
+      "type": "function",
+      "name": "set_pixels",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        475,
+        478
+      ],
+      "summary": "Function set_pixels in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:pixels_are_opaque",
+      "type": "function",
+      "name": "pixels_are_opaque",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        483,
+        489
+      ],
+      "summary": "Function pixels_are_opaque in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:max_first_line",
+      "type": "function",
+      "name": "max_first_line",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        546,
+        548
+      ],
+      "summary": "Function max_first_line in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:scrolled_by",
+      "type": "function",
+      "name": "scrolled_by",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        551,
+        553
+      ],
+      "summary": "Function scrolled_by in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:can_scroll",
+      "type": "function",
+      "name": "can_scroll",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        555,
+        557
+      ],
+      "summary": "Function can_scroll in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:track",
+      "type": "function",
+      "name": "track",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        634,
+        636
+      ],
+      "summary": "Function track in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:chosen",
+      "type": "function",
+      "name": "chosen",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        663,
+        665
+      ],
+      "summary": "Function chosen in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:show_path",
+      "type": "function",
+      "name": "show_path",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        669,
+        674
+      ],
+      "summary": "Function show_path in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:replay_where_the_pointer_is",
+      "type": "function",
+      "name": "replay_where_the_pointer_is",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        691,
+        698
+      ],
+      "summary": "Function replay_where_the_pointer_is in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:hover_is_shown",
+      "type": "function",
+      "name": "hover_is_shown",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        714,
+        720
+      ],
+      "summary": "Function hover_is_shown in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:is_text_preview",
+      "type": "function",
+      "name": "is_text_preview",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        724,
+        726
+      ],
+      "summary": "Function is_text_preview in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:page_is_painted",
+      "type": "function",
+      "name": "page_is_painted",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        729,
+        731
+      ],
+      "summary": "Function page_is_painted in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/ui/preview_window/media_types.rs:effective_frame_delay_ms",
+      "type": "function",
+      "name": "effective_frame_delay_ms",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        733,
+        742
+      ],
+      "summary": "Function effective_frame_delay_ms in media_types.rs.",
+      "tags": [
+        "function",
+        "general",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_types.rs:PreviewMessage",
+      "type": "class",
+      "name": "PreviewMessage",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        33,
+        157
+      ],
+      "summary": "Class PreviewMessage in media_types.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_types.rs:MediaType",
+      "type": "class",
+      "name": "MediaType",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        161,
+        281
+      ],
+      "summary": "Class MediaType in media_types.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_types.rs:ImageFrame",
+      "type": "class",
+      "name": "ImageFrame",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        435,
+        455
+      ],
+      "summary": "Class ImageFrame in media_types.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_types.rs:StreamedFrames",
+      "type": "class",
+      "name": "StreamedFrames",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        503,
+        511
+      ],
+      "summary": "Class StreamedFrames in media_types.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_types.rs:TextPreviewState",
+      "type": "class",
+      "name": "TextPreviewState",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        521,
+        543
+      ],
+      "summary": "Class TextPreviewState in media_types.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_types.rs:VideoCrop",
+      "type": "class",
+      "name": "VideoCrop",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        561,
+        566
+      ],
+      "summary": "Class VideoCrop in media_types.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_types.rs:VideoGeometry",
+      "type": "class",
+      "name": "VideoGeometry",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        571,
+        617
+      ],
+      "summary": "Class VideoGeometry in media_types.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_types.rs:DerivedSubtitles",
+      "type": "class",
+      "name": "DerivedSubtitles",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        622,
+        628
+      ],
+      "summary": "Class DerivedSubtitles in media_types.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/ui/preview_window/media_types.rs:SubtitleStreams",
+      "type": "class",
+      "name": "SubtitleStreams",
+      "filePath": "src/ui/preview_window/media_types.rs",
+      "lineRange": [
+        654,
+        657
+      ],
+      "summary": "Class SubtitleStreams in media_types.rs.",
+      "tags": [
+        "class",
+        "type-definition",
+        "general"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:load_media",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:load_media",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:load_media_of_kind",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:load_media_of_kind",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:load_picture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:load_picture",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:queue_load_request",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:queue_load_request",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:clear_load_request",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:clear_load_request",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:spawn_load_worker",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:spawn_load_worker",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:load_spinner_delay",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:load_spinner_delay",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:waiting_placement",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:waiting_placement",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:spinner_due",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:spinner_due",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:follow_pointer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:follow_pointer",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:answer_belongs_to_the_wait",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "function:src/ui/preview_window/load_dispatch.rs:answer_belongs_to_the_wait",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "class:src/ui/preview_window/load_dispatch.rs:LoadResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "class:src/ui/preview_window/load_dispatch.rs:LoadResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "class:src/ui/preview_window/load_dispatch.rs:LoadRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "class:src/ui/preview_window/load_dispatch.rs:LoadRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "class:src/ui/preview_window/load_dispatch.rs:HoverPlacement",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "class:src/ui/preview_window/load_dispatch.rs:HoverPlacement",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "class:src/ui/preview_window/load_dispatch.rs:Followed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "class:src/ui/preview_window/load_dispatch.rs:Followed",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "class:src/ui/preview_window/load_dispatch.rs:PendingLoad",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/load_dispatch.rs",
+      "target": "class:src/ui/preview_window/load_dispatch.rs:PendingLoad",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:render_loading_frame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:render_loading_frame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:create_loading_media",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:create_loading_media",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:pin_arc_set",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:pin_arc_set",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:paint_pin_spinner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:paint_pin_spinner",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:blend_pin_arc_pixel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:blend_pin_arc_pixel",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:spinner_overlay_box",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:spinner_overlay_box",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:overlay_loading_spinner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/loading_paint.rs",
+      "target": "function:src/ui/preview_window/loading_paint.rs:overlay_loading_spinner",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:video_geometry_cache",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:video_geometry_cache",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:fill_band_opaque",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:fill_band_opaque",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:fill_band_hit_testable",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:fill_band_hit_testable",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:fill_band",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_frame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_frame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_pixels",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_pixels",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:refresh_audio_card",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:refresh_audio_card",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:relayout_audio_card",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:relayout_audio_card",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_width",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_width",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_height",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_height",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_frame_is_opaque",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_frame_is_opaque",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:is_fully_loaded",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:is_fully_loaded",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:sync_shared_frames",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:sync_shared_frames",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:frames_were_released",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:frames_were_released",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:release_played_frames",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:release_played_frames",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:advance_frame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:advance_frame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:is_streaming",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:is_streaming",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:should_draw_streaming_overlay",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:should_draw_streaming_overlay",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:update_loading_frame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:update_loading_frame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:cancel_background_work",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:cancel_background_work",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:take_native_video_frame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:take_native_video_frame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_text_options",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_text_options",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_archive_options",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_archive_options",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_media_is_painted",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_media_is_painted",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_media_kind",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:current_media_kind",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:engine_svg_media",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:engine_svg_media",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:engine_font_media",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:engine_font_media",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:pinned_engine_media",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:pinned_engine_media",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:static_image_media",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "function:src/ui/preview_window/media_data.rs:static_image_media",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "class:src/ui/preview_window/media_data.rs:VideoGeometryKey",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "class:src/ui/preview_window/media_data.rs:VideoGeometryKey",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "class:src/ui/preview_window/media_data.rs:ProbedGeometry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "class:src/ui/preview_window/media_data.rs:ProbedGeometry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "class:src/ui/preview_window/media_data.rs:MediaData",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_data.rs",
+      "target": "class:src/ui/preview_window/media_data.rs:MediaData",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:kind",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:kind",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_loading",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_loading",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_engine",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_engine",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_native_video",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_native_video",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:draws_in_a_window_of_its_own",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:draws_in_a_window_of_its_own",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_audio",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_audio",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_painted",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_painted",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:has_bubble_picture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:has_bubble_picture",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:bubble_mark",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:bubble_mark",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:set_pixels",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:set_pixels",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:pixels_are_opaque",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:pixels_are_opaque",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:max_first_line",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:max_first_line",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:scrolled_by",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:scrolled_by",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:can_scroll",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:can_scroll",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:track",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:track",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:chosen",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:chosen",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:show_path",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:show_path",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:replay_where_the_pointer_is",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:replay_where_the_pointer_is",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:hover_is_shown",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:hover_is_shown",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_text_preview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:is_text_preview",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:page_is_painted",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:page_is_painted",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:effective_frame_delay_ms",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "function:src/ui/preview_window/media_types.rs:effective_frame_delay_ms",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:PreviewMessage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:PreviewMessage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:MediaType",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:MediaType",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:ImageFrame",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:ImageFrame",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:StreamedFrames",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:StreamedFrames",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:TextPreviewState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:TextPreviewState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:VideoCrop",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:VideoCrop",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:VideoGeometry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:VideoGeometry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:DerivedSubtitles",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:DerivedSubtitles",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:SubtitleStreams",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:src/ui/preview_window/media_types.rs",
+      "target": "class:src/ui/preview_window/media_types.rs:SubtitleStreams",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ]
+}
