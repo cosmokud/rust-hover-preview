@@ -36,68 +36,21 @@ impl Drop for MenuSettings {
     }
 }
 
-/// What the configuration file was when a test began: the bytes
-/// it held, no file at all, or a file there that cannot be read —
-/// which is a file a test cannot write back either, so it is left
-/// exactly where it is.
-enum ConfigFileWas {
-    Bytes(Vec<u8>),
-    NoFile,
-    Unreadable,
-}
-
-/// The configuration file as a test found it, put back when the
-/// guard is dropped. A press on a menu's check row writes the
-/// configuration the way every setting this app's own menus write
-/// is, so a test that presses one leaves the file the press wrote
-/// unless it is put back. The file is one file, so the guard holds
-/// the turn to have it until the test is done
-/// (`CONFIG_FILE_TURN`).
+/// The app's own configuration file while a test has it: a folder of the test's own holding
+/// it, taken away when the guard is dropped. A press on a menu's check row writes the
+/// configuration the way every setting this app's own menus write is, and the machine's own
+/// file is the one a run of the app watches every second and takes what it finds in — so a
+/// test that pressed a row over the machine's own would change what that run had
+/// (`ConfigFolderOfItsOwn`). The file is one file, so the guard holds the turn to have it
+/// until the test is done.
 struct ConfigFilePutBack {
-    path: Option<std::path::PathBuf>,
-    was: ConfigFileWas,
-    _turn: std::sync::MutexGuard<'static, ()>,
+    _folder: crate::config::config::ConfigFolderOfItsOwn,
 }
 
 impl ConfigFilePutBack {
     fn take() -> Self {
-        let path = crate::config::config::AppConfig::config_path();
-        let was = match path.as_ref() {
-            Some(path) if path.exists() => match std::fs::read(path) {
-                Ok(bytes) => ConfigFileWas::Bytes(bytes),
-                Err(_) => ConfigFileWas::Unreadable,
-            },
-            _ => ConfigFileWas::NoFile,
-        };
         Self {
-            path,
-            was,
-            _turn: crate::CONFIG_FILE_TURN.lock().expect("the file's turn"),
-        }
-    }
-}
-
-impl Drop for ConfigFilePutBack {
-    fn drop(&mut self) {
-        let Some(path) = self.path.as_ref() else {
-            return;
-        };
-
-        match &self.was {
-            ConfigFileWas::Bytes(bytes) => {
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(path, bytes);
-            }
-            // There was no file before the test, so the file the
-            // test's own press wrote is taken away again.
-            ConfigFileWas::NoFile => {
-                let _ = std::fs::remove_file(path);
-            }
-            // A file that cannot be read is one that cannot be
-            // written back, so it is left where it is.
-            ConfigFileWas::Unreadable => {}
+            _folder: crate::config::config::ConfigFolderOfItsOwn::take(),
         }
     }
 }

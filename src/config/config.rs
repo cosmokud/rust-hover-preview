@@ -94,5 +94,11 @@ use std::fs;
 #[cfg(test)]
 use std::time::Duration;
 
+// The folder of a test's own, reached from the tests that have the app read or write its
+// configuration — the preview window's own beside this module's — so that the machine's own
+// `config.ini`, the one a run of the app watches, is a file no test ever touches.
+#[cfg(test)]
+pub(crate) use settings_io::ConfigFolderOfItsOwn;
+
 #[cfg(test)]
 mod tests;
