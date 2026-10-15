@@ -173,6 +173,11 @@ pub(crate) enum PinCommand {
     /// The file after the one pinned, the same walk the other way.
     Next,
     Minimize,
+    /// Collapse the pin into a place of the asker's own choosing, rather than into the one
+    /// `Pin Mode → Minimize to` has it put: what the card's menu's `To Bubble` and
+    /// `To Taskbar` rows ask for, which say where the pin goes rather than where the next
+    /// minimize would take it (see `collapse_pin_to`).
+    MinimizeTo(PinMinimizeTo),
     Maximize,
     Close,
     /// The bubble a collapsed pin left was clicked: the window goes back up.
