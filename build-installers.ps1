@@ -38,6 +38,13 @@ Write-Host $packagerToolsRoot
 # LTO the local `cargo build --release` uses, and it puts its binary in `target/github`
 # — which is where the packaging metadata looks for it.
 Write-Host "Building NSIS installer..."
+
+# The packaging pipeline stays with this checkout: `binaries-dir` and `out-dir` in Cargo.toml
+# are relative to it, and the CI workflow uploads from those same places. cargo-packager
+# 0.11.8 reads them from Cargo.toml and ignores --binaries-dir/--out-dir, so a machine-local
+# shared target dir is opted out of here rather than followed. CI is unaffected: there the
+# default target dir is this same directory.
+$env:CARGO_TARGET_DIR = Join-Path $repoRoot "target"
 cargo packager --profile github --formats nsis
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

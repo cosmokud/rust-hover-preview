@@ -2013,7 +2013,7 @@ fn a_sounds_bubble_takes_the_place_of_the_minimize_button() {
     );
 }
 
-/// A play pressed on the bubble of a collapsed sound, with `Pin Mode → Pause Preview → Audio` on:
+/// A play pressed on the bubble of a collapsed sound, with `Pin Mode → Pause on Minimize` on:
 /// the park is given back the road a restore gives it back, and the tick that parked it does not
 /// park the sound again over the hand that asked for it.
 ///

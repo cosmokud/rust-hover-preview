@@ -36,7 +36,7 @@ pub(super) const ID_TRAY_PIN: u16 = 1004; // Whether a preview can be pinned wit
 pub(super) const ID_TRAY_PIN_UPDATE: u16 = 1016;
 pub(super) const ID_TRAY_PIN_UPDATE_HOVER: u16 = 1017;
 /// And the two rows of the `Pin Mode → Pause in Bubble` submenu, which now hang as
-/// `Pause Minimized` under each kind's own `Pin Mode`: whether a pin the minimize button put
+/// `Pause on Minimize` under each kind's own `Pin Mode`: whether a pin the minimize button put
 /// away holds the sound it is playing and whether it holds a video. They sit in
 /// the slack the same block left beside the update pair, for the same reason — both are the
 /// pin's own business and neither is a click on the row beside it.

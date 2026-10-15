@@ -1084,9 +1084,9 @@ fn a_press_over_a_finished_ffplay_film_begins_it_again_at_the_top() {
     clear_restart_count();
 }
 
-/// A play pressed on the bubble of a pin the collapse parked, with the `Pin Mode → Pause Preview`
-/// switches on: the park is given back the road a restore gives it back, and the tick that parked
-/// it does not park it again over the hand that asked for it.
+/// A play pressed on the bubble of a pin the collapse parked, with the `Pin Mode → Pause on
+/// Minimize` switches on: the park is given back the road a restore gives it back, and the tick
+/// that parked it does not park it again over the hand that asked for it.
 ///
 /// Its old road was two faults. A park standing was answered by the ordinary toggle, which let go
 /// of a hold a dead player could not be holding and left the bubble holding a park for a film
