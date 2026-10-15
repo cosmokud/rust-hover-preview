@@ -336,11 +336,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // where in a file a sound starts — so a film's settings and a sound's are two menus rather
     // than one (see `append_loop_item` and `append_pin_mode_menu`).
     //
-    // The `Volume` rows inside the film's and the sound's halves are the halves the old
-    // `Volume` menu held, with the sound's `Audio Seek` renamed `Seek` and its `Pin Mode Audio
-    // Seek` renamed `Seek` too, inside `Pin Mode` beside the rest of a pinned sound's own rows.
-    // The picture's half holds the one question a picture answers: whether a pinned one
-    // shuffles.
+    // `Preview Settings` holds what a preview *is* rather than what it is heard at: the film's own
+    // subtitle tracks, whether a hovered one goes round, and what a *pinned* one does — the
+    // levels of both kinds are one menu of their own (see `volume_menu`).
+    //
+    // The film's and the sound's halves used to carry the `Volume` halves the old `Volume` menu
+    // held, with the sound's `Audio Seek` renamed `Seek` and its `Pin Mode Audio Seek` renamed
+    // `Seek` too, inside `Pin Mode` beside the rest of a pinned sound's own rows.
     //
     // The film's and the sound's `Pause Minimized` rows are read here, beside the shuffle and
     // the end of file they hang above: all three are what a *pinned* preview of that kind does,
@@ -439,7 +441,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // Whether a film's own subtitle tracks are probed for and copied out at all,
     // read the same way the two switches above the levels are: a switch about a
     // film's picture rather than a level of the list under it, so it is a row of
-    // `Preview Settings → Video` beside `Volume` rather than a row of either list (see
+    // `Preview Settings → Video` rather than a row of either half of `Volume` (see
     // `video_subtitles`).
     let video_subtitles = CONFIG
         .lock()
@@ -523,17 +525,44 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_AUDIO_VOLUME,
     );
 
+    // The `Volume` submenu's own two halves, hung from the tray rather than from either
+    // kind: what a film and a sound are heard at is one question asked of both, so it is one
+    // menu with a half apiece rather than a row of the film's and the sound's halves of
+    // `Preview Settings` (see `append_switches` and `append_levels`).
+    let volume_menu = CreatePopupMenu().unwrap();
+    let _ = AppendMenuW(
+        volume_menu,
+        MF_STRING | MF_POPUP,
+        video_levels.0 as usize,
+        w!("Video"),
+    );
+    let _ = AppendMenuW(
+        volume_menu,
+        MF_STRING | MF_POPUP,
+        audio_levels.0 as usize,
+        w!("Audio"),
+    );
+
     // The picture kind's own half, above the film's: the one question a picture answers that
     // no other kind's rows answer for it — whether a *pinned* one takes the next file of the
     // folder at random. A picture has no level to be heard at, nothing to go round at the end
     // of, and nowhere in it to start, so the shuffle is the whole of it: a hover has no next
-    // file, and a step back is the file before it either way (see `append_shuffle_item`).
-    let image_menu = CreatePopupMenu().unwrap();
+    // file, and a step back is the file before it either way (see `append_shuffle_item`). It is
+    // the only row a picture's `Pin Mode` has, the way a film's and a sound's own `Pin Mode`
+    // hold theirs.
+    let image_pin_mode = CreatePopupMenu().unwrap();
     append_shuffle_item(
-        image_menu,
+        image_pin_mode,
         ID_TRAY_IMAGE_SHUFFLE,
         image_shuffle,
         DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
+    );
+    let image_menu = CreatePopupMenu().unwrap();
+    let _ = AppendMenuW(
+        image_menu,
+        MF_STRING | MF_POPUP,
+        image_pin_mode.0 as usize,
+        w!("Pin Mode"),
     );
     let _ = AppendMenuW(
         preview_settings,
@@ -542,23 +571,17 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Image"),
     );
 
-    // The film kind's own rows, below its `Volume`: whether a hovered film goes round at the end
-    // of it, and what a *pinned* one does — whether its forward steps shuffle, and what its end
+    // The film kind's own rows: whether a hovered film goes round at the end of
+    // it, and what a *pinned* one does — whether its forward steps shuffle, and what its end
     // does, which is stop there, go round, or step on to the next file that the `Shuffle` row
     // decides between the file beside it and a random one (see `append_loop_item` and
     // `append_pin_mode_menu`).
     let video_preview = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        video_preview,
-        MF_STRING | MF_POPUP,
-        video_levels.0 as usize,
-        w!("Volume"),
-    );
-    // The film's own row, under its `Volume` and above `Loop`: whether its own subtitle tracks
-    // are probed for and copied out at all — a switch about a film's picture rather than a
-    // level, so it is a row of `Preview Settings → Video` beside `Volume` rather than inside it,
-    // and the film's alone and not the sound's (see `video_subtitles`). Its name is the engine's
-    // business rather than one cost for all three (see `subtitles_label`).
+    // The film's own row, above `Loop`: whether its own subtitle tracks are probed for and
+    // copied out at all — a switch about a film's picture rather than a level, so it is a row
+    // of `Preview Settings → Video` and the film's alone and not the sound's (see
+    // `video_subtitles`). Its name is the engine's business rather than one cost for all three
+    // (see `subtitles_label`).
     append_labeled_item(
         video_preview,
         MF_STRING | if video_subtitles { MF_CHECKED } else { MF_UNCHECKED },
@@ -597,12 +620,6 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // (see `pin_mode_audio_seek`). `Pin Mode` is listed below the kind's own rows, so the
     // settings a hovered sound plays by come before the ones only a pinned sound has.
     let audio_preview = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        audio_preview,
-        MF_STRING | MF_POPUP,
-        audio_levels.0 as usize,
-        w!("Volume"),
-    );
     append_loop_item(
         audio_preview,
         ID_TRAY_AUDIO_LOOP,
@@ -1291,6 +1308,19 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         MF_STRING | MF_POPUP,
         background_menu.0 as usize,
         w!("Background"),
+    );
+
+    // Add the "Volume" submenu, below `Background` and above `Performance`: what a film and a
+    // sound are heard at, one half apiece, with each half's own two switches above its levels.
+    // It is a block of its own rather than a row of either kind's half of `Preview Settings`
+    // because the level is the whole of what a film and a sound answer the same way, and the
+    // other rows of those halves — the film's subtitles, the loop, the pin's own — are not that
+    // question at all (see `volume_menu`).
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        volume_menu.0 as usize,
+        w!("Volume"),
     );
 
     // Add the "Performance" submenu: what the app costs while it is working — the memory it

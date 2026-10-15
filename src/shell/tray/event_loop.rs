@@ -286,7 +286,7 @@ unsafe extern "system" fn tray_window_proc(
                     // player rather than by anything on screen.
                     ID_TRAY_REMEMBER_VOLUME => toggle_remember_audio_volume(),
                     ID_TRAY_REMEMBER_VIDEO_VOLUME => toggle_remember_video_volume(),
-                    // The row under `Preview Settings → Video`'s `Volume`: whether a
+                    // The row under `Preview Settings → Video`: whether a
                     // film's own subtitle tracks are probed for and copied out at all,
                     // which is read where a probe runs and where a player is started
                     // rather than by anything on screen.
@@ -317,8 +317,8 @@ unsafe extern "system" fn tray_window_proc(
                     {
                         set_pin_end_of_file(cmd - ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, false)
                     }
-                    // A level of either half of the `Volume` rows inside `Preview Settings →
-                    // Video` and `→ Audio`, by the position it was
+                    // A level of either half of the `Volume` rows inside `Volume →
+                    // Video` and `Volume → Audio`, by the position it was
                     // listed at. The two halves offer the same levels, so one table answers for
                     // both and each range is what says which setting was meant.
                     cmd if (ID_TRAY_VIDEO_VOLUME_BASE
