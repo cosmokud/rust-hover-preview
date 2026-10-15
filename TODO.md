@@ -388,12 +388,6 @@ itself — is taken away for a page as it is for a drawing.
 WebGL2 is not on this list because nothing here blocks it: the runtime has it, and what stood in
 front of it was the script that is now given.
 
-## A Held Sound The Engine Plays Cannot Be Set Going Again
-
-A pinned sound the media engine Windows has is playing — `Volume → Audio → Normalize` off, or on with no gain measured for the file, so `playing_player` answers `Native` — is held by `Space` or the card's own **Play/Pause** button and then never goes on. The cause is the arm's question rather than the press: `toggle_pinned_audio` asks `video_player::set_paused(video_player::is_playing())`, and `is_playing()` is true for as long as a session exists and has not failed, so a press holds the engine again instead of letting it go. The card cannot show a native hold either, because `audio_paused` stays `None` for one — the hold lives in the engine, which nothing on this side reads (`pinned_audio_chrome` draws its play button from `audio_paused.is_none()`).
-
-What a fix has to decide, and why it is not a one-line change: either the engine's own pause state is exposed (`IsPaused` is read inside `readers/video_player/playback.rs` for `audio_ended` and not published) and a native hold is written into `audio_paused` so the chrome and the press agree with it, or a native hold is reworked to let the session go and write the second it stood at, the way the FFmpeg route already does (`toggle_pinned_audio`'s `Ffmpeg` arm, `restart_pinned_audio`) — the same shape the end of a pass now leaves the card in. Either way the fix needs a real Media Foundation session, so no hermetic test covers it today; it wants a check by hand on a machine with `Normalize` off.
-
 ## Configuration
 
 - The `*_BEFORE_*` lists `repair_older_lists` reads are there for files written before this build, and can go when a file that old can no longer be in use — a release or two away. Nothing else carries the history of a list, and the names this app once wrote are not read at all any more: a file that holds one loses the line and nothing else has to know about it.
