@@ -1,0 +1,21 @@
+#!/bin/sh
+# The shared cargo target dir is machine-local, so it cannot live in a committed
+# file without leaking a drive letter into every clone. Instead it arrives from
+# `git config rhp.targetDir` and is handed to cargo as .cargo/target-dir.local.toml,
+# which .cargo/config.toml includes. Unset means this hook writes nothing and cargo
+# uses the usual per-checkout target/, which is what other machines and CI get.
+#
+# post-checkout is the hook `git worktree add` runs, so a new worktree shares the
+# directory with no manual step.
+
+set -eu
+
+target=$(git config --get rhp.targetDir) || exit 0
+[ -n "$target" ] || exit 0
+
+# TOML wants forward slashes; accept a path pasted from Explorer.
+target=$(printf '%s' "$target" | tr '\\' '/')
+
+root=$(git rev-parse --show-toplevel) || exit 0
+mkdir -p "$root/.cargo"
+printf '# Written by .githooks/post-checkout. Machine-local, never committed.\n[build]\ntarget-dir = "%s"\n' "$target" > "$root/.cargo/target-dir.local.toml"
