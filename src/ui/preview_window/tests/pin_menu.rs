@@ -128,10 +128,13 @@ impl Drop for BubblePutBack {
     }
 }
 
-/// A pin stood up for a test in a window tall enough to hold the whole of the card's menu:
-/// the panel is held inside the card's own window, so a card shorter than the panel has the
-/// rows past its own bottom edge clipped off it (see `pin_chrome::menu_popup_from_point`).
-fn a_sound_pin_tall_enough_for_its_menu() -> PinnedPreview {
+/// A pin stood up for a test showing a sound's card big enough that a right-click on it
+/// leaves the whole of the menu's room on the screen beside it: the panel is placed against
+/// the display's own work area rather than against the card's box, so the card is no longer
+/// asked to be tall enough to hold its own menu — and these tests keep a card that would
+/// have been, which is the shape a card on a real machine has (see
+/// `pin_chrome::menu_popup_from_point`).
+fn a_sound_card_whose_menu_fits_the_screen() -> PinnedPreview {
     PinnedPreview {
         content: (100, 100, 500, 420),
         ..sound_pin()
@@ -264,21 +267,18 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     assert!(
         pinned_menu_geometry().is_none(),
         "a menu that has not been asked for is not painted"
     );
 
-    let (width, height) = pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
-        .expect("the pin that was installed");
     let hwnd = HWND(0x1000 as *mut _);
 
     // A point that leaves the panel room: the panel's own top-left is the
     // point itself, the moment the press has landed.
-    let (x, y) = (20, 20);
+    let (x, y) = on_screen((20, 20));
     unsafe { open_pin_menu(hwnd, x, y) };
     let Some(paint) = pinned_menu_geometry() else {
         panic!("a menu that is up is painted");
@@ -336,7 +336,7 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
 
     // A second right-click moves the panel to the new point, and the menu
     // stays up.
-    let (x, y) = (30, 40);
+    let (x, y) = on_screen((30, 40));
     unsafe { open_pin_menu(hwnd, x, y) };
     let Some(paint) = pinned_menu_geometry() else {
         panic!("the menu is still up");
@@ -347,17 +347,23 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
         "a second right-click moves the panel to the new point"
     );
 
-    // A right-click near the far corner would put the panel off the
-    // window, so the placement holds it inside.
-    unsafe { open_pin_menu(hwnd, width - 2, height - 2) };
+    // A right-click near the far corner of the screen would put the panel off
+    // it, so the placement holds it inside: the room a panel is held in is the
+    // display's own work area and not the card's box, which is what lets a menu
+    // taller than the card keep every one of its rows (see `pin_menu_window`).
+    let screen = work_area_at(x, y);
+    unsafe { open_pin_menu(hwnd, screen.right - 2, screen.bottom - 2) };
     let Some(paint) = pinned_menu_geometry() else {
         panic!("the menu is still up");
     };
     assert!(
-        paint.popup.panel.right <= width && paint.popup.panel.bottom <= height,
-        "a panel asked for near the corner is held inside the window"
+        paint.popup.panel.right <= screen.right && paint.popup.panel.bottom <= screen.bottom,
+        "a panel asked for near the corner of the screen is held inside it"
     );
-    assert!(paint.popup.panel.left >= 0 && paint.popup.panel.top >= 0);
+    assert!(
+        paint.popup.panel.left >= screen.left && paint.popup.panel.top >= screen.top,
+        "and it is held inside the work area's own top-left"
+    );
 }
 
 /// A right-click on a pin that is not showing a sound's card opens
@@ -397,7 +403,7 @@ fn the_menu_carries_its_arrow_with_the_flyout_down() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| pin.menu.open = true);
     let Some(paint) = pinned_menu_geometry() else {
@@ -466,7 +472,7 @@ fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| pin.menu.open = true);
     let Some(paint) = pinned_menu_geometry() else {
@@ -538,7 +544,7 @@ fn a_press_on_the_shuffle_row_turns_it_over_and_writes_it_down() {
     let _file = ConfigFilePutBack::take();
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| pin.menu.open = true);
     let Some(paint) = pinned_menu_geometry() else {
@@ -590,6 +596,71 @@ fn a_press_on_the_shuffle_row_turns_it_over_and_writes_it_down() {
     );
 }
 
+/// A menu standing with the whole screen to its right opens its flyout to the right of
+/// it, and one asked for at the screen's own right edge opens it to the left: the room a
+/// flyout is placed in is the display's own work area and not the card's box, so what
+/// says which side it opens on is where the menu stands on the screen — which is also why
+/// a card no wider than the menu still has a flyout to open (see `pinned_menu_paint`).
+#[test]
+fn the_flyout_opens_right_of_the_menu_unless_the_screens_right_edge_says_otherwise() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
+
+    let hwnd = HWND(0x1000 as *mut _);
+    let screen = work_area_at(0, 0);
+
+    // With the screen open to the right of it, the flyout is placed right of the menu it
+    // came from.
+    unsafe { open_pin_menu(hwnd, 120, 120) };
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    assert!(
+        unsafe { pinned_menu_press(hwnd, x, y) },
+        "a press on the Seek row is the menu's own"
+    );
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let flyout = paint.flyout.as_ref().expect("the flyout is up");
+    assert_eq!(
+        paint.popup.arrow,
+        pin_chrome::MenuArrow::Right,
+        "the Seek row's door points at the flyout on its right"
+    );
+    assert!(
+        flyout.popup.panel.left >= paint.popup.panel.right,
+        "and the flyout stands right of the menu it came from"
+    );
+
+    // Asked for at the screen's own right edge, it flips to the menu's left — the standard
+    // Windows behaviour — with the menu itself left where the click put it.
+    unsafe { open_pin_menu(hwnd, screen.right - 2, screen.top + 20) };
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    assert!(
+        unsafe { pinned_menu_press(hwnd, x, y) },
+        "a press on the Seek row is the menu's own"
+    );
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let flyout = paint.flyout.as_ref().expect("the flyout is up");
+    assert_eq!(
+        paint.popup.arrow,
+        pin_chrome::MenuArrow::Left,
+        "the Seek row's door points at the flyout on its left near the screen's own edge"
+    );
+    assert!(
+        flyout.popup.panel.right <= paint.popup.panel.left,
+        "and the flyout stands left of the menu it came from"
+    );
+    assert!(
+        paint.popup.panel.right <= screen.right,
+        "and the menu itself is still held inside the screen"
+    );
+}
+
 /// A press on one of the end-of-file flyout's choice rows makes that end of file the one
 /// the pin plays by from then on, and the menu goes away with the answer — the same bargain
 /// the seek flyout's rows make (see `the_flyout_s_rows_answer_presses`).
@@ -602,7 +673,7 @@ fn a_press_on_an_end_of_file_choice_sets_it_and_puts_the_menu_away() {
     let _file = ConfigFilePutBack::take();
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| {
         pin.menu.open = true;
@@ -672,7 +743,7 @@ fn a_press_outside_the_panel_puts_it_away() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| pin.menu.open = true);
     let Some(paint) = pinned_menu_geometry() else {
@@ -705,7 +776,7 @@ fn the_rows_that_do_something_leave_their_ask_with_the_loop() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     // What each row is for, as the ask it leaves behind with the loop.
     let asks = [
@@ -720,7 +791,7 @@ fn the_rows_that_do_something_leave_their_ask_with_the_loop() {
     for (label, command) in asks {
         with_pin(|pin| {
             pin.menu.open = true;
-            pin.menu.point = (20, 20);
+            pin.menu.point = on_screen((20, 20));
         });
         // The queue is emptied first, so what is read is the ask this press left.
         take_pin_command();
@@ -752,11 +823,11 @@ fn a_press_on_a_rule_is_nothing_at_all() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| {
         pin.menu.open = true;
-        pin.menu.point = (20, 20);
+        pin.menu.point = on_screen((20, 20));
     });
     take_pin_command();
     let paint = pinned_menu_geometry().expect("the menu is up");
@@ -798,7 +869,7 @@ fn the_seek_row_opens_its_flyout_beside_the_menu() {
 
     let _settings = MenuSettings::put(AudioSeek::Middle, PinEndOfFile::Continue, true);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| {
         pin.menu.open = true;
@@ -829,16 +900,30 @@ fn the_seek_row_opens_its_flyout_beside_the_menu() {
         "the flyout is top-aligned with the Seek row"
     );
 
-    // The main menu is still inside the window and
-    // uncovered, and the flyout is inside the window,
-    // which is what keeps it reachable.
-    let (width, height) = pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
-        .expect("the pin that was installed");
-    assert!(paint.popup.panel.left >= 0, "the menu is inside the window");
-    assert!(paint.popup.panel.right <= width, "and uncovered to its right");
-    assert!(flyout.popup.panel.right <= width, "the flyout is inside the window");
-    assert!(flyout.popup.panel.bottom <= height, "and so is its bottom");
+    // The main menu is still inside the screen and
+    // uncovered, and the flyout is inside the screen,
+    // which is what keeps it reachable: the room a
+    // panel is held in is the display's own work area
+    // and not the card's box, which is what lets a
+    // menu taller than the card keep every row (see
+    // `pinned_menu_paint`).
+    let screen = work_area_at(0, 0);
+    assert!(
+        paint.popup.panel.left >= screen.left,
+        "the menu is inside the screen"
+    );
+    assert!(
+        paint.popup.panel.right <= screen.right,
+        "and uncovered to its right"
+    );
+    assert!(
+        flyout.popup.panel.right <= screen.right,
+        "the flyout is inside the screen"
+    );
+    assert!(
+        flyout.popup.panel.bottom <= screen.bottom,
+        "and so is its bottom"
+    );
 
     // The flyout holds the four seek choices, in the
     // order the tray lists them in, with the one the
@@ -872,7 +957,7 @@ fn the_flyout_s_rows_answer_presses() {
 
     let _settings = MenuSettings::put(AudioSeek::Remember, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     // The four choices, in the order the flyout lists
     // them in.
@@ -937,7 +1022,7 @@ fn a_choice_made_in_the_flyout_is_written_down_and_puts_the_whole_menu_away() {
     let _file = ConfigFilePutBack::take();
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| {
         pin.menu.open = true;
@@ -1003,7 +1088,7 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| pin.menu.open = true);
     let Some(paint) = pinned_menu_geometry() else {
@@ -1057,7 +1142,7 @@ fn a_press_outside_both_panels_puts_the_whole_menu_away() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| {
         pin.menu.open = true;
@@ -1099,17 +1184,20 @@ fn a_press_outside_both_panels_puts_the_whole_menu_away() {
     }
 }
 
-/// The screen point a window-relative point of these tests' sound pin
-/// is: its window's box begins at (100, 100), so a point on the menu is
-/// taken to the screen the way the chrome tick takes the pointer.
+/// The screen point a point of these tests' sound card is: the card's own box begins at
+/// (100, 100), so a right-click on it at a point of its own is a point on the screen the
+/// way the window's procedure takes one (see `client_to_screen`). What a panel is read
+/// back as is already on the screen, because that is where it is drawn — in a window of
+/// its own over the screen rather than inside the card (`pin_menu_window`).
 fn on_screen(point: (i32, i32)) -> (i32, i32) {
     (100 + point.0, 100 + point.1)
 }
 
-/// The window-relative middle of a row of the main menu, taken from the band the panel laid
+/// The middle of a row of the main menu, taken from the band the panel laid
 /// the row out in rather than from arithmetic on the row height: a rule between two groups of
 /// rows takes half of one, so the row under one is not a row's height further down (see
-/// `pin_chrome::MenuRowBand`).
+/// `pin_chrome::MenuRowBand`). It is a point on the screen, because that is where the
+/// panel is drawn (see `pin_menu_window`).
 fn menu_row_point(paint: &PinMenuPaint, index: usize) -> (i32, i32) {
     let band = paint
         .popup
@@ -1133,10 +1221,10 @@ fn row_at(rows: &[pin_chrome::MenuRow], label: &str) -> usize {
         .unwrap_or_else(|| panic!("the menu holds the {label} row"))
 }
 
-/// A point in the middle of one of a flyout's rows, in the window's own coordinates: what
+/// The middle of a row of a flyout: what
 /// a press or a hover on that row is aimed with. It is taken from the band the panel laid
 /// the row out in rather than from arithmetic on the row height (see
-/// `pin_chrome::MenuRowBand`).
+/// `pin_chrome::MenuRowBand`), and it is a point on the screen with it.
 fn flyout_row_point(flyout: &PinMenuFlyout, index: usize) -> (i32, i32) {
     let band = flyout
         .popup
@@ -1181,14 +1269,14 @@ fn hovering_the_seek_row_opens_the_flyout_after_a_short_delay() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| {
         pin.menu.open = true;
-        pin.menu.point = (20, 20);
+        pin.menu.point = on_screen((20, 20));
     });
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek = on_screen(menu_row_point(&paint, row_at(&paint.rows, "Seek")));
+    let seek = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
 
     let t0 = Instant::now();
 
@@ -1222,15 +1310,15 @@ fn leaving_the_seek_row_before_the_delay_cancels_its_flyout() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| {
         pin.menu.open = true;
-        pin.menu.point = (20, 20);
+        pin.menu.point = on_screen((20, 20));
     });
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek = on_screen(menu_row_point(&paint, row_at(&paint.rows, "Seek")));
-    let end_of_file = on_screen(menu_row_point(&paint, row_at(&paint.rows, "End of File")));
+    let seek = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
+    let end_of_file = menu_row_point(&paint, row_at(&paint.rows, "End of File"));
 
     let t0 = Instant::now();
     tick(Some(seek), t0);
@@ -1257,16 +1345,16 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| {
         pin.menu.open = true;
-        pin.menu.point = (20, 20);
+        pin.menu.point = on_screen((20, 20));
     });
 
     // Open the flyout by resting on the Seek row past the delay.
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek = on_screen(menu_row_point(&paint, row_at(&paint.rows, "Seek")));
+    let seek = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
     let t0 = Instant::now();
     tick(Some(seek), t0);
     tick(Some(seek), t0 + Duration::from_millis(200));
@@ -1275,10 +1363,10 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
     // Over the flyout itself: it stays.
     let paint = pinned_menu_geometry().expect("the menu is up");
     let flyout = paint.flyout.as_ref().expect("the flyout is up");
-    let on_flyout = on_screen((
+    let on_flyout = (
         (flyout.popup.panel.left + flyout.popup.panel.right) / 2,
         flyout.popup.rows_top + flyout.popup.row_height / 2,
-    ));
+    );
     tick(Some(on_flyout), t0 + Duration::from_millis(300));
     assert!(flyout_is_up(), "the flyout stays up under the pointer");
 
@@ -1286,10 +1374,10 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
     // it stays up across it.
     let paint = pinned_menu_geometry().expect("the menu is up");
     let flyout = paint.flyout.as_ref().expect("the flyout is up");
-    let gap = on_screen((
+    let gap = (
         (paint.popup.panel.right + flyout.popup.panel.left) / 2,
         menu_row_point(&paint, row_at(&paint.rows, "Seek")).1,
-    ));
+    );
     tick(Some(gap), t0 + Duration::from_millis(400));
     assert!(
         flyout_is_up(),
@@ -1297,7 +1385,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
     );
 
     // On the End of File row: it hides.
-    let end_of_file = on_screen(menu_row_point(&paint, row_at(&paint.rows, "End of File")));
+    let end_of_file = menu_row_point(&paint, row_at(&paint.rows, "End of File"));
     assert!(
         tick(Some(end_of_file), t0 + Duration::from_millis(500)),
         "the flyout going is a change worth a repaint"
@@ -1308,7 +1396,7 @@ fn the_flyout_stays_up_across_the_gap_and_hides_on_another_row() {
     );
 
     // Opened again, then the pointer leaves the menu entirely: it hides.
-    let seek = on_screen(menu_row_point(&paint, row_at(&paint.rows, "Seek")));
+    let seek = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
     tick(Some(seek), t0 + Duration::from_millis(600));
     tick(Some(seek), t0 + Duration::from_millis(800));
     assert!(flyout_is_up(), "the flyout opened again");
@@ -1330,14 +1418,14 @@ fn the_row_under_the_pointer_is_the_row_that_is_washed() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     with_pin(|pin| {
         pin.menu.open = true;
-        pin.menu.point = (20, 20);
+        pin.menu.point = on_screen((20, 20));
     });
     let paint = pinned_menu_geometry().expect("the menu is up");
-    let seek_row = on_screen(menu_row_point(&paint, row_at(&paint.rows, "Seek")));
+    let seek_row = menu_row_point(&paint, row_at(&paint.rows, "Seek"));
     let t0 = Instant::now();
 
     assert!(
@@ -1359,10 +1447,10 @@ fn the_row_under_the_pointer_is_the_row_that_is_washed() {
     with_pin(|pin| pin.menu.seek = true);
     let paint = pinned_menu_geometry().expect("the menu is up");
     let flyout = paint.flyout.as_ref().expect("the flyout is up");
-    let choice = on_screen((
+    let choice = (
         (flyout.popup.panel.left + flyout.popup.panel.right) / 2,
         flyout.popup.rows_top + 2 * flyout.popup.row_height + flyout.popup.row_height / 2,
-    ));
+    );
     tick(Some(choice), t0 + Duration::from_millis(50));
     let paint = pinned_menu_geometry().expect("the menu is up");
     assert_eq!(
@@ -1384,7 +1472,7 @@ fn the_loop_takes_a_foreign_press_ask_and_puts_the_menu_away() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     // Any ask another test left behind is taken before this one asks its own.
     take_pin_menu_dismiss();
@@ -1426,7 +1514,7 @@ fn the_same_ask_puts_the_bubbles_menu_away() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     // The bubble's own menu up in the circle a collapsed pin left, with the bubble's handle
     // in the slot the loop's tick reads it from — a window nobody has to put on a screen
@@ -1466,7 +1554,7 @@ fn closing_the_menu_from_the_window_side_puts_both_panels_away() {
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
     let hwnd = HWND(0x1000 as *mut _);
     unsafe { open_pin_menu(hwnd, 20, 20) };
@@ -1487,37 +1575,43 @@ fn closing_the_menu_from_the_window_side_puts_both_panels_away() {
     );
 }
 
-/// A point outside the window's own box is outside it, and a point in it is
-/// not: what a captured press aimed at another app or the taskbar is told
-/// apart by.
+/// A point on neither of the card's menu's panels is outside it, and a point on
+/// a row is not: what a captured press aimed at another app or the taskbar is
+/// told apart by. The panels are drawn in a window of their own over the screen,
+/// so the point is a place on the screen and what says it is on the menu is a
+/// panel's own rows (see `pin_menu_point_is_outside`).
 #[test]
-fn a_point_outside_the_window_is_outside_and_one_inside_is_not() {
+fn a_point_off_both_panels_is_outside_and_one_on_a_row_is_not() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
+    let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
     let _put_back = PutBack(take_pin_for_a_test());
-    stand_pin(Some(a_sound_pin_tall_enough_for_its_menu()));
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
 
-    let (width, height) = pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
-        .expect("the pin that was installed");
+    unsafe { open_pin_menu(HWND(0x1000 as *mut _), 120, 120) };
+    let paint = pinned_menu_geometry().expect("the menu is up");
 
-    assert!(!pin_menu_point_is_outside(0, 0), "the top-left is inside");
+    // The middle of the Shuffle row, which is a row the menu holds.
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Shuffle"));
     assert!(
-        !pin_menu_point_is_outside(width - 1, height - 1),
-        "so is the bottom-right"
+        !pin_menu_point_is_outside(x, y),
+        "a press on a row of the menu is on the menu"
     );
+
+    // A point beside the panel, in the row of its first row: not the panel, and not
+    // a row of any of the menu's.
+    let x = paint.popup.panel.left - 10;
+    let y = paint.popup.rows_top + paint.popup.row_height / 2;
     assert!(
-        pin_menu_point_is_outside(-1, 10),
-        "a captured press from the left is outside"
+        pin_menu_point_is_outside(x, y),
+        "a press off the panel is outside"
     );
+
+    // And a press that landed on another window or on the desktop.
     assert!(
-        pin_menu_point_is_outside(width, 10),
-        "and one from the right is too"
-    );
-    assert!(
-        pin_menu_point_is_outside(10, height),
-        "as is one from below"
+        pin_menu_point_is_outside(-1_000, -1_000),
+        "a press from another window is outside"
     );
 }

@@ -32,9 +32,10 @@ impl Drop for LayeredSurface {
 
 thread_local! {
     /// The surfaces this thread paints layered windows on, one per window and kept between
-    /// repaints. There are two windows at most, and both are painted by the preview thread:
-    /// the preview — which is the pinned window while a pin is up — and the round bubble a
-    /// collapsed pin leaves. A surface rebuilt per repaint would be a display's worth of
+    /// repaints. The windows at most are three, and all of them are painted by the preview
+    /// thread: the preview — which is the pinned window while a pin is up — the round bubble a
+    /// collapsed pin leaves, and the window of the card's own over the screen. A surface
+    /// rebuilt per repaint would be a display's worth of
     /// pixels allocated for every frame of a video.
     pub(super) static LAYERED_SURFACES: RefCell<Vec<(isize, LayeredSurface)>> = const { RefCell::new(Vec::new()) };
     /// Mutable box for the corner spinner: the small piece of a frame the arc is drawn into
@@ -75,6 +76,12 @@ thread_local! {
     /// strip. It is kept between paints for the reason the surfaces above are, and
     /// cleared before each use for the reason the tooltip's is.
     pub(super) static MENU_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+    /// The membrane the card's menu is written on in the window of its own over the screen, for
+    /// the reason the tooltip's membrane is. It is the menu window's rather than the card's
+    /// (`MENU_SURFACE`) because the two windows are painted in turn, and a surface rebuilt for
+    /// each of them is one made and thrown away on every repaint of either. It is cleared
+    /// before each use, for the reason the tooltip's is.
+    pub(super) static MENU_WINDOW_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
 }
 
 /// The last frame a pinned film's player had on screen, held as a frame of its own rather than
@@ -302,8 +309,9 @@ pub(super) fn hold_video_window_frame() -> bool {
     true
 }
 
-/// How many windows keep a surface of their own: the preview — pinned or not — and the bubble.
-pub(super) const LAYERED_SURFACE_WINDOWS: usize = 2;
+/// How many windows keep a surface of their own: the preview — pinned or not — the bubble,
+/// and the card's menu.
+pub(super) const LAYERED_SURFACE_WINDOWS: usize = 3;
 
 /// DIB bits for a `width` x `height` frame in one window's own surface, reusing what
 /// that window already has when the size is unchanged. `None` means the surface could

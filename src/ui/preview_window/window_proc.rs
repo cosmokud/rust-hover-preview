@@ -276,12 +276,16 @@ pub(super) unsafe extern "system" fn window_proc(
         }
         WM_LBUTTONDOWN => {
             let (x, y) = message_point(lparam);
+            // The point on the screen the press landed at, which is what the card's menu is
+            // asked in: its panels are drawn in a window of their own over the screen rather
+            // than inside this one (see `pin_menu_window`).
+            let (screen_x, screen_y) = client_to_screen(hwnd, x, y);
             // A captured press aimed elsewhere — another app, the taskbar —
             // while the card's menu is up: the menu goes away with it, and the
             // press goes no further. No focus is taken for it and no drag is
             // begun from it: the hand is on another window, and answering it
             // as a press on the card would carry this window for that hand.
-            if pin_menu_is_open() && pin_menu_point_is_outside(x, y) {
+            if pin_menu_is_open() && pin_menu_point_is_outside(screen_x, screen_y) {
                 close_pin_menu(hwnd);
                 return LRESULT(0);
             }
@@ -370,14 +374,18 @@ pub(super) unsafe extern "system" fn window_proc(
             // release below.
             if pinned() {
                 let (x, y) = message_point(lparam);
+                // The point on the screen, which is the window the card's menu's panels are
+                // drawn in and the point one is asked of at.
+                let (menu_x, menu_y) = client_to_screen(hwnd, x, y);
                 // A captured right-click aimed elsewhere while the menu is up
-                // puts it away rather than moving it: the panel belongs inside
-                // this window, and a point outside it is a hand that has left.
-                if pin_menu_is_open() && pin_menu_point_is_outside(x, y) {
+                // puts it away rather than moving it: the panel belongs to the
+                // screen rather than to this window, and a point it holds no
+                // panel at is a hand that has left.
+                if pin_menu_is_open() && pin_menu_point_is_outside(menu_x, menu_y) {
                     close_pin_menu(hwnd);
                     return LRESULT(0);
                 }
-                open_pin_menu(hwnd, x, y);
+                open_pin_menu(hwnd, menu_x, menu_y);
                 return LRESULT(0);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)

@@ -82,6 +82,7 @@ mod pin_input;
 mod pin_install;
 mod pin_lifecycle;
 mod pin_menu;
+mod pin_menu_window;
 mod pin_model;
 mod pin_playback;
 mod pin_swap;
@@ -217,8 +218,9 @@ use windows::Win32::UI::Shell::{
     SEE_MASK_ASYNCOK, SEE_MASK_HMONITOR, SHELLEXECUTEINFOW, SHELLEXECUTEINFOW_0,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    EnumWindows, FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindow,
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+    DispatchMessageW, EnumWindows, FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow,
+    GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
     LoadCursorW, MoveWindow,
     MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
@@ -329,6 +331,7 @@ use pin_input::*;
 use pin_install::*;
 use pin_lifecycle::*;
 use pin_menu::*;
+use pin_menu_window::*;
 use pin_model::*;
 use pin_playback::*;
 use pin_swap::*;

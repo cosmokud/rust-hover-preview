@@ -1,5 +1,5 @@
 //! The menu a pinned sound's card opens from a right-click on its window:
-//! the panel that floats over the media below the card, and the rows in
+//! the panel that floats over the screen beside the card, and the rows in
 //! it.
 //!
 //! The panel is placed at the point the press landed and drawn the way a
@@ -50,6 +50,10 @@ pub(super) const MENU_PANEL_WIDTH_PIXELS: f32 = 150.0;
 const MENU_ROW_HEIGHT_PIXELS: f32 = 22.0;
 pub(super) const MENU_PAD_PIXELS: f32 = 6.0;
 
+/// The width of the shadow a panel is drawn with under itself, in the units a
+/// display's scale multiplies: what the window a panel is drawn in has to hold room
+/// for below it as well as the panel's own height (`paint_menu_popup`).
+pub(crate) const MENU_SHADOW_PIXELS: f32 = 2.0;
 /// The room the main menu's own panel holds to the right of its
 /// longest row's label: the same room the panel holds to the
 /// left of it — the pad and the marks' column together
@@ -319,6 +323,11 @@ fn menu_bands(rows: &[MenuRow], rows_top: i32, row_height: i32) -> Vec<MenuRowBa
 /// bottom does — so a click near an edge opens a panel a hand can
 /// still reach.
 ///
+/// Which window the panel is held inside is the caller's own question: the card's
+/// menu is drawn in a window of its own over the screen, and it asks with the
+/// display's own work area as that window's box, so a panel is held inside the
+/// screen rather than inside the card it came out of (see `pin_menu_window`).
+///
 /// The panel is placed here rather than recomputed from anything the
 /// card drew, because a right-click is a point on the window rather
 /// than a button: the old button-anchored menu hung off the gear's
@@ -393,6 +402,39 @@ pub(crate) fn menu_popup_from_point(
         menu_flyout_tier(&placed, width, dpi);
 
     MenuPopup { arrow, ..placed }
+}
+
+/// A panel and its rows moved by a room in x and y: what a menu drawn in a window of
+/// its own over the screen is handed before it is painted, because the panel a hand
+/// answers on the screen is held in the coordinates of the window it is painted in
+/// (see `pin_menu_window`).
+///
+/// A panel and its rows are one thing — the rows' own bands, the panel's pad and the
+/// top its rows start at all move together — so it is one move that is asked for and
+/// not three that could disagree.
+pub(crate) fn menu_popup_shifted(popup: &MenuPopup, dx: i32, dy: i32) -> MenuPopup {
+    let panel = RECT {
+        left: popup.panel.left + dx,
+        top: popup.panel.top + dy,
+        right: popup.panel.right + dx,
+        bottom: popup.panel.bottom + dy,
+    };
+
+    MenuPopup {
+        panel,
+        rows_top: popup.rows_top + dy,
+        row_height: popup.row_height,
+        rows: popup.rows,
+        arrow: popup.arrow,
+        bands: popup
+            .bands
+            .iter()
+            .map(|band| MenuRowBand {
+                top: band.top + dy,
+                ..*band
+            })
+            .collect(),
+    }
 }
 
 /// Where the flyout opened from a row of a menu is, in the window's own
@@ -722,7 +764,7 @@ pub(crate) fn paint_menu_popup(
     }
 
     let radius = (MENU_RADIUS * scale).max(1.0);
-    let shadow = (2.0 * scale).round().max(1.0) as i32;
+    let shadow = (MENU_SHADOW_PIXELS * scale).round().max(1.0) as i32;
 
     // The shadow, the panel and its hairline are the tooltip's
     // own three, so a menu reads as the same kind of floating

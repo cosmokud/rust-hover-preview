@@ -89,6 +89,27 @@ pub fn run_preview_window() {
 
         RegisterClassExW(&taskbar_class);
 
+        // And the class the card's menu is drawn in: a panel of its own over the screen rather
+        // than rows drawn inside the card, which is what keeps a menu taller than the card it
+        // came out of from having its rows cut off by the card's own edges (see
+        // `pin_menu_window`).
+        let menu_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(pin_menu_proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: hinstance.into(),
+            hIcon: Default::default(),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hbrBackground: Default::default(),
+            lpszMenuName: PCWSTR::null(),
+            lpszClassName: PIN_MENU_CLASS,
+            hIconSm: Default::default(),
+        };
+
+        RegisterClassExW(&menu_class);
+
         // Create the preview window
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
@@ -2226,6 +2247,14 @@ pub fn run_preview_window() {
                 if pin_chrome_up() && player_stands_over_the_pin(hwnd) {
                     raise_pinned_window(hwnd);
                 }
+
+                // And the card's menu, which is a window of its own over the screen: the
+                // raise above has to be answered with the menu's own, and the menu's own
+                // paint is the one thing the card's repaint does not cover (see
+                // `render_pin_menu`). Asked whether anything changed or not, because a
+                // menu is a panel a hand is looking at and the price of being sure it is
+                // where it stands is a repaint no bigger than its own rows.
+                render_pin_menu();
             }
 
             // A page the render engine draws is not messaged about the way an Office page
