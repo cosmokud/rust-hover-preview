@@ -452,7 +452,8 @@ pub(super) fn append_pause_minimized_item(menu: HMENU, pause_id: u16, pause: boo
     );
 }
 
-/// The `Video → Pin Mode → Shuffle`, `Audio → Pin Mode → Shuffle` and `Image → Shuffle` rows:
+/// The `Video → Pin Mode → Shuffle`, `Audio → Pin Mode → Shuffle` and
+/// `Image → Pin Mode → Shuffle` rows:
 /// whether the next file a *pinned* preview steps on to — the end of a file its `End of
 /// File` row calls `Jump`, a caption's next press, a forward key — is a random file of the
 /// same kind rather than the one beside it, carrying its check. A hover has no next file,
