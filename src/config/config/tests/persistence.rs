@@ -323,3 +323,119 @@ fn the_picked_mpv_path_round_trips_through_the_file() {
         "nothing picked is an empty path, which is the first install"
     );
 }
+
+/// The machine's own configuration file is one file, and the tests that reach it reach it
+/// one at a time.
+static FILE_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The configuration file as a test found it, put back when the guard is dropped: the app
+/// reaches the file by the machine's own path (`config_path`), so a test that has the app
+/// read or write anything has to leave the file as it was, and a file that was not there has
+/// to be gone again.
+struct ConfigFileAsItWas {
+    path: std::path::PathBuf,
+    was: Option<Vec<u8>>,
+    _turn: std::sync::MutexGuard<'static, ()>,
+}
+
+impl ConfigFileAsItWas {
+    fn take() -> Self {
+        let path = AppConfig::config_path().expect("the configuration file's path");
+        let was = fs::read(&path).ok();
+        Self {
+            path,
+            was,
+            _turn: FILE_TURN.lock().expect("the file's turn"),
+        }
+    }
+}
+
+impl Drop for ConfigFileAsItWas {
+    fn drop(&mut self) {
+        match &self.was {
+            Some(bytes) => {
+                let _ = fs::write(&self.path, bytes);
+            }
+            None => {
+                let _ = fs::remove_file(&self.path);
+            }
+        }
+    }
+}
+
+/// What the app can read a file as: the settings section with a setting in it is what makes a
+/// file one of this app's, and a file without one is not read as a configuration at all.
+#[test]
+fn a_file_with_no_setting_of_its_own_is_not_one_this_app_reads() {
+    assert!(read_ini("").is_none(), "a zero-length file says nothing");
+    assert!(
+        read_ini("[settings]\n").is_none(),
+        "and neither does a settings section holding nothing in it"
+    );
+    assert!(
+        read_ini("[image]\nextensions=png\n").is_none(),
+        "nor one holding only the lists"
+    );
+    assert!(
+        read_ini("nonsense\n").is_none(),
+        "nor one that is not this app's shape at all"
+    );
+    assert!(
+        read_ini("[settings]\naudio_loop=false\n").is_some(),
+        "a setting in the settings section is what the app reads"
+    );
+}
+
+/// A zero-length file is what a write cut short leaves behind — the process ended while it
+/// was happening, which is what a build does to a running copy so it can link over its
+/// binary. It is a file with nothing in it to read, and both reads of the file say exactly
+/// that: neither the start nor the watcher's own read writes the defaults of a fresh
+/// installation over it, which is what used to put every setting back where the app starts.
+#[test]
+fn a_zero_length_file_is_not_written_over_by_either_read() {
+    let file = ConfigFileAsItWas::take();
+    fs::write(&file.path, b"").expect("the zero-length file");
+
+    let loaded = AppConfig::load();
+    assert_eq!(
+        fs::read_to_string(&file.path).expect("the file where it was"),
+        "",
+        "the start wrote nothing over a file it could not read"
+    );
+    assert_eq!(
+        loaded.pin_mode_audio_end_of_file, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+        "and the configuration holds where this build starts rather than a value the file does not say"
+    );
+
+    let mut watched = AppConfig::default();
+    watched.reload_from_disk();
+    assert_eq!(
+        fs::read_to_string(&file.path).expect("the file where it was"),
+        "",
+        "and neither did the watcher's read of the same file"
+    );
+}
+
+/// A save puts the whole of what the app holds on disk, and leaves nothing of its own beside
+/// the file: the text is written under a name of its own and moved over the file, so what is
+/// under the app's own name is the whole text or the file that was there.
+#[test]
+fn a_save_leaves_the_whole_text_on_disk_and_no_copy_of_it_beside() {
+    let file = ConfigFileAsItWas::take();
+
+    let config = AppConfig {
+        pin_mode_audio_end_of_file: PinEndOfFile::Continue,
+        ..Default::default()
+    };
+    config.save();
+
+    assert_eq!(
+        fs::read_to_string(&file.path).expect("the file a save writes"),
+        ordered_text(&config.to_ini()),
+        "the whole of what the app holds is on disk"
+    );
+    assert!(
+        !file.path.with_extension("ini.new").exists(),
+        "and the copy it was written beside is gone"
+    );
+}

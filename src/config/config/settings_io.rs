@@ -317,6 +317,27 @@ pub(super) fn headings_are_old(text: &str) -> bool {
     listed != written
 }
 
+/// The text of a file as the app reads it, or `None` for a file this app cannot read: one that
+/// holds no setting of its own, which is what a zero-length file left behind by a write that
+/// was cut short is, and what a file this app did not write is.
+///
+/// A file that cannot be read is not guessed at. Reading nothing out of one leaves every
+/// setting where a fresh one starts, and the headings and keys a file of this app's own writes
+/// and this one does not are then a reason to write those defaults over it — a write with
+/// nothing to do with the file, which is the one kind of write this app does not make (see
+/// `load`, `reload_from_disk`).
+pub(super) fn read_ini(text: &str) -> Option<Ini> {
+    let mut ini = Ini::new();
+    if ini.read(text.to_string()).is_err() {
+        return None;
+    }
+
+    ini.get_map_ref()
+        .get(CONFIG_SECTION)
+        .is_some_and(|settings| !settings.is_empty())
+        .then_some(ini)
+}
+
 /// The two files the installer leaves behind for the app to find, taken as it starts.
 ///
 /// The installer never writes `config.ini` — a second writer of that file would carry the
@@ -384,8 +405,6 @@ impl AppConfig {
 
         config.is_first_run = !path.exists();
         if !config.is_first_run {
-            let mut ini = Ini::new();
-
             // A file that cannot be read is left exactly where it is, and what it holds is not
             // guessed at: writing the defaults over it would be a write with nothing to do with
             // the file, which is the one kind of write this app does not make. A file that is
@@ -394,11 +413,12 @@ impl AppConfig {
             // The text is read here rather than by `Ini::load`, which reads and parses the same
             // file: a parse keeps nothing of the comments, and whether the settings sit under the
             // headings this build writes them under is a question about the text (see
-            // `headings_are_old`).
+            // `headings_are_old`). A file holding no setting of its own at all — a zero-length
+            // one among them — is not read at all (see `read_ini`).
             if let Ok(text) = fs::read_to_string(&path) {
-                let old_headings = headings_are_old(&text);
+                if let Some(mut ini) = read_ini(&text) {
+                    let old_headings = headings_are_old(&text);
 
-                if ini.read(text).is_ok() {
                     let repaired = lists::repair_older_lists(&mut ini) || old_headings;
                     config.apply_ini(&ini);
 
@@ -459,11 +479,10 @@ impl AppConfig {
     /// watcher sees after it is a file nothing further is done to.
     pub fn reload_from_disk(&mut self) {
         if let Some(path) = Self::config_path() {
-            let mut ini = Ini::new();
             if let Ok(text) = fs::read_to_string(&path) {
-                let old_headings = headings_are_old(&text);
+                if let Some(mut ini) = read_ini(&text) {
+                    let old_headings = headings_are_old(&text);
 
-                if ini.read(text).is_ok() {
                     let repaired = lists::repair_older_lists(&mut ini) || old_headings;
                     self.apply_ini(&ini);
 
@@ -484,13 +503,28 @@ impl AppConfig {
 
     /// Write the configuration out: `to_ini` says what it holds, and `ordered_text` says what
     /// the text of the file is.
+    ///
+    /// The text is written beside the file and moved over the one that is there rather than
+    /// written into it, so that a write cut short — the process ended while it was happening,
+    /// which is what a build does to a running copy so it can link over its binary
+    /// (`build.rs`), or a disk that filled — leaves the file as it was, whole, rather than
+    /// half-written or empty. A zero-length file is one the next start cannot read, and every
+    /// setting it does not find in it is a setting it writes the default back over (see
+    /// `read_ini`).
     pub fn save(&self) {
         if let Some(path) = Self::config_path() {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
 
-            let _ = fs::write(&path, ordered_text(&self.to_ini()));
+            let staged = path.with_extension("ini.new");
+            if fs::write(&staged, ordered_text(&self.to_ini())).is_ok() {
+                // The move is what puts the new text in place, so what a reader finds under
+                // the app's own name is the whole text or the file that was there.
+                if fs::rename(&staged, &path).is_err() {
+                    let _ = fs::remove_file(&staged);
+                }
+            }
         }
     }
 
