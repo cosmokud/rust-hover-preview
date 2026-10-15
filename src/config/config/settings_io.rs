@@ -3,9 +3,12 @@
 //! repairs a file written by an earlier build is put through.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use configparser::ini::Ini;
+
+#[cfg(not(test))]
 use directories::BaseDirs;
 
 use crate::config::theme_files;
@@ -363,10 +366,101 @@ pub(super) fn take_reset_markers(folder: &Path) -> (bool, bool) {
     (reset_settings, reset_extensions)
 }
 
+/// The folder a test build of the app keeps its own configuration in, while a test holds one:
+/// the folder of a test's own rather than the machine's own.
+///
+/// The machine's own configuration file is one file that a run of the app reads every second
+/// (`main`'s watcher) and writes back what it read, so a test that read or wrote it changed
+/// what that run had — and a value no menu offers, a number a hand never chose, stayed.
+///
+/// The file is one file, so one test at a time has the app's own folder.
+#[cfg(test)]
+static FILE_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+static HELD_FOLDER: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// The folder of a test's own, held while the test has the app's configuration file. The
+/// app's own folder is pointed at it for as long as the guard lives, and the folder goes
+/// away with it — including whatever the app wrote in it.
+#[cfg(test)]
+pub(crate) struct ConfigFolderOfItsOwn {
+    path: PathBuf,
+    _turn: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl ConfigFolderOfItsOwn {
+    /// A folder made for the test now, and the configuration file the app reads and writes
+    /// in it. One folder a test rather than one the tests share, so that two tests running
+    /// beside each other are not answered with each other's file.
+    pub(crate) fn take() -> Self {
+        // The turn is taken before the folder is: a test whose guard went away while another
+        // still had the app pointed at its folder would clear it out from under it. A test that
+        // panicked with the turn leaves it poisoned, and the tests after it still have to have
+        // their own file.
+        let _turn = FILE_TURN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "rust-hover-preview-config-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = fs::create_dir_all(&path);
+
+        *HELD_FOLDER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(path.clone());
+
+        Self { path, _turn }
+    }
+
+    /// The file the app's own configuration is, in the folder of the test's own.
+    pub(crate) fn config_file(&self) -> PathBuf {
+        self.path.join("config.ini")
+    }
+}
+
+#[cfg(test)]
+impl Drop for ConfigFolderOfItsOwn {
+    fn drop(&mut self) {
+        let mut held = HELD_FOLDER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *held = None;
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Where a test build of the app keeps its own configuration while a test does not hold a
+/// folder of its own: one folder of the tests' own, never the machine's.
+#[cfg(test)]
+fn test_folder() -> PathBuf {
+    let held = HELD_FOLDER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    held.clone()
+        .unwrap_or_else(|| std::env::temp_dir().join("rust-hover-preview-tests"))
+}
+
 impl AppConfig {
     /// The app's own folder under the roaming profile, holding `config.ini` and
     /// the `theme` folder beside it.
+    ///
+    /// A test build has a folder of its own for as long as a test holds one, and never the
+    /// machine's own: that file is the one a run of the app is watching (see
+    /// `ConfigFolderOfItsOwn`).
     fn folder() -> Option<PathBuf> {
+        #[cfg(test)]
+        {
+            return Some(test_folder());
+        }
+
+        #[cfg(not(test))]
         BaseDirs::new().map(|dirs| dirs.config_dir().join("rust-hover-preview"))
     }
 
@@ -468,33 +562,37 @@ impl AppConfig {
         config
     }
 
-    /// Read the file again, after the watcher saw it change, with the same repairs a start puts
-    /// it through and the same question about whether it says what the app is using.
+    /// Read the file again, after the watcher saw it change, with the same repairs a start
+    /// puts it through — and none of its writing.
     ///
-    /// Both belong here as much as they do at a start: the file is what the user edits, and an
-    /// edit that writes a value the app cannot read, adds a key of their own, or names a setting
-    /// the way an older build named it, is one to put right there and then rather than at the
-    /// next start — as is a file an older build wrote and this one has not read since. It settles
-    /// the same way a start does — what it writes is a file that needs nothing, so the write the
-    /// watcher sees after it is a file nothing further is done to.
+    /// What the file says is taken, and what it has wrong or missing is put right in what the
+    /// app is using: a value it cannot read, a key of the user's own, a setting named the way an
+    /// older build named it, a list of this app's own from before it grew. The file is left to
+    /// say what it said — the next start is what writes it, the same way it always was.
+    ///
+    /// A write here would be a write the watcher sees, and the write is the whole of the
+    /// trouble: the file is the one the user is holding open in the editor this app's own
+    /// `Edit Config.ini` row put them in, and an editor writes the file in place — a read a
+    /// second later takes half of what they are writing and writes the whole of the app's own
+    /// view back over it, which is their edit gone. A write here is also what made an outside
+    /// write stay: the app read what some other writer had put there, and the next thing on
+    /// disk was the app's own agreeing with it (see `save`).
     pub fn reload_from_disk(&mut self) {
         if let Some(path) = Self::config_path() {
             if let Ok(text) = fs::read_to_string(&path) {
                 if let Some(mut ini) = read_ini(&text) {
-                    let old_headings = headings_are_old(&text);
-
-                    let repaired = lists::repair_older_lists(&mut ini) || old_headings;
+                    // Read through the repairs rather than writing them back: a list of this
+                    // app's own from before it grew, or a file an older build grouped the way
+                    // it grouped them, is what the app uses from here on, and the file keeps
+                    // what it had until a start writes it.
+                    lists::repair_older_lists(&mut ini);
                     self.apply_ini(&ini);
 
                     // The engine repair a start puts the file through, for the same reason an edit
                     // to the file is put through the others: a choice naming a player this machine
-                    // has not got is written back as `Best` (see `VideoEngine::installed`).
+                    // has not got is answered with `Best` (see `VideoEngine::installed`).
                     if !self.video_engine.installed() {
                         self.video_engine = DEFAULT_VIDEO_ENGINE;
-                    }
-
-                    if repaired || self.differs(&ini) {
-                        self.save();
                     }
                 }
             }
@@ -517,13 +615,37 @@ impl AppConfig {
                 let _ = fs::create_dir_all(parent);
             }
 
+            let text = ordered_text(&self.to_ini());
             let staged = path.with_extension("ini.new");
-            if fs::write(&staged, ordered_text(&self.to_ini())).is_ok() {
+            // What is moved is on the disk rather than in the write cache when the move puts it
+            // under the app's own name: a machine that lost the power between the two would
+            // otherwise be left with a file holding nothing, which is the whole of what
+            // writing beside and moving is for.
+            let staged_written = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&staged)
+                .and_then(|mut file| {
+                    file.write_all(text.as_bytes())
+                        .and_then(|()| file.sync_all())
+                });
+
+            if staged_written.is_ok() {
                 // The move is what puts the new text in place, so what a reader finds under
                 // the app's own name is the whole text or the file that was there.
                 if fs::rename(&staged, &path).is_err() {
+                    // A move the machine does not allow — the file is held open where it
+                    // stands, by a thing that shares it without the delete the move needs —
+                    // still leaves the setting to be written down, and a setting left
+                    // unwritten is one the next read takes back off the app. The text goes
+                    // into the file that is there, the one write this app made before it
+                    // wrote beside.
                     let _ = fs::remove_file(&staged);
+                    let _ = fs::write(&path, text);
                 }
+            } else {
+                let _ = fs::remove_file(&staged);
             }
         }
     }

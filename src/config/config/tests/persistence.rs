@@ -325,39 +325,25 @@ fn the_picked_mpv_path_round_trips_through_the_file() {
 }
 
 /// The machine's own configuration file is one file, and the tests that reach it reach it
-/// one at a time (see `CONFIG_FILE_TURN`).
+/// one at a time — the turn is the folder of a test's own (`ConfigFolderOfItsOwn`).
 ///
-/// The configuration file as a test found it, put back when the guard is dropped: the app
-/// reaches the file by the machine's own path (`config_path`), so a test that has the app
-/// read or write anything has to leave the file as it was, and a file that was not there has
-/// to be gone again.
+/// A test's turn at the file is a folder of the test's own holding it, taken away when the
+/// guard is dropped: the app reaches the file by its own path (`config_path`), and a test
+/// build's own path is the folder of the test's rather than the machine's — a run of the app
+/// watches the machine's file every second and takes what it finds there, so a test that
+/// wrote it would change what that run had (see `ConfigFolderOfItsOwn`).
 struct ConfigFileAsItWas {
+    _folder: ConfigFolderOfItsOwn,
     path: std::path::PathBuf,
-    was: Option<Vec<u8>>,
-    _turn: std::sync::MutexGuard<'static, ()>,
 }
 
 impl ConfigFileAsItWas {
     fn take() -> Self {
-        let path = AppConfig::config_path().expect("the configuration file's path");
-        let was = fs::read(&path).ok();
+        let folder = ConfigFolderOfItsOwn::take();
+        let path = folder.config_file();
         Self {
+            _folder: folder,
             path,
-            was,
-            _turn: crate::CONFIG_FILE_TURN.lock().expect("the file's turn"),
-        }
-    }
-}
-
-impl Drop for ConfigFileAsItWas {
-    fn drop(&mut self) {
-        match &self.was {
-            Some(bytes) => {
-                let _ = fs::write(&self.path, bytes);
-            }
-            None => {
-                let _ = fs::remove_file(&self.path);
-            }
         }
     }
 }
@@ -457,4 +443,25 @@ fn what_a_save_wrote_the_next_start_reads_back() {
 
     assert_eq!(read_back.pin_mode_audio_end_of_file, PinEndOfFile::Continue);
     assert_eq!(read_back.hover_delay_ms, 137);
+}
+
+/// The folder a test has the app read and write is one of the test's own, and never the
+/// machine's. A run of the app watches the machine's file every second and takes what it finds
+/// in it, so a test that wrote there would change what that run had: the rest of what a start
+/// read back was put right by the next write, and the one setting the test had named stayed —
+/// a hover delay a hand had left at nothing holding a number no menu offers. This is the seam
+/// that keeps a test off it (`ConfigFolderOfItsOwn`), and the test that says it is still there.
+#[test]
+fn a_tests_own_configuration_file_is_never_the_machines() {
+    let file = ConfigFileAsItWas::take();
+    let path = AppConfig::config_path().expect("the configuration file's path");
+
+    assert!(
+        path.starts_with(std::env::temp_dir()),
+        "a test's configuration file is in a folder of the test's own, not the machine's"
+    );
+    assert_eq!(
+        path, file.path,
+        "and it is the file this test reads and writes"
+    );
 }
