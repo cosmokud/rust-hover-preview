@@ -625,4 +625,331 @@ mod tests {
              out, because a line answered false is a command the film on screen never hears"
         );
     }
+
+    /// **A real player begun the way a film at 0% is begun has its track selected back by the pair,
+    /// and is playing at the level the knob is at.**
+    ///
+    /// This is the assertion the fault itself asks for and the one nothing else in the module can
+    /// make. Every other test here asserts the *string* this app means to write — that the pair is
+    /// the level and then `aid`, in that order, once per player — and the string being exactly right
+    /// is not the same as a player doing what it says: a level and a track asked for on a player
+    /// given no audio is the whole of what a knob dragged up from 0% does (see `set_volume`).
+    ///
+    /// **A film with a picture *and* a soundtrack out of two files the test writes itself.** A file
+    /// with no track left at all is one mpv quits on — measured: a WAV with `--aid=no` is exit code
+    /// 2 before its pipe is even there — and the app's own films always have a picture to keep the
+    /// player up. So the test writes a BMP (read as a still picture) and a second of PCM WAV, and
+    /// hands mpv the WAV as the picture's own audio track through its `--audio-file`: two files of a
+    /// few hundred bytes rather than a muxer or a binary fixture. `--image-display-duration=inf`
+    /// keeps the still from reaching its end while the pair is delivered.
+    ///
+    /// **The reading is what makes it fiddly, and it is a fact of the test rather than of the
+    /// app.** mpv serves one client at a time, so a connection held open while `set_volume` writes
+    /// has the app's own `deliver` retrying and giving up (see `deliver`): every ask here opens the
+    /// pipe, asks its one property, reads the one answer and lets go again, and the pair is written
+    /// with no client on the pipe at all. The player is otherwise the app's own — `video_launch::mpv_args`
+    /// builds its command line, `--aid=no` among the arguments — with the two switches a machine
+    /// with nobody in front of it needs: no window, no sound device.
+    ///
+    /// Run it the way the ignore asks for — `cargo test
+    /// a_real_mpv_begun_without_audio_takes_the_track_back -- --ignored` — and one at a time beside
+    /// the other tests here that write for real, for the reason their own notes give.
+    #[test]
+    #[ignore = "starts a real mpv, which a test run must never do; needs one installed"]
+    fn a_real_mpv_begun_without_audio_takes_the_track_back() {
+        use super::super::video_launch;
+        use crate::app::engine_processes;
+        use crate::formats::codecs;
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+
+        let Some(program) = codecs::resolve_mpv(None, &codecs::mpv_installs()) else {
+            println!("this machine has no mpv, so there is no player to ask for the track back");
+            return;
+        };
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-mpv-aid-test");
+        let picture = folder.join("a-picture.bmp");
+        let soundtrack = folder.join("a-second-of-silence.wav");
+        if std::fs::create_dir_all(&folder).is_err()
+            || write_a_picture(&picture).is_err()
+            || write_a_second_of_silence(&soundtrack).is_err()
+        {
+            println!(
+                "the temp folder or the test's two files cannot be written, so there is no \
+                      film to begin"
+            );
+            let _ = std::fs::remove_dir_all(&folder);
+            return;
+        }
+
+        // The app's own launch for a film at 0%: the level of nothing is `--aid=no` rather than a
+        // level of zero (see `video_launch::mpv_args`), and the name is the app's own pipe.
+        let name = next_pipe_name();
+        let args = video_launch::mpv_args(
+            &picture, 0, 0, 320, 240, 0.0, 0, None, false, false, None, &name,
+        );
+        let audio_file = format!("--audio-file={}", soundtrack.to_string_lossy());
+        let started = engine_processes::hidden_command(&program)
+            .args(&args)
+            .args([
+                audio_file.as_str(),
+                "--image-display-duration=inf",
+                "--vo=null",
+                "--ao=null",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        let mut player = match started {
+            Ok(player) => player,
+            Err(error) => {
+                println!(
+                    "mpv is installed but could not be started ({}), so there is no player to ask \
+                     for the track back",
+                    error.kind()
+                );
+                let _ = std::fs::remove_dir_all(&folder);
+                return;
+            }
+        };
+
+        let look = Duration::from_millis(25);
+        remember_pipe(
+            player.id(),
+            &name,
+            video_launch::mpv_launched_without_audio(0),
+        );
+        write_to_a_real_pipe(true);
+
+        // The player has the film once it lists both of its tracks: a pipe that is not listening
+        // yet answers nothing, and a film still being opened lists fewer tracks than the two it
+        // was given. Asking about the audio before this is asking a player that may not be there.
+        let patience = Instant::now() + Duration::from_secs(15);
+        let mut tracks = String::new();
+        while Instant::now() < patience {
+            tracks = ask_a_real_mpv(&name, "track-list/count").unwrap_or_default();
+            if data_of(&tracks).and_then(|count| count.parse::<u32>().ok()) == Some(2) {
+                break;
+            }
+            std::thread::sleep(look);
+        }
+        let loaded = data_of(&tracks).and_then(|count| count.parse::<u32>().ok()) == Some(2);
+
+        // The pair, by the production call and with the production record beside the pipe: a level
+        // moved up on a player the launch gave no audio is the level and then the track asked back
+        // (see `set_volume`). The first line is tried until it lands, as it is in the other tests
+        // here that write for real: the pipe is freed a moment after the last client let go of it.
+        let mut told = false;
+        if loaded {
+            let by = Instant::now() + Duration::from_secs(5);
+            told = set_volume(player.id(), 40);
+            while !told && Instant::now() < by {
+                std::thread::sleep(look);
+                told = set_volume(player.id(), 40);
+            }
+        }
+
+        // **The player's own answer**, asked down the same pipe: the track it has selected, the
+        // codec of that track, and the level it is playing at. A player that heard the level and
+        // nothing else answers the second with an error — which is exactly the silent-film fault
+        // this pair is for, and the reason the assertion is on mpv's answer rather than on the line
+        // the app wrote.
+        //
+        // It is asked until the answers are those (see `the_level_was_taken`) and not once, because
+        // a line written to a player and the player having read it are two moments: a read that
+        // lands between the level and the ask for the track answers for the state before the pair,
+        // and a player that never gets there fails the assertions below with what it did say.
+        let by = Instant::now() + Duration::from_secs(5);
+        let (mut aid, mut codec, mut volume) = (String::new(), String::new(), String::new());
+        while loaded && Instant::now() < by {
+            aid = ask_a_real_mpv(&name, "aid").unwrap_or_default();
+            codec = ask_a_real_mpv(&name, "audio-codec-name").unwrap_or_default();
+            volume = ask_a_real_mpv(&name, "volume").unwrap_or_default();
+            if the_level_was_taken(&aid, &codec, &volume) {
+                break;
+            }
+            std::thread::sleep(look);
+        }
+
+        let _ = player.kill();
+        let _ = player.wait();
+        forget_pipe(player.id());
+        write_to_a_real_pipe(false);
+        let _ = std::fs::remove_dir_all(&folder);
+
+        assert!(
+            loaded,
+            "the player has to open the film the test wrote, which is a picture and a soundtrack \
+             and nothing else: it listed \"{tracks}\" tracks, and a player that never had the film \
+             cannot be asked what its soundtrack became"
+        );
+        assert!(
+            told,
+            "the level has to reach the player's pipe, or there is no pair under test at all"
+        );
+        assert!(
+            data_of(&aid)
+                .and_then(|id| id.parse::<i64>().ok())
+                .is_some_and(|id| id > 0),
+            "the track has to be selected back on the player, which is what the second half of the \
+             pair is for: `aid` answered \"{aid}\" after a level above nothing on a player the launch \
+             gave no audio at all"
+        );
+        assert!(
+            !data_of(&codec).unwrap_or_default().is_empty(),
+            "and the track has to be one the player can decode, which is what a level is heard \
+             through: `audio-codec-name` answered \"{codec}\""
+        );
+        assert!(
+            data_of(&volume)
+                .and_then(|level| level.parse::<f64>().ok())
+                .is_some_and(|level| (level - 40.0).abs() < 0.01),
+            "and the level has to be the one the knob was moved to: `volume` answered \"{volume}\""
+        );
+    }
+
+    /// A 16x16 picture in the one shape every player on the machine reads without a library: an
+    /// uncompressed BMP. What the test above wants of it is a track that keeps a player up while its
+    /// soundtrack is asked back — the picture itself is never drawn, since the launch is headless.
+    fn write_a_picture(path: &std::path::Path) -> std::io::Result<()> {
+        let side = 16u32;
+        let pixels = side * side * 3;
+        let mut bmp = Vec::with_capacity(54 + pixels as usize);
+        bmp.extend_from_slice(b"BM");
+        bmp.extend_from_slice(&(54 + pixels).to_le_bytes());
+        bmp.extend_from_slice(&0u16.to_le_bytes());
+        bmp.extend_from_slice(&0u16.to_le_bytes());
+        bmp.extend_from_slice(&54u32.to_le_bytes());
+        bmp.extend_from_slice(&40u32.to_le_bytes());
+        bmp.extend_from_slice(&(side as i32).to_le_bytes());
+        bmp.extend_from_slice(&(side as i32).to_le_bytes());
+        bmp.extend_from_slice(&1u16.to_le_bytes());
+        bmp.extend_from_slice(&24u16.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&pixels.to_le_bytes());
+        bmp.extend_from_slice(&2835i32.to_le_bytes());
+        bmp.extend_from_slice(&2835i32.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.resize(54 + pixels as usize, 0x60);
+        std::fs::write(path, bmp)
+    }
+
+    /// A second of silence in the one shape every player on the machine reads: PCM WAV, one
+    /// channel, 8000 samples a second, sixteen bits a sample. The smallest soundtrack mpv opens,
+    /// which is all the test above wants of it — the track is the subject and the sound is not.
+    fn write_a_second_of_silence(path: &std::path::Path) -> std::io::Result<()> {
+        let samples = 8000u32;
+        let data = samples * 2;
+        let mut wav = Vec::with_capacity(44 + data as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data.to_le_bytes());
+        wav.resize(44 + data as usize, 0);
+        std::fs::write(path, wav)
+    }
+
+    /// Whether a player's own answers say the level was taken: a track selected, a codec for that
+    /// track, and the level the knob was moved to. It is the rule for when to stop *asking* in the
+    /// test above; the assertions after it are what decide what the answers have to be.
+    fn the_level_was_taken(aid: &str, codec: &str, volume: &str) -> bool {
+        data_of(aid)
+            .and_then(|id| id.parse::<i64>().ok())
+            .is_some_and(|id| id > 0)
+            && !data_of(codec).unwrap_or_default().is_empty()
+            && data_of(volume)
+                .and_then(|level| level.parse::<f64>().ok())
+                .is_some_and(|level| (level - 40.0).abs() < 0.01)
+    }
+
+    /// One answer from a real player: open its pipe, ask the one property, read the line it answers
+    /// with, and let go of the pipe again. **The letting go is the fiddly part** — mpv serves one
+    /// client at a time, so a connection held open while `set_volume` writes makes its `deliver`
+    /// retry and give up (see `deliver`) — so the connection lives inside the thread and is closed
+    /// when the thread's own work is done, before the answer is handed back. The opening is patient
+    /// for the same reason `deliver`'s is: the instance the last client held is freed a moment after
+    /// the client let go of it, and an ask that lands in that moment is one nothing was asked by.
+    ///
+    /// The wait is bounded and a silent player is answered with nothing, because a test that hangs
+    /// on a pipe no player ever writes to cannot say which of the two is at fault. `None` therefore
+    /// means no answer at all — a pipe that could not be opened, a request mpv refused, or a player
+    /// that wrote nothing in the time given — and every caller reads it as a fact of that kind
+    /// rather than as a failure.
+    fn ask_a_real_mpv(name: &str, property: &str) -> Option<String> {
+        use std::io::{BufRead, Write};
+
+        let path = format!(r"\\.\pipe\{name}");
+        // The line is built here rather than inside the thread, so what the thread owns is its bytes
+        // and its pipe, and nothing borrowed has to outlive the call.
+        let mut line = format!(r#"{{"command":["get_property","{property}"],"request_id":1}}"#);
+        line.push('\n');
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let answer = (|| -> Option<String> {
+                let mut offers = PIPE_OFFERS;
+                let mut pipe = loop {
+                    offers -= 1;
+                    match std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&path)
+                    {
+                        Ok(pipe) => break pipe,
+                        Err(error)
+                            if offers > 0 && error.raw_os_error() == Some(ERROR_PIPE_BUSY) =>
+                        {
+                            std::thread::sleep(PIPE_OFFER_WAIT);
+                        }
+                        Err(_) => return None,
+                    }
+                };
+                pipe.write_all(line.as_bytes()).ok()?;
+
+                // A client is sent the property-change events of the properties it observed and
+                // nothing else, so the first line that comes back is the reply — and the request id
+                // is what makes that a fact read off the line rather than a hope about the order.
+                let mut reader = std::io::BufReader::new(pipe);
+                let mut answer_line = String::new();
+                for _ in 0..4 {
+                    answer_line.clear();
+                    if reader.read_line(&mut answer_line).ok()? == 0 {
+                        return None;
+                    }
+                    if answer_line.contains("\"request_id\":1") {
+                        return Some(answer_line);
+                    }
+                }
+                None
+            })();
+            let _ = send.send(answer);
+        });
+
+        receive
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .ok()
+            .flatten()
+    }
+
+    /// What the `data` field of an answer says, as the text it says it with — a number left as its
+    /// digits, a string without its quotes — and nothing at all for an answer that carries no
+    /// `data`, which is how mpv refuses a request.
+    fn data_of(answer: &str) -> Option<String> {
+        let data = answer.split("\"data\":").nth(1)?.trim_start();
+        match data.strip_prefix('"') {
+            Some(text) => Some(text.split('"').next()?.to_string()),
+            None => Some(data.split([',', '}']).next()?.trim().to_string()),
+        }
+    }
 }
