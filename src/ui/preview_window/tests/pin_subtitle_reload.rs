@@ -205,7 +205,7 @@ fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on
     // The FFmpeg half above began a player, which wrote its own pid down: this half is about the
     // player this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     step_pinned_subtitle();
     assert_eq!(
         restart_count(),

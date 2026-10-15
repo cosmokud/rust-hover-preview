@@ -492,7 +492,7 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     // The ffplay half above began a player, which wrote its own pid down: this half is about the
     // player this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     stand(70, 40);
     set_pin_volume(70);
     assert_eq!(
@@ -527,6 +527,112 @@ fn a_level_moved_on_a_pinned_mpv_is_told_to_the_player_while_ffplays_is_begun_ag
     assert!(
         mpv_ipc::noted_lines().is_empty(),
         "and the engine listens on no pipe for a level to be written to"
+    );
+
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
+/// **A level dragged up from nothing on a pinned mpv film turns the player's audio on**, which is
+/// what makes the drag do anything at all: a film begun at `Volume → Video` 0% is given no audio
+/// rather than a level of nothing (see `mpv_args`), so a level set on its player is one nothing
+/// plays at and the knob that moved it went on being silent. The track is asked back for by the
+/// player's own road — `aid` set to `auto`, after the level so that the audio opens at the level
+/// in hand (see `mpv_ipc::set_volume`) — and the asking is the player's own fact rather than the
+/// drag's: the rest of the drag, and the settle, are the level alone.
+///
+/// The `Remember` rows are stood off so that a test never writes the configuration file a level
+/// would be remembered into.
+#[test]
+fn a_level_moved_up_from_nothing_on_a_pinned_mpv_asks_the_track_back() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let mut levels = PinLevels::set(0, 50);
+    levels.remembering(false, false);
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(video);
+    }
+
+    let content = (100, 100, 420, 340);
+    let film = PathBuf::from("pin-muted-launch-film.mkv");
+    let stand = |level: u32, playing_at: u32| {
+        let mut pin = overlay_pin(content, PinChrome::always());
+        pin.path = film.clone();
+        pin.transport.begun(30.0, true, false);
+        pin.transport.duration = Some(200.0);
+        pin.volume.level = level;
+        pin.volume.playing_at = playing_at;
+        stand_pin(Some(pin));
+    };
+
+    // The player behind the pin is one a level of nothing began — a pipe to be told on, and no
+    // track at all, which is the launch `mpv_args` makes of that level.
+    stand_ffplay_in(Some(false));
+    stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    VIDEO_PID.store(101, Ordering::SeqCst);
+    mpv_ipc::remember_pipe(101, "a-muted-launch-pipe", true);
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+    stand(0, 0);
+
+    // A hand takes the knob up, and the level is heard: the property first, and the track the
+    // level opens at asked for after it.
+    set_pin_volume(60);
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![
+            format!(
+                "{}\n",
+                r#"{"command":["set_property","volume",60],"async":true}"#
+            ),
+            format!(
+                "{}\n",
+                r#"{"command":["set_property","aid","auto"],"async":true}"#
+            ),
+        ],
+        "a level above nothing on a player begun at nothing is the level and the track together"
+    );
+    assert_eq!(
+        pinned_playback_state().map(|(_, _, _, volume)| volume.playing_at),
+        Some(60),
+        "and the claim of what the player is playing at moves only with a level it was told"
+    );
+
+    // The rest of the drag is the level alone — the track is a fact of the player now — and the
+    // release begins nothing: mpv took the level as it played.
+    set_pin_volume(80);
+    assert_eq!(
+        mpv_ipc::noted_lines()[2..],
+        [format!(
+            "{}\n",
+            r#"{"command":["set_property","volume",80],"async":true}"#
+        )],
+        "the track is asked for once per player, not once per step of a drag"
+    );
+    clear_restart_count();
+    settle_pin_volume();
+    assert_eq!(
+        restart_count(),
+        0,
+        "mpv took the level while it ran, so the settle begins nothing"
     );
 
     mpv_ipc::forget_pipe(101);
@@ -606,7 +712,7 @@ fn a_level_moved_in_the_tray_is_given_to_the_pin_that_is_up() {
     // The player above was begun again, which wrote its own pid down: this half is about the one
     // this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
-    mpv_ipc::remember_pipe(101, "tray-live-volume-pipe");
+    mpv_ipc::remember_pipe(101, "tray-live-volume-pipe", false);
     mpv_ipc::clear_noted();
     stand(0, 0);
     levels.set_levels(100, 50);
