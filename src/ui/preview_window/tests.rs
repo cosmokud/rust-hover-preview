@@ -189,6 +189,50 @@ fn sound_pin() -> PinnedPreview {
     pin
 }
 
+/// The two `Pin Mode → Pause Preview` switches and a sound's own `Normalize`, stood where a test
+/// asks and put back when the guard is dropped — the house pattern (see `CardFontSettings`).
+///
+/// The two switches stand *on*, which is the state a bubble is about: a test of what a press on a
+/// collapsed pin's bubble does has to be able to say which of the two gates the media behind the
+/// bubble answers to, and a machine's own settings are not that. `Normalize` is stood off beside
+/// them because a measured gain would put the sound in FFmpeg's hands whatever the probe said, and
+/// the player a test begins for one is begun off the machine's own programs when it is not.
+struct PausePreviewSettings {
+    video: bool,
+    audio: bool,
+    normalize: bool,
+}
+
+impl PausePreviewSettings {
+    /// Stands the two park switches where a test wants them, holding what the machine's own
+    /// settings were to put back.
+    fn stood_at(video: bool, audio: bool) -> Self {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = PausePreviewSettings {
+            video: config.pin_pause_video,
+            audio: config.pin_pause_audio,
+            normalize: config.normalize_volume,
+        };
+        config.pin_pause_video = video;
+        config.pin_pause_audio = audio;
+        // The gain-scan arm is what puts a file of any probe into FFmpeg's hands, so it is stood
+        // off rather than left to the machine (see `playing_player`).
+        config.normalize_volume = false;
+
+        was
+    }
+}
+
+impl Drop for PausePreviewSettings {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.pin_pause_video = self.video;
+            config.pin_pause_audio = self.audio;
+            config.normalize_volume = self.normalize;
+        }
+    }
+}
+
 /// A pin of the kind the chrome's own questions are about: a picture, whose window is its
 /// media and whose chrome is drawn over it.
 fn overlay_pin(content: ScreenRegion, chrome: PinChrome) -> PinnedPreview {

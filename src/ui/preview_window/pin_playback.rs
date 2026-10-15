@@ -972,6 +972,40 @@ pub(super) fn toggle_pinned_by_key(
     offset: &mut f64,
     paused: &mut Option<f64>,
 ) {
+    // A collapsed pin's bubble answers a press for itself, and what it answers about is the two
+    // switches' playback rather than the window's own. A park standing is given back the same road
+    // a restore gives one back — and never held over, because a park written a tick after the
+    // press that asked for the playback back is the bubble arguing with the hand, which is the
+    // whole of what this is (see `settle_bubble_playback`).
+    //
+    // Nothing parked is nothing to give back, and the press is then the ordinary play/pause of the
+    // player behind the window: nothing was playing when the pin went down, so what the press asks
+    // for is what the bar would have asked for with the window up. It claims the bubble either
+    // way — a bubble answering a press of its own is a window the user is in.
+    if pin_is_collapsed() {
+        if let Some(park) = pin_bubble_pause() {
+            put_back_bubble_playback(park, started, offset);
+            update_pin_bubble_pause(None);
+        } else {
+            toggle_the_player_on_screen(started, offset, paused);
+        }
+        with_pin(|pin| pin.bubble_run = true);
+        return;
+    }
+
+    toggle_the_player_on_screen(started, offset, paused);
+}
+
+/// Answer a play/pause against the player the file on screen is actually played by.
+///
+/// It is the same match the pin's own bar and card press through, read out of the same place: a
+/// video is the transport and a sound is the card's clock, and which of the two it is comes from
+/// what the window is showing rather than from the key (see `pin_toggle_target`).
+fn toggle_the_player_on_screen(
+    started: &mut Option<Instant>,
+    offset: &mut f64,
+    paused: &mut Option<f64>,
+) {
     match pin_toggle_target(current_media_type()) {
         PinToggle::Video => {
             // The same three the bar's own press reads, out of the same place: a pin with no

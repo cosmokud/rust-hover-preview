@@ -1112,6 +1112,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         },
         collapsed,
         bubble_pause: None,
+        bubble_run: false,
         hovered: None,
         pressed: None,
         // The name the hand-off button says. It is left empty here
