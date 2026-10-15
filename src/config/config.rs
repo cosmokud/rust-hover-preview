@@ -88,7 +88,7 @@ use configparser::ini::Ini;
 #[cfg(test)]
 use defaults::CONFIG_SECTION;
 #[cfg(test)]
-use settings_io::{headings_are_old, ordered_text, take_reset_markers, SETTING_GROUPS};
+use settings_io::{headings_are_old, ordered_text, read_ini, take_reset_markers, SETTING_GROUPS};
 #[cfg(test)]
 use std::fs;
 #[cfg(test)]
