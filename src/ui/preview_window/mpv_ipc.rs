@@ -21,14 +21,23 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-/// The pipe a launch names, unique to that launch.
+/// The pipe a launch names, unique to that launch and to this run of the app.
 ///
 /// A counter rather than the process id because the name is written into the argument list before
 /// there is a process to name: `mpv_args` builds the command line, and the player only exists once
-/// it has been spawned. It is one apart from the last, so two previews never share a pipe.
+/// it has been spawned. It is one apart from the last, so two previews never share a pipe. **The
+/// app's own process id is what the counter alone cannot do**: a counter begins at one every run,
+/// and a player left listening by a run that was killed holds the very first name the next run
+/// asks for, answers its lines as though they were meant for it, and the app's `deliver` reports
+/// success for a command the player on screen never heard (see `CURRENT_PIPE`, which is a single
+/// slot rather than a map of them).
 pub(super) fn next_pipe_name() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    format!("rust-hover-preview-mpv-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "rust-hover-preview-mpv-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// A player this app holds while it runs: the pipe it listens on, and whether the launch gave it
