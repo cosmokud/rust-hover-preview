@@ -11,6 +11,23 @@ pub(super) fn cursor_screen_point() -> Option<(i32, i32)> {
     Some((point.x, point.y))
 }
 
+/// A point in a window's own coordinates as a place on the screen: what a press on the card's
+/// menu is asked in, because the menu is drawn in a window of its own over the screen rather
+/// than inside the card, and the card's own window is the one that holds the pointer and is
+/// handed the press in its own coordinates (see `pin_menu_window`).
+///
+/// A point the window cannot place is answered as it stands, which is what a window standing in
+/// for a real one in a test is handed: the screen and that window's own coordinates are the same
+/// thing there, which is the only answer that keeps a test's own numbers meaningful.
+pub(super) fn client_to_screen(hwnd: HWND, x: i32, y: i32) -> (i32, i32) {
+    let mut point = POINT { x, y };
+    if unsafe { ClientToScreen(hwnd, &mut point) }.as_bool() {
+        (point.x, point.y)
+    } else {
+        (x, y)
+    }
+}
+
 /// The media box a window box implies: the window less the caption above it and the transport bar
 /// below it — or the window itself, for a kind whose chrome is drawn over its media and whose two
 /// boxes are therefore one box (see `pin_overlay_chrome`).
@@ -804,7 +821,12 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     // row is the menu's before it is the card's, and a press
     // anywhere else is a press that has left the menu, which
     // puts the panel away (see `pinned_menu_press`).
-    if pinned_menu_press(hwnd, x, y) {
+    //
+    // It is answered on the screen rather than in the card's own coordinates,
+    // because that is where the panel is drawn: in a window of its own over
+    // the screen (see `pin_menu_window`).
+    let (menu_x, menu_y) = client_to_screen(hwnd, x, y);
+    if pinned_menu_press(hwnd, menu_x, menu_y) {
         return true;
     }
 

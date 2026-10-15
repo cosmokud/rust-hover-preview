@@ -465,6 +465,11 @@ impl PinWindow for Win32PinWindow {
 /// bubble and the box are windows of their own — but they are settled from the same one exit, so
 /// a fourth road out of a pin cannot leave them standing.
 ///
+/// And the window the card's menu was drawn in, which goes with the pin for the same reason the
+/// bubble's does: it is a window this app put up standing for a pin that has gone, and a panel
+/// nothing will ever paint again is a window the desktop keeps for nothing (see
+/// `pin_menu_window`).
+///
 /// It is a separate function and not part of the state for the same reason it is separate from
 /// the teardown's own list: it holds three locks in turn, none of them the pin's, and a reader
 /// that wanted one lock for a pin's end would be holding the planner's.
@@ -495,6 +500,13 @@ pub(super) fn end_pin_beside_the_state() {
     // of its park, and what it was holding is a picture the size of a display (see
     // `compose_parked_band`).
     forget_video_frame();
+
+    // And the window the card's menu was drawn in, if one is up: it is a window of this
+    // app's own standing for a pin that has gone, exactly as the bubble is, and a panel
+    // nothing will ever paint again is a window the desktop keeps for nothing.
+    unsafe {
+        hide_pin_menu_window();
+    }
 
     // And the gesture that killed with its end still to come. A pin taken
     // down mid-dead-band never reaches its relaunch, and the snapshot left

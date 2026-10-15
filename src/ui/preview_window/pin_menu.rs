@@ -30,9 +30,9 @@ pub(super) struct PinMenu {
     /// Whether the Seek row's flyout is up beside the menu, for the same reason
     /// the End of File row's is.
     pub(super) seek: bool,
-    /// Where the right-click that opened the panel landed, in the
-    /// window's own coordinates: the panel's top-left, held inside
-    /// the window by the placement (see `pin_chrome::menu_popup_from_point`).
+    /// Where the right-click that opened the panel landed, on the screen: the
+    /// panel's top-left, held inside the display's own work area by the placement (see
+    /// `pin_chrome::menu_popup_from_point`).
     pub(super) point: (i32, i32),
     /// The row of the main menu the pointer is over, for the wash the
     /// row under the hand is painted with, or nothing where the
@@ -73,6 +73,10 @@ pub(super) struct PinMenuPaint {
     /// leaves it — on one side of the point the right-click
     /// landed or the other (see `pin_chrome::menu_flyout_from_menu`).
     pub(super) flyout: Option<PinMenuFlyout>,
+    /// The scale the panels were laid out at, which is the scale they are painted at: the
+    /// card's own, so that a panel's pads, rows and marks are the size its placement
+    /// measured them (see `pin_chrome::menu_panel_sizes`).
+    pub(super) dpi: u32,
 }
 
 /// What a repaint draws the Seek row's flyout from:
@@ -380,10 +384,10 @@ pub(super) fn pinned_menu_geometry() -> Option<PinMenuPaint> {
 /// right-click that opened it landed, and the
 /// flyout the row under the hand opens beside it.
 ///
-/// The panel is anchored at the pin's own remembered click point, in
-/// the window's own coordinates, and held inside the window by the
-/// placement (see `pin_chrome::menu_popup_from_point`), so a panel
-/// opened on a hand near an edge is a panel a hand can still reach.
+/// The panel is anchored at the pin's own remembered click point, on the
+/// screen, and held inside the display's own work area by the placement (see
+/// `pin_chrome::menu_popup_from_point`), so a panel opened on a hand near an edge is
+/// a panel a hand can still reach.
 fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     if !pin_shows_an_audio_card(pin) {
         return None;
@@ -407,7 +411,20 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
         false => PinMenuRow::Seek,
     })
     .unwrap_or(0);
-    let (width, height) = pin.window_size();
+    // The panel is placed on the screen rather than inside the card: the window it is drawn
+    // in is one of its own over the display's work area, so the room a panel is held
+    // inside is the display's own and not the card's — which is what lets a menu taller
+    // than the card keep every one of its rows, and what keeps the flyout on the right of
+    // the menu until the right edge of the screen says otherwise (see `pin_menu_window`).
+    // The placement is asked in the work area's own coordinates and the panels are moved
+    // onto the screen afterwards, because a press on one is answered in the screen's own.
+    let screen = work_area_at(pin.menu.point.0, pin.menu.point.1);
+    let point = (
+        pin.menu.point.0 - screen.left,
+        pin.menu.point.1 - screen.top,
+    );
+    let width = screen.right - screen.left;
+    let height = screen.bottom - screen.top;
 
     // The flyout's own placement is what says where the main
     // menu itself is, because the two panels are placed together
@@ -420,7 +437,7 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
     let (popup, flyout) = match choices {
         Some(choices) => {
             let placed = pin_chrome::menu_flyout_from_menu(
-                &pin_chrome::menu_popup_from_point(pin.menu.point, width, height, pin.dpi, &rows),
+                &pin_chrome::menu_popup_from_point(point, width, height, pin.dpi, &rows),
                 width,
                 height,
                 pin.dpi,
@@ -428,16 +445,20 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
                 &choices,
             );
             (
-                placed.menu,
+                pin_chrome::menu_popup_shifted(&placed.menu, screen.left, screen.top),
                 Some(PinMenuFlyout {
-                    popup: placed.popup,
+                    popup: pin_chrome::menu_popup_shifted(&placed.popup, screen.left, screen.top),
                     rows: choices,
                     hover: pin.menu.hover_flyout,
                 }),
             )
         }
         None => (
-            pin_chrome::menu_popup_from_point(pin.menu.point, width, height, pin.dpi, &rows),
+            pin_chrome::menu_popup_shifted(
+                &pin_chrome::menu_popup_from_point(point, width, height, pin.dpi, &rows),
+                screen.left,
+                screen.top,
+            ),
             None,
         ),
     };
@@ -447,6 +468,7 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
         rows,
         hover: pin.menu.hover_main,
         flyout,
+        dpi: pin.dpi,
     })
 }
 
@@ -466,10 +488,11 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
 /// `pin_chrome::menu_flyout_gap_holds`). Opening one flyout puts the other
 /// away, so only one is ever up.
 ///
-/// The pointer is read as a place on the screen and taken against the
-/// window's own box, the conversion `refresh_pin_volume` makes, for the same
-/// reason it makes it: a pointer that has left the pin sends it nothing more,
-/// so a wash or a flyout left up under one is a mark on a hand that is gone.
+/// The pointer is read as a place on the screen, which is the coordinates the
+/// panels are held in: they are drawn in a window of their own over the screen rather
+/// than inside the card, so what the pointer has left is the menu itself rather than a
+/// window it was standing over — and a wash or a flyout left up under a hand that is
+/// gone is a mark on nothing.
 pub(super) fn refresh_pin_menu(
     pin: &mut PinnedPreview,
     now: Instant,
@@ -483,8 +506,7 @@ pub(super) fn refresh_pin_menu(
         return false;
     };
 
-    let window = pin.window_box();
-    let at = cursor.map(|(x, y)| (x - window.0, y - window.1));
+    let at = cursor;
 
     let hover_main = at.and_then(|(x, y)| pin_chrome::menu_row_at(&paint.popup, x, y));
     let hover_flyout = paint
@@ -578,7 +600,13 @@ pub(super) fn refresh_pin_menu(
 /// where it landed, and the panel is one paint away from being gone (see
 /// `open_pin_menu`). The pointer itself is held while the menu is up —
 /// taken in `open_pin_menu` and let go below with the menu — so a press
-/// anywhere outside the window still arrives here to be answered.
+/// anywhere on the screen still arrives here to be answered, over whatever
+/// window it was aimed at.
+///
+/// `x` and `y` are a place on the screen rather than in the card's own
+/// window, because the panels are: the menu is drawn in a window of its own
+/// over the screen (see `pin_menu_window`), and the card's own window is
+/// the one holding the pointer that carried the press here.
 pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     let Some(paint) = pinned_menu_geometry() else {
         return false;
@@ -691,6 +719,10 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
         release_pin_capture(hwnd);
     }
     render_layered_preview(hwnd);
+    // And the window the menu was drawn in goes away with the panels that were
+    // answered, or is painted again where a row left it standing — a flyout
+    // opened, a check turned over (see `render_pin_menu`).
+    render_pin_menu();
 
     true
 }
@@ -707,10 +739,9 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
 /// flyouts put away: a hand that opens the menu has
 /// come for the choices, and they are one row away.
 ///
-/// shortcut: the panel is held inside the card's own window, so a card shorter than the whole
-/// menu now is has the rows past its bottom edge clipped off it — upgrade by growing the window
-/// for the menu the way the bubble's own menu does, when a card that short has to reach every
-/// row (see `pin_chrome::menu_popup_from_point`).
+/// `x` and `y` are a place on the screen rather than in the card's own
+/// window, which is the window the panel is placed against and the window
+/// the press on it is answered in (see `pin_menu_window`).
 pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
     let audio = pin_state()
         .and_then(|pinned| pinned.pin().map(pin_shows_an_audio_card))
@@ -737,6 +768,7 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
     // later, which is the press the menu stayed up through.
     let _ = SetCapture(hwnd);
     render_layered_preview(hwnd);
+    render_pin_menu();
 }
 
 /// Whether the card's menu is up: what an outside press is answered against
@@ -747,21 +779,31 @@ pub(super) fn pin_menu_is_open() -> bool {
         .unwrap_or(false)
 }
 
-/// Whether a point in the window's own coordinates is outside the window:
-/// what a press the menu's capture delivered from elsewhere is told apart
-/// by. A captured press aimed at another app or the taskbar arrives here
-/// with coordinates outside the window's own box, and answering it as a
-/// press on the card would drag the window for a hand on another window.
+/// Whether a point on the screen is on neither of the card's menu's panels:
+/// what a press the menu's capture delivered from elsewhere is told apart by.
+/// A captured press aimed at another app or the taskbar arrives here from a
+/// place the menu holds nothing at, and answering it as a press on the card
+/// would drag the window for a hand on another window.
+///
+/// It is asked of the panels rather than of the card's own box, because the
+/// panels are no longer the card's: they are drawn in a window of their own
+/// over the screen, and a hand on the card beside the menu has left the menu
+/// exactly as a hand on another app has.
 pub(super) fn pin_menu_point_is_outside(x: i32, y: i32) -> bool {
-    let Some(size) = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
-    else {
+    let Some(paint) = pinned_menu_geometry() else {
         return false;
     };
-    x < 0 || y < 0 || x >= size.0 || y >= size.1
+    let on_a_row = pin_chrome::menu_row_at(&paint.popup, x, y).is_some()
+        || paint
+            .flyout
+            .as_ref()
+            .is_some_and(|flyout| pin_chrome::menu_row_at(&flyout.popup, x, y).is_some());
+    !on_a_row
 }
 
 /// Put the card's menu away where it is up, answering whether it came down:
-/// the whole menu goes — both panels — and the pointer with it, while the
+/// the whole menu goes — both panels — and the pointer with it, and the window
+/// they were drawn in with them, while the
 /// pin itself is left standing. A press that arrived from elsewhere is what
 /// this answers; a repaint is owed where it did.
 pub(super) unsafe fn close_pin_menu(hwnd: HWND) -> bool {
@@ -775,6 +817,7 @@ pub(super) unsafe fn close_pin_menu(hwnd: HWND) -> bool {
     if was_up {
         release_pin_capture(hwnd);
         render_layered_preview(hwnd);
+        render_pin_menu();
     }
     was_up
 }
@@ -790,6 +833,9 @@ pub(super) unsafe fn close_pin_menu(hwnd: HWND) -> bool {
 /// window hidden the bubble is the pin's own window: a press the hook read was outside the
 /// bubble's as surely as it was outside the card's (see `bubble_window_is_at` and
 /// `close_pin_bubble_menu`).
+///
+/// The window the card's menu was drawn in goes with it, because a panel nothing will ever
+/// paint again is a window the desktop keeps for nothing (see `render_pin_menu`).
 pub(super) fn take_pin_menu_dismiss() -> bool {
     let asked = PIN_MENU_DISMISS_REQUESTED.swap(false, Ordering::AcqRel);
     if !asked {
@@ -804,6 +850,7 @@ pub(super) fn take_pin_menu_dismiss() -> bool {
         }
     });
     let bubble_was_up = unsafe { close_pin_bubble_menu() };
+    unsafe { render_pin_menu() };
 
     // The ask being taken, as this side of the seam sees it: the
     // flag's value before the swap, and whether a menu was up to

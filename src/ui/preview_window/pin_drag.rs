@@ -1161,4 +1161,11 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
     } else if seek_cover_is_waiting() {
         unpark_pinned_player(window);
     }
+
+    // And the card's menu, which the pointer is held for exactly the way a drag is: a capture
+    // somebody else took is a menu nothing can be answered in, and the panels are no longer
+    // inside the card's own window — so unlike a drag, a menu left standing by one is not a
+    // menu a press on the card can still put away (see `close_pin_menu` and
+    // `pin_menu_window`).
+    unsafe { close_pin_menu(HWND(window.hwnd() as *mut _)) };
 }
