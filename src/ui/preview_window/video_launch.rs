@@ -142,6 +142,17 @@ fn write_input_conf(file: &Path) -> bool {
     std::fs::write(file, MPV_PAUSE_BINDING).is_ok()
 }
 
+/// Whether a launch at `volume` is given no audio at all rather than a level of zero, which is
+/// `--aid=no` and nothing else — no track at all, so the decoder is saved the whole soundtrack.
+///
+/// It is one rule asked in two places, and it is one function so that the two cannot come apart:
+/// `mpv_args`, which pushes the flag from it, and the launch itself, which records the answer
+/// beside the pipe so that a level moved on to such a player has a track to ask back for before it
+/// can be heard (see `mpv_ipc::set_volume`).
+pub(super) fn mpv_launched_without_audio(volume: u32) -> bool {
+    volume == 0
+}
+
 /// The arguments an mpv video is begun with, which is the command line the spec settles on
 /// (`--vo` and `--focus-on` deliberately not among them: mpv's default video output is the
 /// wanted answer on every build this decade, and a `--focus-on` is a hard start failure on a
@@ -155,7 +166,9 @@ fn write_input_conf(file: &Path) -> bool {
 /// **A muted film is given no audio rather than a level of zero**, which is the ffplay route's
 /// `-an` and saves the decoder the whole soundtrack; and **a film with no measured gain is given
 /// no filter at all**, because none has measured one yet and what measures it is a read on a
-/// thread of its own (see `spawn_gain_scan`).
+/// thread of its own (see `spawn_gain_scan`). What that first half leaves for a later hand is
+/// `mpv_launched_without_audio`, which the launch records beside the pipe as well (see
+/// `mpv_ipc::set_volume`).
 #[allow(clippy::too_many_arguments)] // Each one is a fact about the launch, and a struct of them would be a type for one call.
 pub(super) fn mpv_args(
     path: &Path,
@@ -257,7 +270,7 @@ pub(super) fn mpv_args(
         args.push(format!("--start={start:.3}"));
     }
 
-    if volume == 0 {
+    if mpv_launched_without_audio(volume) {
         args.push("--aid=no".to_string());
     } else {
         args.push(format!("--volume={volume}"));

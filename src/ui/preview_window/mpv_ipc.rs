@@ -6,16 +6,17 @@
 //! and begun again.
 //!
 //! **Write-only by decision.** The pipe is opened, one JSON command line is written, and the
-//! handle is dropped: there is no reader thread, no request id, no reply parsed and no state kept
-//! between commands, so there is nothing left behind to clean up when a player is killed. The app
-//! knows what it needs without asking — the sidecar from the filesystem, the level from the pin —
-//! so nothing is read back. A command that wants no answer says so with `"async": true` rather
-//! than leaving a reply nobody reads in the pipe.
+//! handle is dropped: there is no reader thread, no request id, no reply parsed and nothing read
+//! back — the app knows what it needs without asking, the sidecar from the filesystem and the
+//! level from the pin. A command that wants no answer says so with `"async": true` rather than
+//! leaving a reply nobody reads in the pipe.
 //!
 //! The pipe the launch names is remembered against the player's own process id, and forgotten when
 //! that player is killed or parked, so a command can never reach a player this app has stopped
-//! holding (see `kill_player_process` and `restart_pinned_player`). The name is unique per launch
-//! (a counter) so two previews could never share one.
+//! holding (see `kill_player_process` and `restart_pinned_player`). What is remembered beside the
+//! name is what the launch itself said of its player — whether it was given any audio — because a
+//! level moved on a player begun with none has a track to ask back for (see `HeldPlayer` and
+//! `set_volume`). The name is unique per launch (a counter) so two previews could never share one.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -30,45 +31,64 @@ pub(super) fn next_pipe_name() -> String {
     format!("rust-hover-preview-mpv-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
-/// The pipe the player behind `pid` listens on, while it is the one this app holds.
-static CURRENT_PIPE: Mutex<Option<(u32, String)>> = Mutex::new(None);
+/// A player this app holds while it runs: the pipe it listens on, and whether the launch gave it
+/// no audio at all.
+///
+/// **The audio is a fact of the launch and the pipe is where it is needed.** A level of nothing is
+/// begun with `--aid=no` rather than a level of nothing (see `video_launch::mpv_args`), and a level
+/// moved on to such a player has no track to be heard at until one is asked for (see `set_volume`).
+/// The two are one player's facts, so they are kept together and forgotten together: a kill or a
+/// park drops the record, and a stale launch can never leave an answer behind for the player that
+/// replaces it.
+#[derive(Clone)]
+struct HeldPlayer {
+    pid: u32,
+    /// The pipe name, without the `\\.\pipe\` the delivery adds.
+    pipe: String,
+    /// Whether the player has no audio track selected, which is what the first level above nothing
+    /// asks back for (see `set_volume`).
+    audio_off: bool,
+}
 
-/// Remember the pipe a launch named for the player it has just begun.
-pub(super) fn remember_pipe(pid: u32, name: &str) {
+/// The player behind a pid this app holds while it runs.
+static CURRENT_PIPE: Mutex<Option<HeldPlayer>> = Mutex::new(None);
+
+/// Remember the pipe a launch named for the player it has just begun, and whether that launch gave
+/// the player any audio at all (see `HeldPlayer`).
+pub(super) fn remember_pipe(pid: u32, name: &str, audio_off: bool) {
     if let Ok(mut slot) = CURRENT_PIPE.lock() {
-        *slot = Some((pid, name.to_string()));
+        *slot = Some(HeldPlayer {
+            pid,
+            pipe: name.to_string(),
+            audio_off,
+        });
     }
 }
 
 /// Forget the pipe of `pid`, where it is that player's — a kill drops it too.
 pub(super) fn forget_pipe(pid: u32) {
     if let Ok(mut slot) = CURRENT_PIPE.lock() {
-        if slot.as_ref().is_some_and(|(held, _)| *held == pid) {
+        if slot.as_ref().is_some_and(|held| held.pid == pid) {
             *slot = None;
         }
     }
 }
 
-/// The pipe the player behind `pid` listens on, or nothing where that player is not the one this
-/// app holds.
-fn pipe_for(pid: u32) -> Option<String> {
+/// The player this app holds behind `pid`, or nothing where `pid` names no such player.
+fn held_player(pid: u32) -> Option<HeldPlayer> {
     CURRENT_PIPE
         .lock()
         .ok()
-        .and_then(|slot| {
-            slot.as_ref()
-                .filter(|(held, _)| *held == pid)
-                .map(|(_, name)| name.clone())
-        })
+        .and_then(|slot| slot.as_ref().filter(|held| held.pid == pid).cloned())
 }
 
 /// Where a command actually goes: the pipe of the player behind `pid`, or nothing where there is
 /// no such player.
 fn write(pid: u32, line: String) -> bool {
-    let Some(name) = pipe_for(pid) else {
+    let Some(held) = held_player(pid) else {
         return false;
     };
-    deliver(&name, line)
+    deliver(&held.pipe, line)
 }
 
 /// How many times a line is offered to the pipe, and how long the wait between two offers is.
@@ -143,14 +163,52 @@ pub(super) fn write_to_a_real_pipe(real: bool) {
 }
 
 /// Set the level mpv is playing at, in the 0–100 the pin's knob is drawn in.
+///
+/// **A level above nothing is a track asked back for where the launch turned the audio off.** mpv
+/// is begun with `--aid=no` rather than `--volume=0` at a level of nothing (see
+/// `video_launch::mpv_args`), and such a player has no track for a level to be heard at: the level
+/// alone moved a property nothing played at, which is why a knob dragged up on a film the tray had
+/// at 0% went on being silent. The track is asked for with the first level above nothing — `aid`
+/// back to `auto`, the selection a launch with audio leaves the property at, since the app names no
+/// track of its own — and with the *level already in hand*, so a track asked for first cannot open
+/// the audio at mpv's own default of full for the moment the level line takes to follow.
+///
+/// The ask leaves a player that has its track, and that is remembered as what it is: the next step
+/// of a drag, and a release's re-assertion, are the level alone (see `HeldPlayer`). A level of
+/// nothing asks for nothing, since a film a hand has taken back down to silence wants the property
+/// it already has and not a decoder turned off behind it.
 pub(super) fn set_volume(pid: u32, level: u32) -> bool {
-    write(
+    let Some(held) = held_player(pid) else {
+        return false;
+    };
+
+    // mpv's JSON IPC reads a message up to its newline, and a line with none is a command it
+    // never sees — closing the pipe does not deliver it either — so the newline is part of
+    // the line rather than of the write (see `write`).
+    if !write(
         pid,
-        // mpv's JSON IPC reads a message up to its newline, and a line with none is a command it
-        // never sees — closing the pipe does not deliver it either — so the newline is part of
-        // the line rather than of the write (see `write`).
         format!(r#"{{"command":["set_property","volume",{level}],"async":true}}"#) + "\n",
-    )
+    ) {
+        return false;
+    }
+
+    if level > 0 && held.audio_off {
+        if !write(
+            pid,
+            r#"{"command":["set_property","aid","auto"],"async":true}"#.to_string() + "\n",
+        ) {
+            return false;
+        }
+        // The ask landed, so the player has its track: the fact moves with it, which is what keeps
+        // a drag from asking again on its next step.
+        if let Ok(mut slot) = CURRENT_PIPE.lock() {
+            if let Some(held) = slot.as_mut().filter(|held| held.pid == pid) {
+                held.audio_off = false;
+            }
+        }
+    }
+
+    true
 }
 
 /// Take mpv to a second of its file.
@@ -198,6 +256,7 @@ pub(super) fn clear_noted() {
 
 #[cfg(test)]
 mod tests {
+    use super::super::pin_window::PIN_TESTS_ONE_AT_A_TIME;
     use super::*;
 
     /// The name a launch names is one apart from the last, so no two previews can share a pipe —
@@ -216,8 +275,12 @@ mod tests {
     /// pid guard is for: the pipe outlives a kill by nothing, so a stale pid names no pipe.
     #[test]
     fn a_command_reaches_the_player_it_names_and_no_other() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         clear_noted();
-        remember_pipe(41, "a-pipe");
+        remember_pipe(41, "a-pipe", false);
 
         assert!(
             set_volume(41, 40),
@@ -229,7 +292,8 @@ mod tests {
                 "{}\n",
                 r#"{"command":["set_property","volume",40],"async":true}"#
             )],
-            "the volume is set on the player's own property, and the line wants no answer"
+            "the volume is set on the player's own property, and the line wants no answer — one \
+             line, because a player a level above nothing was begun at has its audio already"
         );
 
         assert!(
@@ -247,12 +311,82 @@ mod tests {
         clear_noted();
     }
 
+    /// **A level moved above nothing on a player the launch gave no audio asks the track back**,
+    /// once per player and after the level rather than before it.
+    ///
+    /// A launch at a level of nothing is given `--aid=no` rather than `--volume=0` (see
+    /// `video_launch::mpv_args`), so the property a level is set on is one nothing plays at: a
+    /// knob dragged up on such a film moved the level and stayed silent, which is the fault this
+    /// pair of lines is for. The order is the point of the second line being second — a track
+    /// opened before the level lands opens the audio at mpv's own default of full — and the record
+    /// moving with the ask is the point of the pair being written once and not once per pixel.
+    #[test]
+    fn a_level_moved_above_nothing_on_a_player_begun_without_audio_asks_for_the_track_once() {
+        // The noted log is one the pin's own tests write in as well, and the three tests here that
+        // read it are one at a time only because they hold the pin's own lock: without it a
+        // sibling's clear lands between the two lines this test is counting.
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        clear_noted();
+        // A player of the kind a level of nothing is begun as.
+        remember_pipe(31, "a-muted-launch-pipe", true);
+
+        // A level of nothing asks for nothing: the property already says silence, and a film the
+        // knob has not been taken up on is left as the launch left it.
+        assert!(set_volume(31, 0));
+        assert_eq!(
+            noted_lines(),
+            vec![format!(
+                "{}\n",
+                r#"{"command":["set_property","volume",0],"async":true}"#
+            )],
+            "the level alone, because nothing is heard at it and no track is asked back"
+        );
+        clear_noted();
+
+        // The first level above nothing moves the property and then asks for the track, in that
+        // order, so that the audio the track opens at is the level just named.
+        assert!(set_volume(31, 40));
+        assert_eq!(
+            noted_lines(),
+            vec![
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","volume",40],"async":true}"#
+                ),
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","aid","auto"],"async":true}"#
+                ),
+            ],
+            "the level first, and then `aid` set back to `auto` — the selection a launch with \
+             audio leaves the property at"
+        );
+
+        // And the player has a track from here: the rest of a drag is the level alone.
+        assert!(set_volume(31, 55));
+        assert_eq!(
+            noted_lines().len(),
+            3,
+            "the track is asked for once per player, and not once per step of a drag"
+        );
+
+        forget_pipe(31);
+        clear_noted();
+    }
+
     /// Every command the pin sends is a JSON command line with the one property or the one seek
     /// the manual names, and each says it wants no reply.
     #[test]
     fn each_command_is_the_line_mpv_is_told_with() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         clear_noted();
-        remember_pipe(7, "a-pipe");
+        remember_pipe(7, "a-pipe", false);
 
         assert!(seek_absolute(7, 90.0));
         assert!(set_paused(7, true));
@@ -340,7 +474,7 @@ mod tests {
             }
         };
 
-        remember_pipe(player.id(), &name);
+        remember_pipe(player.id(), &name, false);
         write_to_a_real_pipe(true);
 
         // The player puts its end of the pipe up while it starts, and a line written before it is
@@ -442,7 +576,7 @@ mod tests {
             }
         };
 
-        remember_pipe(player.id(), &name);
+        remember_pipe(player.id(), &name, false);
         write_to_a_real_pipe(true);
 
         // The player puts its end of the pipe up while it starts, so the first line is tried until
