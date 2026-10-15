@@ -874,7 +874,7 @@ fn a_seek_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays() {
     // The ffplay half above began a player, which wrote its own pid down: this half is about the
     // player this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     stand_pin(Some(a_playing_pin(&film, content)));
     seek_pinned_playback(&film, content, 90.0);
     assert_eq!(restart_count(), 0, "mpv is taken to the second while it runs");
@@ -966,7 +966,7 @@ fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume()
     // The ffplay half above began a player, which wrote its own pid down: this half is about the
     // player this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     stand_pin(Some(a_playing_pin(&film, content)));
     let transport = pinned_playback_state().expect("a pin is up").2;
     toggle_pinned_playback(&film, content, transport);
@@ -1337,7 +1337,7 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     // The ffplay half above began a player, which wrote its own pid down: this half is about the
     // player this app was holding before that.
     VIDEO_PID.store(101, Ordering::SeqCst);
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     note_video_loop(101, &film, content, 0.0, Some(8.0));
     a_pass_has_run();
     assert!(video_loop_tick(true, true), "the tick sends the film back");
@@ -1504,7 +1504,7 @@ fn the_tick_takes_a_pausing_film_back_to_its_top_and_holds_it_there() {
     stand_mpv_in(Some(true));
     stand_ffplay_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     mpv_ipc::clear_noted();
 
     let _jumps = VideoJumps::set(false, PinEndOfFile::Pause);
@@ -1600,7 +1600,7 @@ fn a_pinned_films_loop_is_the_pins_own_end_of_file_and_not_the_hovers() {
     stand_mpv_in(Some(true));
     stand_ffplay_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     mpv_ipc::clear_noted();
     clear_restart_count();
 
@@ -2189,7 +2189,7 @@ fn an_mpv_wrap_moves_the_pins_bar_onto_the_pass_it_began() {
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     stand_pin(Some(a_playing_pin(&film, content)));
     let _jumps = VideoJumps::set(true, PinEndOfFile::Loop);
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     mpv_ipc::clear_noted();
 
     note_video_loop(101, &film, content, 0.0, Some(8.0));
@@ -2267,7 +2267,7 @@ fn an_mpv_seek_moves_the_loops_clock_onto_the_second() {
     stand_ffplay_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     stand_pin(Some(a_playing_pin(&film, content)));
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     mpv_ipc::clear_noted();
 
     // The clock's reckoning is a hair from the end of the film, which is the state a seek into the
@@ -2348,7 +2348,7 @@ fn a_film_the_tick_holds_at_its_top_is_resumed_by_one_command() {
     stand_ffplay_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     stand_pin(Some(a_playing_pin(&film, content)));
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     mpv_ipc::clear_noted();
     clear_restart_count();
     note_video_loop(101, &film, content, 0.0, Some(200.0));
@@ -2414,7 +2414,7 @@ fn a_film_held_at_its_end_plays_again_from_the_top() {
     stand_ffplay_in(Some(false));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     stand_pin(Some(a_playing_pin(&film, content)));
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
     mpv_ipc::clear_noted();
     note_video_loop(101, &film, content, 0.0, Some(200.0));
 

@@ -467,7 +467,7 @@ fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     stand_video_engine_in(Some((VideoEngine::Mpv, true)));
     stand_ffplay_in(Some(false));
-    mpv_ipc::remember_pipe(101, "test-pipe");
+    mpv_ipc::remember_pipe(101, "test-pipe", false);
 
     // Both play states, because the key a seek press posts is a toggle: a playing film is stopped
     // by it and a paused one is started by it, and neither is a seek.

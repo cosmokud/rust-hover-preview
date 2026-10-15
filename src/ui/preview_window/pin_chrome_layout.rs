@@ -729,8 +729,10 @@ pub(super) fn set_pin_volume(level: u32) {
             // `settle_pin_volume`).
             mpv_ipc::set_volume(VIDEO_PID.load(Ordering::SeqCst), level)
         } else {
-            video_player::set_volume(level);
-            true
+            // The engine answers for itself whether there was a session to take the level, rather
+            // than this arm assuming one: the claim of what the player is playing at may move only
+            // where the player was actually told (see `video_player::set_volume`).
+            video_player::set_volume(level)
         };
         // The claim of what the player is playing at moves only where the player was actually
         // told: writing it for a command that never reached one would leave the bar claiming a
@@ -922,8 +924,12 @@ pub(super) fn settle_pin_volume() {
 
     match current_media_type() {
         Some(MediaType::NativeVideo) => {
-            video_player::set_volume(volume.level);
-            with_pin(|pin| pin.volume.playing_at = pin.volume.level);
+            // The engine takes a level while it plays, and the claim moves only where it did: a
+            // session that has already gone heard nothing, and the level stays owed to the next
+            // player rather than being recorded as given (see `video_player::set_volume`).
+            if video_player::set_volume(volume.level) {
+                with_pin(|pin| pin.volume.playing_at = pin.volume.level);
+            }
         }
         Some(MediaType::Video)
             if video_route(&path) == VideoRoute::Mpv
@@ -959,8 +965,9 @@ pub(super) fn settle_pin_volume() {
                 // The live path already gave it to the engine, so this arm is normally a no-op —
                 // and it is kept for the case where the knob was turned before a session was
                 // there to take it (see `set_pin_volume`).
-                video_player::set_volume(volume.level);
-                with_pin(|pin| pin.volume.playing_at = pin.volume.level);
+                if video_player::set_volume(volume.level) {
+                    with_pin(|pin| pin.volume.playing_at = pin.volume.level);
+                }
             } else {
                 // Otherwise the player that takes a level only by being started at one is owed it,
                 // and the clock behind a sound's card is the loop's: so the flag, and the loop
