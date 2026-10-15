@@ -387,11 +387,18 @@ pub fn set_paused(paused: bool) {
 /// altogether. Nothing is done where nothing is playing, which is a pin whose file has already
 /// been let go of; the level a player is started at is the caller's answer, as it has always
 /// been (see [`play`]).
-pub fn set_volume(volume: u32) {
+///
+/// **The answer says whether a session was there to take the level**, because the caller records
+/// the level as the player's own only where the player was told it: a level claimed as given to a
+/// session that had already been let go of is a level nothing is owed and no settling repairs
+/// (see `pin_chrome_layout`'s `set_pin_volume` and `settle_pin_volume`). A pin let go of while
+/// its knob is still under the hand is an ordinary thing rather than a failure, so the answer is
+/// a fact of what happened and not a report of an error.
+pub fn set_volume(volume: u32) -> bool {
     SESSION.with(|slot| {
         let slot = slot.borrow();
         let Some(session) = slot.as_ref() else {
-            return;
+            return false;
         };
 
         let engine = &session.engine;
@@ -403,7 +410,9 @@ pub fn set_volume(volume: u32) {
                 let _ = engine.SetVolume(f64::from(volume.min(100)) / 100.0);
             }
         }
-    });
+
+        true
+    })
 }
 
 /// Take the sound that is playing to `seconds` into its file, which is what a start position
