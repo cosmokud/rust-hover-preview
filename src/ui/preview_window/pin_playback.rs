@@ -82,6 +82,27 @@ pub(super) fn pin_is_playing(transport: &PinTransport) -> bool {
     }
 }
 
+/// Whether the sound behind a card is playing, which is the one question the card's own play
+/// button answers and the one its menu's hold row is named from.
+///
+/// A player of this app's is the process behind the sound, asked of the media rather than off
+/// the published pid: a held player was killed without a wait, so its pid outlives it until a
+/// death is confirmed and would answer "playing" for a sound nobody can hear. The lock is safe
+/// here — nothing that builds the card's menu runs with the media held, which is the one thing
+/// the bar a pid is read from cannot promise (see `pin_is_playing`).
+///
+/// The engine's own is asked whether it is *held* rather than whether it is playing, because a
+/// session that was asked to hold is a session that is still there (see `a_sound_that_is_held`).
+pub(super) fn pinned_audio_playing() -> bool {
+    let running = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.video_process.is_some()))
+        .unwrap_or(false);
+
+    running || (video_player::is_playing() && !video_player::is_paused())
+}
+
 /// What the transport's own actions need of the pin: the file being played, the box the player's
 /// window fills, where its playback is, and the level it is playing at.
 pub(super) fn pinned_playback_state() -> Option<(PathBuf, ScreenRegion, PinTransport, PinVolume)> {
