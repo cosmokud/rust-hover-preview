@@ -50,10 +50,13 @@ enum ConfigFileWas {
 /// guard is dropped. A press on a menu's check row writes the
 /// configuration the way every setting this app's own menus write
 /// is, so a test that presses one leaves the file the press wrote
-/// unless it is put back.
+/// unless it is put back. The file is one file, so the guard holds
+/// the turn to have it until the test is done
+/// (`CONFIG_FILE_TURN`).
 struct ConfigFilePutBack {
     path: Option<std::path::PathBuf>,
     was: ConfigFileWas,
+    _turn: std::sync::MutexGuard<'static, ()>,
 }
 
 impl ConfigFilePutBack {
@@ -66,7 +69,11 @@ impl ConfigFilePutBack {
             },
             _ => ConfigFileWas::NoFile,
         };
-        Self { path, was }
+        Self {
+            path,
+            was,
+            _turn: crate::CONFIG_FILE_TURN.lock().expect("the file's turn"),
+        }
     }
 }
 
