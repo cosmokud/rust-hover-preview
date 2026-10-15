@@ -47,6 +47,11 @@ The release binary is written to `target/release/rust-hover-preview.exe`:
 cargo build --release
 ```
 
+`cargo test` runs against folders of the tests' own rather than the machine's: a test build of
+the app keeps its `config.ini`, its engine records and its browser profiles under
+`%TEMP%\rust-hover-preview-tests`, so a test run never touches the settings an app you already
+have running is watching.
+
 See [README.md](README.md) for app usage and [ARCHITECTURE.md](ARCHITECTURE.md)
 for a full system overview.
 

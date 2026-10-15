@@ -473,7 +473,7 @@ Settings are stored at:
 %APPDATA%\rust-hover-preview\config.ini
 ```
 
-The file is watched, and changes apply without a restart. A save writes the whole file beside it and moves it into place, so a save cut short leaves the file that was there; a file holding no setting of its own is not read as a configuration, and is left exactly where it is.
+The file is watched, and changes apply without a restart. A read takes what the file says and puts right in the app what it cannot read — the file itself is left alone until the next start, so a hand edit is never written over while it is being made. A save writes the whole file beside it, flushed to the disk, and moves it into place, so a save cut short leaves the file that was there; a file holding no setting of its own is not read as a configuration, and is left exactly where it is.
 
 Example, trimmed:
 
