@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[cfg(not(test))]
 use directories::BaseDirs;
 use once_cell::sync::Lazy;
 use windows::core::PCWSTR;
@@ -385,18 +386,34 @@ fn recorded_pids(image: Option<&str>, kind: Option<Kind>) -> Vec<u32> {
 /// `RHP_ENGINE_STATE` names a folder for one run, the way `RHP_WEBVIEW_PROFILE` names
 /// a profile, and it is there for the same reason: a test must be able to reap what
 /// it wrote without being confused with the records of the app somebody is actually
-/// running.
+/// running. A test build that names nothing falls back to a folder of the tests' own,
+/// never the machine's — the folder a run of the app is reaping from.
 fn state_folder() -> Option<PathBuf> {
     if let Some(folder) = std::env::var_os("RHP_ENGINE_STATE") {
         return Some(PathBuf::from(folder));
     }
 
+    #[cfg(test)]
+    {
+        return Some(test_folder());
+    }
+
+    #[cfg(not(test))]
     Some(
         BaseDirs::new()?
             .data_local_dir()
             .join("rust-hover-preview")
             .join("engines"),
     )
+}
+
+/// Where a test build keeps its run files while a test does not name a folder of its
+/// own: one folder of the tests' own, never the machine's.
+#[cfg(test)]
+fn test_folder() -> PathBuf {
+    std::env::temp_dir()
+        .join("rust-hover-preview-tests")
+        .join("engines")
 }
 
 /// This run's file, named by its own process id.
@@ -990,5 +1007,38 @@ mod tests {
         let _ = second.wait();
         let _ = std::fs::remove_dir_all(&folder);
         std::env::remove_var("RHP_ENGINE_STATE");
+    }
+
+    /// The folder a test build falls back to is one of the tests' own, never the
+    /// machine's: the folder a run of the app somebody is actually running is reaping
+    /// from, which a test must not write into.
+    ///
+    /// Holds the stand-ins' lock for the reason the two tests above do: those two name
+    /// the folder in the environment, and this test reads the fallback for a run that
+    /// names nothing.
+    #[test]
+    fn a_tests_own_engine_state_folder_is_never_the_machines() {
+        let _stand_in = STAND_IN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let folder = state_folder().expect("a state folder of the test's own");
+
+        let machine = directories::BaseDirs::new()
+            .expect("the machine's folders")
+            .data_local_dir()
+            .join("rust-hover-preview")
+            .join("engines");
+
+        assert!(
+            !folder.starts_with(&machine),
+            "a test's run files are in a folder of the test's own, not the machine's: {}",
+            folder.display()
+        );
+        assert!(
+            folder.starts_with(std::env::temp_dir()),
+            "and it is one of the tests' own: {}",
+            folder.display()
+        );
     }
 }
