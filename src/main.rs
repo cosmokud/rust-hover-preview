@@ -27,6 +27,11 @@ pub static RUNNING: AtomicBool = AtomicBool::new(true);
 pub static CONFIG: Lazy<Mutex<config::config::AppConfig>> =
     Lazy::new(|| Mutex::new(config::config::AppConfig::load()));
 
+// The machine's own `config.ini` is one file, and the tests that have the app read or write
+// it reach it one at a time, so that a test is answered with the file it left.
+#[cfg(test)]
+pub static CONFIG_FILE_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Whether `RHP_STARTUP_TRACE` asks for what the start cost to be written out, and where.
 ///
 /// A run without the variable set writes nothing anywhere, the way `RHP_HOOK_TRACE` writes no

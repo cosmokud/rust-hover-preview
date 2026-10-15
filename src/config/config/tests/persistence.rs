@@ -325,9 +325,8 @@ fn the_picked_mpv_path_round_trips_through_the_file() {
 }
 
 /// The machine's own configuration file is one file, and the tests that reach it reach it
-/// one at a time.
-static FILE_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
+/// one at a time (see `CONFIG_FILE_TURN`).
+///
 /// The configuration file as a test found it, put back when the guard is dropped: the app
 /// reaches the file by the machine's own path (`config_path`), so a test that has the app
 /// read or write anything has to leave the file as it was, and a file that was not there has
@@ -345,7 +344,7 @@ impl ConfigFileAsItWas {
         Self {
             path,
             was,
-            _turn: FILE_TURN.lock().expect("the file's turn"),
+            _turn: crate::CONFIG_FILE_TURN.lock().expect("the file's turn"),
         }
     }
 }
