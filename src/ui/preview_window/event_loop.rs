@@ -677,7 +677,7 @@ pub fn run_preview_window() {
                 );
 
                 // What a collapse into the bubble holds back and what a restore puts back,
-                // read from the two `Pin Mode → Pause Preview` switches every tick: a switch
+                // read from the two `Pin Mode → Pause on Minimize` switches every tick: a switch
                 // thrown while the pin is a bubble is answered on the next one (see
                 // `settle_bubble_playback`).
                 settle_bubble_playback(&mut audio_started, &mut audio_start_offset);

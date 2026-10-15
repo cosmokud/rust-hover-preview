@@ -834,7 +834,7 @@ pub(super) fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
 /// pressed again.
 ///
 /// What this has in common with the bubble's is the mechanics and not the setting:
-/// `Pin Mode → Pause Preview` is about what a collapse does, and this is about a key pressed in
+/// `Pin Mode → Pause on Minimize` is about what a collapse does, and this is about a key pressed in
 /// a window the user is in. A sound with no player behind it is left alone on both counts — there
 /// is no playback to hold — which is the answer a file nothing will play gives.
 pub(super) fn toggle_pinned_audio(

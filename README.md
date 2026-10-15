@@ -13,8 +13,9 @@ A Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in F
 - Mouse-hover and keyboard-navigation previews in Explorer, beside the cursor or the focused item and kept on screen.
 - Press a key (SPACE by default) and a preview becomes a window of its own — captioned, movable, resizable, always on top, where it stays until you close it.
 - Supports images, videos, audios, ebooks, Office documents, design documents, text/code, archives, camera raw, vector drawings, fonts, and more.
-- *Granular display scaling:* Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.
+- Granular display scaling: Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.
 - Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
+- Plugs into what you have: built-in decoders and Windows codecs cover the basics; ImageMagick, FFmpeg, mpv, LibreOffice, Office, WebView2, PeaZip, Calibre, and the Windows PDF engine extend it where installed — nothing bundled. For video, **mpv is recommended** for performance, hardware acceleration, reliability,  and subtitles (embedded tracks and sidecar `.srt`) that just work.
 
 ## Supported Formats
 
@@ -291,7 +292,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected.
     - A pinned video has a transport bar with a volume of its own, set on the window; it does not change **Volume → Video**.
     - **Maximize** fits the window to the screen.
-    - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a right-click on the bubble opens its own menu: the same playback rows, then the ways out; **Play** there gives back a park the collapse made, without waiting for the window), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
+    - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a right-click on the bubble opens its own menu: the same playback rows, then **Pause on Minimize** where the kind behind it plays something, then the ways out; **Play** there gives back a park the collapse made, without waiting for the window), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
     - Clicking the window gives it the keyboard; then the arrow keys step it and `Escape` closes it.
     - The pin key itself only ever puts a pin up and brings back a bubble; it never hides one.
     - The key is named in the item and can be changed in `config.ini` (`pin_key`).
@@ -309,7 +310,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **To Bubble** (Default) — The window collapses into the round bubble on the desktop, and this app never appears in the taskbar.
     - **To Taskbar** — The window leaves the screen and the app appears in the taskbar as its own button, titled **Rust Preview**; clicking the button brings the pinned window back where it stood, and a right-click on the button closes the window.
     - A window is away either way, so previews stay held back until it is brought back, whichever place the setting names.
-    - What a window put away holds where it is is **Pause Minimized** at the top of each kind's own **Pin Mode** — one under **Preview Settings → Video**, one under **Preview Settings → Audio** — because what should go quiet while a pin is away is a question about one kind of file.
+    - What a window put away holds where it is is **Pause on Minimize** at the top of each kind's own **Pin Mode** — one under **Preview Settings → Video**, one under **Preview Settings → Audio** — because what should go quiet while a pin is away is a question about one kind of file.
   - **Navigation** — What **Previous** and **Next** on the caption step through: three anchors — **Video**, **Audio**, **Others** — each with **All Files** / **Same Category**. The walk is anchored on the first file pinned, so a video walks videos while a document walks end to end.
     - The walk is the pin's own: one playlist spawned when the pin is taken up and stepped along, so a **Previous** is the file the walk came from and the **Next** after it is the file it was interrupted on. A file picked in the listing inside that folder carries the playlist on; one anywhere else starts fresh.
     - Video and Audio start at **Same Category**, Others at **All Files**.
@@ -335,7 +336,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - Where the engine that will play is mpv the row reads **Subtitles (MPV)** and is not about a copy at all: mpv finds a film's own tracks and the `.srt` beside it and draws them itself, so nothing is extracted and the pinned `T` key does nothing on that route.
     - **Loop** — On by default: a hovered film goes round at the end of its file. Off, it stops there.
     - **Pin Mode** — What a *pinned* film does.
-      - **Pause Minimized** — On by default: a film put away by the **Minimize** button is held where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
+      - **Pause on Minimize** — On by default: a film put away by the **Minimize** button is held where it stood and started again at the second it stopped at when the window comes back, rather than playing on behind a bubble nobody can see.
       - **Shuffle** — Off by default: whether a forward step of the walk takes a random film of the anchor's kind rather than the one beside it. A step back is the file the walk came from.
       - **End of File** — What a pinned film does at the end of its file: **Loop** (default), **Pause** (the file left where it ended, the bar and the play button standing there), or **Jump** — the walk's next file, which the **Shuffle** row decides between the file beside it and a random one of the same kind.
   - **Audio** — The same questions for a sound, and the two places a sound starts: where a hovered one does and where a *pinned* one does.
@@ -348,7 +349,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen.
     - A video is always played from its beginning.
   - **Pin Mode** — What a *pinned* sound does.
-    - **Pause Minimized** — On by default: the sound a pin put away was playing is held where it stood and started again at the second it stopped at when the window comes back.
+    - **Pause on Minimize** — On by default: the sound a pin put away was playing is held where it stood and started again at the second it stopped at when the window comes back.
     - **Shuffle** and **End of File** — the same two rows as a film's, asked of a sound: a forward step takes a random sound rather than the one beside it, and a file that ends goes round, holds where it stopped, or steps on to the next.
     - **Seek** — Where in a file a *pinned* sound starts playing: **From the Start** (default), **Remember**, **From the Middle**, or **Random**.
   - **Text** — What a text preview is painted with: the font size, how Markdown is shown, and whether a page of HTML runs.
@@ -745,7 +746,7 @@ See [TODO.md](TODO.md) for planned work, known bugs, and other issues.
 
 ## Privacy
 
-Rust Hover Preview is local-first: previews work without an internet connection, and the only network request is an update check, which runs only at startup and when you open the tray menu, at most once every six hours, and never while `Check for Updates` is switched off. There is no telemetry, analytics, ads, accounts, or crash reporting; it reads only the item you hover or focus in Explorer, locally and only for enabled preview types, and cloud-only placeholders are skipped on purpose while password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use locally installed mpv, FFmpeg, LibreOffice, or ImageMagick when available, plus Microsoft Office, Windows' own media engine, and the Windows PDF engine; caches are bounded by `config.ini` — decoded images stay in memory, while the page an engine drew for a document is kept as a file under the temp folder, where Windows is free to clear it. See `PRIVACY.md` for full details.
+Rust Hover Preview is local-first: previews work without an internet connection, and the only network request is an update check, which runs only at startup and when you open the tray menu, at most once every six hours, and never while `Check for Updates` is switched off. There is no telemetry, analytics, ads, accounts, or crash reporting; it reads only the item you hover or focus in Explorer, locally and only for enabled preview types, and cloud-only placeholders are skipped on purpose while password-protected files are never bypassed. Settings and themes live under `%APPDATA%\rust-hover-preview`; optional previews use locally installed mpv, FFmpeg, LibreOffice, or ImageMagick when available, plus Microsoft Office, Windows' own media engine, and the Windows PDF engine; caches are bounded by `config.ini` — decoded images stay in memory, while the page an engine drew for a document is kept as a file under the temp folder, where Windows is free to clear it. See [PRIVACY.md](PRIVACY.md) for full details.
 
 ## License
 

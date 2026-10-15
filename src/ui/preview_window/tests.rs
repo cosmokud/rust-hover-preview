@@ -189,7 +189,7 @@ fn sound_pin() -> PinnedPreview {
     pin
 }
 
-/// The two `Pin Mode → Pause Preview` switches and a sound's own `Normalize`, stood where a test
+/// The two `Pin Mode → Pause on Minimize` switches and a sound's own `Normalize`, stood where a test
 /// asks and put back when the guard is dropped — the house pattern (see `CardFontSettings`).
 ///
 /// The two switches stand *on*, which is the state a bubble is about: a test of what a press on a

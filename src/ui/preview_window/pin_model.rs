@@ -398,7 +398,7 @@ pub(super) struct PinnedPreview {
     /// switches that owned it.
     ///
     /// A press on a bubble whose park is standing gives that park back — the same road a restore
-    /// gives one back — and from then on the `Pin Mode → Pause Preview` switches stand down until
+    /// gives one back — and from then on the `Pin Mode → Pause on Minimize` switches stand down until
     /// the pin is up again: a park written over a film the hand just asked for would be the bubble
     /// arguing with the press that answered it (see `toggle_pinned_by_key` and
     /// `settle_bubble_playback`). A press with no park standing — a film the bar had paused before
