@@ -139,7 +139,8 @@ pub(super) enum PinMenuRow {
     /// playback it holds, and one between that and the settings the pin plays by.
     Separator,
     /// Hold what is playing where it stands, or set it going again: the same pause the card's
-    /// clock and a Space in the window answer.
+    /// clock and a Space in the window answer. It is named for what it will do, the way the
+    /// bubble's own hold is (see `menu_rows`).
     Pause,
     /// The file after the one pinned, the same walk the card's own arrow takes.
     NextFile,
@@ -177,14 +178,18 @@ const PIN_MENU_ROWS: [PinMenuRow; 11] = [
 
 impl PinMenuRow {
     /// What the row is written as: a rule carries nothing at all, because there is nothing on
-    /// one to read.
-    fn label(self) -> &'static str {
+    /// one to read. The hold is named for what it will do rather than for what it already does,
+    /// the way the bubble's own hold is (see `bubble_menu_row_label`): `Pause` while the sound is
+    /// playing and `Play` while it is held — the same answer the card's own play button gives
+    /// (see `pinned_audio_playing`).
+    fn label(self, playing: bool) -> &'static str {
         match self {
             PinMenuRow::ToBubble => "To Bubble",
             PinMenuRow::ToTaskbar => "To Taskbar",
             PinMenuRow::Close => "Close",
             PinMenuRow::Separator => "",
-            PinMenuRow::Pause => "Pause",
+            PinMenuRow::Pause if playing => "Pause",
+            PinMenuRow::Pause => "Play",
             PinMenuRow::NextFile => "Next File",
             PinMenuRow::PreviousFile => "Previous File",
             PinMenuRow::Shuffle => "Shuffle",
@@ -230,14 +235,19 @@ fn row_of(row: PinMenuRow) -> Option<usize> {
 /// change to the setting shows the moment it is made, from wherever it was made —
 /// the same setting the tray's own `End of File` submenu writes (see `menu_rows`).
 ///
+/// The hold is named at the paint as well, from what the player behind the card is doing:
+/// `Pause` while the sound is playing and `Play` while it is held (see
+/// `pinned_audio_playing`).
+///
 /// The rows a hand counts here are the rows themselves, with no rule between them: the doors
 /// the flyouts hang from are named rather than numbered (see `row_of` and
 /// `pinned_menu_paint`).
 pub(super) fn menu_rows() -> Vec<pin_chrome::MenuRow> {
+    let playing = pinned_audio_playing();
     PIN_MENU_ROWS
         .iter()
         .map(|row| pin_chrome::MenuRow {
-            label: row.label().to_string(),
+            label: row.label(playing).to_string(),
             mark: row.mark(),
         })
         .collect()

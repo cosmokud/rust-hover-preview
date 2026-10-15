@@ -167,7 +167,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
             "To Taskbar",
             "Close",
             "",
-            "Pause",
+            "Play",
             "Next File",
             "Previous File",
             "",
@@ -254,6 +254,57 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
     );
 }
 
+/// The hold row is named for what it will do rather than for what the row already does,
+/// the way the bubble's own hold is: `Pause` while the sound behind the card is playing
+/// and `Play` while it is held — the same answer the card's own play button gives, and
+/// the row holds its place in the menu whichever of the two it says (see `menu_rows` and
+/// `pinned_audio_playing`).
+///
+/// The media slot is the one place the answer is read from, so it is taken for the length
+/// of the test and put back what it was: a player of this app's is the process in it, and
+/// a test notes one rather than beginning one (see `PlayerProcess::Noted`).
+#[test]
+fn the_hold_row_is_named_for_what_it_will_do() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    // Nothing behind the card: the row offers to set the sound going.
+    let rows = menu_rows();
+    assert_eq!(
+        rows[row_at(&rows, "Play")].label,
+        "Play",
+        "with nothing playing the hold row is a play"
+    );
+    assert!(
+        rows.iter().all(|row| row.label != "Pause"),
+        "and no row of it is a pause"
+    );
+
+    // A player of this app's behind the sound: the row offers to hold it, in the same
+    // place it sat before — only what it says moves.
+    let mut media = static_image_media(
+        Arc::new(ImageFrame::new(vec![0u8; 4], 1, 1, 0)),
+        MediaType::Audio,
+    );
+    media.video_process = Some(PlayerProcess::Noted(4));
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(media);
+    }
+    let rows = menu_rows();
+    assert_eq!(
+        rows[row_at(&rows, "Pause")].label,
+        "Pause",
+        "with a player running the hold row is a pause"
+    );
+
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = previous_media;
+    }
+}
+
 /// A right-click on an audio pin opens the card's menu at the point it
 /// landed — with no panel before the press and the panel there the moment
 /// it has landed, which is no animation — and a second right-click while
@@ -299,7 +350,7 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
             "To Taskbar",
             "Close",
             "",
-            "Pause",
+            "Play",
             "Next File",
             "Previous File",
             "",
@@ -518,7 +569,7 @@ fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
             "To Taskbar",
             "Close",
             "",
-            "Pause",
+            "Play",
             "Next File",
             "Previous File",
             "",
@@ -783,7 +834,7 @@ fn the_rows_that_do_something_leave_their_ask_with_the_loop() {
         ("To Bubble", PinCommand::MinimizeTo(PinMinimizeTo::Bubble)),
         ("To Taskbar", PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
         ("Close", PinCommand::Close),
-        ("Pause", PinCommand::TogglePlayback),
+        ("Play", PinCommand::TogglePlayback),
         ("Next File", PinCommand::Next),
         ("Previous File", PinCommand::Previous),
     ];
@@ -1117,7 +1168,7 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
             "To Taskbar",
             "Close",
             "",
-            "Pause",
+            "Play",
             "Next File",
             "Previous File",
             "",
