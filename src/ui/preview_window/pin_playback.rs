@@ -840,7 +840,7 @@ pub(super) fn toggle_pinned_audio(
             // than a hold lifted, which is the same bargain the player this app started is
             // given below (see the `Ffmpeg` arm).
             if paused.is_some() {
-                video_player::play_audio(&path, pinned_audio_level(), 0.0, pin_audio_loops(&path));
+                video_player::play_audio(&path, pinned_audio_level(), 0.0, pin_audio_loops());
                 *paused = None;
             } else {
                 // A press is a toggle, and the engine's own answer is the only one there is about
@@ -997,6 +997,85 @@ pub(super) fn restart_pinned_audio(path: &Path, from: f64) -> Option<Instant> {
     }
 
     Some(Instant::now())
+}
+
+/// Begin a sound a pin has just taken up again where it is, where the two rules for the end of
+/// its file disagree.
+///
+/// A sound a pin comes up on is the sound the hover was already playing, and no player is begun
+/// for it at the take-up (see `PreviewMessage::Pin`): so the rule it goes round by is the one its
+/// hover's start read, while the `End of File` the card is thereafter drawn against is the pin's
+/// own. Where those two answer differently the pin has a sound it cannot govern — a player that
+/// takes the file round on its own never exits, so no pass of it ends for the pin's setting to be
+/// read at, and the card's clock, which does ask the pin's answer, is held at the whole of the
+/// file from the first pass on (see `player_loops_itself` and `audio_clock`).
+///
+/// Beginning it again is what tells a player of this app's anything at all (see
+/// `restart_pinned_audio`), and it is begun at the second it is at rather than at the second the
+/// pin's own seek would start it from: this is a sound the user is listening to, and what has to
+/// change is the rule it ends by. A sound the two rules *agree* about is left exactly as it is,
+/// which is every sound under the pin's default `End of File` — and a sound the hover began part
+/// way into its file has no loop of its own to disagree about (see
+/// `a_taken_up_sound_is_begun_again`).
+///
+/// The engine's own session is moved by `play_audio`, which stops whatever is there and begins
+/// the sound at a second with the engine's own loop mode: a sound the engine Windows has is
+/// looped by that mode and by nothing this side can set later (see `video_player::play_audio`).
+pub(super) fn take_up_pinned_audio(
+    path: &Path,
+    started: &mut Option<Instant>,
+    offset: &mut f64,
+    paused: Option<f64>,
+) {
+    // A sound a key is holding has no player going round anything, and a sound nothing will play
+    // has no player at all: both are answered with nothing begun.
+    let Some(track) = audio_track::playable(path) else {
+        return;
+    };
+    if paused.is_some() {
+        return;
+    }
+
+    if !a_taken_up_sound_is_begun_again(current_audio_loop(), pin_audio_loops(), *offset) {
+        return;
+    }
+
+    let played = audio_clock(path, *started, *offset, None).0.unwrap_or(0.0);
+
+    match playing_player(path, &track) {
+        Player::Native => {
+            video_player::play_audio(path, pinned_audio_level(), played, pin_audio_loops());
+            // The engine is taken to the second itself rather than this side counting from one,
+            // so what is written down here is the record of where the sound was begun and
+            // nothing more: its clock is its own (see `audio_clock`).
+            *offset = played;
+        }
+        // The player is this app's own, so it is ended and begun at the second it is at — and a
+        // player that would not come up is a sound nothing is playing, which is written down as
+        // the answer that gets rather than as an old clock left counting (see
+        // `PinTransport::player_gone`).
+        Player::Ffmpeg => {
+            *started = restart_pinned_audio(path, played);
+            *offset = played;
+        }
+    }
+}
+
+/// Whether a sound a pin has just taken up has to be begun again for the pin's own `End of File`
+/// to be able to reach it, asked of the two rules and the second the sound was started at alone —
+/// so that the answer can be read without a player, a file or an engine (see
+/// `take_up_pinned_audio`, and `pinned_pass_end` for the same shape about the end itself).
+///
+/// What is compared is not the two switches but what each of them makes of the player: a sound
+/// begun anywhere but the beginning of its file is given no loop of its own however the switch is
+/// set, because the position `ffplay`'s loop seeks back to is the position it was started at
+/// (see `player_loops_itself`), so the two rules agree about it whatever they say.
+pub(super) fn a_taken_up_sound_is_begun_again(
+    hover_loops: bool,
+    pin_loops: bool,
+    from: f64,
+) -> bool {
+    player_loops_itself(hover_loops, from) && !player_loops_itself(pin_loops, from)
 }
 
 /// The level a sound this app starts is played at: the pin's own where a pin is showing the
