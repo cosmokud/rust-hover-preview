@@ -63,6 +63,287 @@ fn face() -> [u8; 4] {
     [colour[2], colour[1], colour[0], 255]
 }
 
+/// A painted bubble over a colour, as the desktop would show it: premultiplied over an opaque
+/// backdrop, which is the only way the antialiasing of an edge is a thing that can be looked at.
+fn over(buffer: &[u8], width: u32, height: u32, backdrop: [u8; 3]) -> Vec<u8> {
+    let mut out = vec![255u8; (width * height * 4) as usize];
+    for (pixel, source) in out.as_chunks_mut::<4>().0.iter_mut().zip(buffer.chunks(4)) {
+        let alpha = source[3] as u32;
+        for channel in 0..3 {
+            pixel[channel] =
+                (source[channel] as u32 + backdrop[channel] as u32 * (255 - alpha) / 255) as u8;
+        }
+    }
+    out
+}
+
+/// One painted bubble drawn at another size, each pixel of it repeated `factor` times, so that
+/// an edge half a pixel wide is a thing the eye can find.
+fn zoom(buffer: &[u8], width: u32, height: u32, factor: u32) -> (Vec<u8>, u32, u32) {
+    let (wide, tall) = (width * factor, height * factor);
+    let mut out = vec![0u8; (wide * tall * 4) as usize];
+    for y in 0..tall {
+        for x in 0..wide {
+            let from = ((y / factor) as usize * width as usize + (x / factor) as usize) * 4;
+            let to = (y as usize * wide as usize + x as usize) * 4;
+            out[to..to + 4].copy_from_slice(&buffer[from..from + 4]);
+        }
+    }
+    (out, wide, tall)
+}
+
+/// The bubbles a collapsed pin can become, side by side at both scales, over a desktop's own
+/// grey: the design under review.
+///
+/// What a picture of them shows and a test on their pixels cannot is whether a circle reads as a
+/// circle: the ring, the face and the picture inside meet along three curves, and any of the three
+/// drawn a whole pixel at a time can pass a per-pixel test and still be a staircase to look at.
+/// The faces, left to right: a page's play, a paused sound, a page's own mark, a picture whose
+/// frame is not in hand, a playing sound's meter, and a frame with the pause mark over it.
+#[test]
+fn draws_the_bubbles_faces() {
+    let dir = scratch("bubble-faces");
+    let backdrop = [128u8, 128, 128];
+
+    for (dpi, tag) in [(96u32, "96dpi"), (192u32, "192dpi")] {
+        // The size the window paints the circle at: `PIN_BUBBLE_PIXELS` on a display at this
+        // scale (`logical_px`).
+        let side = (44.0 * dpi as f32 / 96.0).round() as u32;
+        // A picture with something in it to lose: a shade per column, which is a picture shown
+        // smaller than it was drawn if anything is (see `picture_pixel`).
+        let picture = (0..side * side)
+            .flat_map(|index| {
+                let shade = ((index % side) * 255 / side) as u8;
+                [shade, shade.wrapping_sub(128), 128, 255]
+            })
+            .collect::<Vec<u8>>();
+
+        let faces = [
+            (BubbleArt::None, BubbleMark::Play),
+            (BubbleArt::None, BubbleMark::Pause),
+            (BubbleArt::None, BubbleMark::Page),
+            (BubbleArt::None, BubbleMark::Picture),
+            (
+                BubbleArt::Audio {
+                    level: 0.7,
+                    phase: 0.0,
+                },
+                BubbleMark::Play,
+            ),
+            (
+                BubbleArt::Picture {
+                    pixels: &picture,
+                    width: side,
+                    height: side,
+                },
+                BubbleMark::Pause,
+            ),
+        ];
+
+        let width = side * faces.len() as u32;
+        let mut strip = image_buffer(width, side);
+        for (cell, (art, mark)) in faces.into_iter().enumerate() {
+            let mut buffer = image_buffer(side, side);
+            paint_bubble(&mut buffer, side, side, &palette(), art, mark);
+            let painted = over(&buffer, side, side, backdrop);
+            blit_cell(&mut strip, width, side, &painted, side, cell as u32 * side);
+        }
+
+        let path = dir.join(format!("bubbles-{tag}.png"));
+        write_png(path.clone(), &strip, width, side);
+        println!("{}", path.display());
+
+        // The whole strip again at four times the size, which is what a review of an edge is:
+        // a circle forty-four pixels across has no edge to look at on its own.
+        if dpi == 96 {
+            let (large, wide, tall) = zoom(&strip, width, side, 4);
+            let path = dir.join(format!("bubbles-{tag}-x4.png"));
+            write_png(path.clone(), &large, wide, tall);
+            println!("{}", path.display());
+        }
+    }
+}
+
+#[test]
+fn the_face_and_the_ring_meet_at_a_ramp_rather_than_a_step() {
+    // The ring is a hairline of the accent around a face of the theme's own colour, and the two
+    // meet along a circle: a pixel on that circle holds some of each, and a painter that gives it
+    // one or the other leaves a staircase where the two colours change (see `paint_bubble`).
+    let painted = paint(BubbleArt::None, BubbleMark::Play);
+    let face = face();
+    let ring = [
+        palette().accent[2],
+        palette().accent[1],
+        palette().accent[0],
+        255,
+    ];
+
+    // Outwards from the middle of the bubble on its right, which is the bare face: the play mark
+    // is a glyph across the middle of the face and does not reach the ring on this row.
+    let row = SIDE / 2;
+    let colours = (SIDE / 2..SIDE)
+        .map(|x| pixel(&painted, x, row))
+        .collect::<Vec<_>>();
+    let last_face = colours
+        .iter()
+        .rposition(|&colour| colour == face)
+        .expect("the face is drawn");
+    let first_ring = colours
+        .iter()
+        .position(|&colour| colour == ring)
+        .expect("the ring is drawn");
+
+    assert!(
+        first_ring > last_face + 1,
+        "the face runs to {last_face} and the ring starts at {first_ring} with nothing between \
+         them: a pixel on the edge of either is both of them in the shares the circle leaves"
+    );
+}
+
+#[test]
+fn the_pictures_round_edge_is_a_ramp_rather_than_a_cut() {
+    // The picture a bubble carries is cut to the circle the ring leaves, which is a curve like
+    // any other in here: a pixel on it holds some of the picture and some of the ring, and a
+    // painter that gives it the one or the other leaves an edge a hand can see the steps in
+    // (see `paint_bubble`).
+    let upper = [10, 200, 30, 255];
+    let lower = [242, 40, 100, 255];
+    let mut halves = Vec::with_capacity((SIDE * SIDE * 4) as usize);
+    for row in 0..SIDE {
+        let band = if row < SIDE / 2 { upper } else { lower };
+        for _ in 0..SIDE {
+            halves.extend_from_slice(&band);
+        }
+    }
+
+    let mean = average_color(&halves).expect("a picture of two colours has a mean");
+    let ring = [mean[2], mean[1], mean[0], 255];
+    let picture = upper;
+    let painted = paint(
+        BubbleArt::Picture {
+            pixels: &halves,
+            width: SIDE,
+            height: SIDE,
+        },
+        BubbleMark::Page,
+    );
+
+    // A row through the upper half of the picture and out to its edge, where the two colours a
+    // pixel can be are the picture's own and the ring's mean — and nothing else.
+    let row = SIDE / 4;
+    let colours = (SIDE / 2..SIDE)
+        .map(|x| pixel(&painted, x, row))
+        .collect::<Vec<_>>();
+    let last_picture = colours
+        .iter()
+        .rposition(|&colour| colour == picture)
+        .expect("the picture is drawn");
+    let first_ring = colours
+        .iter()
+        .position(|&colour| colour == ring)
+        .expect("the ring is drawn");
+
+    assert!(
+        first_ring > last_picture + 1,
+        "the picture runs to {last_picture} and the ring starts at {first_ring} with nothing \
+         between them: the circle the picture is cut to passes between the two"
+    );
+}
+
+#[test]
+fn a_picture_finer_than_the_bubble_is_averaged_rather_than_sampled() {
+    // A picture cut to a square is wider than the round face it is put in, so nearly every pixel
+    // of the face asks the picture for a point that falls between four of its pixels. What the
+    // point falls among is what the pixel is (see `paint_bubble`); the one nearest it is what
+    // leaves a picture of a pixel-wide pattern looking like static rather than like a picture.
+    let mut checkerboard = Vec::with_capacity((SIDE * SIDE * 4) as usize);
+    let ink = [[255u8, 255, 255, 255], [0, 0, 0, 255]];
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            checkerboard.extend_from_slice(&ink[((x + y) % 2) as usize]);
+        }
+    }
+
+    let painted = paint(
+        BubbleArt::Picture {
+            pixels: &checkerboard,
+            width: SIDE,
+            height: SIDE,
+        },
+        BubbleMark::Page,
+    );
+
+    // The face, and not the ring or the edge of the circle: every pixel of it is a pixel of the
+    // picture, so every one of them is a black, a white, or the grey a pixel between them is.
+    let mut between = 0;
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            if distance(x, y) > SIDE as f32 / 2.0 - 6.0 {
+                continue;
+            }
+            if !matches!(pixel(&painted, x, y), [255, 255, 255, 255] | [0, 0, 0, 255]) {
+                between += 1;
+            }
+        }
+    }
+
+    assert!(
+        between > 100,
+        "{between} pixels of the face are neither of the two colours the picture is made of: a \
+         picture shown smaller than it was drawn is the average of what it covers"
+    );
+}
+
+#[test]
+fn the_marks_slanted_edge_is_a_share_of_the_ink_rather_than_all_of_it() {
+    // The play triangle is the one mark in a bubble whose edge runs across the pixel grid: the
+    // pixels it crosses are some of the face and some of the ink, and a painter that gives each of
+    // them the one or the other draws a staircase (see `paint_mark`). The mark is one colour laid
+    // down at one opacity, so the share of it a pixel carries is read back off the pixel.
+    let painted = paint(BubbleArt::None, BubbleMark::Play);
+    let face = face();
+    // The ink at full coverage, read out of the triangle where nothing else can be: a column of
+    // the mark off its own middle row, which every pixel of its edge is a share of rather than
+    // the whole of.
+    let solid = pixel(&painted, SIDE / 2, SIDE / 2 - 3);
+    assert_ne!(solid, face, "the ink of the mark is drawn");
+
+    let share =
+        |pixel: [u8; 4]| (pixel[0] as f32 - face[0] as f32) / (solid[0] as f32 - face[0] as f32);
+
+    let mut partial = 0;
+    let mut rows = Vec::new();
+    for y in SIDE / 2 - 8..=SIDE / 2 + 8 {
+        for x in SIDE / 2 - 12..=SIDE / 2 + 12 {
+            let pixel = pixel(&painted, x, y);
+            if pixel == face || pixel == solid {
+                continue;
+            }
+
+            let carried = share(pixel);
+            if (0.02..0.98).contains(&carried) {
+                partial += 1;
+                if !rows.contains(&y) {
+                    rows.push(y);
+                }
+            }
+        }
+    }
+
+    assert!(
+        partial > 20,
+        "only {partial} pixels of the triangle carry a part of the ink rather than all of it: a \
+         pixel the edge crosses holds the area of the triangle that is in it"
+    );
+    assert!(
+        rows.len() > 8,
+        "the pixels carrying part of the ink are on {} rows out of the {} the triangle is drawn \
+         across, which is an edge rounded off rather than drawn",
+        rows.len(),
+        SIDE / 2 + 8 - (SIDE / 2 - 8) + 1
+    );
+}
+
 #[test]
 fn a_picture_gives_the_ring_its_own_average_colour() {
     // The ring of a bubble over a picture is the picture's own mean rather than the theme's
