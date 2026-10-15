@@ -771,7 +771,8 @@ pub(super) fn start_audio_playback_at(
                 // over the gain it asked for (see `video_player::stop`).
                 video_player::stop();
 
-                media.video_process = start_audio_player(path, volume, start, Some(gain), pin_audio_loops(path));
+                media.video_process =
+                    start_audio_player(path, volume, start, Some(gain), pin_audio_loops());
 
                 return media.video_process.is_some();
             }
@@ -797,13 +798,13 @@ pub(super) fn start_audio_playback_at(
             // one where the pin's end of file is a loop — every other pinned sound
             // is one the engine plays once, and the end of it is what either moves
             // the pin on, steps through the folder, or stops it (see `pin_audio_loops`).
-            video_player::play_audio(path, volume, start, pin_audio_loops(path));
+            video_player::play_audio(path, volume, start, pin_audio_loops());
             video_player::is_playing()
         }
         Player::Ffmpeg => {
             // A gain measured for the file is FFmpeg's filter and goes with it; the branch above
             // is where a file with one was already taken, so this is a player started with no gain.
-            media.video_process = start_audio_player(path, volume, start, None, pin_audio_loops(path));
+            media.video_process = start_audio_player(path, volume, start, None, pin_audio_loops());
             media.video_process.is_some()
         }
     }
@@ -955,16 +956,32 @@ pub(super) fn reached_the_end(played: Duration, length: Option<f64>, offset: f64
     played.as_secs_f64() >= pass.min(AUDIO_WRAP_MINIMUM)
 }
 
-/// Whether the sound `path` is showing goes round on its own: a hovered sound loops
-/// where its own loop switch says so, and a pinned one where the pin's end of file is a
-/// loop — every other sound is one the engine plays once, and the end of it is what either
-/// moves the pin on, steps through the folder, or stops it (see `wrap_audio_player`).
+/// Whether the sound now on screen goes round on its own: a hovered sound loops where its own
+/// loop switch says so, and a pinned one where the pin's end of file is a loop — every other
+/// sound is one the engine plays once, and the end of it is what either moves the pin on, steps
+/// through the folder, or stops it (see `wrap_audio_player`).
 ///
-/// The setting is the pin's own, so a hover preview — a sound the pointer is
-/// on rather than one a pin was asked to keep — is answered by its own switch, and
-/// the question of the pin's half is only ever asked of the file a pin is showing.
-pub(super) fn pin_audio_loops(path: &Path) -> bool {
-    if pinned() && pinned_path().as_deref() == Some(path) {
+/// The setting is the pin's own, so a hover preview — a sound the pointer is on rather than one a
+/// pin was asked to keep — is answered by its own switch, and which of the two it is is asked of
+/// the pin rather than of the file: a hover is refused at every door while a pin is up (see
+/// `hover_is_shown`), so a sound being begun while one is up is the pin's own sound.
+///
+/// The file is deliberately not consulted, and that is the whole of a bug this answered wrongly:
+/// the pin does not own the file it is *about to* show. A swap begins the incoming sound's
+/// player (see `swap_pinned_media`) before the install writes the new path into the pin, so a
+/// walk step — a sound dropped at the beginning of its file where the pin's own seek says so —
+/// asked this with a path the pin had not been given yet, fell to the *hover's* switch, and a
+/// hovered sound loops by default. What came of it was a player taking the file round on its own
+/// (`player_loops_itself`), which never exits: no pass ended, so `End of File` was never read
+/// again for the sound the pin was showing, and the card's clock — which asks the pin's answer
+/// (see `audio_clock`) — stood at the whole of the file from the first pass on.
+///
+/// shortcut: a rule changed while a sound the player already takes round itself is going is not
+/// read until that player is begun again — a seek, a resume, a swap, a take-up, which is the
+/// bargain `set_pin_end_of_file` documents; upgrade where the `End of File` row has to reach a
+/// sound that is already going round.
+pub(super) fn pin_audio_loops() -> bool {
+    if pinned() {
         current_pin_mode_audio_end_of_file() == PinEndOfFile::Loop
     } else {
         current_audio_loop()
@@ -1229,7 +1246,7 @@ pub(super) fn audio_clock(
     // `player_loops_itself`).
     let position = match (elapsed, track.duration) {
         (Some(elapsed), Some(duration)) if duration > 0.0 => {
-            if player_loops_itself(pin_audio_loops(path), from) {
+            if player_loops_itself(pin_audio_loops(), from) {
                 // The whole of the passes a player of its own has taken round, gone round with
                 // it: the same rule a pinned film's transport clock is read by (see
                 // `transport_clock`), and the one thing that keeps a seekbar moving under a

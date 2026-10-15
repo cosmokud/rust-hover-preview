@@ -3193,18 +3193,32 @@ pub fn run_preview_window() {
                                 );
                             }
                         } else if kind == Some(MediaType::Audio) {
-                            let card = AudioCardClock {
-                                started: audio_started,
-                                from: audio_start_offset,
-                                paused: audio_paused,
-                                name_offset: audio_name_scroll
-                                    .as_ref()
-                                    .map(|scroll| scroll.offset())
-                                    .unwrap_or(0),
-                                dpi: audio_card_dpi,
-                                chrome: pinned_audio_chrome(audio_paused),
-                            };
                             if let Some((path, _)) = pinned_media_owner() {
+                                // A sound a pin comes up on is the sound the hover was already
+                                // playing: no player is begun for it here, so where the rule it
+                                // goes round by is not the pin's own the pin begins it again
+                                // where it is — a player that takes the file round on its own has
+                                // no pass end for the pin's `End of File` to be read at (see
+                                // `take_up_pinned_audio`).
+                                take_up_pinned_audio(
+                                    &path,
+                                    &mut audio_started,
+                                    &mut audio_start_offset,
+                                    audio_paused,
+                                );
+
+                                let card = AudioCardClock {
+                                    started: audio_started,
+                                    from: audio_start_offset,
+                                    paused: audio_paused,
+                                    name_offset: audio_name_scroll
+                                        .as_ref()
+                                        .map(|scroll| scroll.offset())
+                                        .unwrap_or(0),
+                                    dpi: audio_card_dpi,
+                                    chrome: pinned_audio_chrome(audio_paused),
+                                };
+
                                 pin_relayout = relayout_pinned_media(
                                     &path,
                                     content,
