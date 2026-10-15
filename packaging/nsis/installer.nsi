@@ -17,7 +17,8 @@
 ;     has each of them and carrying a link to the page it is installed from where
 ;     it does not (see "Optional engines page" below). It installs nothing and
 ;     writes nothing: it is the README's install steps, offered where a user is
-;     already looking.
+;     already looking. Office is the one engine on it with no page to open — it is
+;     not a download — so Office's row is the one that carries nothing.
 ; Upgrading cargo-packager means diffing this file against the upstream
 ; template at crates/packager/src/package/nsis/installer.nsi.
 
@@ -190,10 +191,12 @@ Page custom RecommendedShow RecommendedLeave
 ;
 ; What is asked about each engine is what the app itself asks before it drives one, so a page
 ; that says a name is missing and the app's own `Codecs` row agree: the folders each installer
-; writes to, the `PATH` for FFmpeg's player, the console archiver inside a PeaZip installation,
-; and the ProgID of each Office application for the one thing decided here about LibreOffice —
-; the Office formats are worth naming only on a machine with no Office to draw them, and what
-; LibreOffice adds to a machine that has one is the formats beside them.
+; writes to, the `PATH` for FFmpeg's player, the two folders mpv's own installers write to, the
+; console archiver inside a PeaZip installation, and the ProgID of each Office application — as
+; a row of Office's own, which is the one row here with nothing to its right, since Office is not
+; a download, and as the one thing decided here about LibreOffice: the Office formats are worth
+; naming only on a machine with no Office to draw them, and what LibreOffice adds to a machine
+; that has one is the formats beside them.
 ;
 ; Like the page above it, this page is not shown to an unattended installer at all: an update
 ; put on by the app's own `Auto` answer runs this installer silently, and a page nobody is
@@ -270,7 +273,8 @@ LangString recommendedNote ${LANG_ENGLISH} "The first puts the settings back and
 ; formats that engine would give previews to, and the two words a row can carry to its right.
 ; `enginesLibreOffice` is the name a machine with no Office sees and `enginesLibreNiche` the one
 ; a machine with it does: the Office formats are covered there already, and what LibreOffice
-; adds is the formats beside them.
+; adds is the formats beside them. `enginesMPV` names the formats `enginesFFmpeg` does: mpv plays
+; what FFmpeg's player plays, and the app's own `Codecs` row for it carries no list of its own.
 ;
 ; The checkmark is a square root sign, which is a fact about the font rather than a choice: the
 ; dialog font these pages are drawn with carries `√` and has no glyph at all for `✔` or `✓`,
@@ -280,12 +284,14 @@ LangString enginesSubtitle ${LANG_ENGLISH} "Previews that need something this ap
 LangString enginesIntro ${LANG_ENGLISH} "These engines are optional: without one, the files it draws simply show no preview. Nothing is installed here — a link opens the page it is installed from, and an engine installed later is used without a restart."
 LangString enginesDetected ${LANG_ENGLISH} "Detected"
 LangString enginesDownload ${LANG_ENGLISH} "Download"
+LangString enginesMPV ${LANG_ENGLISH} "MPV (flv, rmvb, mxf, ogv, swf, ...)"
 LangString enginesFFmpeg ${LANG_ENGLISH} "FFmpeg (flv, rmvb, mxf, ogv, swf, ...)"
 LangString enginesLibreOffice ${LANG_ENGLISH} "LibreOffice (doc, docx, xls, xlsx, ppt, pptx, ...)"
 LangString enginesLibreNiche ${LANG_ENGLISH} "LibreOffice (cdr, odt, ods, odp, odg, ...)"
 LangString enginesImageMagick ${LANG_ENGLISH} "ImageMagick (nef, cr2, cr3, arw, dng, raf, ...)"
 LangString enginesPeaZip ${LANG_ENGLISH} "PeaZip (cab, iso, rpm, deb, arj, lzh, ...)"
 LangString enginesCalibre ${LANG_ENGLISH} "Calibre (mobi, azw3, epub, djvu, fb2, ...)"
+LangString enginesOffice ${LANG_ENGLISH} "Microsoft Office (doc, docx, xls, xlsx, ppt, pptx, ...)"
 
 !macro SetContext
   !if "${INSTALLMODE}" == "currentUser"
@@ -718,8 +724,35 @@ FunctionEnd
 ; that label greyed — which is what disabling a static does, since the dialog manager draws a
 ; disabled control's text in the grey the platform keeps for it.
 ;
-; The five engines are asked about one at a time, and each detector answers in `$0`: 1 where the
-; engine is installed and 0 where it is not.
+; Each engine is asked about one at a time, and each detector answers in `$0`: 1 where the engine
+; is installed and 0 where it is not.
+;
+; mpv is asked for where the app asks for it (see `codecs::mpv_installs`): beside the app, in a
+; folder on the `PATH`, and in the two folders its own installers write to — `MPV Player` under
+; Program Files, which is where winget puts it, and SVP 4's `mpv64`. What the app also honors is
+; a copy the user picked in its own settings, which is a path in the app's configuration; this
+; installer reads none of that, so a machine whose only mpv is a chosen copy is one this page
+; does not know about.
+Function MPVInstalled
+  StrCpy $0 0
+  ${If} ${FileExists} "$INSTDIR\mpv.exe"
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  SearchPath $1 "mpv.exe"
+  ${IfNot} ${Errors}
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$PROGRAMFILES64\MPV Player\mpv.exe"
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$PROGRAMFILES\SVP 4\mpv64\mpv.exe"
+    StrCpy $0 1
+  ${EndIf}
+FunctionEnd
+
 Function FFmpegInstalled
   StrCpy $0 0
   SearchPath $1 "ffplay.exe"
@@ -799,10 +832,10 @@ Function CalibreInstalled
   ${EndIf}
 FunctionEnd
 
-; Whether every Office application this app draws a page with is installed. It is asked for the
-; LibreOffice row and nothing else, and what that row is called follows it: with all three here
-; the Office formats are covered and what LibreOffice adds is the formats beside them, while a
-; machine with none — or with only some — is shown the Office formats LibreOffice draws.
+; Whether every Office application this app draws a page with is installed. It marks the Office
+; row, and what the LibreOffice row is called follows it: with all three here the Office formats
+; are covered and what LibreOffice adds is the formats beside them, while a machine with none —
+; or with only some — is shown the Office formats LibreOffice draws.
 ;
 ; What is read is the ProgID each application registers, which is the same `CLSIDFromProgID`
 ; question the app asks before it drives one.
@@ -839,18 +872,36 @@ Function EnginesShow
   ${NSD_CreateLabel} 0 0 100% 26u "$(enginesIntro)"
   Pop $0
 
-  Call FFmpegInstalled
+  ; mpv's row is the first, as mpv is the first of the engines the app lists for a video: where
+  ; more than one player is installed, it is the one `Best` prefers.
+  Call MPVInstalled
   ${If} $0 == 1
-    StrCpy $1 "√ $(enginesFFmpeg)"
+    StrCpy $1 "√ $(enginesMPV)"
     ${NSD_CreateLabel} 0 32u 74% 12u "$1"
     Pop $0
     ${NSD_CreateLabel} 75% 32u 25% 12u "$(enginesDetected)"
     Pop $0
   ${Else}
-    ${NSD_CreateLabel} 0 32u 74% 12u "$(enginesFFmpeg)"
+    ${NSD_CreateLabel} 0 32u 74% 12u "$(enginesMPV)"
     Pop $0
     EnableWindow $0 0
     ${NSD_CreateLink} 75% 32u 25% 12u "$(enginesDownload)"
+    Pop $0
+    ${NSD_OnClick} $0 EnginesLinkMPV
+  ${EndIf}
+
+  Call FFmpegInstalled
+  ${If} $0 == 1
+    StrCpy $1 "√ $(enginesFFmpeg)"
+    ${NSD_CreateLabel} 0 46u 74% 12u "$1"
+    Pop $0
+    ${NSD_CreateLabel} 75% 46u 25% 12u "$(enginesDetected)"
+    Pop $0
+  ${Else}
+    ${NSD_CreateLabel} 0 46u 74% 12u "$(enginesFFmpeg)"
+    Pop $0
+    EnableWindow $0 0
+    ${NSD_CreateLink} 75% 46u 25% 12u "$(enginesDownload)"
     Pop $0
     ${NSD_OnClick} $0 EnginesLinkFFmpeg
   ${EndIf}
@@ -867,15 +918,15 @@ Function EnginesShow
   Call LibreOfficeInstalled
   ${If} $0 == 1
     StrCpy $1 "√ $EnginesLibreText"
-    ${NSD_CreateLabel} 0 46u 74% 12u "$1"
+    ${NSD_CreateLabel} 0 60u 74% 12u "$1"
     Pop $0
-    ${NSD_CreateLabel} 75% 46u 25% 12u "$(enginesDetected)"
+    ${NSD_CreateLabel} 75% 60u 25% 12u "$(enginesDetected)"
     Pop $0
   ${Else}
-    ${NSD_CreateLabel} 0 46u 74% 12u "$EnginesLibreText"
+    ${NSD_CreateLabel} 0 60u 74% 12u "$EnginesLibreText"
     Pop $0
     EnableWindow $0 0
-    ${NSD_CreateLink} 75% 46u 25% 12u "$(enginesDownload)"
+    ${NSD_CreateLink} 75% 60u 25% 12u "$(enginesDownload)"
     Pop $0
     ${NSD_OnClick} $0 EnginesLinkLibreOffice
   ${EndIf}
@@ -883,15 +934,15 @@ Function EnginesShow
   Call ImageMagickInstalled
   ${If} $0 == 1
     StrCpy $1 "√ $(enginesImageMagick)"
-    ${NSD_CreateLabel} 0 60u 74% 12u "$1"
+    ${NSD_CreateLabel} 0 74u 74% 12u "$1"
     Pop $0
-    ${NSD_CreateLabel} 75% 60u 25% 12u "$(enginesDetected)"
+    ${NSD_CreateLabel} 75% 74u 25% 12u "$(enginesDetected)"
     Pop $0
   ${Else}
-    ${NSD_CreateLabel} 0 60u 74% 12u "$(enginesImageMagick)"
+    ${NSD_CreateLabel} 0 74u 74% 12u "$(enginesImageMagick)"
     Pop $0
     EnableWindow $0 0
-    ${NSD_CreateLink} 75% 60u 25% 12u "$(enginesDownload)"
+    ${NSD_CreateLink} 75% 74u 25% 12u "$(enginesDownload)"
     Pop $0
     ${NSD_OnClick} $0 EnginesLinkImageMagick
   ${EndIf}
@@ -899,15 +950,15 @@ Function EnginesShow
   Call PeaZipInstalled
   ${If} $0 == 1
     StrCpy $1 "√ $(enginesPeaZip)"
-    ${NSD_CreateLabel} 0 74u 74% 12u "$1"
+    ${NSD_CreateLabel} 0 88u 74% 12u "$1"
     Pop $0
-    ${NSD_CreateLabel} 75% 74u 25% 12u "$(enginesDetected)"
+    ${NSD_CreateLabel} 75% 88u 25% 12u "$(enginesDetected)"
     Pop $0
   ${Else}
-    ${NSD_CreateLabel} 0 74u 74% 12u "$(enginesPeaZip)"
+    ${NSD_CreateLabel} 0 88u 74% 12u "$(enginesPeaZip)"
     Pop $0
     EnableWindow $0 0
-    ${NSD_CreateLink} 75% 74u 25% 12u "$(enginesDownload)"
+    ${NSD_CreateLink} 75% 88u 25% 12u "$(enginesDownload)"
     Pop $0
     ${NSD_OnClick} $0 EnginesLinkPeaZip
   ${EndIf}
@@ -915,17 +966,33 @@ Function EnginesShow
   Call CalibreInstalled
   ${If} $0 == 1
     StrCpy $1 "√ $(enginesCalibre)"
-    ${NSD_CreateLabel} 0 88u 74% 12u "$1"
+    ${NSD_CreateLabel} 0 102u 74% 12u "$1"
     Pop $0
-    ${NSD_CreateLabel} 75% 88u 25% 12u "$(enginesDetected)"
+    ${NSD_CreateLabel} 75% 102u 25% 12u "$(enginesDetected)"
     Pop $0
   ${Else}
-    ${NSD_CreateLabel} 0 88u 74% 12u "$(enginesCalibre)"
+    ${NSD_CreateLabel} 0 102u 74% 12u "$(enginesCalibre)"
     Pop $0
     EnableWindow $0 0
-    ${NSD_CreateLink} 75% 88u 25% 12u "$(enginesDownload)"
+    ${NSD_CreateLink} 75% 102u 25% 12u "$(enginesDownload)"
     Pop $0
     ${NSD_OnClick} $0 EnginesLinkCalibre
+  ${EndIf}
+
+  ; Office's row is the one with nothing beside it: Office is not a free download, so a machine
+  ; without it is told what the row is and offered nowhere to go — the same silence the app's own
+  ; `Codecs` rows keep for it, which cannot be picked either.
+  Call OfficeInstalled
+  ${If} $0 == 1
+    StrCpy $1 "√ $(enginesOffice)"
+    ${NSD_CreateLabel} 0 116u 74% 12u "$1"
+    Pop $0
+    ${NSD_CreateLabel} 75% 116u 25% 12u "$(enginesDetected)"
+    Pop $0
+  ${Else}
+    ${NSD_CreateLabel} 0 116u 74% 12u "$(enginesOffice)"
+    Pop $0
+    EnableWindow $0 0
   ${EndIf}
 
   nsDialogs::Show
@@ -938,10 +1005,16 @@ FunctionEnd
 Function EnginesLeave
 FunctionEnd
 
-; The page's five links, a function each, so that the address a row opens is written by the row
+; The page's six links, a function each, so that the address a row opens is written by the row
 ; rather than looked up from a table. The control handle the click carries is the first thing on
 ; the stack and is dropped: what a click does is one address, and which control it was is not
-; part of the question.
+; part of the question. Office's row has no function of its own here: there is nowhere to send
+; anyone.
+Function EnginesLinkMPV
+  Pop $0
+  ExecShell "open" "https://mpv.io/installation/"
+FunctionEnd
+
 Function EnginesLinkFFmpeg
   Pop $0
   ExecShell "open" "https://ffmpeg.org/download.html"
