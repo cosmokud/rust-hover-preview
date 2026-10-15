@@ -1,4 +1,5 @@
 use super::*;
+use super::environment::user_data_folder;
 
 /// The page the engine is pointed at is what makes a document the size of the window
 /// it was given: the document goes in an image, and an image is scaled to its box
@@ -666,4 +667,29 @@ fn webview_probe() {
 
     shutdown();
     println!("after shutdown: showing={}", is_showing());
+}
+
+/// The folder a test build falls back to is one of the tests' own, never the
+/// machine's: the profile root a run of the app somebody is actually running keeps
+/// its profiles in, which its next start clears and this one must not write into.
+#[test]
+fn a_tests_own_profile_folder_is_never_the_machines() {
+    let folder = user_data_folder();
+
+    let machine = directories::BaseDirs::new()
+        .expect("the machine's folders")
+        .data_local_dir()
+        .join("rust-hover-preview")
+        .join("webview");
+
+    assert!(
+        !folder.starts_with(&machine),
+        "a test's profile is in a folder of the test's own, not the machine's: {}",
+        folder.display()
+    );
+    assert!(
+        folder.starts_with(std::env::temp_dir()),
+        "and it is one of the tests' own: {}",
+        folder.display()
+    );
 }

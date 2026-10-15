@@ -171,7 +171,17 @@ pub(crate) fn stale_profile_pids() -> Vec<u32> {
 }
 
 /// The folder the per-run folders live in.
+///
+/// A test build keeps its runs' folders in one of the tests' own, never the machine's:
+/// the root a run of the app somebody is actually running holds its profiles in, which
+/// its next start clears and this one must not write into.
 fn profile_root() -> PathBuf {
+    #[cfg(test)]
+    {
+        return test_folder();
+    }
+
+    #[cfg(not(test))]
     directories::BaseDirs::new()
         .map(|dirs| {
             dirs.data_local_dir()
@@ -179,6 +189,15 @@ fn profile_root() -> PathBuf {
                 .join("webview")
         })
         .unwrap_or_else(std::env::temp_dir)
+}
+
+/// Where a test build keeps its profiles while a test does not name a folder of its
+/// own: one folder of the tests' own, never the machine's.
+#[cfg(test)]
+fn test_folder() -> PathBuf {
+    std::env::temp_dir()
+        .join("rust-hover-preview-tests")
+        .join("webview")
 }
 
 /// Clear away the folders earlier runs left, which nothing is using any more.
