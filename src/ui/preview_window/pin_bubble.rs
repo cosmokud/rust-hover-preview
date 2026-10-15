@@ -123,8 +123,13 @@ pub(super) enum BubbleMenuRow {
     NextFile,
     /// The file before the one pinned.
     PreviousFile,
-    /// The rule between the playback and the two ways out of the bubble.
+    /// The rule between the playback and the switch below it, and between that switch and the
+    /// two ways out of the bubble.
     Separator,
+    /// Whether a pin the minimize button puts away holds what it is playing where it stands: the
+    /// switch the kind's own `Pin Mode` in the tray carries, on the bubble a minimize is what
+    /// left here (see `pin_pause_video` and `pin_pause_audio`).
+    PauseOnMinimize,
     /// Put the pin away into the taskbar rather than the bubble.
     ToTaskbar,
     /// Take the pin down.
@@ -132,24 +137,58 @@ pub(super) enum BubbleMenuRow {
 }
 
 /// The rows the bubble's menu holds, from the top of the panel to the bottom: the playback of
-/// the file behind the bubble, the rule, and the two ways out of any bubble. The hold is only a
-/// row where there is playback for it to hold.
+/// the file behind the bubble, the rule, the switch that decides what a minimize holds back,
+/// the rule again, and the two ways out of any bubble. Both the hold and the switch are only
+/// rows where the kind behind the bubble has playback for them to answer about.
 pub(super) fn bubble_menu_rows(kind: Option<MediaType>) -> Vec<BubbleMenuRow> {
-    let mut rows = Vec::with_capacity(6);
+    let mut rows = Vec::with_capacity(8);
     if bubble_space_toggles(kind) {
         rows.push(BubbleMenuRow::Toggle);
     }
     rows.push(BubbleMenuRow::NextFile);
     rows.push(BubbleMenuRow::PreviousFile);
     rows.push(BubbleMenuRow::Separator);
+    if bubble_pause_on_minimize(kind).is_some() {
+        rows.push(BubbleMenuRow::PauseOnMinimize);
+        rows.push(BubbleMenuRow::Separator);
+    }
     rows.push(BubbleMenuRow::ToTaskbar);
     rows.push(BubbleMenuRow::Close);
     rows
 }
 
+/// What the kind behind the bubble has the `Pause on Minimize` switch at, or nothing where the
+/// kind has no switch: whether a pin the minimize button puts away holds what it is playing
+/// where it stands is a question a film and a sound have an answer to and nothing else has.
+fn bubble_pause_on_minimize(kind: Option<MediaType>) -> Option<bool> {
+    match kind {
+        Some(MediaType::Video) | Some(MediaType::NativeVideo) => Some(pin_pause_video()),
+        Some(MediaType::Audio) => Some(pin_pause_audio()),
+        _ => None,
+    }
+}
+
+/// Turn the `Pause on Minimize` switch over for the kind behind the bubble: written under the
+/// configuration's lock and saved, the way every setting this app's own menus write is (see
+/// `pin_menu::toggle_pin_audio_shuffle`). A kind with no switch of its own writes nothing,
+/// because its menu carries no row to press.
+fn toggle_pause_on_minimize(kind: Option<MediaType>) {
+    if let Ok(mut config) = CONFIG.lock() {
+        match kind {
+            Some(MediaType::Video) | Some(MediaType::NativeVideo) => {
+                config.pin_pause_video = !config.pin_pause_video
+            }
+            Some(MediaType::Audio) => config.pin_pause_audio = !config.pin_pause_audio,
+            _ => return,
+        }
+        config.save();
+    }
+}
+
 /// What a row of the bubble's menu says: the hold named for what it will do, the two walks
-/// named for the file they step to, and the two ways out spelled the way the tray spells them.
-/// A rule carries nothing at all, because there is nothing on one to read.
+/// named for the file they step to, the switch spelled the way the tray spells it, and the two
+/// ways out the same way. A rule carries nothing at all, because there is nothing on one to
+/// read.
 pub(super) fn bubble_menu_row_label(row: BubbleMenuRow, playing: bool) -> &'static str {
     match row {
         BubbleMenuRow::Toggle if playing => "Pause",
@@ -157,16 +196,23 @@ pub(super) fn bubble_menu_row_label(row: BubbleMenuRow, playing: bool) -> &'stat
         BubbleMenuRow::NextFile => "Next File",
         BubbleMenuRow::PreviousFile => "Previous File",
         BubbleMenuRow::Separator => "",
+        BubbleMenuRow::PauseOnMinimize => "Pause on Minimize",
         BubbleMenuRow::ToTaskbar => "To Taskbar",
         BubbleMenuRow::Close => "Close",
     }
 }
 
-/// The mark a row of the bubble's menu carries: nothing anywhere, except on the rule between
-/// the playback and the ways out (see `pin_chrome::MenuMark::Separator`).
-fn bubble_menu_row_mark(row: BubbleMenuRow) -> pin_chrome::MenuMark {
+/// The mark a row of the bubble's menu carries: nothing anywhere, except the hairline on the
+/// rule and the check the switch stands for (see `pin_chrome::MenuMark`).
+fn bubble_menu_row_mark(
+    row: BubbleMenuRow,
+    pause_on_minimize: Option<bool>,
+) -> pin_chrome::MenuMark {
     match row {
         BubbleMenuRow::Separator => pin_chrome::MenuMark::Separator,
+        BubbleMenuRow::PauseOnMinimize => {
+            pin_chrome::MenuMark::Check(pause_on_minimize.unwrap_or(false))
+        }
         _ => pin_chrome::MenuMark::None,
     }
 }
@@ -177,11 +223,12 @@ pub(super) fn bubble_menu_chrome_rows(
     kind: Option<MediaType>,
     playing: bool,
 ) -> Vec<pin_chrome::MenuRow> {
+    let pause_on_minimize = bubble_pause_on_minimize(kind);
     bubble_menu_rows(kind)
         .iter()
         .map(|row| pin_chrome::MenuRow {
             label: bubble_menu_row_label(*row, playing).to_string(),
-            mark: bubble_menu_row_mark(*row),
+            mark: bubble_menu_row_mark(*row, pause_on_minimize),
         })
         .collect()
 }
@@ -340,6 +387,25 @@ pub(super) unsafe fn bubble_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return true;
     }
 
+    // The switch the `Pause on Minimize` row carries is turned over where it is pressed, and the
+    // panel stays up with the mark it now carries — the way the card's own `Shuffle` row answers
+    // (see `pin_menu::toggle_pin_audio_shuffle`). Nothing is asked of the pin: what a collapse
+    // holds back is read by the tick that keeps a collapsed pin's playback in step, so a switch
+    // turned over here is answered on that tick's next pass (see `settle_bubble_playback`).
+    if row == Some(BubbleMenuRow::PauseOnMinimize) {
+        toggle_pause_on_minimize(current_media_type());
+        // The rows the panel is painted from are the ones the menu was opened with, so the check
+        // it now carries is written into them here rather than being read again at the paint.
+        let rows = bubble_menu_chrome_rows(current_media_type(), bubble_is_playing());
+        if let Ok(mut menu) = BUBBLE_MENU.lock() {
+            if let Some(menu) = menu.as_mut() {
+                menu.rows = rows;
+            }
+        }
+        render_pin_bubble(hwnd);
+        return true;
+    }
+
     close_bubble_menu(hwnd);
     match row {
         Some(BubbleMenuRow::Toggle) => ask_pin(PinCommand::TogglePlayback),
@@ -347,8 +413,9 @@ pub(super) unsafe fn bubble_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
         Some(BubbleMenuRow::PreviousFile) => ask_pin(PinCommand::Previous),
         Some(BubbleMenuRow::ToTaskbar) => bubble_to_taskbar(),
         Some(BubbleMenuRow::Close) => ask_pin(PinCommand::Close),
-        // A press outside both the rows and the circle is a press that has left the menu.
-        Some(BubbleMenuRow::Separator) | None => {}
+        // A press outside both the rows and the circle is a press that has left the menu; the
+        // rule and the switch above are not rows a press reaches here with.
+        Some(BubbleMenuRow::Separator) | Some(BubbleMenuRow::PauseOnMinimize) | None => {}
     }
     true
 }
@@ -412,8 +479,8 @@ pub(super) fn collapse_pin() {
 /// app is left standing in the taskbar with the pin off the screen instead.
 ///
 /// A collapsed pin is still a pin — previews are still held back until it is restored or
-/// closed, and what it is playing is held where it is by the two `Pin Mode → Pause Preview`
-/// switches (see `PIN_COLLAPSED` and `settle_bubble_playback`).
+/// closed, and what it is playing is held where it is by the two `Pin Mode → Pause on
+/// Minimize` switches (see `PIN_COLLAPSED` and `settle_bubble_playback`).
 ///
 /// Everything but the last step is the same either way — which is why only the last step of a
 /// collapse differs between the two places (see `pin_minimize_to`).
@@ -759,8 +826,9 @@ pub(super) fn update_pin_bubble_pause(park: Option<BubblePause>) {
 }
 
 /// Keep a pin's playback in step with its bubble: hold what is playing when the pin is collapsed
-/// — each kind behind the switch of its own, a video behind `Pin Mode → Pause Preview → Video`
-/// and a sound behind `... → Audio` — and put it back the way it was when the pin comes up again.
+/// — each kind behind the switch of its own, a film behind the one the video's own `Pin Mode →
+/// Pause on Minimize` carries and a sound behind the audio's — and put it back the way it was
+/// when the pin comes up again.
 ///
 /// It runs on the tick beside the pin's own commands, and the sound's clock is half of why: a
 /// sound FFmpeg plays is timed by this app over the moment its player was started and the second

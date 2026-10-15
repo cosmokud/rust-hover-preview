@@ -1554,6 +1554,89 @@ fn the_same_ask_puts_the_bubbles_menu_away() {
     assert!(pinned(), "while the pin that was standing is left standing");
 }
 
+/// A press on the bubble's `Pause on Minimize` row turns the kind's own switch over and leaves
+/// the panel up with the check it now carries: the one row of a bubble's menu that answers where
+/// it stands, the way the card's own `Shuffle` row answers (see `bubble_menu_press`).
+#[test]
+fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // Both switches on, so the press below has one of them to turn off, and a pin whose card
+    // the standing menu is read against.
+    let _switches = PausePreviewSettings::stood_at(true, true);
+    let _put_back = PutBack(take_pin_for_a_test());
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
+
+    // A sound behind the bubble: the switch the menu's row carries is the sound's own half of
+    // the pair, and a kind with no playback has no row to press at all (see `pin_pause_audio`).
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        let mut media = create_loading_media(8, 4);
+        media.media_type = MediaType::Audio;
+        *slot = Some(media);
+    }
+
+    // The bubble's own menu up in the circle a collapsed pin left, stood in the slot the loop's
+    // tick reads it from, the way the dismiss test above stands it (see `open_bubble_menu`).
+    let hwnd = HWND(0x2000 as *mut _);
+    let _bubble = BubblePutBack::put(hwnd);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true);
+    let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
+    if let Ok(mut menu) = BUBBLE_MENU.lock() {
+        *menu = Some(BubbleMenu {
+            rows,
+            popup,
+            hover: None,
+            dpi: 96,
+        });
+    }
+
+    // The middle of the switch's own band, named by what the row says rather than by the number
+    // it happens to sit at.
+    let index = row_at(
+        &bubble_menu_chrome_rows(Some(MediaType::Audio), true),
+        "Pause on Minimize",
+    );
+    let (x, y) = {
+        let menu = BUBBLE_MENU.lock().expect("the bubble's menu");
+        let menu = menu.as_ref().expect("the bubble's menu is up");
+        let band = menu
+            .popup
+            .bands
+            .iter()
+            .find(|band| band.answers == index)
+            .expect("the panel lays the switch's row out in a band");
+        (
+            (menu.popup.panel.left + menu.popup.panel.right) / 2,
+            band.top + band.height / 2,
+        )
+    };
+    assert!(
+        unsafe { bubble_menu_press(hwnd, x, y) },
+        "a hand on the switch is the menu's own"
+    );
+
+    assert!(
+        !CONFIG.lock().expect("the configuration").pin_pause_audio,
+        "the sound's switch was on, so the press turned it off"
+    );
+    let check = {
+        let menu = BUBBLE_MENU.lock().expect("the bubble's menu");
+        let menu = menu.as_ref().expect("the panel stays up over the switch");
+        matches!(menu.rows[index].mark, pin_chrome::MenuMark::Check(false))
+    };
+    assert!(
+        check,
+        "and the check the panel carries is the switch it now stands for"
+    );
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
 /// Closing the menu from the window side puts both panels away and leaves
 /// the pin standing: the answer a captured outside press gets, rather than
 /// the hook's ask a tick later.

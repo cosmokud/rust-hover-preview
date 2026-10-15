@@ -228,7 +228,7 @@ pub(super) fn pin_update_enabled() -> bool {
 }
 
 /// Whether a pin collapsed into its bubble holds the video it is playing where it is, as the
-/// configuration has it (see `Pin Mode → Pause Preview → Video`). It is read by the tick that
+/// configuration has it (see `Pin Mode → Pause on Minimize`). It is read by the tick that
 /// keeps a collapsed pin's playback in step with the bubble, so a switch thrown while the pin
 /// is a bubble is answered on the next tick (see `settle_bubble_playback`).
 pub(super) fn pin_pause_video() -> bool {
@@ -239,7 +239,7 @@ pub(super) fn pin_pause_video() -> bool {
 }
 
 /// And the same question about a sound, asked in the same place (see
-/// `Pin Mode → Pause Preview → Audio`).
+/// `Pin Mode → Pause on Minimize`).
 pub(super) fn pin_pause_audio() -> bool {
     CONFIG
         .lock()

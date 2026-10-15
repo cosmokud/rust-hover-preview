@@ -56,7 +56,8 @@ fn only_a_click_on_an_already_focused_bubble_puts_the_window_back() {
 }
 
 /// The bubble's menu holds the hold for a film or a sound, the two walks of the folder it
-/// stands in, and the two ways out of any bubble.
+/// stands in, the switch that decides what a minimize holds back, and the two ways out of any
+/// bubble.
 #[test]
 fn the_bubble_menu_holds_only_what_has_playback() {
     for kind in [
@@ -70,6 +71,8 @@ fn the_bubble_menu_holds_only_what_has_playback() {
                 BubbleMenuRow::Toggle,
                 BubbleMenuRow::NextFile,
                 BubbleMenuRow::PreviousFile,
+                BubbleMenuRow::Separator,
+                BubbleMenuRow::PauseOnMinimize,
                 BubbleMenuRow::Separator,
                 BubbleMenuRow::ToTaskbar,
                 BubbleMenuRow::Close,
@@ -128,6 +131,11 @@ fn the_bubble_menu_names_what_each_row_will_do() {
         "a rule carries nothing: there is nothing on one to read"
     );
     assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::PauseOnMinimize, true),
+        "Pause on Minimize",
+        "the switch is spelled the way the tray spells it"
+    );
+    assert_eq!(
         bubble_menu_row_label(BubbleMenuRow::ToTaskbar, true),
         "To Taskbar",
         "the stand-in is the taskbar's, not the tray's"
@@ -154,6 +162,8 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
             "Next File",
             "Previous File",
             "",
+            "Pause on Minimize",
+            "",
             "To Taskbar",
             "Close"
         ],
@@ -170,6 +180,8 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
             "Play",
             "Next File",
             "Previous File",
+            "",
+            "Pause on Minimize",
             "",
             "To Taskbar",
             "Close"
@@ -198,5 +210,42 @@ fn the_bubble_menu_points_no_arrow_at_any_row() {
         popup.arrow,
         pin_chrome::MenuArrow::None,
         "no row of the bubble's menu opens anything"
+    );
+}
+
+/// The check the `Pause on Minimize` row carries is the switch of the kind the bubble stands
+/// for: a film reads the video's and a sound reads the audio's, and a kind with no playback
+/// carries no row at all.
+#[test]
+fn the_pause_switch_carries_the_check_of_the_kind_it_stands_for() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _switches = PausePreviewSettings::stood_at(false, true);
+
+    let film = bubble_menu_chrome_rows(Some(MediaType::Video), false);
+    let row = film
+        .iter()
+        .position(|row| row.label == "Pause on Minimize")
+        .expect("a film's bubble carries the switch");
+    assert!(
+        matches!(film[row].mark, pin_chrome::MenuMark::Check(false)),
+        "the video's switch is off, so the film's row is unchecked"
+    );
+
+    let sound = bubble_menu_chrome_rows(Some(MediaType::Audio), false);
+    let row = sound
+        .iter()
+        .position(|row| row.label == "Pause on Minimize")
+        .expect("a sound's bubble carries the switch");
+    assert!(
+        matches!(sound[row].mark, pin_chrome::MenuMark::Check(true)),
+        "the audio's switch is on, so the sound's row is checked"
+    );
+
+    let page = bubble_menu_chrome_rows(Some(MediaType::Text), false);
+    assert!(
+        page.iter().all(|row| row.label != "Pause on Minimize"),
+        "a page's bubble has no playback for a minimize to hold"
     );
 }
