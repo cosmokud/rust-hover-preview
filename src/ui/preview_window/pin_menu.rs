@@ -95,22 +95,6 @@ pub(super) struct PinMenuFlyout {
 /// `refresh_pin_menu`).
 const PIN_MENU_HOVER_DELAY: Duration = Duration::from_millis(150);
 
-/// The rows of the card's menu: `End of File` and `Seek` are the doors its flyouts hang from,
-/// the first and the last of them, and `Shuffle` between the two answers on the spot — a
-/// check a press turns over, with no flyout of its own (see `menu_rows` and
-/// `pinned_menu_press`). The same two doors are what the hover timers watch and what a press
-/// on either opens (see `refresh_pin_menu`).
-const END_OF_FILE_ROW: usize = 0;
-/// The row of the card's menu that answers where it stands rather than opening a panel: the
-/// check `Shuffle` carries (see `menu_rows`).
-const SHUFFLE_ROW: usize = 1;
-
-/// The row of the card's menu that opens the seek choices: the last of its rows, whatever
-/// the panel holds (see `menu_rows`).
-fn seek_row_of(rows: &[pin_chrome::MenuRow]) -> usize {
-    rows.len().saturating_sub(1)
-}
-
 /// The ways a pinned sound can start, in the order the menu lists them:
 /// the same four, in the same order, the tray's own
 /// `Volume → Pin Mode Audio Seek` submenu offers (see
@@ -135,35 +119,124 @@ const SEEK_LABELS: [&str; 4] = [
     "Random",
 ];
 
-/// The rows the card's menu holds: the door that opens the end-of-file choices, the check
-/// that says whether a forward step of the pin's walk shuffles, and the door that opens the
-/// seek choices.
+/// One row of the card's menu, named rather than numbered: the rows a hand counts are the
+/// rows themselves, and the number one of them sits at moves the moment another is put in
+/// above it. A press, a hover and a flyout are all answered against the name, which is the
+/// thing that says what the row does (see `PIN_MENU_ROWS`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PinMenuRow {
+    /// Collapse the pin into the round bubble it leaves on the desktop.
+    ToBubble,
+    /// Collapse the pin into the app's own stand-in in the taskbar.
+    ToTaskbar,
+    /// Take the pin down.
+    Close,
+    /// The rule between two groups of rows: one between the ways out of the pin and the
+    /// playback it holds, and one between that and the settings the pin plays by.
+    Separator,
+    /// Hold what is playing where it stands, or set it going again: the same pause the card's
+    /// clock and a Space in the window answer.
+    Pause,
+    /// The file after the one pinned, the same walk the card's own arrow takes.
+    NextFile,
+    /// The file before the one pinned.
+    PreviousFile,
+    /// Whether a forward step of the pin's walk shuffles: the one row that answers where it
+    /// stands rather than opening a panel.
+    Shuffle,
+    /// The door the ends of file are chosen through.
+    EndOfFile,
+    /// The door the seeks are chosen through.
+    Seek,
+}
+
+/// The rows the card's menu holds, from the top of the panel to the bottom: the two ways out
+/// of the pin, the rule, the playback of the file in it, the rule again, and the three
+/// settings the pin plays by — the shuffle that answers on the spot, and the two doors the
+/// flyouts hang from.
 ///
-/// The main menu is always these three rows — the choices are the flyouts' own rows, beside
-/// the menu's rather than in place of them (see `end_of_file_rows` and `seek_rows`).
+/// The same two doors are what the hover timers watch and what a press on either opens (see
+/// `refresh_pin_menu`).
+const PIN_MENU_ROWS: [PinMenuRow; 11] = [
+    PinMenuRow::ToBubble,
+    PinMenuRow::ToTaskbar,
+    PinMenuRow::Close,
+    PinMenuRow::Separator,
+    PinMenuRow::Pause,
+    PinMenuRow::NextFile,
+    PinMenuRow::PreviousFile,
+    PinMenuRow::Separator,
+    PinMenuRow::Shuffle,
+    PinMenuRow::EndOfFile,
+    PinMenuRow::Seek,
+];
+
+impl PinMenuRow {
+    /// What the row is written as: a rule carries nothing at all, because there is nothing on
+    /// one to read.
+    fn label(self) -> &'static str {
+        match self {
+            PinMenuRow::ToBubble => "To Bubble",
+            PinMenuRow::ToTaskbar => "To Taskbar",
+            PinMenuRow::Close => "Close",
+            PinMenuRow::Separator => "",
+            PinMenuRow::Pause => "Pause",
+            PinMenuRow::NextFile => "Next File",
+            PinMenuRow::PreviousFile => "Previous File",
+            PinMenuRow::Shuffle => "Shuffle",
+            PinMenuRow::EndOfFile => "End of File",
+            PinMenuRow::Seek => "Seek",
+        }
+    }
+
+    /// The mark the row carries: a rule, a door to a flyout, the check the shuffle is the face
+    /// of, and nothing at all for a row that answers on the spot.
+    fn mark(self) -> pin_chrome::MenuMark {
+        match self {
+            PinMenuRow::Separator => pin_chrome::MenuMark::Separator,
+            PinMenuRow::EndOfFile | PinMenuRow::Seek => pin_chrome::MenuMark::Door,
+            PinMenuRow::Shuffle => pin_chrome::MenuMark::Check(pin_audio_shuffle()),
+            PinMenuRow::ToBubble
+            | PinMenuRow::ToTaskbar
+            | PinMenuRow::Close
+            | PinMenuRow::Pause
+            | PinMenuRow::NextFile
+            | PinMenuRow::PreviousFile => pin_chrome::MenuMark::None,
+        }
+    }
+}
+
+/// Where a row of the card's menu sits in the panel, by name rather than by the number it
+/// happens to be at: what a press and a hover are answered against (see `PIN_MENU_ROWS`).
+fn row_of(row: PinMenuRow) -> Option<usize> {
+    PIN_MENU_ROWS.iter().position(|held| *held == row)
+}
+
+/// The rows the card's menu holds: the two ways out of the pin, the playback of the file in
+/// it, and the settings the pin plays by — the door that opens the end-of-file choices, the
+/// check that says whether a forward step of the pin's walk shuffles, and the door that opens
+/// the seek choices.
 ///
 /// The two doors carry no mark of their own: what each choice is, is the flyout's to say, and
 /// what says a row opens one is the arrow at its own right (see `pin_chrome::MenuMark::Door`).
 /// The row between them is the one that answers here, and it carries the check the setting has
 /// now (see `pin_audio_shuffle`).
 ///
+/// Read out of the configuration at the paint rather than remembered, so that a
+/// change to the setting shows the moment it is made, from wherever it was made —
+/// the same setting the tray's own `End of File` submenu writes (see `menu_rows`).
+///
 /// The rows a hand counts here are the rows themselves, with no rule between them: the doors
-/// the flyouts hang from are the first and the last of these (see `pinned_menu_paint`).
+/// the flyouts hang from are named rather than numbered (see `row_of` and
+/// `pinned_menu_paint`).
 pub(super) fn menu_rows() -> Vec<pin_chrome::MenuRow> {
-    vec![
-        pin_chrome::MenuRow {
-            label: "End of File".to_string(),
-            mark: pin_chrome::MenuMark::Door,
-        },
-        pin_chrome::MenuRow {
-            label: "Shuffle".to_string(),
-            mark: pin_chrome::MenuMark::Check(pin_audio_shuffle()),
-        },
-        pin_chrome::MenuRow {
-            label: "Seek".to_string(),
-            mark: pin_chrome::MenuMark::Door,
-        },
-    ]
+    PIN_MENU_ROWS
+        .iter()
+        .map(|row| pin_chrome::MenuRow {
+            label: row.label().to_string(),
+            mark: row.mark(),
+        })
+        .collect()
 }
 
 /// The ends of file a pinned sound can have, in the order the tray's own `End of File`
@@ -327,12 +400,13 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
         None
     };
     // Which row of the main menu the flyout hangs from: the row the hand opened it from,
-    // which is the main menu's first for the end-of-file list and its last for the seeks (see
-    // `menu_rows`).
-    let hang_row = match pin.menu.end_of_file {
-        true => END_OF_FILE_ROW,
-        false => seek_row_of(&rows),
-    };
+    // which is the named door that flyout hangs from, wherever the panel now holds it (see
+    // `row_of`).
+    let hang_row = row_of(match pin.menu.end_of_file {
+        true => PinMenuRow::EndOfFile,
+        false => PinMenuRow::Seek,
+    })
+    .unwrap_or(0);
     let (width, height) = pin.window_size();
 
     // The flyout's own placement is what says where the main
@@ -418,20 +492,19 @@ pub(super) fn refresh_pin_menu(
         .as_ref()
         .and_then(|flyout| at.and_then(|(x, y)| pin_chrome::menu_row_at(&flyout.popup, x, y)));
 
-    // The End of File row is the main menu's first and the Seek row its last: the rows the
-    // flyouts hang from, whatever the panel holds (see `menu_rows`). The Shuffle row between
-    // them opens nothing, so no timer watches it — a check is a press rather than a rest (see
-    // `pinned_menu_press`). The rows counted here are the rows a hand counts, which for this
+    // The End of File row and the Seek row are the doors the flyouts hang from, named rather
+    // than numbered, whatever the panel holds (see `row_of`). The rows between them answer on
+    // the spot or rule the two groups apart, so no timer watches them — a check is a press
+    // rather than a rest, and a rule is nothing at all (see `pinned_menu_press`). The rows
+    // counted here are the rows a hand counts, which for this
     // panel is every row of it.
-    let end_of_file_row = END_OF_FILE_ROW;
-    let seek_row = seek_row_of(&paint.rows);
-    let on_end_of_file = hover_main == Some(end_of_file_row);
-    let on_seek = hover_main == Some(seek_row);
+    let on_end_of_file = row_of(PinMenuRow::EndOfFile).is_some_and(|row| hover_main == Some(row));
+    let on_seek = row_of(PinMenuRow::Seek).is_some_and(|row| hover_main == Some(row));
     // And the row the flyout that is up hangs from, which is the row the crossing between
     // the two panels is measured at (see `pinned_menu_paint`).
     let hang_row = match pin.menu.end_of_file {
-        true => end_of_file_row,
-        false => seek_row,
+        true => row_of(PinMenuRow::EndOfFile),
+        false => row_of(PinMenuRow::Seek),
     };
 
     // The timers: each starts when the pointer comes onto its row and is
@@ -453,8 +526,10 @@ pub(super) fn refresh_pin_menu(
     // the gap, or the flyout itself.
     let in_flyout = hover_flyout.is_some()
         || paint.flyout.as_ref().is_some_and(|flyout| {
-            at.is_some_and(|(x, y)| {
-                pin_chrome::menu_flyout_gap_holds(&paint.popup, &flyout.popup, hang_row, x, y)
+            hang_row.is_some_and(|hang_row| {
+                at.is_some_and(|(x, y)| {
+                    pin_chrome::menu_flyout_gap_holds(&paint.popup, &flyout.popup, hang_row, x, y)
+                })
             })
         });
     let kept_end_of_file = on_end_of_file || (pin.menu.end_of_file && in_flyout);
@@ -494,8 +569,8 @@ pub(super) fn refresh_pin_menu(
 /// whole menu goes away with it — while a press anywhere else is a press
 /// that has left the menu, which puts both panels away.
 ///
-/// The rows a hand counts are what a press is answered against, and the door rows of the
-/// main menu are the panel's first and its last (see `menu_rows`); there is no rule inside
+/// The rows a hand counts are what a press is answered against, by name rather than by
+/// number (see `row_of`); there is no rule inside
 /// either flyout, so its first row is its first choice (see `pin_chrome::menu_row_at`).
 ///
 /// Nothing is held, because a menu is a thing a
@@ -513,32 +588,69 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     // rows are what a press is answered against, and the pad around them
     // and everywhere outside both panels is not a row (see
     // `pin_chrome::menu_row_at`).
-    let stays_up = match pin_chrome::menu_row_at(&paint.popup, x, y) {
+    let pressed = pin_chrome::menu_row_at(&paint.popup, x, y)
+        .and_then(|index| PIN_MENU_ROWS.get(index).copied());
+
+    let stays_up = match pressed {
         // The door the end-of-file choices come through: a press on it opens its flyout
         // beside the menu and the menu stays up, its rows still showing — the same doors the
         // hover opens, for a hand that has come to press rather than wait. Opening one puts
         // the other away, so only one is ever up.
-        Some(END_OF_FILE_ROW) => {
+        Some(PinMenuRow::EndOfFile) => {
             with_pin(|pin| {
                 pin.menu.end_of_file = true;
                 pin.menu.seek = false;
             });
             true
         }
-        // The row that answers on the spot: a press turns the check over, and the panel
-        // stays up with the mark it now carries — the one row of this menu a press does not
-        // put away, because there is nothing to choose from and the mark is the answer.
-        Some(SHUFFLE_ROW) => {
-            toggle_pin_audio_shuffle();
-            true
-        }
-        Some(_) => {
+        // The other door, the same bargain the other way.
+        Some(PinMenuRow::Seek) => {
             with_pin(|pin| {
                 pin.menu.seek = true;
                 pin.menu.end_of_file = false;
             });
             true
         }
+        // The row that answers on the spot: a press turns the check over, and the panel
+        // stays up with the mark it now carries — the one row of this menu a press does not
+        // put away, because there is nothing to choose from and the mark is the answer.
+        Some(PinMenuRow::Shuffle) => {
+            toggle_pin_audio_shuffle();
+            true
+        }
+        // The two ways out of the pin are collapses that take the card off the screen with
+        // them, so the menu goes away with the window it was opened over.
+        Some(PinMenuRow::ToBubble) => {
+            ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Bubble));
+            false
+        }
+        Some(PinMenuRow::ToTaskbar) => {
+            ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar));
+            false
+        }
+        // Take the pin down: the same close the tray and the card's own close button ask for.
+        Some(PinMenuRow::Close) => {
+            ask_pin(PinCommand::Close);
+            false
+        }
+        // The playback of the file in the card: every one of them goes through the loop the
+        // way the key that asks for the same does, because the answer is a player begun or
+        // ended rather than a state this window can set.
+        Some(PinMenuRow::Pause) => {
+            ask_pin(PinCommand::TogglePlayback);
+            false
+        }
+        Some(PinMenuRow::NextFile) => {
+            ask_pin(PinCommand::Next);
+            false
+        }
+        Some(PinMenuRow::PreviousFile) => {
+            ask_pin(PinCommand::Previous);
+            false
+        }
+        // A rule is not a row a hand answers, so a press on one is nothing at all: the menu
+        // stays exactly where it is.
+        Some(PinMenuRow::Separator) => true,
         None => match paint
             .flyout
             .as_ref()
@@ -594,6 +706,11 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
 /// A menu put up is put up on its main page, both
 /// flyouts put away: a hand that opens the menu has
 /// come for the choices, and they are one row away.
+///
+/// shortcut: the panel is held inside the card's own window, so a card shorter than the whole
+/// menu now is has the rows past its bottom edge clipped off it — upgrade by growing the window
+/// for the menu the way the bubble's own menu does, when a card that short has to reach every
+/// row (see `pin_chrome::menu_popup_from_point`).
 pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
     let audio = pin_state()
         .and_then(|pinned| pinned.pin().map(pin_shows_an_audio_card))
