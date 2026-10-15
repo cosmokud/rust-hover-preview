@@ -586,7 +586,7 @@ impl AppConfig {
             }
         }
         // Whether a pin collapsed into its bubble holds what is playing where it is, asked of
-        // a video and a sound apart — the two switches of the `Pause Preview` submenu.
+        // a video and a sound apart — the two switches of the kind's own `Pause on Minimize`.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_pause_video") {
             self.pin_pause_video = value;
         }

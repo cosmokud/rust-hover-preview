@@ -236,7 +236,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // `PinMinimizeTo`), and the bubble is the answer the app starts at.
     //
     // What such a pin holds while it is away is no longer asked here: the two `Pause
-    // Minimized` rows hang under the kind's own `Pin Mode` instead, because a film and a sound
+    // on Minimize` rows hang under the kind's own `Pin Mode` instead, because a film and a sound
     // are two different things to want quiet and each kind's submenu is the one that knows
     // which of the two is on screen (see `append_pause_minimized_item`).
     let minimize_menu = CreatePopupMenu().unwrap();
@@ -344,7 +344,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // held, with the sound's `Audio Seek` renamed `Seek` and its `Pin Mode Audio Seek` renamed
     // `Seek` too, inside `Pin Mode` beside the rest of a pinned sound's own rows.
     //
-    // The film's and the sound's `Pause Minimized` rows are read here, beside the shuffle and
+    // The film's and the sound's `Pause on Minimize` rows are read here, beside the shuffle and
     // the end of file they hang above: all three are what a *pinned* preview of that kind does,
     // and the two switches moved out of `Pin Mode → Minimize` for the same reason the submenus
     // are split in two — a film and a sound are two different things to want quiet.

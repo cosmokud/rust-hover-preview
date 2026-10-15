@@ -436,8 +436,8 @@ pub(super) fn append_loop_item(menu: HMENU, loop_id: u16, looping: bool, default
     );
 }
 
-/// The `Video → Pin Mode → Pause Minimized` / `Audio → Pin Mode → Pause
-/// Minimized` row: whether a pin the minimize button put away holds the video or the sound it
+/// The `Pause on Minimize` row under each kind's own `Pin Mode` — one under `Video`,
+/// one under `Audio`: whether a pin the minimize button put away holds the video or the sound it
 /// is playing where it is, carrying its check. It moved here from the `Pin Mode → Minimize →
 /// Pause` submenu, one row apiece, because what should go quiet while a pin is away is a
 /// question about one kind of file — a film a user wants to go on hearing while a pin is away
@@ -448,7 +448,7 @@ pub(super) fn append_pause_minimized_item(menu: HMENU, pause_id: u16, pause: boo
         menu,
         MF_STRING | if pause { MF_CHECKED } else { MF_UNCHECKED },
         pause_id,
-        "Pause Minimized",
+        "Pause on Minimize",
     );
 }
 
