@@ -107,6 +107,52 @@ fn the_menu_opens_at_the_point_the_click_landed() {
     assert!(popup.panel.bottom <= 300);
 }
 
+/// A rule between two groups of rows takes half a row and no more: there is nothing on it
+/// to read or answer, so a panel holding one is shorter than a panel of the same rows with a
+/// row in the rule's place.
+#[test]
+fn a_rule_between_two_groups_of_rows_takes_half_a_row() {
+    let ruled = vec![
+        MenuRow {
+            label: "Pause".to_string(),
+            mark: MenuMark::None,
+        },
+        MenuRow {
+            label: String::new(),
+            mark: MenuMark::Separator,
+        },
+        MenuRow {
+            label: "Seek".to_string(),
+            mark: MenuMark::Door,
+        },
+    ];
+    let plain = vec![
+        MenuRow {
+            label: "Pause".to_string(),
+            mark: MenuMark::None,
+        },
+        MenuRow {
+            label: "Seek".to_string(),
+            mark: MenuMark::Door,
+        },
+    ];
+
+    let popup = menu_popup_from_point(a_point(), 400, 300, 96, &ruled);
+    let plain = menu_popup_from_point(a_point(), 400, 300, 96, &plain);
+
+    assert_eq!(
+        popup.panel.bottom - popup.panel.top,
+        plain.panel.bottom - plain.panel.top + popup.row_height / 2,
+        "the rule stands between the two groups, taking half a row of the panel"
+    );
+    assert_eq!(
+        popup.bands[1].height,
+        popup.row_height / 2,
+        "and the rule's own band is that half"
+    );
+    assert_eq!(popup.rows, 3, "the panel still holds the rule among its rows");
+}
+
 /// A menu asked for near an edge is held inside the window: a panel off
 /// the side of a window is a row a hand cannot reach, and one off the
 /// bottom is rows that cannot be read at all. The window's own scale

@@ -423,6 +423,10 @@ pub(super) fn pin_command_request(
             collapse_pin();
             None
         }
+        Some(PinCommand::MinimizeTo(target)) => {
+            collapse_pin_to(target);
+            None
+        }
         Some(PinCommand::Restore) => {
             restore_pin();
             None
