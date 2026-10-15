@@ -291,7 +291,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected.
     - A pinned video has a transport bar with a volume of its own, set on the window; it does not change **Volume → Video**.
     - **Maximize** fits the window to the screen.
-    - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a right-click on the bubble opens its own menu: the same playback rows, then the ways out), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
+    - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a right-click on the bubble opens its own menu: the same playback rows, then the ways out; **Play** there gives back a park the collapse made, without waiting for the window), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
     - Clicking the window gives it the keyboard; then the arrow keys step it and `Escape` closes it.
     - The pin key itself only ever puts a pin up and brings back a bubble; it never hides one.
     - The key is named in the item and can be changed in `config.ini` (`pin_key`).
