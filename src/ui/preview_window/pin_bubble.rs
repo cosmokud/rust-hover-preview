@@ -119,32 +119,55 @@ pub(super) fn bubble_click_restores(was_focused: bool, moved: bool) -> bool {
 pub(super) enum BubbleMenuRow {
     /// Hold what is playing where it stands, or set it going again.
     Toggle,
+    /// The file after the one pinned, the same walk the pin's own arrow takes.
+    NextFile,
+    /// The file before the one pinned.
+    PreviousFile,
+    /// The rule between the playback and the two ways out of the bubble.
+    Separator,
     /// Put the pin away into the taskbar rather than the bubble.
     ToTaskbar,
     /// Take the pin down.
     Close,
 }
 
-/// The rows the bubble's menu holds: the hold for a film or a sound, and the two ways out of any
-/// bubble. The hold is only a row where there is playback for it to hold.
+/// The rows the bubble's menu holds, from the top of the panel to the bottom: the playback of
+/// the file behind the bubble, the rule, and the two ways out of any bubble. The hold is only a
+/// row where there is playback for it to hold.
 pub(super) fn bubble_menu_rows(kind: Option<MediaType>) -> Vec<BubbleMenuRow> {
-    let mut rows = Vec::with_capacity(3);
+    let mut rows = Vec::with_capacity(6);
     if bubble_space_toggles(kind) {
         rows.push(BubbleMenuRow::Toggle);
     }
+    rows.push(BubbleMenuRow::NextFile);
+    rows.push(BubbleMenuRow::PreviousFile);
+    rows.push(BubbleMenuRow::Separator);
     rows.push(BubbleMenuRow::ToTaskbar);
     rows.push(BubbleMenuRow::Close);
     rows
 }
 
-/// What a row of the bubble's menu says: the hold named for what it will do, and the two ways
-/// out spelled the way the tray spells them.
+/// What a row of the bubble's menu says: the hold named for what it will do, the two walks
+/// named for the file they step to, and the two ways out spelled the way the tray spells them.
+/// A rule carries nothing at all, because there is nothing on one to read.
 pub(super) fn bubble_menu_row_label(row: BubbleMenuRow, playing: bool) -> &'static str {
     match row {
         BubbleMenuRow::Toggle if playing => "Pause",
         BubbleMenuRow::Toggle => "Play",
+        BubbleMenuRow::NextFile => "Next File",
+        BubbleMenuRow::PreviousFile => "Previous File",
+        BubbleMenuRow::Separator => "",
         BubbleMenuRow::ToTaskbar => "To Taskbar",
         BubbleMenuRow::Close => "Close",
+    }
+}
+
+/// The mark a row of the bubble's menu carries: nothing anywhere, except on the rule between
+/// the playback and the ways out (see `pin_chrome::MenuMark::Separator`).
+fn bubble_menu_row_mark(row: BubbleMenuRow) -> pin_chrome::MenuMark {
+    match row {
+        BubbleMenuRow::Separator => pin_chrome::MenuMark::Separator,
+        _ => pin_chrome::MenuMark::None,
     }
 }
 
@@ -158,7 +181,7 @@ pub(super) fn bubble_menu_chrome_rows(
         .iter()
         .map(|row| pin_chrome::MenuRow {
             label: bubble_menu_row_label(*row, playing).to_string(),
-            mark: pin_chrome::MenuMark::None,
+            mark: bubble_menu_row_mark(*row),
         })
         .collect()
 }
@@ -310,13 +333,22 @@ pub(super) unsafe fn bubble_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
 
     // The chrome rows above are built from the same list in the same order, so an index into the
     // panel is an index into the rows the menu holds.
+    //
+    // A rule is not a row a hand answers, so a press on one is nothing at all — and the menu
+    // stays up, the way a press on a rule anywhere else does.
+    if row == Some(BubbleMenuRow::Separator) {
+        return true;
+    }
+
     close_bubble_menu(hwnd);
     match row {
         Some(BubbleMenuRow::Toggle) => ask_pin(PinCommand::TogglePlayback),
+        Some(BubbleMenuRow::NextFile) => ask_pin(PinCommand::Next),
+        Some(BubbleMenuRow::PreviousFile) => ask_pin(PinCommand::Previous),
         Some(BubbleMenuRow::ToTaskbar) => bubble_to_taskbar(),
         Some(BubbleMenuRow::Close) => ask_pin(PinCommand::Close),
         // A press outside both the rows and the circle is a press that has left the menu.
-        None => {}
+        Some(BubbleMenuRow::Separator) | None => {}
     }
     true
 }
@@ -366,12 +398,26 @@ pub(super) fn bubble_to_taskbar() {
     }
 }
 
-/// Collapse a pinned window into the round bubble it leaves: the window and everything standing
-/// in it come off the screen, and a small circle takes their place. A collapsed pin is still a
-/// pin — previews are still held back until it is restored or closed, and what it is playing is
-/// held where it is by the two `Pin Mode → Pause Preview` switches (see `PIN_COLLAPSED` and
-/// `settle_bubble_playback`).
+/// Collapse a pinned window into the place the configuration has it put: the round bubble it
+/// leaves on the desktop, or the app's own stand-in in the taskbar (see `pin_minimize_to`).
+///
+/// This is what a minimize button and a `Pin Command → Minimize` ask for; a place chosen by
+/// what asked for it goes through `collapse_pin_to` (see `PinCommand::MinimizeTo`).
 pub(super) fn collapse_pin() {
+    collapse_pin_to(pin_minimize_to());
+}
+
+/// Collapse a pinned window into a place of the asker's own choosing: the window and
+/// everything standing in it come off the screen, and a small circle takes their place — or the
+/// app is left standing in the taskbar with the pin off the screen instead.
+///
+/// A collapsed pin is still a pin — previews are still held back until it is restored or
+/// closed, and what it is playing is held where it is by the two `Pin Mode → Pause Preview`
+/// switches (see `PIN_COLLAPSED` and `settle_bubble_playback`).
+///
+/// Everything but the last step is the same either way — which is why only the last step of a
+/// collapse differs between the two places (see `pin_minimize_to`).
+pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
     let anchor = {
         let Some(mut pinned) = pin_state() else {
             return;
@@ -411,14 +457,13 @@ pub(super) fn collapse_pin() {
     // be a second thread waiting on it — this one, from its own loop.
     give_the_keyboard_back(&Win32PinWindow);
 
-    // Where the pin goes is the configuration's answer, read here rather than carried by the pin:
-    // the round bubble stands on the desktop where the minimize button was, and the taskbar
-    // stand-in leaves the app in the taskbar instead with the pin off the screen (see
-    // `pin_minimize_to`). Everything above is the same either way — which is why only the last
-    // step of a collapse differs.
+    // Where the pin goes is the target it was collapsed into: the
+    // round bubble stands on the desktop where the minimize button was, and the taskbar
+    // stand-in leaves the app in the taskbar instead with the pin off the screen. Everything
+    // above is the same either way — which is why only the last step of a collapse differs.
     unsafe {
         hide_pinned_windows();
-        if pin_minimize_to() == PinMinimizeTo::Taskbar {
+        if target == PinMinimizeTo::Taskbar {
             show_pin_taskbar();
         } else {
             show_pin_bubble(anchor);

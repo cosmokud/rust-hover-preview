@@ -180,6 +180,11 @@ pub(crate) enum MenuMark {
     /// all in the marker column, and what says it is a door is the arrow at its
     /// own right (`MenuPopup::arrow`).
     Door,
+    /// The row is not a row at all: it is the rule between two groups of them, it
+    /// carries no label and no mark, and it holds no band a hand answers. What
+    /// says where one group ends is a hairline across the panel (see
+    /// `paint_menu_popup`).
+    Separator,
 }
 
 /// One row of a card's menu: the label it is written with, and
@@ -263,7 +268,19 @@ fn menu_main_panel_width(rows: &[MenuRow], dpi: u32, width: i32) -> i32 {
 /// measured from and what its bands are laid out by, so the two cannot disagree about how tall
 /// a panel of these rows is.
 fn menu_rows_room(rows: &[MenuRow], row_height: i32) -> i32 {
-    rows.len() as i32 * row_height
+    rows.iter()
+        .map(|row| menu_band_height(row, row_height))
+        .sum()
+}
+
+/// How tall a row's own band is: a row for everything a hand reads, and half of one for the
+/// rule between two groups of rows, because there is nothing on a rule to read or answer —
+/// it is the gap a hand reads the two groups apart by (see `MenuMark::Separator`).
+fn menu_band_height(row: &MenuRow, row_height: i32) -> i32 {
+    match row.mark {
+        MenuMark::Separator => (row_height / 2).max(1),
+        _ => row_height,
+    }
 }
 
 /// The height of a panel that holds these rows: the pad the panel holds its rows
@@ -281,14 +298,14 @@ fn menu_bands(rows: &[MenuRow], rows_top: i32, row_height: i32) -> Vec<MenuRowBa
 
     rows.iter()
         .enumerate()
-        .map(|(index, _)| {
+        .map(|(index, row)| {
             let band = MenuRowBand {
                 top,
-                height: row_height,
+                height: menu_band_height(row, row_height),
                 answers: index,
             };
 
-            top += row_height;
+            top += band.height;
 
             band
         })
@@ -775,6 +792,23 @@ pub(crate) fn paint_menu_popup(
     let mut boxes = Vec::with_capacity(rows.len());
     let mut painter = text_paint::RunPainter::new(surface, scale);
     for (row, band) in rows.iter().zip(&popup.bands) {
+        // The rule between two groups of rows carries no label, no mark and no wash: what
+        // says where one group ends and the next begins is a hairline across the panel, and
+        // nothing on it is a thing a hand answers (see `MenuMark::Separator`).
+        if matches!(row.mark, MenuMark::Separator) {
+            let middle = band.top as f32 + (band.height / 2) as f32 + 0.5;
+            stroke_segment(
+                buffer,
+                width,
+                ((panel.left + pad) as f32, middle),
+                ((panel.right - pad) as f32, middle),
+                (1.0 * scale).round().max(1.0),
+                palette.hover(0.15),
+                1.0,
+            );
+            continue;
+        }
+
         // The row under the pointer is washed before anything is drawn in
         // it, so that its label, its mark and its arrow are all read over
         // the wash rather than under it. It is the row a hand counts that is
@@ -842,6 +876,9 @@ pub(crate) fn paint_menu_popup(
             // A door carries nothing in the marker column: what says a door is a door is the
             // arrow at its own right, drawn below.
             MenuMark::Door => {}
+            // A rule carries nothing in the marker column either: it is painted above, before
+            // anything else is drawn in its band.
+            MenuMark::Separator => {}
         }
 
         boxes.push(box_);

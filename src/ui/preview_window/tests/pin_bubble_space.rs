@@ -55,7 +55,8 @@ fn only_a_click_on_an_already_focused_bubble_puts_the_window_back() {
     );
 }
 
-/// The bubble's menu holds the hold for a film or a sound, and the two ways out of any bubble.
+/// The bubble's menu holds the hold for a film or a sound, the two walks of the folder it
+/// stands in, and the two ways out of any bubble.
 #[test]
 fn the_bubble_menu_holds_only_what_has_playback() {
     for kind in [
@@ -67,6 +68,9 @@ fn the_bubble_menu_holds_only_what_has_playback() {
             bubble_menu_rows(Some(kind)),
             vec![
                 BubbleMenuRow::Toggle,
+                BubbleMenuRow::NextFile,
+                BubbleMenuRow::PreviousFile,
+                BubbleMenuRow::Separator,
                 BubbleMenuRow::ToTaskbar,
                 BubbleMenuRow::Close,
             ],
@@ -81,14 +85,21 @@ fn the_bubble_menu_holds_only_what_has_playback() {
     ] {
         assert_eq!(
             bubble_menu_rows(kind),
-            vec![BubbleMenuRow::ToTaskbar, BubbleMenuRow::Close],
-            "a {kind:?} bubble offers only the two ways out"
+            vec![
+                BubbleMenuRow::NextFile,
+                BubbleMenuRow::PreviousFile,
+                BubbleMenuRow::Separator,
+                BubbleMenuRow::ToTaskbar,
+                BubbleMenuRow::Close,
+            ],
+            "a {kind:?} bubble offers no hold, only the walk and the two ways out"
         );
     }
 }
 
-/// The menu names the hold for what it will do, and the way out for where it goes: Pause while
-/// playing and Play while held, and the taskbar spelled the way the tray spells it.
+/// The menu names the hold for what it will do, the walk for the file it steps to, and the way
+/// out for where it goes: Pause while playing and Play while held, and the taskbar spelled the
+/// way the tray spells it.
 #[test]
 fn the_bubble_menu_names_what_each_row_will_do() {
     assert_eq!(
@@ -100,6 +111,21 @@ fn the_bubble_menu_names_what_each_row_will_do() {
         bubble_menu_row_label(BubbleMenuRow::Toggle, false),
         "Play",
         "a hold on held media lets it go"
+    );
+    assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::NextFile, true),
+        "Next File",
+        "the walk forward is the file after this one"
+    );
+    assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::PreviousFile, false),
+        "Previous File",
+        "and the walk back the one before it"
+    );
+    assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::Separator, true),
+        "",
+        "a rule carries nothing: there is nothing on one to read"
     );
     assert_eq!(
         bubble_menu_row_label(BubbleMenuRow::ToTaskbar, true),
@@ -123,7 +149,14 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         .collect();
     assert_eq!(
         painted,
-        vec!["Pause", "To Taskbar", "Close"],
+        vec![
+            "Pause",
+            "Next File",
+            "Previous File",
+            "",
+            "To Taskbar",
+            "Close"
+        ],
         "a playing sound's menu pauses first"
     );
 
@@ -133,7 +166,14 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         .collect();
     assert_eq!(
         painted,
-        vec!["Play", "To Taskbar", "Close"],
+        vec![
+            "Play",
+            "Next File",
+            "Previous File",
+            "",
+            "To Taskbar",
+            "Close"
+        ],
         "a held film's menu lets it go"
     );
 
@@ -143,8 +183,8 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         .collect();
     assert_eq!(
         painted,
-        vec!["To Taskbar", "Close"],
-        "a page's menu offers only the two ways out"
+        vec!["Next File", "Previous File", "", "To Taskbar", "Close"],
+        "a page's menu offers only the walk and the two ways out"
     );
 }
 
