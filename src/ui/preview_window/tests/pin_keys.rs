@@ -527,6 +527,10 @@ fn a_sound_a_key_held_is_drawn_where_it_was_held() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    // A sound the pointer is on is a hover's, so no pin is up while its clock is measured: the
+    // rule it goes round by is the hover's own switch rather than a pin's (see `pin_audio_loops`).
+    // Stood rather than assumed, so that a pin another test left standing cannot decide it.
+    stand_pin(None);
     let (_folder, path) = a_sound_of_three_minutes();
 
     // A sound this app plays is measured by its own clock over the moment its player was
@@ -651,6 +655,8 @@ fn the_clock_of_a_player_that_loops_itself_goes_round_with_it() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    // A hover's clock again, so no pin is up to answer for it (see `pin_audio_loops`).
+    stand_pin(None);
     let _loop_on = LoopSwitch::put(true);
     let (_folder, path) = a_sound_of_three_minutes();
 
@@ -739,6 +745,110 @@ fn the_pin_key_only_brings_a_bubble_back_and_never_hides_a_window() {
     // did nothing at all, which is the answer a Space now always gets.
     assert!(!pin_key_restores_bubble(false, true));
     assert!(!pin_key_restores_bubble(false, false));
+}
+
+/// The pin's own `End of File`, put where the tests below ask it and put back when the guard is
+/// dropped, the way the sound's loop switch is (`LoopSwitch`) and the two `Audio Seek` settings
+/// are (see `pin_audio_seek::SeekSettings`).
+struct EndOfFileSwitch {
+    was: PinEndOfFile,
+}
+
+impl EndOfFileSwitch {
+    fn put(end_of_file: PinEndOfFile) -> Self {
+        let mut config = CONFIG.lock().expect("the configuration");
+        let was = std::mem::replace(&mut config.pin_mode_audio_end_of_file, end_of_file);
+
+        Self { was }
+    }
+}
+
+impl Drop for EndOfFileSwitch {
+    fn drop(&mut self) {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.pin_mode_audio_end_of_file = self.was;
+        }
+    }
+}
+
+/// A sound a pin is about to show is begun with the pin's own `End of File`, and never with the
+/// hover's `Loop` — which is the whole of a bug the file's own path used to answer wrongly.
+///
+/// A swap begins the incoming sound's player *before* the install writes the new path into the pin
+/// (see `swap_pinned_media`), so for the length of that moment the pin is still showing the file
+/// before the one this player is for. Asking the path who owned the sound answered "no pin", and a
+/// hovered sound loops by default: the sound the walk stepped to was begun at the beginning of its
+/// file as a player that takes the file round on its own (`player_loops_itself`), and one of those
+/// never exits — so no pass of it ever ended, the pin's `End of File → Jump` was never read again,
+/// and the card's clock, which does ask the pin's answer, stood at the whole of the file from the
+/// first pass on (see `audio_clock`). It is the sound heard going round for ever under a bar
+/// frozen at `4:48/4:48`, and it is why the row that had been respected all along stopped being
+/// respected the moment the walk stepped to the next file.
+#[test]
+fn a_sound_a_pin_is_about_to_show_is_begun_with_the_pin_s_end_of_file() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _hover_loops = LoopSwitch::put(true);
+    let _end_of_file = EndOfFileSwitch::put(PinEndOfFile::Continue);
+
+    // Nothing pinned: the sound on screen is a hover's, and the hover's own switch is the rule it
+    // goes round by.
+    stand_pin(None);
+    assert!(
+        pin_audio_loops(),
+        "a hovered sound goes round where the hover's own Loop says so"
+    );
+    assert!(
+        player_loops_itself(pin_audio_loops(), 0.0),
+        "and a hovered sound begun at the beginning of its file is one the player loops itself"
+    );
+
+    // A pin is up showing another file, which is the moment a swap begins the incoming sound's
+    // player.
+    stand_pin(Some(PinnedPreview {
+        path: PathBuf::from("the-file-the-pin-is-showing.mp3"),
+        ..PinnedPreview::for_test()
+    }));
+
+    assert!(
+        !pin_audio_loops(),
+        "the sound a pin is about to show goes round by the pin's own `End of File`, not by the hover's Loop"
+    );
+    assert!(
+        !player_loops_itself(pin_audio_loops(), 0.0),
+        "so it is not begun as a player that loops itself: its end is read, and Jump is what it asks for"
+    );
+
+    stand_pin(None);
+}
+
+/// A sound a pin takes up is begun again where the two rules for the end of its file disagree, and
+/// left exactly where it is where they agree.
+///
+/// A pin comes up on the sound the hover was already playing and no player is begun for it at the
+/// take-up, so the rule it goes round by is the hover's while the `End of File` the card is
+/// thereafter drawn against is the pin's own: a sound the pin says `Jump` and its player takes
+/// round itself is one no setting of the pin's can ever reach, with a card held at the whole of
+/// the file (see `take_up_pinned_audio`).
+#[test]
+fn a_sound_a_pin_takes_up_is_begun_again_only_where_the_two_rules_disagree() {
+    assert!(
+        a_taken_up_sound_is_begun_again(true, false, 0.0),
+        "a sound the hover began looping itself, under a pin whose own end of file is Jump, is one the pin has to begin again"
+    );
+    assert!(
+        !a_taken_up_sound_is_begun_again(true, true, 0.0),
+        "where both rules say a sound goes round, there is nothing for the pin to begin again"
+    );
+    assert!(
+        !a_taken_up_sound_is_begun_again(false, true, 0.0),
+        "and a sound the hover plays once is not begun again for a pin that loops it either"
+    );
+    assert!(
+        !a_taken_up_sound_is_begun_again(true, false, 30.0),
+        "a sound the hover began half way into its file has no loop of its own, so nothing disagrees about it"
+    );
 }
 
 /// The pin key is answered by what is *on screen*, and for the three kinds the engine
