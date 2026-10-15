@@ -394,6 +394,17 @@ pub(super) struct PinnedPreview {
     /// used to pause before the pin was collapsed, a kind with no player behind it (see
     /// `BubblePause`).
     pub(super) bubble_pause: Option<BubblePause>,
+    /// Whether the playback the bubble owes the pin now belongs to the hand rather than to the two
+    /// switches that owned it.
+    ///
+    /// A press on a bubble whose park is standing gives that park back — the same road a restore
+    /// gives one back — and from then on the `Pin Mode → Pause Preview` switches stand down until
+    /// the pin is up again: a park written over a film the hand just asked for would be the bubble
+    /// arguing with the press that answered it (see `toggle_pinned_by_key` and
+    /// `settle_bubble_playback`). A press with no park standing — a film the bar had paused before
+    /// the pin went down — leaves this alone, because the park a press would stand down from is
+    /// the one still written (see `PinTransport::drag_held` on claims that outlive their film).
+    pub(super) bubble_run: bool,
     /// The caption button the pointer is over and the one it has pressed: what the caption is
     /// painted from, and what a release acts on.
     pub(super) hovered: Option<pin_chrome::CaptionButton>,
@@ -468,6 +479,7 @@ impl PinnedPreview {
             chrome: PinChrome::always(),
             collapsed: false,
             bubble_pause: None,
+            bubble_run: false,
             hovered: None,
             pressed: None,
             tooltip: PinTooltip::default(),

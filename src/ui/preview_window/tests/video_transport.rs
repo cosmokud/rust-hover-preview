@@ -91,6 +91,7 @@ fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() 
             chrome: PinChrome::on_arrival(Instant::now()),
             collapsed: false,
             bubble_pause: None,
+            bubble_run: false,
             hovered: None,
             pressed: None,
             tooltip: PinTooltip::default(),
@@ -1083,6 +1084,202 @@ fn a_press_over_a_finished_ffplay_film_begins_it_again_at_the_top() {
     clear_restart_count();
 }
 
+/// A play pressed on the bubble of a pin the collapse parked, with the `Pin Mode → Pause Preview`
+/// switches on: the park is given back the road a restore gives it back, and the tick that parked
+/// it does not park it again over the hand that asked for it.
+///
+/// Its old road was two faults. A park standing was answered by the ordinary toggle, which let go
+/// of a hold a dead player could not be holding and left the bubble holding a park for a film
+/// already going — so the next tick's park was written under a film the hand had just asked for,
+/// and a restore gave it back a second time on top. A bubble with nothing parked — a film the bar
+/// had paused before the pin went down — was the worse one: the press answered nothing at all,
+/// which was the whole of "Play on a collapsed pin does nothing".
+#[test]
+fn a_play_on_a_collapsed_pins_bubble_gives_the_park_back_and_keeps_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _switches = PausePreviewSettings::stood_at(true, true);
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("bubble-play-film.mkv");
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+
+    // FFmpeg's route, where a park the collapse wrote is a player ended at the second it had
+    // reached (see `bubble_playback_to_park`).
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+    let mut parked = a_playing_pin(&film, content);
+    parked.collapsed = true;
+    parked.bubble_pause = Some(BubblePause::Player(30.0));
+    parked.transport.held(30.0);
+    parked.transport.started = None;
+    stand_pin(Some(parked));
+
+    let mut started = None;
+    let mut offset = 0.0;
+    toggle_pinned_by_key(&mut started, &mut offset, &mut None);
+
+    assert_eq!(
+        restart_count(),
+        1,
+        "the press begins the player again: the park the collapse wrote is given back the road a \
+              restore gives one back"
+    );
+    assert!(
+        pin_bubble_pause().is_none(),
+        "the bubble holds no park for the film it has just given back"
+    );
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("a pin is up");
+    assert_eq!(
+        transport.started.map(|(_, from)| from),
+        Some(30.0),
+        "and it is begun at the second the park wrote down"
+    );
+    assert!(pin_is_playing(&transport), "the film is going again");
+
+    // And the tick that parked it stands down over it: a park written a tick after the press that
+    // asked for the film back is the bubble arguing with the hand.
+    settle_bubble_playback(&mut started, &mut offset);
+    assert!(
+        pin_bubble_pause().is_none(),
+        "the switches do not park the film back over the hand that asked for it"
+    );
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("a pin is up");
+    assert!(
+        transport.started.is_some() && transport.paused_at.is_none(),
+        "and the film is still going, which is what the press asked for"
+    );
+
+    // A second press is the ordinary hold, and the hold outlives the pin coming back up: a hold
+    // the hand asked for is not a park the collapse made, and a restore gives nothing back.
+    toggle_pinned_by_key(&mut started, &mut offset, &mut None);
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("a pin is up");
+    assert!(
+        transport.paused_at.is_some(),
+        "the press again holds the film where it stands"
+    );
+    assert!(
+        pin_bubble_pause().is_none(),
+        "and holds it as a hold rather than as a park: there is nothing for a restore to give back"
+    );
+
+    restore_pin();
+    assert!(
+        !pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.collapsed))
+            .expect("a pin is up"),
+        "the pin is up again"
+    );
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("a pin is up");
+    assert!(
+        transport.paused_at.is_some(),
+        "and the hold is still there: what is not playing is not parked"
+    );
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
+
+/// A play pressed on the bubble of a pin whose park the switches never wrote — a film the bar was
+/// used to pause before the pin went down, which a collapse parks nothing for.
+///
+/// This is the one the user reported: the press played the film once and the tick parked it again,
+/// because a park with nothing behind it is a park the bubble writes the moment it sees a film
+/// running under a collapsed pin. The press is the hand, and the bubble does not argue with it:
+/// the film keeps going until the pin comes up again or the same press holds it (see
+/// `toggle_pinned_by_key` and `settle_bubble_playback`).
+#[test]
+fn a_play_on_a_collapsed_pins_bubble_that_parked_nothing_keeps_the_film_going() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _switches = PausePreviewSettings::stood_at(true, true);
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("bubble-play-paused-film.mkv");
+    clear_restart_count();
+    ffplay_window::clear_pause_posts();
+
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+
+    // A film the bar was used to pause before the pin went down: not playing, so the collapse
+    // parks nothing for it — what is not playing is not parked (see `bubble_playback_to_park`).
+    let mut paused = a_playing_pin(&film, content);
+    paused.collapsed = true;
+    paused.transport.held(30.0);
+    paused.transport.started = None;
+    stand_pin(Some(paused));
+
+    let mut started = None;
+    let mut offset = 0.0;
+    toggle_pinned_by_key(&mut started, &mut offset, &mut None);
+
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("a pin is up");
+    assert!(
+        pin_is_playing(&transport),
+        "the press sets the held film going again"
+    );
+
+    // And the tick leaves it going, which is the whole of it: the switches read the pin as down
+    // and see a film running under it, and the press that started it is the hand answering them.
+    ffplay_window::clear_pause_posts();
+    settle_bubble_playback(&mut started, &mut offset);
+    assert_eq!(
+        ffplay_window::pause_posts(),
+        0,
+        "the switches do not park the film back: no hold is delivered to any player"
+    );
+    let transport = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("a pin is up");
+    assert!(
+        pin_is_playing(&transport),
+        "the film the hand asked for is still going"
+    );
+    assert!(
+        pin_bubble_pause().is_none(),
+        "and the bubble wrote no park for it"
+    );
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+    ffplay_window::clear_pause_posts();
+}
 /// A wrap of a film this app is looping: mpv is sent back to the second down its pipe and set going
 /// there, and FFmpeg's film is begun again at it (see `video_loop_tick`).
 #[test]

@@ -2012,3 +2012,96 @@ fn a_sounds_bubble_takes_the_place_of_the_minimize_button() {
         "a picture's bubble is the caption's own minimize, as it has always been"
     );
 }
+
+/// A play pressed on the bubble of a collapsed sound, with `Pin Mode → Pause Preview → Audio` on:
+/// the park is given back the road a restore gives it back, and the tick that parked it does not
+/// park the sound again over the hand that asked for it.
+///
+/// Its old road was a dead one, which was the whole of the fault: the park ends the player, so a
+/// press found no player behind the card and let go of nothing at all.
+#[test]
+fn a_play_on_a_collapsed_pins_bubble_begins_the_parked_sound_again() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _switches = PausePreviewSettings::stood_at(true, true);
+
+    let path = a_remembered_sound("rust-hover-preview-pin-bubble-play");
+
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+
+    // The card the pin is showing, with no player behind it: the park ended the one the collapse
+    // found playing (see `bubble_playback_to_park`).
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = load_audio_card(&path, 240, 80, 96);
+    }
+
+    let mut pin = sound_pin();
+    pin.path = path.clone();
+    pin.collapsed = true;
+    pin.bubble_pause = Some(BubblePause::Player(12.5));
+    stand_pin(Some(pin));
+
+    let mut started = None;
+    let mut offset = 0.0;
+    toggle_pinned_by_key(&mut started, &mut offset, &mut None);
+
+    assert!(
+        started.is_some(),
+        "a player of this app's is begun again: a park ended is a park a press gives back"
+    );
+    assert_eq!(
+        offset, 12.5,
+        "and it is begun at the second the park wrote down"
+    );
+    assert!(
+        pin_bubble_pause().is_none(),
+        "the bubble holds no park for the sound it has just given back"
+    );
+    let running = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.video_process.is_some()))
+        .unwrap_or(false);
+    assert!(running, "and it is behind the card");
+
+    // And the tick that parked it stands down over it.
+    settle_bubble_playback(&mut started, &mut offset);
+    assert!(
+        started.is_some(),
+        "the switches do not park the sound back over the hand that asked for it"
+    );
+    assert_eq!(offset, 12.5, "nor take the clock the card is drawn from");
+    assert!(
+        pin_bubble_pause().is_none(),
+        "and the bubble still holds no park"
+    );
+
+    // A second press is the ordinary hold, and it outlives the pin coming back up: a hold the hand
+    // asked for is not a park the collapse made.
+    toggle_pinned_by_key(&mut started, &mut offset, &mut None);
+    assert!(
+        started.is_none(),
+        "a player of this app's is ended by the hold"
+    );
+
+    restore_pin();
+    let collapsed = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.collapsed))
+        .expect("a pin is up");
+    assert!(!collapsed, "the pin is up again");
+    assert!(
+        started.is_none(),
+        "and the hold is still there: what is not playing is not parked"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    let _ =
+        std::fs::remove_dir_all(std::env::temp_dir().join("rust-hover-preview-pin-bubble-play"));
+}

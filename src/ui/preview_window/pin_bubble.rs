@@ -690,6 +690,10 @@ pub(super) fn restore_pin() {
         }
 
         pin.collapsed = false;
+        // The playback goes back to being the switches' rather than the hand's: a pin up again is
+        // a window a park would be written for, and a claim carried up out of the bubble would be
+        // one the next collapse is answered with (see `PinTransport::drag_held`).
+        pin.bubble_run = false;
 
         // The window goes back up where a preview of it would have been put at the pointer the
         // bubble was clicked with, rather than where it stood when it was collapsed: the bubble is
@@ -774,7 +778,7 @@ pub(super) fn settle_bubble_playback(
     audio_started: &mut Option<Instant>,
     audio_start_offset: &mut f64,
 ) {
-    let (collapsed, parked) = {
+    let (collapsed, parked, taken_over) = {
         let Some(pinned) = pin_state() else {
             return;
         };
@@ -782,11 +786,16 @@ pub(super) fn settle_bubble_playback(
             return;
         };
 
-        (pin.collapsed, pin.bubble_pause)
+        (pin.collapsed, pin.bubble_pause, pin.bubble_run)
     };
 
     if collapsed {
-        if parked.is_some() {
+        // What the switches parked is not theirs to hold a second time: a press on the bubble
+        // gave it back, and the pin is down because a *hold* is a thing the user asked for rather
+        // than a park the collapse made. The switches read the other way round too — one thrown
+        // while the pin is a bubble is answered on the next tick — so the claim is written down
+        // where the park was and stands until the pin is up again (see `toggle_pinned_by_key`).
+        if parked.is_some() || taken_over {
             return;
         }
 
@@ -1347,10 +1356,13 @@ pub(super) fn bubble_art(side: u32) -> (BubbleArtOwned, pin_chrome::BubbleMark) 
 /// Whether the media the bubble stands for is playing now.
 ///
 /// A film is the pin's own transport, asked the way its bar asks it (see `pin_is_playing`). A sound
-/// is not: neither of the two players behind a sound's card is a transport this app keeps, so the
-/// question is put to the players themselves — a process of this app's is one this app started and
-/// can see, and the engine's own is a session in this process — and a sound with neither behind it
-/// is a sound that is not playing rather than an answer that could not be given.
+/// is the card's own question, asked the way the card asks it: neither of the two players behind a
+/// sound's card is a transport this app keeps, so the question is put to the players themselves — a
+/// process of this app's is one this app started and can see, and the engine's own is a session in
+/// this process that is read whether it is *held* rather than whether it is playing, so a sound
+/// sitting under a hold is not one a bubble claims is running (see `pinned_audio_playing`). A sound
+/// with neither behind it is a sound that is not playing rather than an answer that could not be
+/// given.
 ///
 /// **It is asked before the media's lock is taken and never during it**: a sound's arm reaches for
 /// that lock itself (the player process is a field of the media), and a lock a thread already holds
@@ -1361,13 +1373,12 @@ pub(super) fn bubble_is_playing() -> bool {
             .and_then(|pinned| pinned.pin().map(|pin| pin_is_playing(&pin.transport)))
             .unwrap_or(false),
         Some(MediaType::Audio) => {
-            let running = CURRENT_MEDIA
-                .lock()
-                .ok()
-                .and_then(|media| media.as_ref().map(|media| media.video_process.is_some()))
-                .unwrap_or(false);
-
-            running || video_player::is_playing()
+            // The card's own question, asked the way it asks it: a player this app started is
+            // seen in the media, and the engine's own session is read whether it is *held*
+            // rather than whether it is playing, because a session asked to hold is a session
+            // that is still there and is a sound nobody can hear (see `pinned_audio_playing`
+            // and the same rule on a card's own clock).
+            pinned_audio_playing()
         }
         _ => false,
     }

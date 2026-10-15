@@ -597,6 +597,7 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         chrome: PinChrome::always(),
         collapsed: false,
         bubble_pause: None,
+        bubble_run: false,
         hovered: None,
         pressed: None,
         tooltip: PinTooltip::default(),

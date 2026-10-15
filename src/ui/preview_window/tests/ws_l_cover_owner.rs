@@ -46,6 +46,7 @@ fn wide_banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
         chrome: PinChrome::always(),
         collapsed: false,
         bubble_pause: None,
+        bubble_run: false,
         hovered: None,
         pressed: None,
         tooltip: PinTooltip::default(),
