@@ -533,7 +533,14 @@ fn start_mpv_video_playback(
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let child = spawn_player(&mut command)?;
-    mpv_ipc::remember_pipe(child.id(), &ipc);
+    // The pipe the player is told on, and the one thing a later command has to know about the
+    // launch: whether it gave the player any audio at all (see `mpv_launched_without_audio`,
+    // `mpv_ipc::remember_pipe` and `set_volume`).
+    mpv_ipc::remember_pipe(
+        child.id(),
+        &ipc,
+        video_launch::mpv_launched_without_audio(volume),
+    );
 
     // **mpv picks its own tracks, so "was it asked for subtitles" is the honest answer here** —
     // and it is the answer the take-up is asked for: a pin adopts a hover's player rather than
