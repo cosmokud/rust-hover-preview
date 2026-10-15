@@ -438,3 +438,23 @@ fn a_save_leaves_the_whole_text_on_disk_and_no_copy_of_it_beside() {
         "and the copy it was written beside is gone"
     );
 }
+
+/// And the file a save wrote is the one the next start reads back, which is the whole of what
+/// a setting being set means: the guard above only ever says no to a file that holds nothing
+/// of this app's own, so a whole one reads as itself, under whatever name it is held.
+#[test]
+fn what_a_save_wrote_the_next_start_reads_back() {
+    let _file = ConfigFileAsItWas::take();
+
+    let written = AppConfig {
+        pin_mode_audio_end_of_file: PinEndOfFile::Continue,
+        hover_delay_ms: 137,
+        ..Default::default()
+    };
+    written.save();
+
+    let read_back = AppConfig::load();
+
+    assert_eq!(read_back.pin_mode_audio_end_of_file, PinEndOfFile::Continue);
+    assert_eq!(read_back.hover_delay_ms, 137);
+}
