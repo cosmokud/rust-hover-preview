@@ -31,8 +31,8 @@ mod primitives;
 mod transport;
 
 pub(crate) use bubble::{
-    paint_bubble, paint_failure_mark, paint_tooltip, peak_bars, tooltip_layout, BubbleArt,
-    BubbleMark, TooltipText, BUBBLE_BARS,
+    average_color, paint_bubble, paint_failure_mark, paint_tooltip, peak_bars, tooltip_layout,
+    BubbleArt, BubbleMark, TooltipText, BUBBLE_BARS,
 };
 pub(crate) use caption::{
     button_at, button_boxes, measure_caption_text, paint_caption, Caption, CaptionButton,
@@ -50,8 +50,6 @@ pub(crate) use transport::{
 
 #[cfg(test)]
 use crate::text::text_paint::{self, DibSurface};
-#[cfg(test)]
-use bubble::average_color;
 #[cfg(test)]
 use caption::{fit_title, longest_prefix_that_fits, paint_glyph, CaptionButtonBox, BUTTON_PIXELS};
 #[cfg(test)]

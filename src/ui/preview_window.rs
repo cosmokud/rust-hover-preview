@@ -47,6 +47,7 @@
 //! - `video_hw` - what a film is decoded on, and how it loops.
 //! - `audio_engine` - a sound, its loudness, its player and its clock.
 //! - `audio_meter` - the level the sound on screen is being heard at, off the mixer's own meter.
+//! - `bubble_stream` - the frames read out of a film a player of somebody else's is drawing.
 //! - `event_loop` - `run_preview_window` itself.
 //!
 //! The parts share one namespace through this module - each reads the others as one set of items
@@ -58,6 +59,7 @@
 mod animated;
 mod audio_engine;
 mod audio_meter;
+mod bubble_stream;
 mod dimensions;
 mod displays;
 mod engine_render;
@@ -235,7 +237,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
     PBT_APMRESUMESUSPEND,
     PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT, SET_WINDOW_POS_FLAGS,
-    SM_CXDOUBLECLK, SM_CYDOUBLECLK,
+    SM_CXDOUBLECLK, SM_CYDOUBLECLK, SM_XVIRTUALSCREEN,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
     SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
     TPM_TOPALIGN, ULW_ALPHA, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE,

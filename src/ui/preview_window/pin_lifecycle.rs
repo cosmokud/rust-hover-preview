@@ -629,6 +629,25 @@ pub(super) fn pin_media_is_alive(navigating: bool) -> bool {
         return true;
     }
 
+    // **And neither is a pin whose place on the screen is the round bubble.** What a bubble shows
+    // is a picture this app holds — a frame read beside the film, a frame the media engine drew, or
+    // the still the collapse grabbed — so a film whose player has gone leaves the circle standing on
+    // that picture rather than taking the whole pin down: a bubble is not a window onto nothing, and
+    // one that vanished over a player nobody is watching would take with it the only way back to the
+    // file it was showing. What a *walk* leaves behind is the whole of what this is for: a step's
+    // file whose player never came up — one the engine refused, one a swap for another film ended on
+    // its way — is read here as the pin having come apart, which closed a bubble over a press that
+    // was only asking for the next file (see `PinStep`, `abandon_pin_swap`).
+    //
+    // The pin is what comes apart instead where it is *restored*: a window put back up on a film
+    // whose player is still gone is read without this exemption, which is the same answer the film
+    // was owed all along. A pin collapsed into the taskbar stand-in is answered the same way, and
+    // the cost of it is a stand-in that outlives its film rather than a pin that comes apart — an
+    // icon the user has to click or close, against a bubble lost for a press nobody asked to end it.
+    if pin_is_collapsed() {
+        return true;
+    }
+
     match kind {
         MediaType::Video => {
             // A gesture that killed leaves the player gone with its end

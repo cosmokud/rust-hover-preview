@@ -665,6 +665,26 @@ pub(super) fn take_down_pinned_media() {
     }
 }
 
+/// Take the media the pin is showing down for the file replacing it — unless the pin is a bubble.
+///
+/// **What a swap takes down here is the picture the pin is showing, and a bubble has no other one.**
+/// A band nobody can see loses nothing by the media going with it: what fills it is the player's own
+/// window, and the file that replaces this one brings its own media a moment later (see
+/// `install_pinned_media`). A *bubble* is the other way round — what is on the screen is a frame out
+/// of that very media (see `bubble_art`) — so a step that cannot be shown would leave the circle on
+/// the theme's face rather than on the film the press was made over. Keeping it costs nothing where
+/// the file *is* shown, because the install writes the incoming media over it anyway.
+///
+/// What is deliberately not kept is the player: a film whose window is off the screen is still
+/// decoding, and the player the file being left behind was drawn by is ended by the arm that begins
+/// the replacement (see `kill_stray_video_process` and `stop_pinned_player`, which is the same
+/// take-down with the media left standing).
+pub(super) fn take_the_pinned_media_down_for_a_swap() {
+    if !pin_is_collapsed() {
+        take_down_pinned_media();
+    }
+}
+
 /// End the player the file a pinned window is standing on has, keeping that file and the frame
 /// this side holds of it.
 ///

@@ -126,7 +126,7 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     if file.media.media_type.is_native_video() {
         stop_pinned_player();
     } else {
-        take_down_pinned_media();
+        take_the_pinned_media_down_for_a_swap();
     }
 
     if file.media.media_type.is_engine() {
@@ -169,8 +169,10 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             // engine would not take the file at all, which is a file the walk steps over rather
             // than one a frame is waited for. The standing file is still taken down first, exactly
             // as it was before the hold existed — nothing was drawn in the meantime, so there is
-            // nothing to keep (see `refuse_pinned_media`).
-            take_down_pinned_media();
+            // nothing to keep (see `refuse_pinned_media`) — and a *bubble* is the one pin that keeps
+            // what it has instead, because what it is showing is a frame of that very media (see
+            // `take_the_pinned_media_down_for_a_swap`).
+            take_the_pinned_media_down_for_a_swap();
             return PinSwap::Refused {
                 path: file.path,
                 walk: file.walk,
