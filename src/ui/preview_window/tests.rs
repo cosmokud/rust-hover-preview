@@ -395,6 +395,7 @@ mod pin_subtitle_reload;
 mod pin_swap_ffplay_jigsaw;
 mod pin_swap_ffplay_native;
 mod pin_volume;
+mod pin_zoom;
 mod placement;
 mod probes;
 mod video_engine;

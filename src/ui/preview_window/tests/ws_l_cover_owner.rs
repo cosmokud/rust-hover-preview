@@ -34,6 +34,7 @@ fn wide_banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
         path: PathBuf::from("ws-l-cover-owner.mkv"),
         content,
         bound: Some(400),
+        zoom: None,
         restore: None,
         dpi: 96,
         audio_scale: None,

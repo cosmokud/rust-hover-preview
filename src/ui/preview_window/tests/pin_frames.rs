@@ -28,6 +28,7 @@ fn a_frame_of_another_size_is_sampled_into_the_band_it_is_drawn_in() {
                 width: size.0,
                 origin_y: 0,
                 height: size.1,
+                frame: (0, 0, size.0 as i32, size.1 as i32),
             },
         );
         out
@@ -119,13 +120,13 @@ fn a_stretched_band_is_the_frame_at_the_size_it_is_drawn_at() {
         stretch_into_band(
             &media,
             (2, 2),
-            (width, band_height),
             &mut BandTarget {
                 out,
                 dc: surface.dc,
                 width,
                 origin_y,
                 height: band_height,
+                frame: (0, 0, width as i32, band_height as i32),
             },
         ),
         "a frame of the surface's own format is one GDI stretches"
@@ -240,6 +241,7 @@ fn a_band_whose_player_is_parked_is_the_last_frame_scaled_and_never_a_hole() {
                 width,
                 origin_y,
                 height: band_height,
+                frame: (0, 0, width as i32, band_height as i32),
             },
         );
         (out.to_vec(), filled)

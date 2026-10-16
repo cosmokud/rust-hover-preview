@@ -1933,6 +1933,17 @@ pub fn run_preview_window() {
                 }
             }
 
+            // And a notch over a pinned picture is the picture being zoomed: the same hook
+            // swallowed it and left the count here, and what the notches come to — a window grown
+            // or shrunk about the picture's centre, and past the cap a picture grown inside a
+            // window that has stopped — is decided and drawn in the window procedure's own terms,
+            // because a picture is drawn from the frame the window already holds (see
+            // `apply_pin_zoom`).
+            let zoom_delta = wheel_input::take_pin_zoom_delta();
+            if zoom_delta / WHEEL_DELTA != 0 {
+                apply_pin_zoom(hwnd, zoom_delta / WHEEL_DELTA);
+            }
+
             // Check for our custom messages. Only the newest hover target matters;
             // collapse stale Show/Hide traffic so we do not spend time computing
             // layouts for files the cursor has already left.
@@ -3565,8 +3576,10 @@ pub fn run_preview_window() {
                                     // remembering a track of its own (see `next_subtitle`).
                                     None,
                                 );
-                                let pid =
-                                    video_process.as_ref().map(|player| player.id()).unwrap_or(0);
+                                let pid = video_process
+                                    .as_ref()
+                                    .map(|player| player.id())
+                                    .unwrap_or(0);
 
                                 current_video_path = Some(path.clone());
                                 video_pos = (pos_x, pos_y, media_width, media_height);

@@ -122,6 +122,55 @@ pub(super) fn fill_band_hit_testable(out: &mut [u8], width: u32, origin_y: u32, 
     fill_band(out, width, origin_y, height, [1, 1, 1, 1]);
 }
 
+/// Paint a band of a layered window with the backdrop its media is composited over, for the rows a
+/// picture has been carried off.
+///
+/// A picture the wheel has zoomed into its window can be pulled off it — a pan is free — and what is
+/// left behind is not a hole to be left as a hole. A layered window's hit testing is answered by the
+/// shape of its pixels, so a band of transparent ones where the picture used to be is a band that
+/// has stopped being this window's: a press on it would fall through to whatever stands behind the
+/// pin, and a picture pulled right off would leave the hand with nothing to take hold of. So the
+/// backdrop the media would have been drawn over is filled in first, and the picture is composed on
+/// top of it (see `compose_media_into_band`).
+///
+pub(super) fn fill_band_backdrop(
+    out: &mut [u8],
+    width: u32,
+    origin_y: u32,
+    height: u32,
+    background: TransparentBackground,
+) {
+    let stride = width as usize * 4;
+    if stride == 0 || matches!(background, TransparentBackground::Transparent) {
+        return;
+    }
+
+    let rows = out.len() / stride;
+    let first = (origin_y as usize).min(rows);
+    let last = (origin_y as usize + height as usize).min(rows);
+    for row in first..last {
+        let Some(pixels) = out.get_mut(row * stride..row * stride + stride) else {
+            return;
+        };
+
+        for (column, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let (b, g, r) = match background {
+                TransparentBackground::Transparent => (0, 0, 0),
+                TransparentBackground::Black => (0, 0, 0),
+                TransparentBackground::White => (255, 255, 255),
+                TransparentBackground::Checkerboard => {
+                    checkerboard_color(column as u32, (row - origin_y as usize) as u32)
+                }
+            };
+
+            // Premultiplied by an alpha of 255, which is the pixel's own colour: the backdrop of a
+            // band this app fills for itself is opaque where the picture over it is not, or the
+            // press the fill exists for would fall through it (see `fill_band_hit_testable`).
+            pixel.copy_from_slice(&[b, g, r, 255]);
+        }
+    }
+}
+
 /// Paint the rows a band covers with one flat pixel in the premultiplied BGRA a layered window is
 /// read from, leaving every row outside the band exactly as it was.
 fn fill_band(out: &mut [u8], width: u32, origin_y: u32, height: u32, flat: [u8; 4]) {
@@ -240,13 +289,9 @@ impl MediaData {
             .audio_scale
             .map(audio_options_of)
             .unwrap_or_else(current_audio_options);
-        let Some((pixels, width, height)) = audio_preview::render(
-            &card,
-            size.0.max(1),
-            size.1.max(1),
-            clock.dpi,
-            options,
-        ) else {
+        let Some((pixels, width, height)) =
+            audio_preview::render(&card, size.0.max(1), size.1.max(1), clock.dpi, options)
+        else {
             return false;
         };
 
