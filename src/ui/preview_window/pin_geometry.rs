@@ -132,7 +132,7 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     // measured, which is the rule every other reader of a pin keeps: a measure is a file read,
     // and this is the thread that pumps the pinned window's own messages, so a read held under
     // the lock is a window that stops answering for as long as it takes (see `pin_swap_space`).
-    let Some(PinMaximizeInputs {
+    let Some(PinBoxInputs {
         path,
         dpi,
         frame,
@@ -141,7 +141,7 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
         caption,
         content,
         restore,
-    }) = pin_maximize_inputs()
+    }) = pin_box_inputs()
     else {
         return;
     };
@@ -178,6 +178,103 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
             }
 
             pin.restore = restore;
+            pin.content = content;
+            Some(())
+        })
+        .is_some();
+
+    if written {
+        *request = Some(PreviewMessage::PinBox(content));
+    }
+}
+
+/// Put a pinned window back to the size the scaling settings ask for the kind it is showing, in the
+/// middle of the screen it stands on: what a double-click asks for where the configuration has the
+/// size reset on (see `pin_double_click_reset_size`).
+///
+/// The size is the one a fresh take-up of the same file would have been given — the file measured
+/// as its kind is measured, and fitted into the room the pin's own chrome leaves at the share a
+/// hover of the file is placed at — rather than one worked out from the box on screen, which is a
+/// box a hand has already had its way with. A window comes back to the size it was pinned at, which
+/// is what the pair is: that same placing asked for again (see `hover_preview_scale` and
+/// `pinned_media_box`).
+///
+/// **The box road, where the centring it stands beside is a move** (see `centre_pinned_window`): a
+/// size is what a media is laid out at, so the box goes through the loop as its own message and the
+/// player, the browser or the card standing in the pin's band is arranged around the answer — one
+/// relaunch for a film, a re-decode for a picture, and nothing at all for a kind whose window is
+/// not its media (see `PreviewMessage::PinBox`).
+///
+/// The size a hand pulled the window to goes with it, since a reset is the window handed back to
+/// the settings: the bound the files that follow are fitted into names that size, so it is given up
+/// with it (see `PinnedPreview::bound`). A maximize goes the way a drag sends it, the box it
+/// arranged having just been arranged by something else (see `pin_restore_box`).
+///
+/// A sound's card is the one kind with no size of its own to be given back: it is framed by nothing
+/// — no hand can pull a card to another size — so the size it has is the size its setting asked for
+/// already, and what a pair owes it is the middle. The measure is deliberately not taken for one:
+/// a card is drawn at the scale the pin was taken up at rather than at the one in force now, and a
+/// card measured at a setting changed since would be a card drawn at one size out of a box measured
+/// for another (see `PinnedPreview::audio_scale`).
+pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
+    // Read out of the pin in one look and let go of before anything is measured, which is the rule
+    // every reader of a pin keeps: a measure is a file read, and this is the thread that pumps the
+    // pinned window's own messages (see `toggle_pin_maximized`).
+    let Some(PinBoxInputs {
+        path,
+        dpi,
+        frame,
+        overlay,
+        transport_bar,
+        caption,
+        content,
+        restore,
+    }) = pin_box_inputs()
+    else {
+        return;
+    };
+
+    // The screen is read at the middle of the *window* rather than at a corner of the media, the
+    // middle being what the pair asks for: a window half over the seam of two displays is not one
+    // either of them can be said to own by a corner (see `centre_pinned_window`).
+    let window = pinned_window_box_of(content, dpi, transport_bar, overlay, caption);
+    let bounds = work_area_at((window.0 + window.2) / 2, (window.1 + window.3) / 2);
+    let room = pinned_room(bounds, dpi, transport_bar, overlay, caption);
+
+    let shape = match frame {
+        PinFrame::None => None,
+        _ => media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape)),
+    };
+    let size = match shape {
+        Some(shape) => {
+            pinned_media_box(shape, room, hover_preview_scale(&path, current_hover_scales()))
+        }
+        // A file with no size to be read out of it — one whose measure has not come back, one
+        // nothing can be read from at all, and a card, which is its own size already — has no size
+        // to be given back, so the one it has is kept and only the place moves: the answer a
+        // maximize gives such a file as well (see `pin_maximize_decided`).
+        None => (
+            (content.2 - content.0).max(1),
+            (content.3 - content.1).max(1),
+        ),
+    };
+
+    let content = clamp_pinned_box(centred_box(size, room), dpi, &DESKTOPS);
+
+    // The check and the write are one lock and one step, as they are for a maximize: a walk taken
+    // between the read above and this write has changed what the pin is showing, and a box decided
+    // from the file it was on is not the box that file's window wants. The tick that answers the
+    // walk is already queued, so the right answer is to leave it to that rather than to lay out over
+    // the top of it — which is a decision not to write, so it is made beside the write.
+    let written = pin_state()
+        .and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            if pin.path != path || pin.restore != restore {
+                return None;
+            }
+
+            pin.restore = None;
+            pin.bound = None;
             pin.content = content;
             Some(())
         })
@@ -262,9 +359,13 @@ pub(super) fn pin_maximize_decided(asked: PinMaximize) -> (ScreenRegion, Option<
     }
 }
 
-/// What a pin has to decide a maximize with, read out of it in one look: see `PinSwapSpace` for
-/// why it is read rather than asked for piece by piece.
-pub(super) struct PinMaximizeInputs {
+/// What a pin has to decide a box with, read out of it in one look: see `PinSwapSpace` for why it
+/// is read rather than asked for piece by piece.
+///
+/// Both of the readers of it — the maximize button and the size a double-click asks for — decide a
+/// box with the same handful of facts about the pin, which is why they share one look at it rather
+/// than having one each (see `toggle_pin_maximized` and `reset_pinned_size`).
+pub(super) struct PinBoxInputs {
     pub(super) path: PathBuf,
     pub(super) dpi: u32,
     pub(super) frame: PinFrame,
@@ -277,11 +378,11 @@ pub(super) struct PinMaximizeInputs {
     pub(super) restore: Option<ScreenRegion>,
 }
 
-pub(super) fn pin_maximize_inputs() -> Option<PinMaximizeInputs> {
+pub(super) fn pin_box_inputs() -> Option<PinBoxInputs> {
     let pinned = pin_state()?;
     let pin = pinned.pin()?;
 
-    Some(PinMaximizeInputs {
+    Some(PinBoxInputs {
         path: pin.path.clone(),
         dpi: pin.dpi,
         frame: pin.frame,
@@ -380,6 +481,30 @@ pub(super) fn centred_at(size: (i32, i32), centre: (i32, i32)) -> ScreenRegion {
     (left, top, left + width, top + height)
 }
 
+/// The media box a pinned window's own middle puts it in: the window box it has now, centred in the
+/// room with its size untouched — the whole of what a double-click on a pin asks for (see
+/// `centre_pinned_window`).
+///
+/// The box centred is the *window's* rather than the media's, and the two are one box for a kind
+/// whose chrome is drawn over its media. That is the kind a window fitted to the screen is, and such
+/// a window is the whole of the work area's height: the middle of the room is the place it already
+/// stands in, so no gap is opened above it and none below — which is the one thing a fit is owed by
+/// a move that is not allowed to touch the size (see `pin_overlay_chrome`). A kind whose chrome is
+/// in bands is centred with those bands, so the bars are the window's own business rather than the
+/// screen's.
+pub(super) fn centred_pin_box(
+    window: ScreenRegion,
+    dpi: u32,
+    transport: bool,
+    overlay: bool,
+    caption: i32,
+    room: ScreenBounds,
+) -> ScreenRegion {
+    let size = ((window.2 - window.0).max(1), (window.3 - window.1).max(1));
+
+    content_box_of(centred_box(size, room), dpi, transport, overlay, caption)
+}
+
 /// The pin's own answers to the chrome, once a tick: its buttons, a key it was given, and whether
 /// the media behind the pin is still there at all.
 ///
@@ -433,6 +558,10 @@ pub(super) fn pin_command_request(
         }
         Some(PinCommand::Maximize) => {
             toggle_pin_maximized(request);
+            None
+        }
+        Some(PinCommand::ResetSize) => {
+            reset_pinned_size(request);
             None
         }
         Some(PinCommand::Previous) => step_pinned_file(-1, wait, anchor),
@@ -618,6 +747,67 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
 
     // Whatever stands in the media band travels with it — after the box it stands in is the
     // window's, so that a player's window is never put where the surface has not caught up.
+    place_pinned_siblings();
+}
+
+/// Put a pinned window in the middle of the screen it stands on, its size untouched: what a
+/// double-click on the window's own body asks for (see `press_carries_the_pin`).
+///
+/// It is the road a *move* is rather than the road a new box is: only the place changes, so nothing
+/// is laid out again at a size it never had and no player is begun again — the road a drag of the
+/// window already follows, and the reason a picture is drawn from the surface the window already
+/// carries and travels with it (see `apply_pin_drag`).
+///
+/// The screen is read at the middle of the window rather than at a corner of it, so the display the
+/// window is put in the middle of is the one it is mostly standing on — a window half over the seam
+/// of two of them is not a window either of them can be said to own by a corner.
+///
+/// A window the hand has moved gives up the maximize it may have carried, exactly as one moved by a
+/// drag does: a maximize is the button's own arrangement of the box, and this is another one (see
+/// `pin_restore_box`).
+pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
+    let Some((window, was, restore, dpi, transport, overlay, caption)) =
+        pin_state().and_then(|pinned| {
+            let pin = pinned.pin()?;
+            Some((
+                pin.window_box(),
+                pin.content,
+                pin.restore,
+                pin.dpi,
+                pin.transport_bar,
+                pin.overlay,
+                pin.caption,
+            ))
+        })
+    else {
+        return;
+    };
+
+    let size = ((window.2 - window.0).max(1), (window.3 - window.1).max(1));
+    let room = work_area_at((window.0 + window.2) / 2, (window.1 + window.3) / 2);
+    let content = centred_pin_box(window, dpi, transport, overlay, caption, room);
+
+    {
+        let Some(mut pinned) = pin_state() else {
+            return;
+        };
+        let Some(pin) = pinned.pin_mut() else {
+            return;
+        };
+        pin.restore = pin_restore_box(restore, was, content);
+        pin.content = content;
+    }
+
+    let placed = pinned_window_box_of(content, dpi, transport, overlay, caption);
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        placed.0,
+        placed.1,
+        size.0,
+        size.1,
+        SWP_NOACTIVATE | SWP_NOZORDER,
+    );
     place_pinned_siblings();
 }
 

@@ -744,6 +744,89 @@ pub(super) unsafe fn raise_pinned_window(hwnd: HWND) {
     }
 }
 
+/// Whether a press on a pinned window is the second of a double-click, remembering it as the one
+/// the press after it is read against.
+///
+/// A double-click is two presses inside the time Windows reads one in and inside the box it lets
+/// the pointer wander in between them, and both of those are the machine's own answers rather than
+/// numbers chosen here — the same measures Windows itself would have counted on a window whose
+/// class had asked to be sent double-click messages (see `within_double_click`). The class has
+/// not, and cannot: that style takes the second `WM_LBUTTONDOWN` of every double press away, and a
+/// double press on a caption button is two commands on purpose (see `PinnedPreview::last_press`).
+///
+/// Every press is remembered, wherever on the window it landed, and only the arms that would carry
+/// the window ask the answer: two presses of a caption button are two commands, and a pair of them
+/// there is not a request to move anything (see `press_carries_the_pin`).
+pub(super) fn pin_double_click_press(x: i32, y: i32) -> bool {
+    let now = Instant::now();
+
+    let Some(mut pinned) = pin_state() else {
+        return false;
+    };
+    let Some(pin) = pinned.pin_mut() else {
+        return false;
+    };
+
+    let double = pin
+        .last_press
+        .is_some_and(|(then, at)| within_double_click(then, at, now, (x, y)));
+    pin.last_press = Some((now, (x, y)));
+
+    double
+}
+
+/// Whether two presses of one window are one double-click, by the machine's own rule: the second
+/// inside the time Windows reads a double-click in, and inside the rectangle it lets the pointer
+/// wander in between the two — a rectangle read as its reach from the first press, which is half of
+/// what `GetSystemMetrics` answers with.
+///
+/// Both are read from the mouse settings rather than written down here, because a hand that
+/// double-clicks a pin is the same hand double-clicking a folder in the listing behind it, and the
+/// two gestures have to mean the same thing to it.
+pub(super) fn within_double_click(
+    then: Instant,
+    at: (i32, i32),
+    now: Instant,
+    point: (i32, i32),
+) -> bool {
+    let (reach_x, reach_y) = unsafe {
+        (
+            GetSystemMetrics(SM_CXDOUBLECLK) / 2,
+            GetSystemMetrics(SM_CYDOUBLECLK) / 2,
+        )
+    };
+
+    now.duration_since(then) <= Duration::from_millis(u64::from(unsafe { GetDoubleClickTime() }))
+        && (point.0 - at.0).abs() <= reach_x
+        && (point.1 - at.1).abs() <= reach_y
+}
+
+/// What a press that would carry the window does: the drag the hand asked for — or, where the
+/// press is the second of a double-click and the configuration asks for it, the window put in the
+/// middle of the screen it stands on, with no drag begun and nothing carried. A pair asks the loop
+/// for the window's size back first wherever the configuration has that too, and is the move alone
+/// where it has not (see `reset_pinned_size` and `centre_pinned_window`).
+///
+/// Nothing is taken hold of for a pair: the first press of the two was a drag the hand let go of
+/// where it began, and a window moved out from under a press still holding the pointer would have
+/// the next pointer move carry it back to where the first one started.
+unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool) {
+    if double_click && pin_double_click_center() {
+        // A size is what a media is laid out at rather than a place it is carried to, so the reset
+        // is asked for on the loop's own road — the one the maximize button asks its box on, where
+        // the file is measured off the pin's lock and the box is decided (see `reset_pinned_size`).
+        if pin_double_click_reset_size() {
+            ask_pin(PinCommand::ResetSize);
+            return;
+        }
+
+        centre_pinned_window(hwnd);
+        return;
+    }
+
+    begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Move, true);
+}
+
 /// A press on a pinned window, answering whether it was the pin's to act on.
 ///
 /// Four things a press can be, in the order a hand finds them: an edge of the window, which begins
@@ -760,6 +843,12 @@ pub(super) unsafe fn raise_pinned_window(hwnd: HWND) {
 /// which is where its buttons are: a corner's share of a button is a resize, and the rest of it is
 /// the button, exactly as it is on a window whose frame the system draws.
 pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
+    // Whether this press is the second of a pair, asked before any of the arms below so that one
+    // answer serves the whole window: what a pair means is the window put in the middle of its
+    // screen, and the two arms it is put to are the two a press carries the window from (see
+    // `pin_double_click_press`).
+    let double_click = pin_double_click_press(x, y);
+
     let Some(caption) = pinned_caption_geometry() else {
         return false;
     };
@@ -807,7 +896,7 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
             }
         }
 
-        begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Move, true);
+        press_carries_the_pin(hwnd, double_click);
         return true;
     }
 
@@ -839,7 +928,7 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     }
 
     if pinned_content_is_the_pins(x, y) {
-        begin_pin_drag(hwnd, &Win32PinWindow, PinDragAction::Move, true);
+        press_carries_the_pin(hwnd, double_click);
         return true;
     }
 

@@ -216,14 +216,20 @@ pub const MAX_SPINNER_DELAY_MS: u64 = 10_000;
 /// layout asked for, so this is a ceiling on retained pixels rather than on
 /// files: how many images fit depends entirely on how large they are shown.
 ///
-/// Sixty-four megabytes by default, which is one full-screen frame at 4K: a hit skips a
-/// full-resolution decode and its resample, which is the most expensive thing a hover does,
-/// and what is held is the preview-sized frame in BGRA — a picture filling a large display
-/// is about thirty-three megabytes of it. A budget below that holds nothing at all for such
-/// a picture, because a frame larger than the whole budget is not trimmed to fit but left
-/// out of the cache, so every hover of it paid the decode again; sixty-four holds that frame
-/// and the one after it.
-pub const DEFAULT_IMAGE_CACHE_MB: u32 = 64;
+/// A hundred and twenty-eight megabytes by default, which is one full-screen frame at 4K and
+/// the frames beside it: a hit skips a full-resolution decode and its resample, which is the
+/// most expensive thing a hover and a resize both do, and what is held is the preview-sized
+/// frame in BGRA — a picture filling a large display is about thirty-three megabytes of it. A
+/// budget below that holds nothing at all for such a picture, because a frame larger than the
+/// whole budget is not trimmed to fit but left out of the cache, so every hover of it paid the
+/// decode again; a hundred and twenty-eight holds that frame and the three after it.
+///
+/// The count matters more than it used to, because a frame is now the answer to a box it does
+/// not exactly fit as well: a pinned window dragged smaller, or shut and grown back, is drawn from
+/// the frame it was last decoded at rather than decoded again (see `box_is_covered`), and the
+/// cache is what answers a pin taken up again at a size it was decoded at before. A budget that
+/// has dropped those frames is a decode — of the file at its full resolution — after all.
+pub const DEFAULT_IMAGE_CACHE_MB: u32 = 128;
 pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
 /// The folder a document's page is kept in may hold, in megabytes. What a page costs is the
 /// size of the file it is kept as — a PDF the engine that drew it exported, a slide's PNG, a

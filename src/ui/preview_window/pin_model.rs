@@ -409,6 +409,17 @@ pub(super) struct PinnedPreview {
     /// painted from, and what a release acts on.
     pub(super) hovered: Option<pin_chrome::CaptionButton>,
     pub(super) pressed: Option<pin_chrome::CaptionButton>,
+    /// The last press this window answered, and where on it the press landed: what the press
+    /// after it is read against to tell a pair of them from two presses of their own (see
+    /// `pin_double_click_press`).
+    ///
+    /// It is a memory of the pin's rather than the system's because a class has to be registered
+    /// with `CS_DBLCLKS` to be sent a double-click message at all, and asking for one would take
+    /// the second `WM_LBUTTONDOWN` away from every double press on a caption button — two presses
+    /// of a **Next** being two steps of a walk is what the class deliberately has none for. A pin
+    /// rebuilt under the hand is a window that has not been pressed, which is what a pair of
+    /// presses either side of a swap is.
+    pub(super) last_press: Option<(Instant, (i32, i32))>,
     /// What the caption's buttons are saying out loud, and which of them the pointer has been
     /// resting on since enough time for a name to have been read (see `PinTooltip`).
     pub(super) tooltip: PinTooltip,
@@ -482,6 +493,7 @@ impl PinnedPreview {
             bubble_run: false,
             hovered: None,
             pressed: None,
+            last_press: None,
             tooltip: PinTooltip::default(),
             dragging: None,
             parked: false,

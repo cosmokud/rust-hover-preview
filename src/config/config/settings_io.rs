@@ -44,6 +44,8 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
         "General",
         &[
             "check_for_updates",
+            "pin_double_click_center",
+            "pin_double_click_reset_size",
             "pin_enabled",
             "pin_key",
             "pin_nav_audio",
