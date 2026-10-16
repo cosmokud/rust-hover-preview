@@ -1511,22 +1511,28 @@ pub(super) struct PinRelayout {
     pub(super) answer: Receiver<Option<MediaData>>,
 }
 
-/// Take a relayout that has answered, and install it.
+/// Take a relayout that has answered, install it, and answer whether a frame was installed.
 ///
 /// One still running is the ordinary case for the first few ticks after a window is dragged to a
 /// new size: what is on screen is the frame already decoded, and this is where it is replaced by
 /// one drawn for the box the window is now at.
 ///
+/// **The answer is what the caller paints on, and nothing else on the tick it lands is looking for
+/// one.** A frame that has just been installed is a frame the window has not drawn: a picture that is
+/// not moving has no frame to advance and no clock to repaint for, so a relayout no one repaints for
+/// is a sharper frame the user never sees — which is exactly what a picture settled at a size the
+/// wheel took it to would be (see `render_layered_preview`).
+///
 /// The frame is installed here, on the loop's own thread, because `CURRENT_MEDIA` is the loop's
 /// (see `swap_pinned_media` for the same rule on a swap's answer) — and `keep_text_place` is asked
 /// of the media being replaced *before* that lock is taken, for the reason it takes the lock
 /// itself: a lock this thread already holds is not a lock it can wait for.
-pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) {
+pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     let Some(media) = answered(relayout.as_ref().map(|pending| &pending.answer)) else {
-        return;
+        return false;
     };
     let Some(pending) = relayout.take() else {
-        return;
+        return false;
     };
 
     // A relayout is only an answer while the pin is still standing on the file it was asked for.
@@ -1534,17 +1540,20 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) {
     // a window that is no longer there, and its frame must not be installed over whatever is
     // there now.
     if pinned_path().as_deref() != Some(pending.path.as_path()) {
-        return;
+        return false;
     }
 
-    let Some(media) = media else { return };
+    let Some(media) = media else { return false };
     let media = keep_text_place(media);
-    if let Ok(mut current) = CURRENT_MEDIA.lock() {
-        if let Some(ref mut existing) = *current {
-            existing.cancel_background_work();
-        }
-        *current = Some(media);
+    let Ok(mut current) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+    if let Some(ref mut existing) = *current {
+        existing.cancel_background_work();
     }
+    *current = Some(media);
+
+    true
 }
 
 /// Carry where a page of text was up to — the line its frame starts at and what was selected —

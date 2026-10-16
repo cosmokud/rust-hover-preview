@@ -640,6 +640,11 @@ pub(super) struct BandTarget<'a> {
 /// surface DC, and the pixel-at-a-time sampler below is kept for the frames that need it — one
 /// with an alpha channel to composite and a backdrop to composite it over, which is a per-pixel
 /// question GDI cannot be asked (see `stretch_into_band` and `resample_into_band`).
+///
+/// And a frame that is drawn at the size it was *decoded* at is a copy of the rows that land on the
+/// band, which is the road a zoomed picture takes and the one the other two would both charge for:
+/// the stretch by handing GDI the whole frame through a surface of its own, and the sampler by a
+/// sample per pixel of a frame that has nothing to sample (see `copy_frame_into_band`).
 pub(super) fn compose_media_into_band(
     bgra: &[u8],
     width: u32,
@@ -662,9 +667,81 @@ pub(super) fn compose_media_into_band(
 
     if lands_on_everything && (width, height) == band {
         compose_preview_pixels_into_band(bgra, width, height, background, opaque, target);
-    } else if !opaque || !stretch_into_band(bgra, (width, height), &mut target) {
+    } else if !copy_frame_into_band(bgra, (width, height), opaque, &mut target)
+        && (!opaque || !stretch_into_band(bgra, (width, height), &mut target))
+    {
         resample_into_band(bgra, (width, height), band, background, opaque, target);
     }
+}
+
+/// Fill a band from a frame that is drawn at exactly the size it was decoded at, a row at a time,
+/// answering whether it did.
+///
+/// It is the road `stretch_into_band` cannot be asked for and should not be: a picture drawn at the
+/// size its own frame is is a stretch with nothing to do, and the way GDI is asked to do nothing is to
+/// be handed the whole frame through a surface of this app's own — a copy of every pixel of the file,
+/// per repaint, to show the band's own worth of them. A deep zoom is where that shows: a picture the
+/// wheel has taken to four times the fit is a frame of a hundred megabytes, and a hand carrying it is
+/// a hundred megabytes copied and blitted for each move of the hand. What this copies is the rows the
+/// band has, and the columns of them that land on it.
+///
+/// Only a frame whose every pixel is opaque comes here, for the reason `stretch_into_band` is asked
+/// only for one: a frame with an alpha channel is a per-pixel question about what stands behind it, and
+/// what this is is a copy (see `current_frame_is_opaque`).
+///
+/// And the frame has to be the size of the box it lands in, which is the whole of what makes a copy the
+/// right answer: a frame of any other size is one the band has to be filled *from*, and that is a
+/// question for the two roads beside this one (see `compose_media_into_band`).
+pub(super) fn copy_frame_into_band(
+    bgra: &[u8],
+    source: (u32, u32),
+    opaque: bool,
+    target: &mut BandTarget<'_>,
+) -> bool {
+    let (source_width, source_height) = source;
+    let frame = target.frame;
+
+    if !opaque || (source_width as i32, source_height as i32) != (frame.2, frame.3) {
+        return false;
+    }
+
+    let row_bytes = source_width as usize * 4;
+    if row_bytes == 0 || source_height == 0 || bgra.len() < row_bytes * source_height as usize {
+        return false;
+    }
+
+    let (out_width, band_height, origin_y) = (target.width, target.height, target.origin_y);
+    let out_row_bytes = out_width as usize * 4;
+    let top = origin_y as i32 + frame.1;
+
+    // The same cuts the two roads below make, and for the same reasons: the columns to the surface,
+    // because a picture carried wholly off one side is a frame with no columns on the band at all, and
+    // the rows to the band, because a picture carried a long way off is a frame whose rows are mostly
+    // not on screen.
+    let first = frame.0.clamp(0, out_width as i32) as usize;
+    let last = (frame.0 + frame.2).clamp(0, out_width as i32) as usize;
+    let first_row = top.max(origin_y as i32).max(0);
+    let last_row = (top + frame.3)
+        .min(origin_y as i32 + band_height as i32)
+        .max(first_row);
+    let out = &mut *target.out;
+
+    for row in first_row as usize..last_row as usize {
+        // Which row of the frame this row of the band is: one for one, since the two are the same size
+        // and the frame's top is the picture's own top.
+        let source_row = (row as i32 - top) as usize;
+        let start = row * out_row_bytes;
+        let (Some(destination), Some(source)) = (
+            out.get_mut(start + first * 4..start + last * 4),
+            bgra.get(source_row * row_bytes + first * 4..source_row * row_bytes + last * 4),
+        ) else {
+            break;
+        };
+
+        destination.copy_from_slice(source);
+    }
+
+    true
 }
 
 /// Fill a band of another size with the frame, scaled by GDI, answering whether it was drawn.

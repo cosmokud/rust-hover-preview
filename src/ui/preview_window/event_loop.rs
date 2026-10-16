@@ -2810,8 +2810,13 @@ pub fn run_preview_window() {
             // decode of the file being held over, for a window that is about to be shown
             // something else. The answer waits in the slot until the hold is over and the path
             // check has an honest question to refuse it with (see `PinSwapHold`).
-            if pin_swap_hold.is_none() {
-                take_pin_relayout(&mut pin_relayout);
+            if pin_swap_hold.is_none() && take_pin_relayout(&mut pin_relayout) {
+                // A frame that has just been laid out again is a frame the window has not drawn: what
+                // is on screen is the one before it, scaled into the box the new one was decoded for.
+                // Nothing else on this tick is looking for a paint — a picture that is not moving has
+                // no frame to advance and no clock to repaint for — so this is where the sharper frame
+                // goes up (see `take_pin_relayout`).
+                render_layered_preview(hwnd);
             }
 
             let swap = settle_pin_swap(&mut pin_swap_hold, &mut pin_load);

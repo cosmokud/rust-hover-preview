@@ -281,6 +281,115 @@ fn a_zoomed_pictures_band_is_the_zooms_backdrop_and_a_picture_that_fills_its_win
     );
 }
 
+/// A picture drawn at the size its own frame is — which is every picture a zoom has settled on — is a
+/// crop of that frame and nothing else: no stretch, no sample, and no walk over the rows the band has
+/// not got.
+///
+/// It is the road a deep zoom's pan takes, and what it is worth is what the other two cost: the
+/// stretch hands GDI the whole frame through a surface of this app's own, and the sampler asks a
+/// per-pixel question of a frame that has nothing to be sampled. A hundred-megabyte frame carried by a
+/// hand is a hundred megabytes copied per move of it under the one, and the band's own rows under this.
+#[test]
+fn a_frame_drawn_at_its_own_size_is_a_crop_of_it() {
+    // A frame of sixteen rows drawn at its own size, standing in a band of eight: the band shows the
+    // frame's middle eight rows, which is where the picture's own middle is.
+    let (width, height) = (4u32, 8u32);
+    let mut out = vec![0u8; (width * height * 4) as usize];
+
+    // Every row of the frame is its own shade, so a crop that took the wrong rows says so.
+    let mut media = Vec::new();
+    for row in 0..16u32 {
+        for _ in 0..width {
+            media.extend_from_slice(&[row as u8 * 16, 0, 0, 255]);
+        }
+    }
+
+    let drawn = |left: i32, out: &mut [u8]| {
+        copy_frame_into_band(
+            &media,
+            (width, 16),
+            true,
+            &mut BandTarget {
+                out,
+                dc: HDC(std::ptr::null_mut()),
+                width,
+                origin_y: 0,
+                height,
+                frame: (left, -4, width as i32, 16),
+            },
+        )
+    };
+
+    assert!(drawn(0, &mut out), "a frame of its own size is one to copy");
+    for row in 0..height as usize {
+        let pixel = &out[row * width as usize * 4..row * width as usize * 4 + 4];
+        assert_eq!(
+            pixel[0],
+            (row + 4) as u8 * 16,
+            "row {row} of the band is row {} of the picture",
+            row + 4
+        );
+    }
+
+    // A picture carried off the side fills only the columns of the band it still covers, and the ones
+    // it has left are the caller's — which is the backdrop a hand sees beside a picture it has carried.
+    let mut out = vec![0u8; (width * height * 4) as usize];
+    assert!(drawn(-2, &mut out), "a frame carried off the side is one");
+    for row in 0..height as usize {
+        let line = &out[row * width as usize * 4..(row + 1) * width as usize * 4];
+        assert_eq!(
+            line.as_chunks::<4>().0[0],
+            [(row + 4) as u8 * 16, 0, 0, 255],
+            "the columns it still covers are the picture's"
+        );
+        assert_eq!(
+            line.as_chunks::<4>().0[3],
+            [0, 0, 0, 0],
+            "and the columns it has left are exactly as the caller left them"
+        );
+    }
+
+    // And a frame that is not the size of the box it lands in is not this road's: it is one the band
+    // has to be filled *from*, and the sampler is the one that knows how.
+    let mut out = vec![0u8; (width * height * 4) as usize];
+    assert!(
+        !copy_frame_into_band(
+            &media,
+            (width, 16),
+            true,
+            &mut BandTarget {
+                out: &mut out,
+                dc: HDC(std::ptr::null_mut()),
+                width,
+                origin_y: 0,
+                height,
+                frame: (0, -4, width as i32, 8),
+            },
+        ),
+        "a frame drawn at another size is a scale and not a copy"
+    );
+
+    // And neither is a frame with an alpha channel, whatever size it is: what stands behind it is a
+    // per-pixel question and this is a copy.
+    let mut out = vec![0u8; (width * height * 4) as usize];
+    assert!(
+        !copy_frame_into_band(
+            &media,
+            (width, 16),
+            false,
+            &mut BandTarget {
+                out: &mut out,
+                dc: HDC(std::ptr::null_mut()),
+                width,
+                origin_y: 0,
+                height,
+                frame: (0, -4, width as i32, 16),
+            },
+        ),
+        "a frame to be composited is the sampler's"
+    );
+}
+
 /// A page that is laid out to its box — a document, a listing — is resized one dimension at
 /// a time: a wider window is a longer line, and there is no shape of the file's to keep
 /// because the box the text is poured into *is* the layout.
