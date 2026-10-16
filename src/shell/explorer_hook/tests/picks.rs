@@ -778,6 +778,92 @@ fn a_pin_taken_up_begins_from_nothing() {
     );
 }
 
+/// A pin that has moved its own window under a hand that has not moved is not the window this
+/// watch's readings were taken against: the click it is holding for a retry, the settle and the
+/// probe were all measured against where the window was, and the file under the point now is
+/// whatever the move uncovered — a file the hand never chose (see
+/// `PinUpdateWatch::note_pin_box`).
+#[test]
+fn a_pin_that_moves_under_the_hand_gives_up_the_click_it_is_holding() {
+    let stood = (100, 120, 500, 400);
+    let moved = (600, 300, 900, 500);
+    let mut watch = PinUpdateWatch::default();
+
+    // The first reading of the pin's own window is a baseline, like the first item the keyboard is
+    // on: a pin taken up is a window this watch has not seen before, and there is nothing it has
+    // moved from.
+    assert!(
+        !watch.note_pin_box(Some(stood)),
+        "the first sighting of the pin's window is not a move"
+    );
+    assert!(
+        !watch.note_pin_box(Some(stood)),
+        "and a window that stands still has not moved"
+    );
+
+    // A click is held for a retry, as one that landed while the shell was still catching up is,
+    // and the hand has come to rest on it.
+    watch.pending = Some(PendingClick {
+        at: Instant::now(),
+        point: POINT { x: 120, y: 140 },
+        place: None,
+    });
+    watch.arrived = true;
+    watch.probed = true;
+    watch.settled_at = Some(Instant::now());
+    watch.press_point = Some((POINT { x: 120, y: 140 }, Instant::now()));
+
+    // The double-click puts the window back in the middle of its screen while the hand stays where
+    // it was, which is the move the shell must not answer a click through.
+    assert!(
+        watch.note_pin_box(Some(moved)),
+        "the pin's own window under a hand nobody moved has moved"
+    );
+    assert!(
+        watch.pending.is_none(),
+        "so the click held for a retry goes with it: it was made against a window that is not there now"
+    );
+    assert!(
+        !watch.probed && watch.settled_at.is_none(),
+        "and so do the settle and the probe, which were measured against the same window"
+    );
+    assert!(
+        watch.arrived,
+        "while what the hand has done is the hand's and not the window's"
+    );
+    assert!(
+        watch.press_point.is_some(),
+        "and the press the move itself was asked by stays booked: the pair's second press is still the gesture's other half rather than a pick of its own"
+    );
+}
+
+/// The rule the two places a click is answered by ask, with the window's box handed in: a box that
+/// has changed is a window that has moved, and a box that could not be read is a reading of its own
+/// rather than no answer at all — what this app's window does between two ticks while a pin is up
+/// is stand (see `the_pin_window_moved`).
+#[test]
+fn a_pin_window_that_is_not_where_it_was_has_moved() {
+    let stood = (100, 120, 500, 400);
+    let elsewhere = (600, 300, 900, 500);
+
+    assert!(
+        !the_pin_window_moved(Some(stood), Some(stood)),
+        "a window that is where it was has not moved"
+    );
+    assert!(
+        the_pin_window_moved(Some(stood), Some(elsewhere)),
+        "a window standing in another box has"
+    );
+    assert!(
+        the_pin_window_moved(Some(stood), None),
+        "and one that has gone is not where it was"
+    );
+    assert!(
+        the_pin_window_moved(None, Some(stood)),
+        "and one that has appeared is not either"
+    );
+}
+
 /// The second press of the double-click that opened a folder is not a pick, and the pin keeps
 /// the file it was showing.
 ///
