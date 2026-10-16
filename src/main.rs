@@ -140,13 +140,11 @@ fn main() {
     trace.step("browser sweep");
 
     // Everything that is left is files rather than processes, and none of it is anything the
-    // app has to be able to preview with: the folders earlier versions kept their pages in,
-    // the log one of them wrote for every video hover, the installer the update check fetched
-    // before it learned to fetch one only for a click, and the browser profiles of the runs
-    // that are gone. What that costs grows with what those versions left in the temp folder —
-    // thousands of files is a few thousand deletions — and what the user is waiting for is a
-    // tray icon, which is a window and an icon and nothing else, so it is done on a thread of
-    // its own rather than between the launch and the icon.
+    // app has to be able to preview with: what a render that was ended mid-flight left in the
+    // temp folder, and the browser profiles of the runs that are gone. What that costs grows
+    // with what those runs left behind — thousands of files is a few thousand deletions — and
+    // what the user is waiting for is a tray icon, which is a window and an icon and nothing
+    // else, so it is done on a thread of its own rather than between the launch and the icon.
     //
     // The two sweeps above are deliberately not on that thread: they end processes, and what
     // they are for is not leaving a leftover engine beside a new one, which is a question
@@ -157,22 +155,10 @@ fn main() {
     // is drawn a second time and never a preview answered from nothing.
     let mut housekeeping = trace.clone();
     std::thread::spawn(move || {
-        // What an earlier version cached on disk goes, and whatever a render that was ended
-        // mid-flight left in the temp folder goes with it — the pages this version keeps are not
-        // that, and are left where they are so that a document drawn before this run is a read
-        // rather than another render.
+        // Whatever a render that was ended mid-flight left in the temp folder goes — the pages
+        // this version keeps are not that, and are left where they are so that a document drawn
+        // before this run is a read rather than another render.
         engines::document_cache::discard_leftovers();
-
-        // The log an earlier version appended a line to for every video hover is no
-        // longer written; the file it left behind goes the same way, as its own user,
-        // before a video preview could start adding to it again.
-        let _ = fs::remove_file(std::env::temp_dir().join("rust-hover-preview-video.log"));
-
-        // The update check keeps nothing on disk any more — the hour is counted in
-        // memory, and the installer is fetched for the click that asks for it — so
-        // what earlier versions left for it goes with the other files those versions
-        // left behind.
-        app::updates::discard_old_files();
 
         // The browser that draws a document keeps its state in a folder of its
         // own, one per run; what earlier runs left behind is cleared away here, before this

@@ -37,12 +37,11 @@
 //! across a restart.
 
 use crate::config::config::{
-    sanitize_document_cache_mb, sanitize_image_disk_cache_mb, AppConfig, DEFAULT_DOCUMENT_CACHE_MB,
+    sanitize_document_cache_mb, sanitize_image_disk_cache_mb, DEFAULT_DOCUMENT_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB,
 };
 use crate::readers::pdf_preview;
 use crate::CONFIG;
-use directories::BaseDirs;
 use once_cell::sync::Lazy;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -772,30 +771,16 @@ fn prune_folder(folder: &Path, limit: u64, held: Option<&str>) {
     with_index(folder, |index| index.trim(folder, limit, held));
 }
 
-/// Delete what earlier versions cached on disk, and whatever a render that was ended mid-flight
-/// left behind in the temp folder.
+/// Delete whatever a render that was ended mid-flight left behind in the temp folder.
 ///
 /// The pages themselves are not that, and are left where they are — what is cleared there is
 /// the files beside the folder they are kept in, since a scratch file a previous run never got
 /// to read is not one the next attempt is allowed to find.
+///
+/// The folders older versions cached in are not this function's business any more: they were
+/// written by builds that are gone, and the installer takes them once (see `preinstall-section`
+/// in the packaging metadata) rather than every start of the app taking them.
 pub(crate) fn discard_leftovers() {
-    // Only the `office` folder is removed — in the installed layout the app's own executable
-    // and uninstaller live beside it in that same directory, and a page cache is not worth
-    // risking them for.
-    if let Some(dirs) = BaseDirs::new() {
-        let _ = std::fs::remove_dir_all(dirs.cache_dir().join("rust-hover-preview").join("office"));
-    }
-
-    // The `rendered` folder beside `config.ini` is where a version before this one kept every
-    // converted page of every document, and the profile its engine ran under. Nothing reads it
-    // any more: what is drawn now is kept under the pages' own folder, and a folder that is no
-    // longer written to is one to be rid of rather than left for a user to find on their disk.
-    if let Some(folder) = AppConfig::config_path()
-        .and_then(|path| path.parent().map(|folder| folder.join("rendered")))
-    {
-        let _ = std::fs::remove_dir_all(folder);
-    }
-
     let Ok(entries) = std::fs::read_dir(temp_folder()) else {
         return;
     };

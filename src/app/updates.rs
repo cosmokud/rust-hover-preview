@@ -409,30 +409,6 @@ fn due_for_check() -> bool {
         .is_none_or(|last| last.elapsed() >= CHECK_INTERVAL)
 }
 
-/// Remove what earlier versions left for the check: the time they wrote down of
-/// when they last asked, and the installer they fetched before any click. Neither
-/// is kept here any more — the six hours are the run's own memory, and the installer is
-/// fetched for the click that asks for it — so both go at startup, with the other
-/// files earlier versions left behind.
-pub(crate) fn discard_old_files() {
-    let Some(dirs) = directories::BaseDirs::new() else {
-        return;
-    };
-
-    let directory = dirs
-        .data_local_dir()
-        .join("rust-hover-preview")
-        .join("update");
-
-    let _ = fs::remove_file(directory.join("last-check"));
-    let _ = fs::remove_file(directory.join(INSTALLER_FILE));
-    let _ = fs::remove_file(directory.join(format!("{INSTALLER_FILE}.part")));
-
-    // Only where those three were the whole of it: the folder is nothing this
-    // version writes, and an empty one is a folder a user need not have.
-    let _ = fs::remove_dir(&directory);
-}
-
 /// A version as the three numbers it is made of, which is what the tags this
 /// repository publishes are (`v0.3.0`), and what a comparison of two of them
 /// needs. Anything else — a tag with a suffix, a line that is not a version, a
