@@ -169,6 +169,15 @@ pub(super) fn settle(playing: bool, box_: Option<ScreenRegion>) {
             // stopped is dropped rather than handed on, because a picture that has stopped is not a
             // picture that is moving, and the read begins again below.
         }
+        (Some(Stream::Held { key, latest }), _)
+            if keep_a_stopped_films_frame && the_film_the_pin_shows_is(&key.path) =>
+        {
+            // And a film that is *still* stopped is still where it stopped: this is asked of every
+            // tick the bubble stands through the pause and not of the one the pause happened on, and
+            // a frame kept for that one tick is a bubble back on the still the collapse grabbed the
+            // moment after (see `Stream::Held`).
+            return hold(Stream::Held { key, latest });
+        }
         (Some(Stream::Refused(key)), Some(wanted)) if key == wanted.key => {
             return hold(Stream::Refused(key));
         }
@@ -688,7 +697,9 @@ mod tests {
     /// The three ways out of that rule are here beside it, because each of them is a way for the
     /// answer to be nothing: a film that is *playing* again is read again rather than left standing
     /// at the frame it stopped on, another film under the bubble is not left showing this one's
-    /// frame, and a bubble that is not on screen is owed no picture at all.
+    /// frame, and a bubble that is not on screen is owed no picture at all. The rule is also asked
+    /// of every tick the pause lasts rather than of the tick the pause happened on, because a frame
+    /// kept for one tick is a bubble back on its still the moment after.
     #[test]
     fn a_film_paused_while_collapsed_is_left_on_the_frame_it_stopped_on() {
         let _one = PIN_TESTS_ONE_AT_A_TIME
@@ -750,6 +761,17 @@ mod tests {
              grabbed half an hour before it"
         );
 
+        // And the pause lasts more than one tick: the loop asks this of every tick the bubble is up,
+        // and a frame kept for only the tick the pause happened on is a bubble back on the still the
+        // collapse grabbed the moment after (see `Stream::Held`).
+        settle(false, Some(box_));
+        settle(false, Some(box_));
+        assert_eq!(
+            latest_frame(),
+            Some((frame.clone(), side)),
+            "the frame a film stopped on is held for as long as the film is stopped"
+        );
+
         // The film going on again: a decode begun again rather than the frame left standing, because
         // a picture that has stopped is not a picture that is moving.
         settle(true, Some(box_));
@@ -779,11 +801,25 @@ mod tests {
 
         // And a bubble that is not on screen — one put away into the taskbar — is owed no picture at
         // all, so nothing is kept for it.
-        stand_a_running_stream(film, started, side, frame);
+        stand_a_running_stream(film.clone(), started, side, frame.clone());
         settle(false, None);
         assert!(
             latest_frame().is_none(),
             "a circle nobody is looking at keeps no frame"
+        );
+
+        // And a frame that is *held* goes the way of the film it was read from: a walk landing on
+        // another file behind a paused bubble is not left on the frame of the film before it.
+        stand_a_running_stream(film, started, side, frame.clone());
+        settle(false, Some(box_));
+        assert_eq!(latest_frame(), Some((frame, side)), "the pause holds it");
+        let mut walked = take_pin_for_a_test().expect("the pin is up");
+        walked.path = PathBuf::from("another-film.mkv");
+        stand_pin(Some(walked));
+        settle(false, Some(box_));
+        assert!(
+            latest_frame().is_none(),
+            "a held frame of another film is not this bubble's picture"
         );
 
         stand_no_stream();
