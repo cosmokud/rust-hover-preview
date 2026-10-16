@@ -293,7 +293,8 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected.
     - A pinned video has a transport bar with a volume of its own, set on the window; it does not change **Volume → Video**.
     - **Maximize** fits the window to the screen.
-    - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a right-click on the bubble opens its own menu: the same playback rows, then **Pause on Minimize** where the kind behind it plays something, then the ways out; **Play** there gives back a park the collapse made, without waiting for the window), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
+    - A **double-click** puts the window back to the size its kind's scaling setting names and in the middle of the screen it stands on (both halves are switches in `config.ini`: `pin_double_click_reset_size` and `pin_double_click_center`, both on).
+    - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a film's bubble keeps showing the film, and holds the frame it stopped on when it is paused; a right-click on the bubble opens its own menu: the same playback rows, then **Pause on Minimize** where the kind behind it plays something, then the ways out; **Play** there gives back a park the collapse made, without waiting for the window), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
     - Clicking the window gives it the keyboard; then the arrow keys step it and `Escape` closes it.
     - The pin key itself only ever puts a pin up and brings back a bubble; it never hides one.
     - The key is named in the item and can be changed in `config.ini` (`pin_key`).
@@ -425,9 +426,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
   - **Explorer Poll** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`.
     - Lower answers a move sooner; higher is lighter on CPU and Explorer.
-  - **Hardware Acceleration (Video)** — checked by default: a video FFmpeg's player has is decoded on the graphics card rather than on a core.
-    - It is a setting about this build's FFmpeg rather than about a kind of file — a file the media engine plays is decoded by Windows either way.
-    - A machine with no device FFmpeg can decode on is the one the setting is for, where FFmpeg falls back by itself.
+  - **Hardware Acceleration (MPV Only)** — checked by default: a film mpv plays is decoded on the graphics card through mpv's own `--hwdec=auto`, whose safe list and software fallback are that player's business.
+    - It is mpv's switch and nobody else's: FFmpeg's player is given no decode device, and the bubble's own frame reader decodes on a core.
+    - A machine with no `mpv.exe` has no player for the switch to act on, so the row is greyed and unchecked there and a `config.ini` that says on is read as off.
 - **Engine**
   - **Away Timer** — How long Explorer may be unreachable before a non-**Persistent** engine is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`.
     - Counts time when no Explorer window is reachable on any monitor.
@@ -483,6 +484,8 @@ Example, trimmed:
 [settings]
 ; General
 check_for_updates=true
+pin_double_click_center=true
+pin_double_click_reset_size=true
 pin_enabled=true
 pin_key=space
 pin_nav_audio=category
@@ -571,7 +574,7 @@ video_volume=0
 decode_budget_gb=1
 document_cache_mb=256
 general_disk_cache_mb=128
-image_cache_mb=64
+image_cache_mb=128
 image_disk_cache_mb=512
 tick_ms=15
 video_hw_accel=true
@@ -631,7 +634,7 @@ spinner_delay_ms=250
 
 ### Memory and cache
 
-- `image_cache_mb`: memory for decoded image frames. Default `64`, max `2048`; `0` holds nothing.
+- `image_cache_mb`: memory for decoded image frames — one pool shared with pinned windows, so a hover sweep does not evict the frame a pin is drawn from. Default `128`, max `2048`; `0` holds nothing.
 - `document_cache_mb`: disk cache for rendered document pages. Default `256`, max `2048`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
 - `image_disk_cache_mb`: disk cache for the pictures ImageMagick developed. Default `512`, max `2048`; `0` keeps nothing between hovers but still develops the current one. Pictures live under `%TEMP%\rust-hover-preview\image`; the least recently read one is removed first, and they survive a restart.
 - `general_disk_cache_mb`: disk cache for the subtitle tracks a film's embedded ones are copied into. Default `128`, max `2048`; `0` extracts nothing, and a film whose subtitles are embedded is drawn without them. Files live under `%TEMP%\rust-hover-preview\general`, least recently used first.
@@ -639,9 +642,9 @@ spinner_delay_ms=250
 
 ### Performance
 
-- `video_hw_accel`: whether a video FFmpeg's player has is decoded on the graphics card rather than on a core — the tray's **Performance → Hardware Acceleration → Video**.
+- `video_hw_accel`: whether a film mpv plays is decoded on the graphics card — the tray's **Performance → Hardware Acceleration (MPV Only)**.
   - Default `true`.
-  - It is a setting about this build's FFmpeg rather than about a kind of file: a file the media engine plays is decoded by Windows either way, and a machine with no device FFmpeg can decode on is the one the setting is for, where FFmpeg falls back by itself.
+  - It is mpv's switch alone: what it reaches is mpv's own `--hwdec=auto`, and FFmpeg's player is given no decode device at all. A machine with no `mpv.exe` reads it as off, whatever the file says.
 
 ### HDR
 
@@ -669,6 +672,7 @@ spinner_delay_ms=250
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
 - `trigger_key_affect_pin_mode`: whether the trigger key reaches a pinned preview. Default `false` — the key is not read while a preview is pinned, up or collapsed into its bubble, since a pin is a window you put there rather than a hover for the key to hold back. `true` lets holding the key bring the pin down with the previews it stops. It speaks for `disable`; the `enable` mode is left as it is.
 - `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. See **Pin Mode** above for what a pin does.
+- `pin_double_click_center` / `pin_double_click_reset_size`: what a double-click on a pinned window does. Both default `true`: the window is put back to the size its kind's scaling setting asks for, and in the middle of the screen it stands on. Off, either half is left out — with the size reset off, a hand's own size stands and the double-click is the move alone.
 - `pin_update_enabled`: whether a pin that is up is shown the file picked next, by click or by keyboard, without moving the window. Default `true`.
   - Off, the pin keeps the file it was taken up on until it is closed — a pin is also a window to read in, and one that swapped its file out from under the hand on every keystroke would be unreadable.
   - The keyboard half follows Explorer, so it is inert while a pinned window holds the keyboard — click back into the listing and it resumes.

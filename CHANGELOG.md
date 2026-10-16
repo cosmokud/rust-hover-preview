@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.4] - 2026-10-17
+
+### Added
+
+- **A collapsed film's bubble keeps showing the film.** The picture is a second decode of the file, read beside whichever player is playing it — mpv included — and cropped to the circle, so a pin put away is the film rather than the still grabbed when it went down; a pause holds the frame the film stopped on, and the ring takes that frame's colour.
+- **A bubble's bars are read from this app's own sound** — seven bands, thirty times a second, off a process-loopback capture of this app and its players — so a film's bars move with its soundtrack and another window's audio cannot move them. A machine without process loopback keeps the peak-shaped row.
+- **`pin_double_click_center` and `pin_double_click_reset_size`**, both on by default: a double-click on a pinned window puts it back to the size its kind's scaling setting asks for, and in the middle of the screen it stands on. Off, the reset is left out and the move stands alone.
+- **A raw `.aac` states its own length** — counted from the stream's ADTS frames rather than read off the bit rate, so the card's bar and clock match the sound. A stream cut off inside its last frame, one followed by an ID3v1 tag, and headers naming any object type are all counted.
+
+### Changed
+
+- **Hardware acceleration is mpv's switch alone** — `Performance → Hardware Acceleration (MPV Only)`: FFmpeg's player is given no decode device, and the probe that chose one is gone, every device it walked having died in the graphics driver on a real machine. A machine with no `mpv.exe` shows the row greyed and unchecked, and a `config.ini` that says on is read as the off it means there.
+- **A pinned window keeps the pixels it already has when its box shrinks** — a picture, a PDF page, a page Office or the render engine drew, and a comic plate are no longer decoded again for a smaller box; the larger frame is stretched instead, so enlarging back (the double-click above, above all) is sharp at once. A page of text, a listing and a sound's card are still laid out again at the box they are given.
+- **`Image (RAM)` holds `128 MB`** rather than `64`, which is a full-screen frame and the three after it, so a hover sweep no longer evicts the frame a pinned window is decoded at.
+- **A walk landing behind a collapsed pin begins its player off the desktop** rather than leaving a window where the pin's band was.
+- **Version bumped** — `0.4.4` in `Cargo.toml` and `Cargo.lock`.
+
+### Fixed
+
+- **A step of a pin's walk that cannot be shown no longer takes the bubble down** — what a bubble shows is a picture this app holds, so a film whose player has gone leaves the circle standing on that picture rather than coming apart.
+- **A held click is given up when the pin's own window moves** — a double-click that centers a pin no longer answers the press against the point the move uncovered.
+- **The caption's walk chevrons, the transport bar's marks, the close cross and the collapsed pin's bubble are drawn with coverage**, not in whole columns, so an edge is a curve rather than a staircase at a scaled display.
+
 ## [0.4.3] - 2026-10-16
 
 ### Added
