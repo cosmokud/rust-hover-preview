@@ -199,12 +199,25 @@ fn a_failed_file_with_nowhere_to_step_to_is_left_standing_as_the_mark() {
              rather than all of it, and a flat panel says nothing at all about the file that \
              failed"
     );
+    // The mark's edge is the ink and the panel mixed, so every pixel of it is one of the two or a
+    // share of both: nothing of the tray's backdrop, and nothing else the theme has, is in the
+    // mark — which is the whole of what makes it a frame rather than a picture of a cross (see
+    // `draw_cross`).
+    let between = |pixel: &[u8]| {
+        (0..3).all(|channel| {
+            let (low, high) = (
+                panel[channel].min(ink[channel]),
+                panel[channel].max(ink[channel]),
+            );
+            (low..=high).contains(&pixel[channel])
+        })
+    };
     assert!(
         pixels
             .chunks(4)
-            .all(|pixel| *pixel == panel || *pixel == ink),
-        "and the two of them are the only colours in it, so the cross has an edge rather \
-             than a blend into whatever was behind it"
+            .all(|pixel| *pixel == panel || *pixel == ink || between(pixel)),
+        "and the two of them, and what the two mix to where the cross ends, are the only colours \
+         in it"
     );
     // Two strokes crossing, which is the whole of what the mark is. A row through the middle
     // carries both strokes and so does a row well above and below it: a bar or a ring would
