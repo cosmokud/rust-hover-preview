@@ -31,8 +31,8 @@ mod primitives;
 mod transport;
 
 pub(crate) use bubble::{
-    paint_bubble, paint_failure_mark, paint_tooltip, tooltip_layout, BubbleArt, BubbleMark,
-    TooltipText,
+    paint_bubble, paint_failure_mark, paint_tooltip, peak_bars, tooltip_layout, BubbleArt,
+    BubbleMark, TooltipText, BUBBLE_BARS,
 };
 pub(crate) use caption::{
     button_at, button_boxes, measure_caption_text, paint_caption, Caption, CaptionButton,

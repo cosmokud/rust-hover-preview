@@ -165,9 +165,9 @@ pub fn run_preview_window() {
         // How often a collapsed pin's bubble is painted while its bars move.
         //
         // It is the one window of this app's that is redrawn for no reason but that it is *moving*:
-        // a sound's histogram is a shape made of the level on screen now, and the level of a sound
-        // that is playing changes every few milliseconds — so the bubble is painted a little under
-        // thirty times a second, which a hand reads as motion and which is the same order the
+        // a sound's histogram is a shape made of the bands of the sound now, and the bands of a
+        // sound that is playing change every few milliseconds — so the bubble is painted a little
+        // under thirty times a second, which a hand reads as motion and which is the same order the
         // transport bar's own playhead is painted at (`PIN_TRANSPORT_REPAINT_MS`). Nothing else
         // about a bubble moves, so nothing else is on this clock (see the bubble repaint below).
         const BUBBLE_REPAINT: Duration = Duration::from_millis(33);
