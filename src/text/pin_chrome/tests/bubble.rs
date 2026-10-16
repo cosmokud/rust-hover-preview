@@ -613,7 +613,10 @@ fn the_hole_a_films_window_stands_in_is_still_the_windows_own_to_the_mouse() {
     // film's own average, so that a hole is ringed in the colour a painted frame is ringed in and
     // the ring does not change colour when the film pauses and the still takes over (see
     // `render_pin_bubble`).
-    assert_eq!(pixel(&hole, SIDE - 3, SIDE / 2), [ring[2], ring[1], ring[0], 255]);
+    assert_eq!(
+        pixel(&hole, SIDE - 3, SIDE / 2),
+        [ring[2], ring[1], ring[0], 255]
+    );
 
     // And with no colour to give it is the theme's accent, exactly as the ring of a picture that
     // is transparent everywhere is.
