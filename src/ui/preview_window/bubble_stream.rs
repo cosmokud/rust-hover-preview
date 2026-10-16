@@ -127,7 +127,12 @@ pub(super) fn settle(playing: bool, box_: Option<ScreenRegion>) {
             if alive(&mut running) {
                 return hold(Stream::Running(running));
             }
-            return refuse(running.key);
+            // The child this key was begun for has gone: nothing is running, and this film at this
+            // point of this player's run is not asked for again (see the module documentation). The
+            // frames it had landed go with it, so that the bubble paints its still.
+            let key = running.key.clone();
+            end(running);
+            return refuse(key);
         }
         (Some(Stream::Refused(key)), Some(wanted)) if key == wanted.key => {
             return hold(Stream::Refused(key));

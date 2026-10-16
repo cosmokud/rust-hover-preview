@@ -156,6 +156,10 @@ pub(super) fn keep_the_film_in_the_bubble(box_: ScreenRegion) -> bool {
     // Nothing is seated, and whether a film belongs here is the seat's own question — asked again
     // rather than remembered, because what changes under a bubble is the *film*.
     if !seat_film_window(box_) {
+        // Nothing to seat this time, and the bubble may be holding a hole painted for a window that
+        // is no longer there: the still is what it falls back to, and it is drawn now rather than
+        // whenever the bars next move (see `seated_film` and `bubble_art`).
+        repaint_the_bubble();
         return false;
     }
 
