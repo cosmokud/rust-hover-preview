@@ -154,9 +154,10 @@ impl PinResize {
     }
 }
 
-/// A command the chrome has asked for: a button that was clicked, a window that was dragged or
-/// resized, or a collapse. The window procedure cannot do any of it — the media, the player and
-/// the browser are the preview loop's — so it is written here and drained by the loop.
+/// A command the chrome has asked for: a button that was clicked, a window that was dragged,
+/// resized or double-clicked, or a collapse. The window procedure cannot do any of it — the media,
+/// the player and the browser are the preview loop's — so it is written here and drained by the
+/// loop.
 ///
 /// Public because a key asks for the same two as a click does, and a key that walks a pin
 /// arrives in the window procedure rather than being read on the hook thread (see
@@ -179,6 +180,12 @@ pub(crate) enum PinCommand {
     /// minimize would take it (see `collapse_pin_to`).
     MinimizeTo(PinMinimizeTo),
     Maximize,
+    /// Put the window back to the size the scaling settings ask for the kind it is showing, in the
+    /// middle of the screen it stands on: what the second press of a double-click asks for where
+    /// the configuration has the size reset on. It is a box rather than a place — a media has to be
+    /// laid out at its size rather than carried to it — so it goes through the loop like a maximize
+    /// does (see `reset_pinned_size`).
+    ResetSize,
     Close,
     /// The bubble a collapsed pin left was clicked: the window goes back up.
     Restore,
@@ -256,6 +263,16 @@ pub(super) fn pin_double_click_center() -> bool {
         .lock()
         .map(|config| config.pin_double_click_center)
         .unwrap_or(DEFAULT_PIN_DOUBLE_CLICK_CENTER)
+}
+
+/// Whether a double-click on a pinned window puts it back to the size the scaling settings ask for
+/// the kind it is showing, as the configuration has it — the other half of what the pair asks for,
+/// read beside the first and at the same moment (see `pin_double_click_center`).
+pub(super) fn pin_double_click_reset_size() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_double_click_reset_size)
+        .unwrap_or(DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE)
 }
 
 /// Where a pin the minimize button puts away goes — the round bubble on the desktop, or the app's

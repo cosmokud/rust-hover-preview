@@ -1092,6 +1092,10 @@ fn two_presses_are_one_double_click_only_inside_the_machines_own_measures() {
 /// stands on rather than taking hold of it: the place is written down and no drag is begun — a
 /// window moved out from under a press that is still holding the pointer is a window the next
 /// pointer move carries back to where the first press began (see `press_carries_the_pin`).
+///
+/// The size reset is stood off here, so that what this asks is the move alone and the size a hand
+/// gave the window is left exactly as it was: the pair that asks for a size back as well is the
+/// test below (see `DoubleClickSettings`).
 #[test]
 fn a_paired_press_on_a_pinned_window_puts_it_in_the_middle_of_its_screen() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1099,6 +1103,7 @@ fn a_paired_press_on_a_pinned_window_puts_it_in_the_middle_of_its_screen() {
         .unwrap_or_else(|e| e.into_inner());
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let _settings = DoubleClickSettings::stood_at(true, false);
 
     // A picture in the corner of the screen it is on, and a media slot a press on a picture is the
     // window's own in: a page of text under the point would have the press instead (see
@@ -1143,6 +1148,64 @@ fn a_paired_press_on_a_pinned_window_puts_it_in_the_middle_of_its_screen() {
         (moved.2 - moved.0, moved.3 - moved.1),
         (content.2 - content.0, content.3 - content.1),
         "and it is a move and nothing else — the size is the one the window had"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}
+
+/// And where the configuration has the size reset on as well, the pair asks the loop for the size
+/// rather than writing one itself: a size is what a media is laid out at rather than a place it is
+/// carried to, so what a press leaves behind is the request and the box it stands in — the box the
+/// loop will lay the file out at is the loop's to write (see `reset_pinned_size`).
+#[test]
+fn a_paired_press_asks_for_the_size_back_rather_than_writing_one() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let _settings = DoubleClickSettings::stood_at(true, true);
+
+    // The same picture in the corner of the screen it is on, and a point well inside it.
+    let room = work_area_at(0, 0);
+    let content = (room.left, room.top, room.left + 400, room.top + 300);
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        let mut media = create_loading_media(400, 300);
+        media.media_type = MediaType::StaticImage;
+        *current = Some(media);
+    }
+
+    let (x, y) = (100, pinned_caption_height(96, None) + 100);
+    let hwnd = HWND(0x1000 as *mut _);
+    let content_now = || pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.content));
+
+    assert!(
+        unsafe { pinned_press(hwnd, x, y) },
+        "a press on the picture is the window's to act on"
+    );
+    assert!(
+        take_pin_command().is_none(),
+        "the first press of a pair asks the loop for nothing"
+    );
+
+    assert!(
+        unsafe { pinned_press(hwnd, x, y) },
+        "and the second press of the pair is the window's to act on as well"
+    );
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::ResetSize),
+        "a pair with the size reset on did not ask the loop for the window's size back"
+    );
+    assert_eq!(
+        content_now(),
+        Some(content),
+        "and the press wrote a box of its own: what a pair asks for is a size, and a size is a \
+         thing the loop lays the file out at"
     );
 
     stand_pin(previous_pin);

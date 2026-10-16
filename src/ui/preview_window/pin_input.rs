@@ -803,14 +803,23 @@ pub(super) fn within_double_click(
 
 /// What a press that would carry the window does: the drag the hand asked for — or, where the
 /// press is the second of a double-click and the configuration asks for it, the window put in the
-/// middle of the screen it stands on, with no drag begun and nothing carried (see
-/// `centre_pinned_window`).
+/// middle of the screen it stands on, with no drag begun and nothing carried. A pair asks the loop
+/// for the window's size back first wherever the configuration has that too, and is the move alone
+/// where it has not (see `reset_pinned_size` and `centre_pinned_window`).
 ///
 /// Nothing is taken hold of for a pair: the first press of the two was a drag the hand let go of
 /// where it began, and a window moved out from under a press still holding the pointer would have
 /// the next pointer move carry it back to where the first one started.
 unsafe fn press_carries_the_pin(hwnd: HWND, double_click: bool) {
     if double_click && pin_double_click_center() {
+        // A size is what a media is laid out at rather than a place it is carried to, so the reset
+        // is asked for on the loop's own road — the one the maximize button asks its box on, where
+        // the file is measured off the pin's lock and the box is decided (see `reset_pinned_size`).
+        if pin_double_click_reset_size() {
+            ask_pin(PinCommand::ResetSize);
+            return;
+        }
+
         centre_pinned_window(hwnd);
         return;
     }

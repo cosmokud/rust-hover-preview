@@ -28,7 +28,8 @@ use super::setting_types::{
     DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
     DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
-    DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_DOUBLE_CLICK_CENTER,
+    DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
+    DEFAULT_PIN_DOUBLE_CLICK_CENTER, DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE,
     DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_TEXT_SCALE, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND,
@@ -77,6 +78,13 @@ pub struct AppConfig {
     /// left where it is — and a window fitted to the screen is already there, a fit being the
     /// whole of the work area's height.
     pub pin_double_click_center: bool,
+    /// Whether a double-click on a pin also puts the window back to the size the scaling settings
+    /// ask for the kind it is showing, rather than keeping the size a hand dragged it to: the size
+    /// a fresh take-up of the same file would have been given, at the share its kind's own setting
+    /// names, so that a window pulled small comes back to the size a preview of that file is
+    /// shown at — and one pulled wider than that comes back down to it. Off, a double-click is the
+    /// move alone, which is what the switch beside this one is (see `pin_double_click_center`).
+    pub pin_double_click_reset_size: bool,
     /// Whether a pin collapsed into its bubble holds the video it is playing where it is:
     /// on, a film is paused the moment the window becomes a bubble and started again at the
     /// second it was stopped at when the pin comes back up, and off, it plays on behind the
@@ -656,6 +664,7 @@ impl Default for AppConfig {
             pin_key: "space".to_string(),
             pin_minimize_to: DEFAULT_PIN_MINIMIZE_TO,
             pin_double_click_center: DEFAULT_PIN_DOUBLE_CLICK_CENTER,
+            pin_double_click_reset_size: DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE,
             pin_pause_video: DEFAULT_PIN_PAUSE_VIDEO,
             pin_pause_audio: DEFAULT_PIN_PAUSE_AUDIO,
             pin_update_enabled: DEFAULT_PIN_UPDATE_ENABLED,

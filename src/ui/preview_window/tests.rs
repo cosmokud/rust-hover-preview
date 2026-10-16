@@ -233,6 +233,66 @@ impl Drop for PausePreviewSettings {
     }
 }
 
+/// The two switches a double-click on a pinned window answers to, stood where a test asks and put
+/// back when the guard is dropped — the house pattern (see `PausePreviewSettings`).
+///
+/// The two are stood together because the second is only read where the first is on: a test of what
+/// a pair does to a window's *size* is a test that has already said the pair is a centring request
+/// at all.
+struct DoubleClickSettings {
+    center: bool,
+    reset: bool,
+}
+
+impl DoubleClickSettings {
+    fn stood_at(center: bool, reset: bool) -> Self {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = DoubleClickSettings {
+            center: config.pin_double_click_center,
+            reset: config.pin_double_click_reset_size,
+        };
+        config.pin_double_click_center = center;
+        config.pin_double_click_reset_size = reset;
+
+        was
+    }
+}
+
+impl Drop for DoubleClickSettings {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.pin_double_click_center = self.center;
+            config.pin_double_click_reset_size = self.reset;
+        }
+    }
+}
+
+/// What a picture is drawn at, stood where a test asks and put back when the guard is dropped —
+/// the way the two double-click switches are (`DoubleClickSettings`).
+///
+/// A share is the one thing the size a test asks for is read against rather than stated as: a test
+/// that left its own share behind would be measuring every test after it.
+struct PictureScale {
+    was: PreviewScale,
+}
+
+impl PictureScale {
+    fn stood_at(scale: PreviewScale) -> Self {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = std::mem::replace(&mut config.preview_scale, scale);
+
+        Self { was }
+    }
+}
+
+impl Drop for PictureScale {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.preview_scale = self.was;
+        }
+    }
+}
+
 /// A pin of the kind the chrome's own questions are about: a picture, whose window is its
 /// media and whose chrome is drawn over it.
 fn overlay_pin(content: ScreenRegion, chrome: PinChrome) -> PinnedPreview {

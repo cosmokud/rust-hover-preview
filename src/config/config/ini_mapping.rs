@@ -90,6 +90,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "pin_double_click_reset_size",
+            Some(self.pin_double_click_reset_size.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "pin_pause_video",
             Some(self.pin_pause_video.to_string()),
         );
@@ -593,6 +598,11 @@ impl AppConfig {
         // Whether a double-click on a pin puts its window in the middle of the screen it is on.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_double_click_center") {
             self.pin_double_click_center = value;
+        }
+        // And whether it puts the window back to the size its kind's scaling setting asks for as
+        // well, rather than keeping the size a hand gave it.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_double_click_reset_size") {
+            self.pin_double_click_reset_size = value;
         }
         // Whether a pin collapsed into its bubble holds what is playing where it is, asked of
         // a video and a sound apart — the two switches of the kind's own `Pause on Minimize`.
