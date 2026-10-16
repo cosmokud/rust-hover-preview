@@ -386,8 +386,8 @@ mod tests {
         clear_noted();
     }
 
-    /// Every command the pin sends is a JSON command line with the one property or the one seek
-    /// the manual names, and each says it wants no reply.
+    /// One command of every kind is a JSON command line with the one property, the one seek or the
+    /// one flag the manual names, and each says it wants no reply.
     #[test]
     fn each_command_is_the_line_mpv_is_told_with() {
         let _one = PIN_TESTS_ONE_AT_A_TIME

@@ -216,6 +216,37 @@ fn next_noted_pid() -> u32 {
     NEXT.fetch_sub(2, Ordering::Relaxed)
 }
 
+/// The place a player's window is begun at: the box the caller asked for, or — while the pin is a
+/// bubble — the same box moved off the desktop altogether.
+///
+/// **A player puts its window up the moment it has one, and that is not a window anybody wants
+/// behind a bubble.** The picture a bubble shows is painted by this app out of frames read beside
+/// the player (see `bubble_stream`), so the player's own window is wanted nowhere on the screen
+/// until the pin is put back up — and a window that appears where the pin's band was is a black
+/// rectangle over the desktop, because a window that has just been shown has drawn nothing yet.
+/// Hiding it once it exists is a frame too late, which is what the monitor thread's hide is and
+/// what the eye catches (see `apply_noactivate_to_hwnd`).
+///
+/// So a player begun while the pin is collapsed is begun *off* the desktop instead of being hidden
+/// afterwards: `SM_XVIRTUALSCREEN` is the leftmost edge the desktop has, so a window of this width
+/// entirely beyond it is over no display at all. The *size* is deliberately kept and only the
+/// place moved — a player renders at the size it was begun at, so a window begun at nothing would
+/// come back up as a film scaled to nothing — and the restore places it at the band in its own
+/// tick rather than a tick later (see `restore_pin`, which places its siblings as it puts the
+/// window up).
+///
+/// What this is not is a rule about hovers: a hover has no pin to be a bubble of, so its player is
+/// begun at the box its preview was laid out at, where it is the picture and is wanted.
+pub(super) fn bubble_players_box(x: i32, y: i32, width: i32) -> (i32, i32) {
+    if !(pinned() && pin_is_collapsed()) {
+        return (x, y);
+    }
+
+    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let right_of_the_desktop = left - width.max(1) - 1;
+    (right_of_the_desktop, y)
+}
+
 /// Start ffplay for video preview, at the level `volume` names and with the film's own measured
 /// loudness folded into it where `Normalize` is on for videos (see `normalizing_video`).
 ///
@@ -243,6 +274,10 @@ pub(super) fn start_video_playback(
     // what a player is told is this function's whole business: the two routes' command lines have
     // nothing in common but the file (see `video_route`).
     let route = video_route(path);
+
+    // **And where its window goes is asked before either route is, because it is the same question
+    // for both** (see `bubble_players_box`).
+    let (x, y) = bubble_players_box(x, y, width);
 
     // The soundtrack's own measured gain, where `Normalize` is on for videos and one has been
     // measured. It is read here rather than below because both routes want it, and on the same
@@ -1026,9 +1061,14 @@ pub(super) unsafe fn place_player_window(
 /// that is not being drawn is not carried over a strip the pin is showing by being put back
 /// (see `put_a_player_that_is_not_on_screen_back`).
 pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
-    // A collapsed pin has no band on screen, so nothing is placed — not even the hidden window a
-    // hold-off would otherwise put back: that place is a chrome-less film over Explorer beside
-    // the bubble (see `hide_pinned_windows`).
+    // A collapsed pin has no band on screen, so nothing of the *pin's* is placed — not even the
+    // hidden window a hold-off would otherwise put back: that place is a chrome-less film over
+    // Explorer beside the bubble (see `hide_pinned_windows`).
+    //
+    // **And a collapsed pin places no window of anybody else's at all.** What a bubble shows of a
+    // film is a picture it paints itself out of the frames read beside the player (see
+    // `bubble_stream`), so there is nothing of the player's to carry into the circle and nothing to
+    // put back where something has moved it.
     if pin_is_collapsed() {
         return false;
     }

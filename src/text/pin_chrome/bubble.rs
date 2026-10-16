@@ -307,11 +307,19 @@ pub(crate) const BUBBLE_BARS: usize = 7;
 /// film already decoded is that frame's own bytes, and a bubble that copied them would be a second
 /// copy of a picture this app is holding at the very moment the pin collapses (see `bubble_art`).
 pub(crate) enum BubbleArt<'a> {
-    /// A picture already cropped to `side × side` BGRA (an image, or a video frame).
+    /// A picture already cropped to `side × side` BGRA (an image, or a video frame), and the colour
+    /// the ring is drawn in where the caller has one to give.
+    ///
+    /// `ring` is asked of the caller because the ring's colour and the picture are not always the
+    /// same frame: a window of live video frames is painted with the colour of the still it was
+    /// taken from, so that a ring over a moving picture is one colour rather than the average of
+    /// every frame that passes (see `render_pin_bubble`). Where it is not given, the picture's own
+    /// average is the ring, which is what a still's own frame is.
     Picture {
         pixels: &'a [u8],
         width: u32,
         height: u32,
+        ring: Option<[u8; 3]>,
     },
     /// No art: the face alone, with the mark on it.
     None,
@@ -350,11 +358,16 @@ pub(crate) fn paint_bubble(
     // picture that is transparent everywhere has no colour to give, and the accent stands (see
     // `average_color`).
     let ring = match &art {
+        BubbleArt::Picture {
+            ring: Some(ring), ..
+        } => *ring,
         BubbleArt::Picture { pixels, .. } => average_color(pixels).unwrap_or(palette.accent),
         _ => palette.accent,
     };
 
     buffer.fill(0);
+
+    let inner = radius - ring_thickness;
 
     // The shadow: the ring's own coverage, held a couple of pixels lower and spread a little,
     // at a fraction of an opaque black. It is what makes a flat circle read as a thing lying
@@ -363,8 +376,8 @@ pub(crate) fn paint_bubble(
     let shadow_spread = (1.5 * scale).max(1.0);
     for y in 0..height {
         for x in 0..width {
-            let dx = x as f32 + 0.5 - center.0;
-            let dy = y as f32 + 0.5 - (center.1 + shadow_offset);
+            let (dx, dy) = (x as f32 + 0.5 - center.0, y as f32 + 0.5 - center.1);
+            let dy = dy - shadow_offset;
             let distance = (dx * dx + dy * dy).sqrt();
             let coverage =
                 ((radius + shadow_spread - distance) / shadow_spread).clamp(0.0, 1.0) * 0.35;
@@ -373,8 +386,6 @@ pub(crate) fn paint_bubble(
             }
         }
     }
-
-    let inner = radius - ring_thickness;
 
     for y in 0..height {
         for x in 0..width {
@@ -401,6 +412,7 @@ pub(crate) fn paint_bubble(
                     pixels,
                     width: picture_width,
                     height: picture_height,
+                    ..
                 } if face_coverage > 0.0 => {
                     let u = ((x as f32 + 0.5 - center.0) / (inner * 2.0) + 0.5).clamp(0.0, 0.999);
                     let v = ((y as f32 + 0.5 - center.1) / (inner * 2.0) + 0.5).clamp(0.0, 0.999);
@@ -409,14 +421,14 @@ pub(crate) fn paint_bubble(
                 _ => None,
             };
 
-            // What the pixel is made of: the face where the bubble carries no picture, the
-            // picture where it carries one, and the ring in the share of the pixel the face does
-            // not cover. The three are mixed into one colour before it is written rather than
-            // drawn over one another: two partial coverages written one after the other are a
-            // pixel that covers less than their sum, and the desktop shows through the seam
-            // between a ring and the face inside it.
-            let inside = sample.map_or(palette.background, |sample| {
-                [sample[0], sample[1], sample[2]]
+            // What the pixel is made of: the face where the bubble carries no picture, the picture
+            // where it carries one, and the ring in the share of the pixel the face does not cover.
+            // The three are mixed into one colour before it is written rather than drawn over one
+            // another: two partial coverages written one after the other are a pixel that covers
+            // less than their sum, and the desktop shows through the seam between a ring and the
+            // face inside it.
+            let (inside, face_alpha) = sample.map_or((palette.background, 1.0), |sample| {
+                ([sample[0], sample[1], sample[2]], sample[3] as f32 / 255.0)
             });
             let share = face_coverage / coverage;
             let colour = if share >= 1.0 {
@@ -425,14 +437,12 @@ pub(crate) fn paint_bubble(
                 text_paint::blend(ring, inside, share)
             };
 
-            put(
-                buffer,
-                width,
-                x,
-                y,
-                colour,
-                coverage * sample.map_or(1.0, |sample| sample[3] as f32 / 255.0),
-            );
+            // The share of the pixel that is the *ring* is written opaque and the face inside it
+            // at the picture's own alpha, which is what keeps the bubble's edge a thing on the
+            // desktop while a frame with transparency in it stays transparent.
+            let alpha = coverage * face_alpha;
+
+            put(buffer, width, x, y, colour, alpha);
         }
     }
 
@@ -457,13 +467,13 @@ pub(crate) fn paint_bubble(
     // it is showing — which is the play/pause of the file on screen, and is the one thing about a
     // bubble that changes while nothing else does.
     if matches!(&art, BubbleArt::None) || mark.is_playback() {
-        if matches!(&art, BubbleArt::Picture { .. }) {
-            // A glyph over a photograph is a glyph over anything a photograph can be, and half of
+        if !matches!(&art, BubbleArt::None) {
+            // A glyph over a picture is a glyph over anything a picture can be, and half of
             // what a photograph can be is as bright as the glyph. So a faint dark disc goes down
             // first, which does not hide the frame — it is a third of an opaque black, at half
-            // the face — and does make the triangle read on a white sky. The audio face needs
-            // none of it: it is the theme's own background, and the theme is what the glyph was
-            // chosen against.
+            // the face — and does make the triangle read on a white sky. The audio face needs none
+            // of it: it is the theme's own background, and the theme is what the glyph was chosen
+            // against.
             fill_disc(
                 buffer,
                 width,
@@ -563,7 +573,7 @@ fn sample_picture(pixels: &[u8], width: u32, height: u32, u: f32, v: f32) -> Opt
 /// than counted as black, so the average of a frame with a hole in it is the average of what is
 /// drawn. A picture that is transparent everywhere has no colour to give, and answers nothing —
 /// which the caller reads as *no colour from here* and answers with the theme's accent.
-pub(super) fn average_color(pixels: &[u8]) -> Option<[u8; 3]> {
+pub(crate) fn average_color(pixels: &[u8]) -> Option<[u8; 3]> {
     let count = pixels.len() / 4;
     if count == 0 {
         return None;

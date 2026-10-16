@@ -1122,6 +1122,131 @@ fn is_click_through(hwnd: HWND) -> bool {
     unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT.0 as isize != 0 }
 }
 
+/// A film begun *while the pin is a bubble* comes off the screen, which is the half of a collapse
+/// that `hide_pinned_windows` cannot do: that call hides the window the collapse found, and a player
+/// begun afterwards — a walk's next file, an end-of-file step — puts up a window of its own that
+/// nothing else hides.
+///
+/// **The road is the monitor's, because it is the one that finds a window a player showed itself.**
+/// Neither player takes a switch that means "come up off the screen", so the film a walk lands on
+/// behind a bubble stands chrome-less at the box the pin's own band had, with the bubble beside it
+/// painting the same film out of frames read from the file. What a *windowed* pin is owed is the
+/// opposite — the same pass leaves it on the screen it is shown in, and that is asserted here too,
+/// because the hide is a fact about the bubble and not about a player's window.
+#[test]
+fn a_collapsed_pin_takes_a_players_window_off_the_screen() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DestroyWindow, ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE,
+    };
+
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_hwnd = VIDEO_HWND.swap(0, Ordering::SeqCst);
+    let previous_pid = VIDEO_PID.swap(0, Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let player = unsafe { stand_a_player_window(content) };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+
+    // The pin as a collapse leaves it, over a film a player has just put its window up for.
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    note_player_process(0, MPV_IMAGE_NAME);
+    unsafe {
+        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
+    }
+    assert!(
+        unsafe { IsWindowVisible(player).as_bool() },
+        "the window is up, as a player leaves it: a film put up beside a bubble is the defect"
+    );
+
+    unsafe { apply_noactivate_to_hwnd(player) };
+    assert!(
+        !unsafe { IsWindowVisible(player).as_bool() },
+        "and the monitor's pass takes it off the screen: the picture a bubble shows is the frames \
+         read beside the player, and a chrome-less film beside it is a second picture of one film"
+    );
+
+    // And the pin put back up: the same pass places the film in the band it is shown in rather than
+    // hiding it, so what was asserted above is the bubble's rule and not the monitor's.
+    let mut up = take_pin_for_a_test().expect("the pin is up");
+    up.collapsed = false;
+    stand_pin(Some(up));
+    unsafe {
+        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
+    }
+    unsafe { apply_noactivate_to_hwnd(player) };
+    assert!(
+        unsafe { IsWindowVisible(player).as_bool() },
+        "a windowed pin's film is the picture and is left on the screen under it"
+    );
+
+    unsafe {
+        let _ = ShowWindow(player, SW_HIDE);
+        DestroyWindow(player).expect("the stand-in window let go of");
+    }
+    VIDEO_HWND.store(previous_hwnd, Ordering::SeqCst);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    note_player_process(previous_pid, previous_image);
+    stand_pin(previous_pin);
+}
+
+/// A player begun behind a bubble is begun off the desktop, which is what keeps its window from
+/// being seen at all: the monitor's hide is a pass of a thread later, and a window that has just
+/// been shown is a black rectangle over the desktop in the meantime (see `bubble_players_box`).
+///
+/// What the box is *not* is a different size: a player renders at the size it was begun at, so the
+/// width the band has is kept and only the place moves — and a box asked for with no bubble up, or
+/// with a pin that is not a bubble, is the box it always was.
+#[test]
+fn a_player_begun_behind_a_bubble_is_begun_off_the_desktop() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let content = (100, 80, 420, 320);
+    let width = content.2 - content.0;
+
+    // No pin at all: a hover's player, at the box the preview was laid out at.
+    stand_pin(None);
+    assert_eq!(
+        bubble_players_box(content.0, content.1, width),
+        (content.0, content.1),
+        "a hover's player is the picture and is begun where the preview was laid out"
+    );
+
+    // A pin whose window is up: the film's window stands in the band, which is where it goes.
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    assert_eq!(
+        bubble_players_box(content.0, content.1, width),
+        (content.0, content.1),
+        "a windowed pin's player is begun in the band it is watched in"
+    );
+
+    // And a collapsed pin: the same box, moved clear of every display the desktop has.
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+
+    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let (x, y) = bubble_players_box(content.0, content.1, width);
+    assert_eq!(y, content.1, "only the place across the desktop moves");
+    assert!(
+        x + width < left,
+        "a window of the band's own width wholly beyond the desktop's left edge ({x} + {width} \
+         against {left}) is over no display at all, so a player that shows its window the moment it \
+         has one shows nothing"
+    );
+
+    stand_pin(previous_pin);
+}
+
 /// A press on the film of a pin whose player is mpv is a move of the pin, from the pin's own box.
 ///
 /// This is the far end of the band such a pin now wins the point of: what a press that arrives
