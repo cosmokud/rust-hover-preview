@@ -389,3 +389,26 @@ fn the_wheel_is_handed_the_box_of_a_pinned_picture_and_of_nothing_else() {
     stand_pin(None);
     assert_eq!(pin_zoom_keep_alive_try(), None, "and no pin is no box");
 }
+
+#[test]
+fn a_wheel_that_asks_for_more_notches_than_any_hand_can_turn_is_answered_with_a_size_that_holds() {
+    // The hook accumulates whatever a device reports, and a single wheel message can carry a delta of
+    // tens of thousands of notches: a step of that many would be a drawn size no `f32` holds, and the
+    // box the picture is then placed in is a rectangle of whole pixels. So the one thing "no hard
+    // limit" still owes is a number the placement can add to, and it is asked here at both ends —
+    // the ceiling and the floor are the only two counts this function is not free on.
+    let window = (0, 0, 1000, 800);
+    let huge = zoomed(window, PinZoom::filling(window), i32::MAX, Some((500, 400)));
+    assert_eq!(huge.zoom.drawn.0, PIN_ZOOM_CEILING);
+    assert!(
+        huge.zoom.picture_box((1000, 800)).2 < i32::MAX,
+        "and the box it lands in is a rectangle with room either side of it"
+    );
+
+    let tiny = zoomed(window, PinZoom::filling(window), i32::MIN, None);
+    let (width, height) = region_size(tiny.content);
+    assert!(
+        width >= 10 && height >= 8,
+        "a notch out that no hand can turn stops at the floor rather than going past it: {width} by {height}"
+    );
+}
