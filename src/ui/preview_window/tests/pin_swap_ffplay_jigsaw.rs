@@ -114,7 +114,10 @@ fn log_switch(tag: &str, pid_a: u32, hold_out: bool) {
     for (name, pid) in [("A", pid_a), ("B", pid_b)] {
         for seen in visible_windows_for_pid(pid) {
             let (l, t, r, b) = seen.rect;
-            line.push_str(&format!(" {name}[hwnd={:#x} {l},{t},{r},{b}]", seen.hwnd));
+            line.push_str(&format!(
+                " {name}[hwnd={:#x} {l},{t},{r},{b}]",
+                seen.hwnd
+            ));
         }
         if pid != 0 && visible_windows_for_pid(pid).is_empty() {
             line.push_str(&format!(" {name}[no visible window]"));
@@ -138,9 +141,10 @@ fn shoot(tag: &str) {
         let mem = CreateCompatibleDC(screen);
         let bitmap = windows::Win32::Graphics::Gdi::CreateCompatibleBitmap(screen, width, height);
         let old = windows::Win32::Graphics::Gdi::SelectObject(mem, bitmap);
-        let blitted =
-            windows::Win32::Graphics::Gdi::BitBlt(mem, 0, 0, width, height, screen, x, y, SRCCOPY)
-                .is_ok();
+        let blitted = windows::Win32::Graphics::Gdi::BitBlt(
+            mem, 0, 0, width, height, screen, x, y, SRCCOPY,
+        )
+        .is_ok();
         windows::Win32::Graphics::Gdi::SelectObject(mem, old);
         let mut bits = vec![0u8; (width as usize) * (height as usize) * 4];
         let mut read = false;
@@ -278,7 +282,10 @@ fn a_portrait_to_landscape_pick_on_ffplay() {
     // in it: the player begun the way the take-up begins one, at the box the
     // layout put the film in, silent the way a test is.
     let (ax, ay, ar, ab) = PORTRAIT_BOX;
-    stand_pin(Some(overlay_pin((ax, ay, ar, ab), PinChrome::always())));
+    stand_pin(Some(overlay_pin(
+        (ax, ay, ar, ab),
+        PinChrome::always(),
+    )));
     let mut standing = create_loading_media(360, 480);
     standing.media_type = MediaType::Video;
     let process_a = start_video_playback(&portrait, ax, ay, ar - ax, ab - ay, 0.0, 0, None);

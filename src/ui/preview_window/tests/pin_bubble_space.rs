@@ -3,7 +3,11 @@ use super::*;
 /// A SPACE with a focused bubble holds a film or a sound, and nothing else.
 #[test]
 fn space_on_a_focused_bubble_holds_only_a_film_or_a_sound() {
-    for kind in [MediaType::Video, MediaType::NativeVideo, MediaType::Audio] {
+    for kind in [
+        MediaType::Video,
+        MediaType::NativeVideo,
+        MediaType::Audio,
+    ] {
         assert!(
             bubble_space_toggles(Some(kind)),
             "a {kind:?} bubble has playback for SPACE to hold"
@@ -56,7 +60,11 @@ fn only_a_click_on_an_already_focused_bubble_puts_the_window_back() {
 /// bubble.
 #[test]
 fn the_bubble_menu_holds_only_what_has_playback() {
-    for kind in [MediaType::Video, MediaType::NativeVideo, MediaType::Audio] {
+    for kind in [
+        MediaType::Video,
+        MediaType::NativeVideo,
+        MediaType::Audio,
+    ] {
         assert_eq!(
             bubble_menu_rows(Some(kind)),
             vec![
@@ -73,7 +81,11 @@ fn the_bubble_menu_holds_only_what_has_playback() {
         );
     }
 
-    for kind in [Some(MediaType::StaticImage), Some(MediaType::Text), None] {
+    for kind in [
+        Some(MediaType::StaticImage),
+        Some(MediaType::Text),
+        None,
+    ] {
         assert_eq!(
             bubble_menu_rows(kind),
             vec![

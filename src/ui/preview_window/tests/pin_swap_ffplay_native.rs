@@ -91,11 +91,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
     pdf_preview::initialize_apartment();
     wic_image::initialize_apartment();
 
-    eprintln!(
-        "repro: ffplay_available={} mf_started={}",
-        codecs::ffplay_available(),
-        codecs::mf_started()
-    );
+    eprintln!("repro: ffplay_available={} mf_started={}", codecs::ffplay_available(), codecs::mf_started());
 
     // Save the process-wide state this touches, so the next test walks
     // into what it walked into before.
@@ -139,12 +135,8 @@ fn ffplay_to_native_swap_delivers_a_frame() {
         video_player::plays(&uhd),
         named_for_the_media_engine(&uhd),
     );
-    if uhd_media
-        .as_ref()
-        .is_none_or(|m| m.media_type != MediaType::Video)
-        || hd_media
-            .as_ref()
-            .is_none_or(|m| m.media_type != MediaType::NativeVideo)
+    if uhd_media.as_ref().is_none_or(|m| m.media_type != MediaType::Video)
+        || hd_media.as_ref().is_none_or(|m| m.media_type != MediaType::NativeVideo)
     {
         failure = Some(format!(
             "fixtures do not split across the engines (4K={:?}, 1080p={:?}); \
@@ -177,10 +169,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
     if failure.is_none() {
         // Leg 1: pin shows 1080p natively, frames flowing.
         let mut live = load_for_swap(&hd);
-        if live
-            .as_ref()
-            .is_none_or(|m| m.media_type != MediaType::NativeVideo)
-        {
+        if live.as_ref().is_none_or(|m| m.media_type != MediaType::NativeVideo) {
             failure = Some("1080p film would not load for leg 1".to_string());
         } else if let Some(ref media) = live {
             let (w, h) = (media.current_width(), media.current_height());
@@ -205,58 +194,57 @@ fn ffplay_to_native_swap_delivers_a_frame() {
                 failure = Some("4K film would not load on the second pass".to_string());
             }
             Some(mut standing) => {
-                // The ffplay arm tears the whole standing media down first —
-                // this ends the LIVE native session leg 1 started.
-                eprintln!("repro leg 2: take_down_pinned_media ends the live session");
-                take_down_pinned_media();
+        // The ffplay arm tears the whole standing media down first —
+        // this ends the LIVE native session leg 1 started.
+        eprintln!("repro leg 2: take_down_pinned_media ends the live session");
+        take_down_pinned_media();
+        eprintln!(
+            "repro leg 2: after take-down is_playing={}",
+            video_player::is_playing(),
+        );
+        eprintln!("repro leg 2: start ffplay for the 4K film");
+        let process = start_video_playback(&uhd, 100, 100, 640, 360, 0.0, 0, None);
+        eprintln!(
+            "repro: ffplay spawned pid={:?}, VIDEO_PID={}",
+            process.as_ref().map(|c| c.id()),
+            VIDEO_PID.load(Ordering::SeqCst),
+        );
+        if process.is_none() {
+            failure = Some("ffplay would not start for the 4K film".to_string());
+        } else {
+            standing.video_process = process;
+            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                *current = Some(standing);
+            }
+
+            // The swap onto the 1080p film: the native arm's own two
+            // calls, then the hold's own wait.
+            if let Some(mut held) = load_for_swap(&hd) {
+                let (w, h) = (held.current_width(), held.current_height());
+                eprintln!("repro swap: stop_pinned_player, then play 1080p at {w}x{h}");
+                stop_pinned_player();
                 eprintln!(
-                    "repro leg 2: after take-down is_playing={}",
-                    video_player::is_playing(),
-                );
-                eprintln!("repro leg 2: start ffplay for the 4K film");
-                let process = start_video_playback(&uhd, 100, 100, 640, 360, 0.0, 0, None);
-                eprintln!(
-                    "repro: ffplay spawned pid={:?}, VIDEO_PID={}",
-                    process.as_ref().map(|c| c.id()),
+                    "repro swap: after stop VIDEO_PID={}",
                     VIDEO_PID.load(Ordering::SeqCst),
                 );
-                if process.is_none() {
-                    failure = Some("ffplay would not start for the 4K film".to_string());
-                } else {
-                    standing.video_process = process;
+                video_player::play(&hd, w, h, 0, probed_picture(&hd, w, h), true);
+                eprintln!("repro swap: is_playing={}", video_player::is_playing());
+                failure = wait_for_first_frame(&mut held, "swap", Duration::from_secs(20));
+                if failure.is_none() {
+                    eprintln!("repro swap: first frame arrived — the handoff works");
+                    // The install: the held file becomes what is on screen,
+                    // and every tick after takes into it the way the loop's
+                    // own take does once the hold is over.
                     if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                        *current = Some(standing);
-                    }
-
-                    // The swap onto the 1080p film: the native arm's own two
-                    // calls, then the hold's own wait.
-                    if let Some(mut held) = load_for_swap(&hd) {
-                        let (w, h) = (held.current_width(), held.current_height());
-                        eprintln!("repro swap: stop_pinned_player, then play 1080p at {w}x{h}");
-                        stop_pinned_player();
-                        eprintln!(
-                            "repro swap: after stop VIDEO_PID={}",
-                            VIDEO_PID.load(Ordering::SeqCst),
-                        );
-                        video_player::play(&hd, w, h, 0, probed_picture(&hd, w, h), true);
-                        eprintln!("repro swap: is_playing={}", video_player::is_playing());
-                        failure = wait_for_first_frame(&mut held, "swap", Duration::from_secs(20));
-                        if failure.is_none() {
-                            eprintln!("repro swap: first frame arrived — the handoff works");
-                            // The install: the held file becomes what is on screen,
-                            // and every tick after takes into it the way the loop's
-                            // own take does once the hold is over.
-                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                                *current = Some(held);
-                            } else {
-                                failure =
-                                    Some("CURRENT_MEDIA lock unavailable after swap".to_string());
-                            }
-                        }
+                        *current = Some(held);
                     } else {
-                        failure = Some("1080p film would not load for the swap".to_string());
+                        failure = Some("CURRENT_MEDIA lock unavailable after swap".to_string());
                     }
                 }
+            } else {
+                failure = Some("1080p film would not load for the swap".to_string());
+            }
+        }
             }
         }
     }
@@ -279,10 +267,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
             if let Some(mut held) = load_for_swap(&hd) {
                 let (w2, h2) = (held.current_width(), held.current_height());
                 video_player::play(&hd, w2, h2, 0, probed_picture(&hd, w2, h2), true);
-                eprintln!(
-                    "repro rapid: replayed, playing={}",
-                    video_player::is_playing()
-                );
+                eprintln!("repro rapid: replayed, playing={}", video_player::is_playing());
                 failure = wait_for_first_frame(&mut held, "rapid", Duration::from_secs(20));
                 if failure.is_none() {
                     eprintln!("repro rapid: first frame arrived after abandon");
@@ -307,9 +292,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
             ticks += 1;
             eprintln!("repro sustained: take #{ticks}");
             let took = if let Ok(mut current) = CURRENT_MEDIA.lock() {
-                current
-                    .as_mut()
-                    .map(|media| media.take_native_video_frame())
+                current.as_mut().map(|media| media.take_native_video_frame())
             } else {
                 None
             };
@@ -317,8 +300,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
                 Some(true) => frames += 1,
                 Some(false) => {}
                 None => {
-                    failure =
-                        Some("CURRENT_MEDIA lock unavailable during sustained takes".to_string());
+                    failure = Some("CURRENT_MEDIA lock unavailable during sustained takes".to_string());
                     break;
                 }
             }

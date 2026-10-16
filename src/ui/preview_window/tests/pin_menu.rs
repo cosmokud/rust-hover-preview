@@ -141,17 +141,11 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         "the rule between the ways out of the pin and the playback is a rule, not a row"
     );
     assert!(
-        matches!(
-            top[row_at(&top, "End of File")].mark,
-            pin_chrome::MenuMark::Door
-        ),
+        matches!(top[row_at(&top, "End of File")].mark, pin_chrome::MenuMark::Door),
         "the end-of-file row opens the choices, so it is a door rather than an answer"
     );
     assert!(
-        matches!(
-            top[row_at(&top, "Shuffle")].mark,
-            pin_chrome::MenuMark::Check(true)
-        ),
+        matches!(top[row_at(&top, "Shuffle")].mark, pin_chrome::MenuMark::Check(true)),
         "and the row between the doors is the check the shuffle is the face of"
     );
     assert!(
@@ -197,10 +191,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
     );
     let top = menu_rows();
     assert!(
-        matches!(
-            top[row_at(&top, "Shuffle")].mark,
-            pin_chrome::MenuMark::Check(false)
-        ),
+        matches!(top[row_at(&top, "Shuffle")].mark, pin_chrome::MenuMark::Check(false)),
         "the shuffle starts off, so its row is unchecked"
     );
     let ends = end_of_file_rows();
@@ -601,10 +592,7 @@ fn a_press_on_the_shuffle_row_turns_it_over_and_writes_it_down() {
     // The rows show the setting as it now is: the check row is ticked.
     let rows = menu_rows();
     assert!(
-        matches!(
-            rows[row_at(&rows, "Shuffle")].mark,
-            pin_chrome::MenuMark::Check(true)
-        ),
+        matches!(rows[row_at(&rows, "Shuffle")].mark, pin_chrome::MenuMark::Check(true)),
         "the Shuffle row is ticked now"
     );
 
@@ -725,10 +713,7 @@ fn a_press_on_an_end_of_file_choice_sets_it_and_puts_the_menu_away() {
     );
 
     assert_eq!(
-        CONFIG
-            .lock()
-            .expect("the configuration")
-            .pin_mode_audio_end_of_file,
+        CONFIG.lock().expect("the configuration").pin_mode_audio_end_of_file,
         PinEndOfFile::Continue,
         "the press chose Jump, so the pin steps on at the end of a file now"
     );
@@ -784,7 +769,10 @@ fn a_press_outside_the_panel_puts_it_away() {
         unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
         "a hand off the panel is still the menu's to answer"
     );
-    assert!(pinned_menu_geometry().is_none(), "so the panel is put away");
+    assert!(
+        pinned_menu_geometry().is_none(),
+        "so the panel is put away"
+    );
 }
 
 /// The rows that do something rather than answer a question leave their ask with the
@@ -1061,7 +1049,9 @@ fn a_choice_made_in_the_flyout_is_written_down_and_puts_the_whole_menu_away() {
     // The middle of the flyout's last row, which is
     // the Random choice.
     let x = (flyout.popup.panel.left + flyout.popup.panel.right) / 2;
-    let y = flyout.popup.rows_top + 3 * flyout.popup.row_height + flyout.popup.row_height / 2;
+    let y = flyout.popup.rows_top
+        + 3 * flyout.popup.row_height
+        + flyout.popup.row_height / 2;
     assert!(
         unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
         "a hand on a row of the flyout is the menu's own"

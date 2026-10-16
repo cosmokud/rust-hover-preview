@@ -246,6 +246,8 @@ pub(crate) fn button_at(
 /// answer: a room measured beside a group of buttons the caption was not drawn with is a name that
 /// either runs under the buttons or stops short of them.
 pub(crate) fn title_room(width: i32, dpi: u32, maximizable: bool) -> i32 {
+    // The height is a stand-in and not a measurement: only a button's left edge is read below, and a
+    // button's left edge is its kind's own packing against the right of the strip.
     let buttons = button_boxes(width, 1, dpi, maximizable);
     let right = buttons
         .iter()

@@ -720,17 +720,10 @@ fn a_seek_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays() {
     mpv_ipc::remember_pipe(101, "test-pipe", false);
     stand_pin(Some(a_playing_pin(&film, content)));
     seek_pinned_playback(&film, content, 90.0);
-    assert_eq!(
-        restart_count(),
-        0,
-        "mpv is taken to the second while it runs"
-    );
+    assert_eq!(restart_count(), 0, "mpv is taken to the second while it runs");
     assert_eq!(
         mpv_ipc::noted_lines(),
-        vec![format!(
-            "{}\n",
-            r#"{"command":["seek",90.000,"absolute"],"async":true}"#
-        )],
+        vec![format!("{}\n", r#"{"command":["seek",90.000,"absolute"],"async":true}"#)],
         "and the line names the second the bar was let go at"
     );
     assert_eq!(
@@ -830,14 +823,8 @@ fn a_pause_on_a_pinned_mpv_is_told_to_the_player_and_relaunches_ffplays_resume()
     assert_eq!(
         mpv_ipc::noted_lines(),
         vec![
-            format!(
-                "{}\n",
-                r#"{"command":["set_property","pause",true],"async":true}"#
-            ),
-            format!(
-                "{}\n",
-                r#"{"command":["set_property","pause",false],"async":true}"#
-            ),
+            format!("{}\n", r#"{"command":["set_property","pause",true],"async":true}"#),
+            format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
         ],
         "the hold and the release are mpv's own pause property"
     );
@@ -1205,14 +1192,8 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     assert_eq!(
         mpv_ipc::noted_lines(),
         vec![
-            format!(
-                "{}\n",
-                r#"{"command":["seek",0.000,"absolute"],"async":true}"#
-            ),
-            format!(
-                "{}\n",
-                r#"{"command":["set_property","pause",false],"async":true}"#
-            ),
+            format!("{}\n", r#"{"command":["seek",0.000,"absolute"],"async":true}"#),
+            format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
         ],
         "the wrap is a seek to the beginning, which is the only second a loop can restart at, and \
          then the play that brings back a film mpv had paused on its last frame: mpv keeps a pause \
@@ -1232,10 +1213,7 @@ fn a_loop_wrap_on_a_pinned_mpv_is_told_to_the_player_and_restarts_ffplays() {
     VIDEO_PID.store(101, Ordering::SeqCst);
     note_video_loop(101, &film, content, 0.0, Some(8.0));
     a_pass_has_run();
-    assert!(
-        video_loop_tick(true, true),
-        "the tick takes the engine's film back"
-    );
+    assert!(video_loop_tick(true, true), "the tick takes the engine's film back");
     assert_eq!(
         restart_count(),
         1,
@@ -1385,10 +1363,7 @@ fn the_tick_takes_a_pausing_film_back_to_its_top_and_holds_it_there() {
     }
 
     assert!(
-        video_loop_tick(
-            true,
-            pin_video_loops(&film) || pin_video_pauses_at_the_top(&film)
-        ),
+        video_loop_tick(true, pin_video_loops(&film) || pin_video_pauses_at_the_top(&film)),
         "the tick takes the film back, which is the one road this end of file has for mpv"
     );
     assert_eq!(
@@ -1500,14 +1475,8 @@ fn a_pinned_films_loop_is_the_pins_own_end_of_file_and_not_the_hovers() {
     assert_eq!(
         mpv_ipc::noted_lines(),
         vec![
-            format!(
-                "{}\n",
-                r#"{"command":["seek",0.000,"absolute"],"async":true}"#
-            ),
-            format!(
-                "{}\n",
-                r#"{"command":["set_property","pause",false],"async":true}"#
-            ),
+            format!("{}\n", r#"{"command":["seek",0.000,"absolute"],"async":true}"#),
+            format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
         ],
         "the wrap is the seek and the play, the same as a hover's"
     );
@@ -1791,10 +1760,7 @@ fn a_native_films_end_of_file_is_read_off_the_engines_own_clock() {
         NativePassEnd::Nothing,
         "a pass with its margin still to run asks for nothing"
     );
-    assert_eq!(
-        native_pass_end(PinEndOfFile::Pause, true, false),
-        NativePassEnd::Nothing
-    );
+    assert_eq!(native_pass_end(PinEndOfFile::Pause, true, false), NativePassEnd::Nothing);
     assert_eq!(
         native_pass_end(PinEndOfFile::Pause, false, true),
         NativePassEnd::Nothing,
@@ -1845,10 +1811,7 @@ fn the_end_of_file_that_pauses_takes_a_ffplay_film_home_and_holds_it() {
         }
     }
     assert!(
-        !video_loop_tick(
-            true,
-            pin_video_loops(&film) || pin_video_pauses_at_the_top(&film)
-        ),
+        !video_loop_tick(true, pin_video_loops(&film) || pin_video_pauses_at_the_top(&film)),
         "so the tick leaves it where it is rather than beginning it again"
     );
     assert_eq!(
