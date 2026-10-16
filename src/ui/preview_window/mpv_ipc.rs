@@ -241,6 +241,19 @@ pub(super) fn cycle_subtitles(pid: u32) -> bool {
     write(pid, r#"{"command":["cycle","sub"],"async":true}"#.to_string() + "\n")
 }
 
+/// Fill mpv's window with the film rather than letterboxing the film inside it, or let it fit again.
+///
+/// It is how the bubble a collapsed pin leaves is given a picture the shape of its own circle: the
+/// film's window is carried into the bubble's square, and what it draws there is a stripe with the
+/// rest black until this is asked for (see `bubble_film`).
+pub(super) fn set_panscan(pid: u32, filling: bool) -> bool {
+    let level = if filling { 1.0 } else { 0.0 };
+    write(
+        pid,
+        format!(r#"{{"command":["set_property","panscan",{level:.1}],"async":true}}"#) + "\n",
+    )
+}
+
 /// The JSON lines this app would have written, in order, for a test build.
 ///
 /// The pipe is the one seam under `#[cfg(test)]` in the same spirit as `spawn_player`'s noted
@@ -386,8 +399,8 @@ mod tests {
         clear_noted();
     }
 
-    /// Every command the pin sends is a JSON command line with the one property or the one seek
-    /// the manual names, and each says it wants no reply.
+    /// One command of every kind is a JSON command line with the one property, the one seek or the
+    /// one flag the manual names, and each says it wants no reply.
     #[test]
     fn each_command_is_the_line_mpv_is_told_with() {
         let _one = PIN_TESTS_ONE_AT_A_TIME
@@ -401,6 +414,8 @@ mod tests {
         assert!(set_paused(7, true));
         assert!(set_paused(7, false));
         assert!(cycle_subtitles(7));
+        assert!(set_panscan(7, true));
+        assert!(set_panscan(7, false));
 
         assert_eq!(
             noted_lines(),
@@ -409,6 +424,16 @@ mod tests {
                 format!("{}\n", r#"{"command":["set_property","pause",true],"async":true}"#),
                 format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
                 format!("{}\n", r#"{"command":["cycle","sub"],"async":true}"#),
+                // The level a film is filled to is one `panscan` has: no pan at all, and the whole
+                // of the box, so a bubble's square is a crop rather than a stripe (see `panscan`).
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","panscan",1.0],"async":true}"#
+                ),
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","panscan",0.0],"async":true}"#
+                ),
             ],
             "each line names the command and its argument, and every one is async"
         );
@@ -808,6 +833,158 @@ mod tests {
                 .and_then(|level| level.parse::<f64>().ok())
                 .is_some_and(|level| (level - 40.0).abs() < 0.01),
             "and the level has to be the one the knob was moved to: `volume` answered \"{volume}\""
+        );
+    }
+
+    /// **A real mpv takes the whole of a film into the square a bubble seats its window in, and
+    /// fits again once the bubble has gone** — the half of a seat that no stand-in window can
+    /// answer, because the window is this app's own and the property is the player's (see
+    /// `set_panscan` and `bubble_film`).
+    ///
+    /// **A film with a picture and no sound**, written by the test: a still picture is a film mpv
+    /// keeps up without a clock of its own, and `--vo=null` means no window and no sound device on
+    /// a machine with nobody in front of it — what is under test is the property and not the
+    /// drawing of it. The property is asked back down the pipe rather than believed, which is the
+    /// only answer that says a player took it.
+    ///
+    /// Run it the way the ignore asks for — `cargo test --bin rust-hover-preview
+    /// a_real_mpv_fills_the_window_a_bubble_seats -- --ignored` — and one at a time beside the
+    /// other tests here that write for real, for the reason their own notes give.
+    #[test]
+    #[ignore = "starts a real mpv, which a test run must never do; needs one installed"]
+    fn a_real_mpv_fills_the_window_a_bubble_seats_and_fits_again() {
+        use crate::app::engine_processes;
+        use crate::formats::codecs;
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+
+        let Some(program) = codecs::resolve_mpv(None, &codecs::mpv_installs()) else {
+            println!("this machine has no mpv, so there is no player to fill a square");
+            return;
+        };
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-mpv-panscan-test");
+        let picture = folder.join("a-picture.bmp");
+        if std::fs::create_dir_all(&folder).is_err() || write_a_picture(&picture).is_err() {
+            println!("the test's own picture cannot be written, so there is no film to fill");
+            let _ = std::fs::remove_dir_all(&folder);
+            return;
+        }
+
+        let name = next_pipe_name();
+        let ipc = format!(r#"--input-ipc-server=\\.\pipe\{name}"#);
+        let started = engine_processes::hidden_command(&program)
+            .args([
+                picture.to_string_lossy().as_ref(),
+                "--no-config",
+                "--vo=null",
+                "--ao=null",
+                "--image-display-duration=inf",
+                ipc.as_str(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        let mut player = match started {
+            Ok(player) => player,
+            Err(error) => {
+                println!(
+                    "mpv is installed but could not be started ({}), so there is no player to \
+                     fill a square",
+                    error.kind()
+                );
+                let _ = std::fs::remove_dir_all(&folder);
+                return;
+            }
+        };
+
+        let look = Duration::from_millis(25);
+        remember_pipe(player.id(), &name, false);
+        write_to_a_real_pipe(true);
+
+        // The player has the film once it lists its track: a pipe that is not listening yet answers
+        // nothing, and a property set before the file is open is a property set on nothing.
+        let patience = Instant::now() + Duration::from_secs(15);
+        let mut tracks = String::new();
+        while Instant::now() < patience {
+            tracks = ask_a_real_mpv(&name, "track-list/count").unwrap_or_default();
+            if data_of(&tracks).and_then(|count| count.parse::<u32>().ok()) == Some(1) {
+                break;
+            }
+            std::thread::sleep(look);
+        }
+        let loaded = data_of(&tracks).and_then(|count| count.parse::<u32>().ok()) == Some(1);
+
+        // The production line, and the production record beside the pipe: what a collapse asks for
+        // when it seats a film's window in a bubble. The first line is tried until it lands, as it
+        // is in the other tests here that write for real, because the pipe is freed a moment after
+        // the last client let go of it.
+        let mut told = false;
+        if loaded {
+            let by = Instant::now() + Duration::from_secs(5);
+            told = set_panscan(player.id(), true);
+            while !told && Instant::now() < by {
+                std::thread::sleep(look);
+                told = set_panscan(player.id(), true);
+            }
+        }
+
+        // **The player's own answer**, asked down the same pipe: what a film is filled to. It is
+        // asked until it is the level the seat set, because a line written to a player and the
+        // player having read it are two moments (see `ask_a_real_mpv`).
+        let pan = |wanted: f64| {
+            let by = Instant::now() + Duration::from_secs(5);
+            let mut answer = String::new();
+            while loaded && Instant::now() < by {
+                answer = ask_a_real_mpv(&name, "panscan").unwrap_or_default();
+                if data_of(&answer)
+                    .and_then(|level| level.parse::<f64>().ok())
+                    .is_some_and(|level| (level - wanted).abs() < 0.01)
+                {
+                    break;
+                }
+                std::thread::sleep(look);
+            }
+            answer
+        };
+
+        let filling = pan(1.0);
+        // And the other way round: the bubble has gone, so the film fits its window again.
+        let _ = set_panscan(player.id(), false);
+        let fitting = pan(0.0);
+
+        let _ = player.kill();
+        let _ = player.wait();
+        forget_pipe(player.id());
+        write_to_a_real_pipe(false);
+        let _ = std::fs::remove_dir_all(&folder);
+
+        assert!(
+            loaded,
+            "the player has to open the film the test wrote, which is one picture and nothing \
+             else: it listed \"{tracks}\" tracks, and a player that never had the film cannot be \
+             asked what it is filling"
+        );
+        assert!(
+            told,
+            "the line has to reach the player's pipe, or there is no property under test at all"
+        );
+        assert!(
+            data_of(&filling)
+                .and_then(|level| level.parse::<f64>().ok())
+                .is_some_and(|level| (level - 1.0).abs() < 0.01),
+            "the film has to fill the window it was seated in, which is what makes a bubble's \
+             square a crop of the film rather than a stripe of it down the middle: `panscan` \
+             answered \"{filling}\""
+        );
+        assert!(
+            data_of(&fitting)
+                .and_then(|level| level.parse::<f64>().ok())
+                .is_some_and(|level| level.abs() < 0.01),
+            "and it has to fit again once the bubble has gone, or a film put back in a pin's band \
+             is a film cropped to a square nobody can see: `panscan` answered \"{fitting}\""
         );
     }
 

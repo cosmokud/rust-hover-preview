@@ -322,9 +322,7 @@ pub(crate) enum BubbleArt<'a> {
     /// average of the frame the film's window is standing in front of: the ring of a painted frame
     /// is the file's own colour, and a hole whose ring fell back to the theme's accent would change
     /// colour the moment the film paused and the still took the hole's place.
-    Hole {
-        ring: Option<[u8; 3]>,
-    },
+    Hole { ring: Option<[u8; 3]> },
     /// No art: the face alone, with the mark on it.
     None,
 }
@@ -455,10 +453,7 @@ pub(crate) fn paint_bubble(
                 ([0, 0, 0], HOLE_ALPHA)
             } else {
                 sample.map_or((palette.background, 1.0), |sample| {
-                    (
-                        [sample[0], sample[1], sample[2]],
-                        sample[3] as f32 / 255.0,
-                    )
+                    ([sample[0], sample[1], sample[2]], sample[3] as f32 / 255.0)
                 })
             };
             let share = face_coverage / coverage;
@@ -611,7 +606,7 @@ fn sample_picture(pixels: &[u8], width: u32, height: u32, u: f32, v: f32) -> Opt
 /// than counted as black, so the average of a frame with a hole in it is the average of what is
 /// drawn. A picture that is transparent everywhere has no colour to give, and answers nothing —
 /// which the caller reads as *no colour from here* and answers with the theme's accent.
-pub(super) fn average_color(pixels: &[u8]) -> Option<[u8; 3]> {
+pub(crate) fn average_color(pixels: &[u8]) -> Option<[u8; 3]> {
     let count = pixels.len() / 4;
     if count == 0 {
         return None;

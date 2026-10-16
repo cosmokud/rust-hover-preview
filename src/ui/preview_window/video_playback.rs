@@ -1026,11 +1026,16 @@ pub(super) unsafe fn place_player_window(
 /// that is not being drawn is not carried over a strip the pin is showing by being put back
 /// (see `put_a_player_that_is_not_on_screen_back`).
 pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i32) -> bool {
-    // A collapsed pin has no band on screen, so nothing is placed — not even the hidden window a
-    // hold-off would otherwise put back: that place is a chrome-less film over Explorer beside
-    // the bubble (see `hide_pinned_windows`).
+    // A collapsed pin has no band on screen, so nothing of the *pin's* is placed — not even the
+    // hidden window a hold-off would otherwise put back: that place is a chrome-less film over
+    // Explorer beside the bubble (see `hide_pinned_windows`).
+    //
+    // **The one window that is placed is the film's, where a bubble has seated it**, and it is put
+    // back in the bubble's own square rather than in any band: what the bubble holds is a window
+    // that somebody else keeps drawing, and a window that something has moved out from under the
+    // ring is a bubble with the desktop showing through the middle of it (see `bubble_film`).
     if pin_is_collapsed() {
-        return false;
+        return bubble_film::reseat_film_window();
     }
     // What is to be done with the window, from the one answer both of the places that put one
     // somewhere read: everything held off — the pin's own chrome or popup — is nothing this road
