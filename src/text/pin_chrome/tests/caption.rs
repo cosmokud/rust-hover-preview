@@ -614,6 +614,12 @@ fn draws_the_caption_glyphs() {
 /// the boxes alone could see. Arms that reach further than the mark is wide are the third
 /// of the same kind: a row of marks that are not one size is a row of things that are not
 /// one kind of thing, and the walk buttons are the two biggest of the six.
+///
+/// The ink is measured by coverage here and not by whole pixels, which is the measure the
+/// glyph dump above uses and the one the assertions are about: the arms are anti-aliased, and
+/// a band a pixel wide down a slope covers no pixel whole — nine tenths of one is the most
+/// there is at this slope — so counting whole pixels would be asking this test for the walk
+/// the arms used to be drawn with rather than for the shape a chevron has.
 #[test]
 fn the_two_walk_buttons_are_chevrons_pointing_opposite_ways() {
     // A box with room for the whole glyph and a row to spare: the arms part half a span
@@ -624,11 +630,12 @@ fn the_two_walk_buttons_are_chevrons_pointing_opposite_ways() {
     let span = 10;
     let ink = [0u8, 0, 0];
 
-    // The rows drawn in one column. The buffer is filled with a colour first, so that a
-    // blank column reads as blank rather than as ink.
+    // The rows carrying ink in one column. The buffer is filled with a colour first, so that
+    // a blank column reads as blank rather than as ink, and a pixel counts as ink where it is
+    // more ink than bar — which is more than half of it, the ink being black and the bar white.
     fn drawn(buffer: &[u8], x: i32) -> Vec<i32> {
         (0..H)
-            .filter(|y| buffer[((*y * W + x) * 4) as usize] == 0)
+            .filter(|y| buffer[((*y * W + x) * 4) as usize] < 128)
             .collect()
     }
 
@@ -815,89 +822,56 @@ fn the_close_mark_carries_a_share_of_the_ink_at_its_edges() {
     );
 }
 
-/// The walk buttons' chevron drawn both ways — walked in whole pixels, which is what the bar draws
-/// now, and as the two strokes a `stroke_segment` makes of it — at both scales, side by side: the
-/// picture a choice between them is made on.
-///
-/// `draw_chevron` carries the reason it is walked: a chevron's vertex is what a chevron says, and
-/// an anti-aliased stroke a pixel wide rounds its own point off. What a picture settles is what
-/// that costs and what it buys: the strokes of the close cross beside it are a pixel wide too, and
-/// a point rounded off is a point the same weight as the two arms that meet at it. The four cells
-/// are the two directions drawn each way, because a chevron is read as a pair whichever way it
-/// points.
+/// The walk buttons' chevron is two strokes, and a stroke is the one thing a mark drawn a whole
+/// column at a time cannot be: the pixels its arms cross are some of the bar and some of the ink,
+/// and a painter that gives each of them the one or the other draws a staircase (see
+/// `draw_chevron`).
 #[test]
-fn draws_the_chevron_both_ways() {
-    let dir = scratch("caption-chevron");
-    let bar = [250u8, 250, 250];
+fn the_chevrons_arms_carry_a_share_of_the_ink() {
+    let side = 24usize;
+    // A white bar under a dark ink, so that a pixel which is neither is a share of both: at full
+    // coverage the pixel is the ink exactly, and at none of it the bar.
+    let bar = [255u8, 255, 255];
     let ink = [56u8, 58, 66];
 
-    for (dpi, tag) in [(96u32, "96dpi"), (192u32, "192dpi")] {
-        let scale = dpi as f32 / 96.0;
-        let side = text_paint::scaled(BUTTON_PIXELS as i32, scale);
-        let glyph = text_paint::scaled(GLYPH_PIXELS as i32, scale).max(6);
-        let stroke = (GLYPH_STROKE_PIXELS * scale).max(1.0);
-        let width = side * 4;
-
-        let mut strip = vec![0u8; (width * side * 4) as usize];
-        for pixel in strip.as_chunks_mut::<4>().0 {
-            pixel[0] = bar[2];
-            pixel[1] = bar[1];
-            pixel[2] = bar[0];
-            pixel[3] = 255;
-        }
-
-        for (cell, pointing_right) in [false, true].into_iter().enumerate() {
-            for (half, as_strokes) in [(0, false), (1, true)] {
-                let center_x = ((cell * 2 + half) as i32) * side + side / 2;
-                let center_y = side / 2;
-
-                if !as_strokes {
-                    draw_chevron(
-                        &mut strip,
-                        width,
-                        center_x,
-                        center_y,
-                        glyph,
-                        stroke,
-                        ink,
-                        pointing_right,
-                    );
-                    continue;
-                }
-
-                // The two strokes between the same ends the walk covers: the vertex in the middle
-                // of the column it points into, and the arms opening back to the two rows it
-                // reaches (see `draw_open_with_list`).
-                let half_span = glyph as f32 / 2.0;
-                let (middle_x, middle_y) = (center_x as f32 + 0.5, center_y as f32 + 0.5);
-                let point = if pointing_right {
-                    half_span
-                } else {
-                    -half_span
-                };
-                for down in [-1.0, 1.0] {
-                    stroke_segment(
-                        &mut strip,
-                        width,
-                        (middle_x + point, middle_y),
-                        (middle_x - point, middle_y + down * half_span),
-                        stroke,
-                        ink,
-                        1.0,
-                    );
-                }
-            }
-        }
-
-        let path = dir.join(format!("chevron-{tag}.png"));
-        write_png(path.clone(), &strip, width as u32, side as u32);
-        println!("{}", path.display());
-
-        if dpi == 96 {
-            let (large, wide, tall) = zoom(&strip, width as u32, side as u32, 4);
-            let path = dir.join(format!("chevron-{tag}-x4.png"));
-            write_png(path.clone(), &large, wide, tall);
-            println!("{}", path.display());
-        }
+    let surface = DibSurface::create(side as u32, side as u32).expect("a surface");
+    let filled = unsafe { std::slice::from_raw_parts_mut(surface.bits(), 4 * side * side) };
+    for pixel in filled.as_chunks_mut::<4>().0 {
+        pixel[0] = bar[2];
+        pixel[1] = bar[1];
+        pixel[2] = bar[0];
+        pixel[3] = 255;
     }
+
+    paint_glyph(
+        &surface,
+        CaptionButtonBox {
+            kind: CaptionButton::Next,
+            rect: RECT {
+                left: 0,
+                top: 0,
+                right: side as i32,
+                bottom: side as i32,
+            },
+        },
+        false,
+        ink,
+        1.0,
+    );
+
+    // The two colours a pixel of the mark can be, in the buffer's own order, and the byte that
+    // tells them apart: a pixel that is neither is carrying a share of the arms.
+    let painted = surface.pixels();
+    let partial = painted
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] != ink[2] && pixel[0] != bar[2])
+        .count();
+
+    assert!(
+        partial > 10,
+        "the walk buttons' chevron carries part of the ink in {partial} pixels only: the pixels \
+         its arms cross hold the area of the stroke that is in them"
+    );
 }
