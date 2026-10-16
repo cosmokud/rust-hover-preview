@@ -334,8 +334,10 @@ pub(super) unsafe fn pinned_set_cursor(hwnd: HWND) -> bool {
     // What a drag that is going says about the pointer stands until it lets go, whatever the
     // pointer has since been dragged over: a hand that is carrying a window is not asking where
     // the edges of it are, and a hand that is pulling one should keep the shape it began with.
+    // A pan carries the picture rather than the window and is given the same shape for the same
+    // reason: what the hand is holding has moved, whatever it is holding it by.
     let edge = match dragging {
-        Some(PinDragAction::Move) => {
+        Some(PinDragAction::Move) | Some(PinDragAction::Pan { .. }) => {
             if let Ok(cursor) = LoadCursorW(None, IDC_SIZEALL) {
                 SetCursor(cursor);
             }

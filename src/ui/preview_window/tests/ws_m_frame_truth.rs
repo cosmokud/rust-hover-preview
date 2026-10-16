@@ -89,6 +89,7 @@ fn pin_state_dump() -> BTreeMap<String, String> {
                 .map(|drag| match drag.action {
                     PinDragAction::Move => "move".to_string(),
                     PinDragAction::Resize(_) => "resize".to_string(),
+                    PinDragAction::Pan { .. } => "pan".to_string(),
                 })
                 .unwrap_or_else(|| "none".to_string()),
         );
@@ -916,11 +917,8 @@ fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
     // card came out at is held against the file the way the measure thread
     // holds it.
     let song = folder.join("ws-m-card-maximize-song.mp3");
-    std::fs::write(
-        &song,
-        b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00",
-    )
-    .expect("a written file");
+    std::fs::write(&song, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
+        .expect("a written file");
     audio_track::remember(
         &song,
         audio_track::Probed::Track(audio_track::Track {
@@ -956,8 +954,7 @@ fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
             Some((space, work_area_at(pin.content.0, pin.content.1), dpi))
         })
         .expect("a pin to swap away from");
-    let Some(PinBox::Measured(card)) = pin_update_content(space, &song, bounds_at, dpi)
-    else {
+    let Some(PinBox::Measured(card)) = pin_update_content(space, &song, bounds_at, dpi) else {
         panic!("a measured card is its own size, not a wait")
     };
     assert_eq!(
@@ -1001,8 +998,7 @@ fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
             Some((space, work_area_at(pin.content.0, pin.content.1), dpi))
         })
         .expect("a pin to swap away from");
-    let Some(PinBox::Measured(planned)) = pin_update_content(space, &next, bounds_at, dpi)
-    else {
+    let Some(PinBox::Measured(planned)) = pin_update_content(space, &next, bounds_at, dpi) else {
         panic!("a picture of a shape of its own is measured, not waited for")
     };
     assert_ne!(

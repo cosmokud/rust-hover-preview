@@ -677,7 +677,7 @@ fn a_press_on_the_engines_window_begins_the_drag_its_place_means() {
         |x: i32, y: i32| pinned_engine_press_action(window, 96, PinFrame::Shaped, (x, y));
     let edge_of = |action: PinDragAction| match action {
         PinDragAction::Resize(edge) => Some(edge),
-        PinDragAction::Move => None,
+        PinDragAction::Move | PinDragAction::Pan { .. } => None,
     };
 
     // The middle of the band is the media, which is the handle a window's body is.
@@ -758,11 +758,41 @@ fn a_left_border_and_a_right_border_stroke_each_land_the_edge_where_the_hand_put
     // a nameable number in it — the room's own edge, which is where a box can be pulled out to and
     // no further.
     let cases: [(&str, PinResize, i32, i32, i32); 5] = [
-        ("left border pulled out", edge(true, false, false, false), -200, start.2, start.0 - 200),
-        ("right border pulled out", edge(false, false, true, false), 200, start.0, start.2 + 200),
-        ("left border pulled in", edge(true, false, false, false), 100, start.2, start.0 + 100),
-        ("right border pulled in", edge(false, false, true, false), -100, start.0, start.2 - 100),
-        ("left border past the room", edge(true, false, false, false), -10_000, start.2, room.left),
+        (
+            "left border pulled out",
+            edge(true, false, false, false),
+            -200,
+            start.2,
+            start.0 - 200,
+        ),
+        (
+            "right border pulled out",
+            edge(false, false, true, false),
+            200,
+            start.0,
+            start.2 + 200,
+        ),
+        (
+            "left border pulled in",
+            edge(true, false, false, false),
+            100,
+            start.2,
+            start.0 + 100,
+        ),
+        (
+            "right border pulled in",
+            edge(false, false, true, false),
+            -100,
+            start.0,
+            start.2 - 100,
+        ),
+        (
+            "left border past the room",
+            edge(true, false, false, false),
+            -10_000,
+            start.2,
+            room.left,
+        ),
     ];
 
     for (what, edge_, dx, kept, moved) in cases {

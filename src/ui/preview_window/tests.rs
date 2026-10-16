@@ -304,6 +304,21 @@ fn overlay_pin(content: ScreenRegion, chrome: PinChrome) -> PinnedPreview {
     }
 }
 
+/// The same picture with the wheel's own view of it: one drawn `scale` times its window, centred and
+/// not carried — which is what a pin the wheel has taken inside its window is, and the state the two
+/// halves of a press's own test differ by (see `PinZoom`).
+fn with_pin_zoom(pin: PinnedPreview, scale: f32) -> PinnedPreview {
+    let (width, height) = region_size(pin.content);
+
+    PinnedPreview {
+        zoom: Some(PinZoom {
+            drawn: (width as f32 * scale, height as f32 * scale),
+            pan: (0.0, 0.0),
+        }),
+        ..pin
+    }
+}
+
 fn edge(left: bool, top: bool, right: bool, bottom: bool) -> PinResize {
     PinResize {
         left,

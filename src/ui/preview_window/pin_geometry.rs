@@ -248,9 +248,11 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
         _ => media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape)),
     };
     let size = match shape {
-        Some(shape) => {
-            pinned_media_box(shape, room, hover_preview_scale(&path, current_hover_scales()))
-        }
+        Some(shape) => pinned_media_box(
+            shape,
+            room,
+            hover_preview_scale(&path, current_hover_scales()),
+        ),
         // A file with no size to be read out of it — one whose measure has not come back, one
         // nothing can be read from at all, and a card, which is its own size already — has no size
         // to be given back, so the one it has is kept and only the place moves: the answer a
@@ -653,7 +655,37 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     }
     let (dx, dy) = (point.0 - drag.from.0, point.1 - drag.from.1);
 
+    // A pan is the picture moving while the window holds still, so it is answered before the box is
+    // asked about at all: the pointer's travel is added to where the pan stood when the press began,
+    // and the window is painted again at the place it already stands — which is the whole of what
+    // makes a drag of a zoomed-in picture smooth, since a window that was `SetWindowPos`-ed for every
+    // pointer move would be this app moving a box the hand never asked it to move (see `PinZoom`).
+    if let PinDragAction::Pan { from } = drag.action {
+        let carried = (from.0 + dx as f32, from.1 + dy as f32);
+        let painted = pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            let zoom = pin.zoom?;
+            pin.zoom = Some(PinZoom {
+                drawn: zoom.drawn,
+                pan: carried,
+            });
+            // Where the pointer has been carried out to, so that the next ask for a pointer that has
+            // not moved is recognised as the same question (see the early return above).
+            if let Some(drag) = pin.dragging.as_mut() {
+                drag.carried = point;
+            }
+            Some(pin.content)
+        });
+
+        if let Some(content) = painted {
+            render_pinned_preview_at(hwnd, content.0, content.1);
+        }
+        return;
+    }
+
     let window = match drag.action {
+        // Answered above and unreachable here: a pan never asks the window for a box.
+        PinDragAction::Pan { .. } => return,
         PinDragAction::Move => (
             drag.window.0 + dx,
             drag.window.1 + dy,
