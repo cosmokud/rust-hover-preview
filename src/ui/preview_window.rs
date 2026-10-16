@@ -48,6 +48,7 @@
 //! - `audio_engine` - a sound, its loudness, its player and its clock.
 //! - `audio_meter` - the level the sound on screen is being heard at, off the mixer's own meter.
 //! - `bubble_film` - the film's own window standing in the bubble a collapsed pin leaves.
+//! - `bubble_stream` - the frames read out of a film FFmpeg's player is drawing.
 //! - `event_loop` - `run_preview_window` itself.
 //!
 //! The parts share one namespace through this module - each reads the others as one set of items
@@ -60,6 +61,7 @@ mod animated;
 mod audio_engine;
 mod audio_meter;
 mod bubble_film;
+mod bubble_stream;
 mod dimensions;
 mod displays;
 mod engine_render;

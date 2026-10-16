@@ -131,6 +131,7 @@ fn draws_the_bubbles_faces() {
                     pixels: &picture,
                     width: side,
                     height: side,
+                    ring: None,
                 },
                 BUBBLE_OVER_FRAME,
                 BubbleMark::Play,
@@ -140,6 +141,7 @@ fn draws_the_bubbles_faces() {
                     pixels: &picture,
                     width: side,
                     height: side,
+                    ring: None,
                 },
                 [0.0; BUBBLE_BARS],
                 BubbleMark::Picture,
@@ -240,6 +242,7 @@ fn the_pictures_round_edge_is_a_ramp_rather_than_a_cut() {
             pixels: &halves,
             width: SIDE,
             height: SIDE,
+            ring: None,
         },
         BubbleMark::Page,
     );
@@ -285,6 +288,7 @@ fn a_picture_finer_than_the_bubble_is_averaged_rather_than_sampled() {
             pixels: &checkerboard,
             width: SIDE,
             height: SIDE,
+            ring: None,
         },
         BubbleMark::Page,
     );
@@ -371,6 +375,7 @@ fn a_picture_gives_the_ring_its_own_average_colour() {
             pixels: &picture,
             width: SIDE,
             height: SIDE,
+            ring: None,
         },
         BubbleMark::Picture,
     );
@@ -409,6 +414,7 @@ fn a_picture_gives_the_ring_its_own_average_colour() {
             pixels: &halves,
             width: SIDE,
             height: SIDE,
+            ring: None,
         },
         BubbleMark::Picture,
     );
@@ -419,6 +425,46 @@ fn a_picture_gives_the_ring_its_own_average_colour() {
     );
     assert_ne!(mean, [colour[2], colour[1], colour[0]]);
     assert_ne!(mean, [100, 40, 242]);
+}
+
+#[test]
+fn a_pictures_ring_is_the_colour_the_caller_gives_where_one_is_given() {
+    // A picture's ring is its own average, and it is not always the frame the caller paints: the
+    // frames of a film read beside its player are ringed in the colour of the *still* they were taken
+    // from, so that a bubble over a live picture carries one hairline rather than the average of
+    // every frame that passes (see `render_pin_bubble` and `BubbleArt::Picture`).
+    let colour = [10, 200, 30, 255];
+    let given = [12u8, 34, 56];
+    let picture = solid(colour);
+    let painted = |ring| {
+        paint(
+            BubbleArt::Picture {
+                pixels: &picture,
+                width: SIDE,
+                height: SIDE,
+                ring,
+            },
+            BubbleMark::Picture,
+        )
+    };
+
+    // The hairline itself, a few columns in from the right edge, and the picture inside it: the two
+    // are the two questions, and neither is the other's answer.
+    assert_eq!(
+        pixel(&painted(None), SIDE - 3, SIDE / 2),
+        colour,
+        "a picture with no colour given is ringed in its own"
+    );
+    assert_eq!(
+        pixel(&painted(Some(given)), SIDE - 3, SIDE / 2),
+        [given[2], given[1], given[0], 255],
+        "and one given a colour is ringed in it, which is what the still of a live picture is for"
+    );
+    assert_eq!(
+        pixel(&painted(Some(given)), SIDE / 2, SIDE / 2),
+        colour,
+        "while the picture inside the ring is the picture either way"
+    );
 }
 
 #[test]
@@ -548,6 +594,7 @@ fn the_bars_over_a_frame_are_the_themes_ink_and_not_the_frames_own_colour() {
         pixels: &flat,
         width: SIDE,
         height: SIDE,
+        ring: None,
     };
 
     // The mark is a picture's own, which is one dot of the accent drawn in both paints and so part
@@ -729,6 +776,7 @@ fn a_mark_goes_over_a_picture_only_where_the_picture_can_be_playing() {
                 pixels: &picture,
                 width: SIDE,
                 height: SIDE,
+                ring: None,
             },
             mark,
         )

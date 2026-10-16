@@ -307,11 +307,19 @@ pub(crate) const BUBBLE_BARS: usize = 7;
 /// film already decoded is that frame's own bytes, and a bubble that copied them would be a second
 /// copy of a picture this app is holding at the very moment the pin collapses (see `bubble_art`).
 pub(crate) enum BubbleArt<'a> {
-    /// A picture already cropped to `side × side` BGRA (an image, or a video frame).
+    /// A picture already cropped to `side × side` BGRA (an image, or a video frame), and the colour
+    /// the ring is drawn in where the caller has one to give.
+    ///
+    /// `ring` is asked of the caller because the ring's colour and the picture are not always the
+    /// same frame: a window of live video frames is painted with the colour of the still it was
+    /// taken from, so that a ring over a moving picture is one colour rather than the average of
+    /// every frame that passes (see `render_pin_bubble`). Where it is not given, the picture's own
+    /// average is the ring, which is what a still's own frame is.
     Picture {
         pixels: &'a [u8],
         width: u32,
         height: u32,
+        ring: Option<[u8; 3]>,
     },
     /// A hole where the picture would be, with the picture itself standing *behind* the bubble: the
     /// face is not painted at all, because what is in it is another window — a film's own player,
@@ -369,6 +377,9 @@ pub(crate) fn paint_bubble(
     // picture that is transparent everywhere has no colour to give, and the accent stands (see
     // `average_color`).
     let ring = match &art {
+        BubbleArt::Picture {
+            ring: Some(ring), ..
+        } => *ring,
         BubbleArt::Picture { pixels, .. } => average_color(pixels).unwrap_or(palette.accent),
         BubbleArt::Hole { ring } => ring.unwrap_or(palette.accent),
         _ => palette.accent,
@@ -435,6 +446,7 @@ pub(crate) fn paint_bubble(
                     pixels,
                     width: picture_width,
                     height: picture_height,
+                    ..
                 } if face_coverage > 0.0 => {
                     let u = ((x as f32 + 0.5 - center.0) / (inner * 2.0) + 0.5).clamp(0.0, 0.999);
                     let v = ((y as f32 + 0.5 - center.1) / (inner * 2.0) + 0.5).clamp(0.0, 0.999);

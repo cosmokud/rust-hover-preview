@@ -705,6 +705,15 @@ pub fn run_preview_window() {
                     let changed = last_bubble_playing != Some(playing);
                     let due = animating && last_bubble_repaint.elapsed() >= BUBBLE_REPAINT;
 
+                    // And the frames a film FFmpeg's player is drawing are read beside it, which is
+                    // the one picture this app has to *make*: mpv's own window stands in the bubble
+                    // and a film this app draws holds its frame here (see `bubble_film` and
+                    // `bubble_stream`). The state of the world is what this is given — where the
+                    // bubble is standing, and whether the film is playing — so that a level change, a
+                    // seek, a loop and a swap behind the bubble are one answer rather than four
+                    // hooks.
+                    bubble_stream::settle(playing, bubble_box_on_screen());
+
                     if changed || due || frame_ready {
                         last_bubble_playing = Some(playing);
                         if due {
@@ -718,11 +727,13 @@ pub fn run_preview_window() {
                     }
                 } else {
                     // A pin with its window up has no bubble, and nothing of a bubble outlives the
-                    // collapse it was made for: the play state is forgotten and the frame grabbed
-                    // for it is dropped, so a pin collapsed later starts on its own file's frame
-                    // rather than on the one before it (see `BUBBLE_FRAME`).
+                    // collapse it was made for: the play state is forgotten, the frame grabbed for it
+                    // is dropped, and the frames read beside a player are ended, so a pin collapsed
+                    // later starts on its own file's frame rather than on the one before it (see
+                    // `BUBBLE_FRAME` and `bubble_stream`).
                     last_bubble_playing = None;
                     BUBBLE_FRAME_READY.store(false, Ordering::Release);
+                    bubble_stream::settle(false, None);
                     if let Ok(mut frame) = BUBBLE_FRAME.lock() {
                         *frame = None;
                     }
