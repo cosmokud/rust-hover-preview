@@ -301,5 +301,17 @@ Section PreInstall
   IfFileExists "$LOCALAPPDATA\\Rust Hover Preview\\uninstaller.exe" 0 +2
     Delete "$LOCALAPPDATA\\Rust Hover Preview\\uninstaller.exe"
   RMDir "$LOCALAPPDATA\\Rust Hover Preview"
+
+  ; And the folders earlier builds cached in, which this build writes nowhere: the two
+  ; generations of page cache before the temp folder one — beside `config.ini`, and under this
+  ; app's own folder, which for an installed copy is this same one — plus the folder an older
+  ; build prefetched its update installer into and the log one wrote for every video hover.
+  ; They are looked for here rather than at every start of the app: this is the one step a
+  ; machine that ran one of those builds passes through.
+  RmDir /r "$LOCALAPPDATA\\rust-hover-preview\\office"
+  RmDir /r "$LOCALAPPDATA\\rust-hover-preview\\update"
+  SetShellVarContext current
+  RmDir /r "$APPDATA\\rust-hover-preview\\rendered"
+  Delete "$TEMP\\rust-hover-preview-video.log"
 SectionEnd
 """
