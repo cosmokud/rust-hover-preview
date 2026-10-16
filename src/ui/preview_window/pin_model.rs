@@ -830,14 +830,15 @@ pub(super) fn pin_hides_chrome(kind: Option<MediaType>) -> bool {
 ///
 /// A pin with the hand already on it is left out, which is the one thing here that is not a fact
 /// about the media: a picture being dragged is a box the hand is carrying, and a wheel notch landing
-/// in the middle of that drag would be a second answer to the same question (see `apply_pin_zoom`).
+/// in the middle of that drag would be a second answer to the same question (see `pin_zoom_view`).
 pub(crate) fn pin_zoom_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
     let pinned = pin_window::pin_state_try()?;
     let pin = pinned.pin()?;
 
-    if pin.collapsed || pin.dragging.is_some() || pin.zoom.is_none() {
-        return None;
-    }
+    // The same question the wheel's own arithmetic asks, and the same answer: a pin that is a bubble,
+    // a pin whose media is a kind the wheel does not zoom, and a pin with a drag under its hand are all
+    // pins this hook leaves the wheel to (see `pin_zoom_view`).
+    pin_zoom_view(pin)?;
 
     Some(pin.window_box())
 }

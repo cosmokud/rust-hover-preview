@@ -509,7 +509,7 @@ pub(super) fn pin_zoom_step(
 /// is a kind the wheel does not zoom has no view, a pin put away as a bubble has no window on the screen
 /// to point at or to draw, and a pin whose box is under a hand already is a *drag* rather than a zoom — a
 /// wheel notch landing in the middle of one would be two answers to the same question.
-fn pin_zoom_view(pin: &PinnedPreview) -> Option<PinZoom> {
+pub(super) fn pin_zoom_view(pin: &PinnedPreview) -> Option<PinZoom> {
     pin.zoom.filter(|_| !pin.collapsed && pin.dragging.is_none())
 }
 
