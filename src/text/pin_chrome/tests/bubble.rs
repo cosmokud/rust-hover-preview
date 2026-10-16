@@ -77,21 +77,6 @@ fn over(buffer: &[u8], width: u32, height: u32, backdrop: [u8; 3]) -> Vec<u8> {
     out
 }
 
-/// One painted bubble drawn at another size, each pixel of it repeated `factor` times, so that
-/// an edge half a pixel wide is a thing the eye can find.
-fn zoom(buffer: &[u8], width: u32, height: u32, factor: u32) -> (Vec<u8>, u32, u32) {
-    let (wide, tall) = (width * factor, height * factor);
-    let mut out = vec![0u8; (wide * tall * 4) as usize];
-    for y in 0..tall {
-        for x in 0..wide {
-            let from = ((y / factor) as usize * width as usize + (x / factor) as usize) * 4;
-            let to = (y as usize * wide as usize + x as usize) * 4;
-            out[to..to + 4].copy_from_slice(&buffer[from..from + 4]);
-        }
-    }
-    (out, wide, tall)
-}
-
 /// The bubbles a collapsed pin can become, side by side at both scales, over a desktop's own
 /// grey: the design under review.
 ///

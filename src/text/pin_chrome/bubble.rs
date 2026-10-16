@@ -14,8 +14,8 @@
 //! (`paint_failure_mark`).
 
 use super::primitives::{
-    caption_style, draw_cross, fill_box, fill_disc, fill_round_rect, put, stroke_round_rect,
-    surface_pixels, ChromePalette,
+    caption_style, draw_cross, fill_box, fill_disc, fill_round_rect, fill_triangle, put,
+    stroke_round_rect, surface_pixels, ChromePalette,
 };
 use crate::text::text_paint::{self, DibSurface};
 use windows::Win32::Foundation::RECT;
@@ -754,72 +754,6 @@ fn paint_mark(
                         coverage,
                     );
                 }
-            }
-        }
-    }
-}
-
-/// A triangle, filled by the distance to each of its three edges: what a pixel carries is the
-/// share of it the nearest edge leaves, which is the ramp a disc's edge is drawn with (see
-/// `fill_disc`) asked of three straight lines instead of one circle.
-///
-/// A point is inside a triangle where all three of its edges are on the far side of it, and
-/// outside by as much as the furthest of them — so the three are asked per pixel and the shape is
-/// whatever they say it is, with no scanline and no rounding to whole columns. That is what a
-/// slanted edge needs and a column-by-column scan cannot give it: every column of a triangle is a
-/// whole number of pixels tall, and the edge of one is the steps between them.
-fn fill_triangle(
-    buffer: &mut [u8],
-    width: i32,
-    corners: [(f32, f32); 3],
-    color: [u8; 3],
-    coverage: f32,
-) {
-    // Each edge as a line: a unit normal pointing out of the triangle, and where the line it is
-    // on crosses the origin. The normal points away from the corner the edge is not on, which is
-    // the one answer that does not depend on which way round the three were given.
-    let mut edges = [(0.0f32, 0.0f32, 0.0f32); 3];
-    for index in 0..3 {
-        let from = corners[index];
-        let to = corners[(index + 1) % 3];
-        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
-        let length = (dx * dx + dy * dy).sqrt().max(f32::EPSILON);
-        let (nx, ny) = (dy / length, -dx / length);
-        let opposite = corners[(index + 2) % 3];
-        let outward = if nx * (opposite.0 - from.0) + ny * (opposite.1 - from.1) > 0.0 {
-            -1.0
-        } else {
-            1.0
-        };
-        let (nx, ny) = (nx * outward, ny * outward);
-        edges[index] = (nx, ny, -(nx * from.0 + ny * from.1));
-    }
-
-    let mut left = f32::INFINITY;
-    let mut right = f32::NEG_INFINITY;
-    let mut top = f32::INFINITY;
-    let mut bottom = f32::NEG_INFINITY;
-    for corner in corners {
-        left = left.min(corner.0);
-        right = right.max(corner.0);
-        top = top.min(corner.1);
-        bottom = bottom.max(corner.1);
-    }
-    // The box, a pixel wider than the corners on every side, so that a pixel the edge only clips
-    // is asked about rather than missed.
-    let (left, right) = ((left - 1.0).floor() as i32, (right + 1.0).ceil() as i32);
-    let (top, bottom) = ((top - 1.0).floor() as i32, (bottom + 1.0).ceil() as i32);
-
-    for y in top..=bottom {
-        for x in left..=right {
-            let (point_x, point_y) = (x as f32 + 0.5, y as f32 + 0.5);
-            let outside = edges
-                .iter()
-                .map(|&(nx, ny, at)| nx * point_x + ny * point_y + at)
-                .fold(f32::NEG_INFINITY, f32::max);
-            let edge = (0.5 - outside).clamp(0.0, 1.0);
-            if edge > 0.0 {
-                put(buffer, width, x, y, color, coverage * edge);
             }
         }
     }
