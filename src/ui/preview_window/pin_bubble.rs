@@ -49,11 +49,12 @@ pub(super) static BUBBLE_FRAME: Lazy<Mutex<Option<BubbleFrame>>> = Lazy::new(|| 
 /// was, and a flag left standing for a grab that answered nothing is a repaint every tick.
 pub(super) static BUBBLE_FRAME_READY: AtomicBool = AtomicBool::new(false);
 
-/// How fast the wave in a sound's histogram travels, in radians a second.
+/// How fast the wave in the bars a mixer's peak is drawn as travels, in radians a second.
 ///
 /// A rate of its own rather than a period counted in repaints, because the phase is worked out from
-/// the wall clock and nothing else: the loop's cadence is what makes the bars *move*, and this is
-/// what says how far a bar has moved between two of its ticks (see `render_pin_bubble`).
+/// the wall clock and nothing else: the loop's cadence is what makes that row *move*, and this is
+/// what says how far a bar has moved between two of its ticks (see `render_pin_bubble` and
+/// `pin_chrome::peak_bars`).
 const BUBBLE_PHASE_RADIANS_PER_SECOND: f32 = 2.4;
 
 /// A drag of the bubble in progress, as the two things the press measured: where in the bubble the
@@ -246,8 +247,7 @@ pub(super) struct BubbleMenu {
     pub(super) dpi: u32,
 }
 
-pub(super) static BUBBLE_MENU: Lazy<Mutex<Option<BubbleMenu>>> =
-    Lazy::new(|| Mutex::new(None));
+pub(super) static BUBBLE_MENU: Lazy<Mutex<Option<BubbleMenu>>> = Lazy::new(|| Mutex::new(None));
 
 /// Place the bubble's menu panel at a point in the window: the shared placement, with the flyout
 /// arrow cleared — no flyout hangs off this menu, and none of its rows is a door, so no row of it
@@ -333,7 +333,9 @@ pub(super) unsafe fn close_bubble_menu(hwnd: HWND) -> bool {
         return false;
     }
 
-    let (x, y) = window_origin(hwnd).map(|rect| (rect.0, rect.1)).unwrap_or((0, 0));
+    let (x, y) = window_origin(hwnd)
+        .map(|rect| (rect.0, rect.1))
+        .unwrap_or((0, 0));
     let dpi = dpi_at(x, y);
     let side = logical_px(dpi, PIN_BUBBLE_PIXELS).max(16);
     release_pin_capture(hwnd);
@@ -1090,10 +1092,7 @@ pub(super) unsafe fn hide_pinned_windows() {
     // window of the player's process goes too, or a collapse leaves a chrome-less film on screen.
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     if pid != 0 {
-        let _ = EnumWindows(
-            Some(hide_player_windows_callback),
-            LPARAM(pid as isize),
-        );
+        let _ = EnumWindows(Some(hide_player_windows_callback), LPARAM(pid as isize));
     }
 
     if webview_preview::is_showing() {
@@ -1207,11 +1206,11 @@ pub(super) unsafe fn pin_bubble_window() -> Option<HWND> {
 /// Paint the bubble: the round window a collapsed pin leaves, with what its media has to show
 /// inside the circle where it has anything (see `pin_chrome::paint_bubble`).
 ///
-/// The phase the bars of a sound are drawn at is taken from the wall clock rather than kept beside
-/// the bubble, and that is what keeps the wave moving while nothing else about the bubble changes:
-/// the loop repaints it on a cadence, and what makes one repaint differ from the next is the clock
-/// it reads (see the bubble repaint in `run_preview_window`). Every other kind's art is a picture
-/// and does not care what the phase says.
+/// The bars of a sound are drawn from the bands of this app's own sound, read where a bubble is
+/// painted and not kept anywhere — and the phase the rows of a *level* are drawn at is taken from
+/// the wall clock rather than kept beside the bubble, which is what keeps that wave moving while
+/// nothing else about the bubble changes (see `BubbleArtOwned::Level`). Every other kind's art is a
+/// picture and does not care what the phase says.
 pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
     let mut rect = RECT::default();
     if GetWindowRect(hwnd, &mut rect).is_err() {
@@ -1243,6 +1242,25 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
         .map(|since| since.as_secs_f32() * BUBBLE_PHASE_RADIANS_PER_SECOND)
         .unwrap_or(0.0);
 
+    // What the bars are drawn from, which is the one thing the bubble's own art cannot say: seven
+    // band levels where this machine reads them, the peak through the shape a level has always been
+    // drawn as where it does not, and nothing where there is no sound being made at all.
+    //
+    // **A film whose sound is playing gets them too, over its own frame**, and the guard for that is
+    // the play mark rather than the kind: a picture with a play mark is a film that is playing, and
+    // one with a picture mark is a page or a still. A film the app plays at its own default volume
+    // of nothing is a film making no sound, which is a row of no bars and its frame left exactly as
+    // it is — the app never turns a burst of music on to make a meter move (see `DEFAULT_VIDEO_VOLUME`
+    // and `audio_meter::output_bands`).
+    let bars = match &art {
+        BubbleArtOwned::Bands(bands) => *bands,
+        BubbleArtOwned::Level(level) => pin_chrome::peak_bars(*level, phase),
+        BubbleArtOwned::Picture(..) if mark == pin_chrome::BubbleMark::Play => {
+            audio_meter::output_bands().unwrap_or([0.0; pin_chrome::BUBBLE_BARS])
+        }
+        _ => [0.0; pin_chrome::BUBBLE_BARS],
+    };
+
     // The owned art is what outlives the call that made it — a frame read out of a file, a
     // thumbnail cut down to the bubble's own size — and the chrome paints from a picture it is
     // lent, so this is the one place the two meet (see `BubbleArtOwned`).
@@ -1252,11 +1270,7 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
             width: *art_width,
             height: *art_height,
         },
-        BubbleArtOwned::Audio(level) => pin_chrome::BubbleArt::Audio {
-            level: *level,
-            phase,
-        },
-        BubbleArtOwned::None => pin_chrome::BubbleArt::None,
+        _ => pin_chrome::BubbleArt::None,
     };
 
     out.fill(0);
@@ -1265,7 +1279,7 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
     // paints a circle that fills whatever buffer it is handed, so handing it the whole window
     // would centre it over the menu (see `paint_bubble`).
     let mut circle = vec![0u8; side as usize * side as usize * 4];
-    pin_chrome::paint_bubble(&mut circle, side, side, &palette, art, mark);
+    pin_chrome::paint_bubble(&mut circle, side, side, &palette, art, bars, mark);
     for (row, chunk) in circle.chunks(side as usize * 4).enumerate() {
         let start = row * width as usize * 4;
         out[start..start + chunk.len()].copy_from_slice(chunk);
@@ -1281,7 +1295,10 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
             let wanted = (width.max(1), height.max(1));
             MENU_SURFACE.with(|cell| {
                 let mut surface = cell.borrow_mut();
-                if surface.as_ref().map(|surface| (surface.width, surface.height)) != Some(wanted)
+                if surface
+                    .as_ref()
+                    .map(|surface| (surface.width, surface.height))
+                    != Some(wanted)
                 {
                     *surface = DibSurface::create(wanted.0, wanted.1);
                 }
@@ -1367,21 +1384,27 @@ pub(super) unsafe fn repaint_pin_bubble() {
 pub(super) enum BubbleArtOwned {
     /// A picture of `side × side` BGRA, and the side it was cut to.
     Picture(Vec<u8>, u32, u32),
-    /// The level the sound on screen is being heard at, 0.0..=1.0.
-    Audio(f32),
+    /// The seven bands of this app's own sound, 0.0..=1.0 each (see `audio_meter::output_bands`).
+    Bands([f32; pin_chrome::BUBBLE_BARS]),
+    /// The level the sound on screen is being heard at, 0.0..=1.0, for the machine whose bands
+    /// will not be read (see `audio_meter::output_peak`).
+    Level(f32),
     /// Nothing to show inside the circle: the face, and the mark on it.
     None,
 }
 
 /// What the bubble is drawn with: the picture the whole pin has to show inside the circle, the
-/// level a sound is being heard at, or nothing — together with the mark its kind carries.
+/// bands a sound is doing, the level it is being heard at, or nothing — together with the mark its
+/// kind carries.
 ///
-/// The kind decides which of the three, and each arm answers the question its own way: a film
-/// FFmpeg plays shows the frame that was grabbed for it, a film the media engine plays shows the
-/// frame the engine is holding, a sound shows the meter — **while it is playing**, because a
-/// histogram is a picture of a level and a paused sound has no level to draw, so it is answered
-/// with the pause glyph instead. Everything else whose kind *is* a picture shows the same
-/// thumbnail a page's first plate is cut to.
+/// The kind decides which, and each arm answers the question its own way: a film FFmpeg plays
+/// shows the frame that was grabbed for it, a film the media engine plays shows the frame the
+/// engine is holding, a sound shows the bands of this app's own sound — or the mixer's own peak
+/// through the shape a level has always been drawn as, where this machine will not read bands at
+/// all. A sound is answered **while it is playing** and not before: a histogram is a picture of a
+/// sound being made, and a paused sound has none to draw, so it is answered with the pause glyph
+/// instead. Everything else whose kind *is* a picture shows the same thumbnail a page's first
+/// plate is cut to.
 ///
 /// **The playback is asked before the media is locked, and never while it is held.** The question
 /// is answered out of the media itself — a sound's player process is a field of it, and a film's
@@ -1409,9 +1432,13 @@ pub(super) fn bubble_art(side: u32) -> (BubbleArtOwned, pin_chrome::BubbleMark) 
         MediaType::NativeVideo => bubble_thumbnail(media, side)
             .map(|pixels| BubbleArtOwned::Picture(pixels, side, side))
             .unwrap_or(BubbleArtOwned::None),
-        MediaType::Audio if playing => {
-            BubbleArtOwned::Audio(audio_meter::output_peak().unwrap_or(0.0))
-        }
+        // The bands of this app's own sound where this machine reads them, and the mixer's own
+        // peak where it will not: the same row of bars, drawn from the answer this machine has
+        // (see `audio_meter` and `BubbleArtOwned`).
+        MediaType::Audio if playing => match audio_meter::output_bands() {
+            Some(bands) => BubbleArtOwned::Bands(bands),
+            None => BubbleArtOwned::Level(audio_meter::output_peak().unwrap_or(0.0)),
+        },
         kind if kind.has_bubble_picture() => bubble_thumbnail(media, side)
             .map(|pixels| BubbleArtOwned::Picture(pixels, side, side))
             .unwrap_or(BubbleArtOwned::None),
@@ -1448,6 +1475,25 @@ pub(super) fn bubble_is_playing() -> bool {
             // and the same rule on a card's own clock).
             pinned_audio_playing()
         }
+        _ => false,
+    }
+}
+
+/// Whether the bars a bubble is drawn with are read from sound that is moving.
+///
+/// A sound's own bands move every few milliseconds while it plays. A film's bars are read from the
+/// same capture of this app's own sound, drawn over the film's own frame, and they move the same
+/// way — but only while the film is making any: a film the app plays at a level of nothing is begun
+/// with no audio track at all, so its bars are a row of nothing and there is nothing for the bubble
+/// to paint again for (see `render_pin_bubble` and `BUBBLE_REPAINT`).
+///
+/// The playback is not part of the question: whether a film is playing at all is the caller's own
+/// ask, so that a bubble drawn while a film is held is not one this claims is making sound (see the
+/// bubble repaint in `run_preview_window`).
+pub(super) fn bubble_bars_are_moving() -> bool {
+    match current_media_type() {
+        Some(MediaType::Audio) => true,
+        Some(MediaType::Video) | Some(MediaType::NativeVideo) => pinned_volume_level() > 0,
         _ => false,
     }
 }
@@ -1591,10 +1637,7 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
             if dragging {
                 let _ = ReleaseCapture();
                 let was_focused = BUBBLE_PRESS_FOCUSED.swap(false, Ordering::AcqRel);
-                if bubble_click_restores(
-                    was_focused,
-                    PIN_BUBBLE_MOVED.load(Ordering::Acquire),
-                ) {
+                if bubble_click_restores(was_focused, PIN_BUBBLE_MOVED.load(Ordering::Acquire)) {
                     // A press that did not move is a click, and a click on a bubble the hand is
                     // already in is what puts the window back up. The focusing click stays a
                     // bubble, so the SPACE below has a window to hold.

@@ -5,6 +5,10 @@ use super::*;
 /// one pixel across — a smaller bubble would be testing rounding rather than drawing.
 const SIDE: u32 = 64;
 
+/// A row of bars over a film's own frame, for the visual dump: what a playing film's bubble is
+/// drawn as where the film is making a sound (see `paint_bars`).
+const BUBBLE_OVER_FRAME: [f32; BUBBLE_BARS] = [0.2, 0.5, 0.9, 0.75, 0.6, 0.35, 0.15];
+
 /// A palette with three colours nothing can confuse for one another, so that a pixel read back is
 /// unambiguously the ring, the face or the glyph.
 fn palette() -> ChromePalette {
@@ -16,10 +20,17 @@ fn palette() -> ChromePalette {
     }
 }
 
-fn paint(art: BubbleArt<'_>, mark: BubbleMark) -> Vec<u8> {
+/// A bubble with a row of bars in it, which is what a sound and a playing film are drawn with:
+/// the bars are the level or the bands the caller worked out (see `peak_bars`).
+fn paint_bars(art: BubbleArt<'_>, bars: [f32; BUBBLE_BARS], mark: BubbleMark) -> Vec<u8> {
     let mut buffer = vec![0u8; (SIDE * SIDE * 4) as usize];
-    paint_bubble(&mut buffer, SIDE, SIDE, &palette(), art, mark);
+    paint_bubble(&mut buffer, SIDE, SIDE, &palette(), art, bars, mark);
     buffer
+}
+
+/// A bubble with nothing in it but its face, its ring and its glyph.
+fn paint(art: BubbleArt<'_>, mark: BubbleMark) -> Vec<u8> {
+    paint_bars(art, [0.0; BUBBLE_BARS], mark)
 }
 
 /// One pixel of a painted bubble, in the premultiplied BGRA the buffer is in.
@@ -104,15 +115,15 @@ fn draws_the_bubbles_faces() {
             .collect::<Vec<u8>>();
 
         let faces = [
-            (BubbleArt::None, BubbleMark::Play),
-            (BubbleArt::None, BubbleMark::Pause),
-            (BubbleArt::None, BubbleMark::Page),
-            (BubbleArt::None, BubbleMark::Picture),
+            (BubbleArt::None, peak_bars(0.0, 0.0), BubbleMark::Play),
+            (BubbleArt::None, [0.0; BUBBLE_BARS], BubbleMark::Pause),
+            (BubbleArt::None, [0.0; BUBBLE_BARS], BubbleMark::Page),
+            (BubbleArt::None, [0.0; BUBBLE_BARS], BubbleMark::Picture),
             (
-                BubbleArt::Audio {
-                    level: 0.7,
-                    phase: 0.0,
-                },
+                BubbleArt::None,
+                // The seven bands a sound is drawn as: a shape that rises and falls across the
+                // row, which is what a review of a bubble's own edge wants to see.
+                [0.2, 0.45, 0.8, 1.0, 0.7, 0.4, 0.15],
                 BubbleMark::Play,
             ),
             (
@@ -121,15 +132,25 @@ fn draws_the_bubbles_faces() {
                     width: side,
                     height: side,
                 },
-                BubbleMark::Pause,
+                BUBBLE_OVER_FRAME,
+                BubbleMark::Play,
+            ),
+            (
+                BubbleArt::Picture {
+                    pixels: &picture,
+                    width: side,
+                    height: side,
+                },
+                [0.0; BUBBLE_BARS],
+                BubbleMark::Picture,
             ),
         ];
 
         let width = side * faces.len() as u32;
         let mut strip = image_buffer(width, side);
-        for (cell, (art, mark)) in faces.into_iter().enumerate() {
+        for (cell, (art, bars, mark)) in faces.into_iter().enumerate() {
             let mut buffer = image_buffer(side, side);
-            paint_bubble(&mut buffer, side, side, &palette(), art, mark);
+            paint_bubble(&mut buffer, side, side, &palette(), art, bars, mark);
             let painted = over(&buffer, side, side, backdrop);
             blit_cell(&mut strip, width, side, &painted, side, cell as u32 * side);
         }
@@ -412,20 +433,13 @@ fn the_average_of_a_picture_is_the_average_of_what_is_drawn_in_it() {
 fn the_bars_of_a_sound_are_drawn_inside_the_circle() {
     // The one thing a bubble must never do is write outside itself: what is behind it is the
     // desktop, so a bar reaching past the circle is a bar painted over whatever the user has there.
-    // The two paints differ in the level alone, so every pixel that differs between them is a pixel
-    // of the bars — the face, the ring and the glyph are the same in both.
-    let quiet = paint(
-        BubbleArt::Audio {
-            level: 0.0,
-            phase: 1.1,
-        },
-        BubbleMark::Pause,
-    );
-    let loud = paint(
-        BubbleArt::Audio {
-            level: 1.0,
-            phase: 1.1,
-        },
+    // The two paints differ in the bars alone — and a bar at no level is no bar, so every pixel
+    // that differs between them is a pixel of the bars and the face, the ring and the glyph are the
+    // same in both.
+    let quiet = paint_bars(BubbleArt::None, [0.0; BUBBLE_BARS], BubbleMark::Pause);
+    let loud = paint_bars(
+        BubbleArt::None,
+        [0.35, 0.6, 0.85, 1.0, 0.9, 0.55, 0.2],
         BubbleMark::Pause,
     );
 
@@ -452,6 +466,134 @@ fn the_bars_of_a_sound_are_drawn_inside_the_circle() {
     // A test that asserts nothing was drawn draws nothing: the bars are in the face and not only
     // absent, which is what the assertion above would also be answered by.
     assert!(drawn > 0, "the bars were not drawn at all");
+}
+
+#[test]
+fn a_band_is_drawn_where_it_stands_and_as_tall_as_it_is_loud() {
+    // The two things the row of bars says, and neither of them is about the circle: the lowest band
+    // is the bar on the left — which is the whole of what a bubble forty-four pixels across can say
+    // about frequency — and a band at a level is a bar a level tall.
+    let one = |band: usize, level: f32| {
+        let mut bars = [0.0; BUBBLE_BARS];
+        bars[band] = level;
+        bars
+    };
+
+    // What a bar put on the face, and nothing else: the face, the ring and the glyph are one paint
+    // in every bubble here, so the pixel that differs from a bubble with no bars at all is a pixel
+    // of a bar (see `paint_bars`).
+    let none = paint(BubbleArt::None, BubbleMark::Play);
+    let columns = |painted: &Vec<u8>| {
+        (0..SIDE)
+            .filter(|x| (0..SIDE).any(|y| pixel(painted, *x, y) != pixel(&none, *x, y)))
+            .collect::<Vec<u32>>()
+    };
+    let ink = |painted: &Vec<u8>| {
+        let mut count = 0;
+        for x in 0..SIDE {
+            for y in 0..SIDE {
+                if pixel(painted, x, y) != pixel(&none, x, y) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+    let bars_of = |bars: [f32; BUBBLE_BARS]| paint_bars(BubbleArt::None, bars, BubbleMark::Play);
+
+    let lowest = columns(&bars_of(one(0, 1.0)));
+    let highest = columns(&bars_of(one(BUBBLE_BARS - 1, 1.0)));
+
+    assert!(
+        !lowest.is_empty() && lowest.iter().all(|x| *x < SIDE / 2),
+        "the lowest band was not the bar on the left: {lowest:?}"
+    );
+    assert!(
+        !highest.is_empty() && highest.iter().all(|x| *x > SIDE / 2),
+        "the highest band was not the bar on the right: {highest:?}"
+    );
+
+    // A quieter band is a shorter bar, read as the ink it carries: the same columns, fewer rows of
+    // them.
+    assert!(
+        ink(&bars_of(one(0, 1.0))) > ink(&bars_of(one(0, 0.4))),
+        "a louder band was not drawn as a taller bar"
+    );
+}
+
+#[test]
+fn the_bars_over_a_frame_are_the_themes_ink_and_not_the_frames_own_colour() {
+    // What the bars are drawn in over a film's frame. The theme's ink is what the ring of a bubble
+    // with no picture in it is drawn in as well, and a frame's own average colour — which is the
+    // colour the *ring* of a bubble with a picture in it is drawn in — would be the worst ink there
+    // is for bars across that frame. A picture of one colour is the case that says so: bars drawn
+    // in the colour the picture is made of are bars that changed nothing at all.
+    let flat = [10u8, 200, 20, 255]
+        .iter()
+        .cycle()
+        .take(SIDE as usize * SIDE as usize * 4)
+        .copied()
+        .collect::<Vec<u8>>();
+    let art = || BubbleArt::Picture {
+        pixels: &flat,
+        width: SIDE,
+        height: SIDE,
+    };
+
+    // The mark is a picture's own, which is one dot of the accent drawn in both paints and so part
+    // of neither's difference from the other: what differs is a bar and nothing else.
+    let without = paint(art(), BubbleMark::Picture);
+    let with = paint_bars(art(), [1.0; BUBBLE_BARS], BubbleMark::Picture);
+
+    let differing = (0..SIDE)
+        .flat_map(|x| (0..SIDE).map(move |y| (x, y)))
+        .filter(|(x, y)| pixel(&with, *x, *y) != pixel(&without, *x, *y))
+        .collect::<Vec<(u32, u32)>>();
+
+    assert!(
+        !differing.is_empty(),
+        "the bars over a frame were not drawn at all, so they are the frame's own colour"
+    );
+
+    // The buffer is the premultiplied BGRA a layered window is in, so the accent is read out of it
+    // backwards — the order the ring's own test beside this one asks in (`paint_bubble`).
+    let accent = palette().accent;
+    for (x, y) in differing {
+        assert_eq!(
+            pixel(&with, x, y),
+            [accent[2], accent[1], accent[0], 255],
+            "the bar at {x},{y} is not the theme's own ink"
+        );
+    }
+}
+
+#[test]
+fn the_row_a_mixer_peak_is_drawn_as_is_a_wave_and_not_a_block() {
+    // The row a machine without the capture keeps: one level drawn as seven bars of a wave, which
+    // is what this row was before the bands arrived. It is the fallback rather than the meter, so
+    // what it is held to is small: that a level draws bars at all, that they differ — a block of
+    // equal bars is the shape that says *one number* to a hand, which is exactly what the mixer's
+    // peak is — and that the top of the scale is the top of a bar (see `peak_bars`).
+    let bars = peak_bars(1.0, 0.7);
+
+    assert!(
+        bars.iter().all(|bar| (0.0..=1.0).contains(bar)),
+        "a bar of a peak is out of the range a bar is drawn over: {bars:?}"
+    );
+    assert!(
+        bars.iter().any(|bar| *bar > 0.0),
+        "a peak at the top of the scale drew no bars at all"
+    );
+
+    let loudest = bars.iter().cloned().fold(f32::MIN, f32::max);
+    let quietest = bars.iter().cloned().fold(f32::MAX, f32::min);
+    assert!(
+        loudest - quietest > 0.1,
+        "the row of a peak is a block rather than a wave: {bars:?}"
+    );
+
+    let quieter = peak_bars(0.5, 0.7).into_iter().fold(f32::MIN, f32::max);
+    assert!(quieter < loudest, "a quieter peak drew a taller bar");
 }
 
 #[test]

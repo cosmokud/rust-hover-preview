@@ -165,11 +165,13 @@ pub fn run_preview_window() {
         // How often a collapsed pin's bubble is painted while its bars move.
         //
         // It is the one window of this app's that is redrawn for no reason but that it is *moving*:
-        // a sound's histogram is a shape made of the level on screen now, and the level of a sound
-        // that is playing changes every few milliseconds — so the bubble is painted a little under
-        // thirty times a second, which a hand reads as motion and which is the same order the
-        // transport bar's own playhead is painted at (`PIN_TRANSPORT_REPAINT_MS`). Nothing else
-        // about a bubble moves, so nothing else is on this clock (see the bubble repaint below).
+        // a sound's histogram is a shape made of the bands of the sound now, and the bands of a
+        // sound that is playing change every few milliseconds — so the bubble is painted a little
+        // under thirty times a second, which a hand reads as motion and which is the same order the
+        // transport bar's own playhead is painted at (`PIN_TRANSPORT_REPAINT_MS`). A film's bars
+        // are the same bands drawn over its own frame, and are on this clock for as long as the
+        // film is making sound (see `bubble_bars_are_moving`). Nothing else about a bubble moves, so
+        // nothing else is on this clock (see the bubble repaint below).
         const BUBBLE_REPAINT: Duration = Duration::from_millis(33);
         // The play state a collapsed pin's bubble was last painted for, and when it was last
         // painted: what it stands for is asked of the file's own player, and a film paused by a key
@@ -685,10 +687,12 @@ pub fn run_preview_window() {
                 // The bubble a collapsed pin leaves is made of what the pin's media has to show —
                 // a frame, or the level a sound is being heard at — so it is painted again when any
                 // of the three things it is made of has changed: the playback it stands for, a frame
-                // grabbed for it out of a film FFmpeg plays, and the clock, while a sound's bars
-                // move. Nothing else asks for a bubble repaint: a bubble over a picture is painted
-                // once, at the collapse, and a bubble that is not up is never painted at all (see
-                // `BUBBLE_REPAINT`).
+                // grabbed for it out of a film FFmpeg plays, and the clock, while the bars it is
+                // drawn with are being read from sound that is moving — a sound's own bands, or the
+                // soundtrack of a film that is playing above a level of nothing (see
+                // `bubble_bars_are_moving`). Nothing else asks for a bubble repaint: a bubble over a
+                // picture is painted once, at the collapse, and a bubble that is not up is never
+                // painted at all (see `BUBBLE_REPAINT`).
                 //
                 // The playback is asked of the file's own player rather than of anything this loop
                 // wrote down, because a film paused by a key in its own window sends this thread
@@ -696,7 +700,7 @@ pub fn run_preview_window() {
                 // it was drawn with, which is the whole of what the comparison below is for.
                 if pin_is_collapsed() {
                     let playing = bubble_is_playing();
-                    let animating = playing && current_media_kind() == Some(PreviewType::Audio);
+                    let animating = playing && bubble_bars_are_moving();
                     let frame_ready = BUBBLE_FRAME_READY.swap(false, Ordering::AcqRel);
                     let changed = last_bubble_playing != Some(playing);
                     let due = animating && last_bubble_repaint.elapsed() >= BUBBLE_REPAINT;
