@@ -2503,3 +2503,55 @@ fn a_band_the_pin_wins_is_one_part_in_255_and_only_over_the_band() {
         );
     }
 }
+
+/// A double-click puts a pinned window in the middle of the screen it stands on, and the size it
+/// had is the size it keeps: what is moved is the window's own box, bands and all, and for a window
+/// fitted to the screen that box is already the middle of it (see `centred_pin_box`).
+#[test]
+fn a_double_click_puts_a_pin_in_the_middle_of_its_screen() {
+    let room = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1040,
+    };
+
+    // A kind whose chrome is drawn over its media is one box, so a fit to the screen — the whole
+    // of the room's height, which is what a fit leaves a picture — is put back exactly where it
+    // was: the middle of the room is the place it already stands in, so no gap is opened above it
+    // and none below.
+    let fitted = (135, 0, 1785, 1040);
+    assert_eq!(
+        centred_pin_box(fitted, 96, false, true, 0, room),
+        fitted,
+        "a window fitted to the screen was moved off the middle of it, or given a gap above it or \
+         below"
+    );
+
+    // A window smaller than the room is moved to the middle of it, size and all: a 400 by 300 box
+    // in the corner comes out 760 across and 370 down.
+    assert_eq!(
+        centred_pin_box((0, 0, 400, 300), 96, false, true, 0, room),
+        (760, 370, 1160, 670),
+        "a window smaller than the screen was not put in the middle of it"
+    );
+
+    // A kind whose chrome is in bands is centred as the window, bands and all: the media box that
+    // comes out of it is the one that leaves the window's own box in the middle, which is why the
+    // media of such a pin is not simply the middle of the room.
+    let bands = 30 + pinned_transport_height(96, true);
+    let banded_window = (0, 0, 400, 300 + bands);
+    let banded = centred_pin_box(banded_window, 96, true, false, 30, room);
+    let window = pinned_window_box_of(banded, 96, true, false, 30);
+
+    assert_eq!(
+        (window.2 - window.0, window.3 - window.1),
+        (400, 300 + bands),
+        "centring changed the size of a window whose chrome is in bands"
+    );
+    assert_eq!(
+        window.1,
+        (room.bottom - room.top - (300 + bands)) / 2,
+        "the box put in the middle is the window's own, bands and all, rather than the media's"
+    );
+}
