@@ -1035,7 +1035,12 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // that somebody else keeps drawing, and a window that something has moved out from under the
     // ring is a bubble with the desktop showing through the middle of it (see `bubble_film`).
     if pin_is_collapsed() {
-        return bubble_film::reseat_film_window();
+        // **The one window that is placed is the film's, where a bubble has seated it** — and a
+        // bubble with no film in it is given one where there is one to give, since the window of a
+        // film a walk landed on behind the bubble is nowhere else to be put. The box is the circle's
+        // own, read off the bubble's window: a bubble the hand has carried is a bubble standing
+        // somewhere else (see `bubble_film`).
+        return bubble_box_on_screen().is_some_and(bubble_film::keep_the_film_in_the_bubble);
     }
     // What is to be done with the window, from the one answer both of the places that put one
     // somewhere read: everything held off — the pin's own chrome or popup — is nothing this road

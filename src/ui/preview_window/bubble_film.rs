@@ -24,14 +24,15 @@ use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn};
 
 /// The film's window standing in the bubble, as this app seated it.
 ///
-/// The three are one fact — a handle belongs to a process, and both belong to the box the bubble
-/// asked for — and a reader that could see one of them without the others would be reading a box
-/// it cannot trust, a window it cannot verify, or a process that is not the window's.
+/// The two are one fact — a handle belongs to a process, and a window that cannot be traced back to
+/// the player this app holds is a window of somebody else's — so they are kept together and verified
+/// together (see `SeatedFilm`'s reader, `seated_film`). Where the window *stands* is deliberately not
+/// kept here: the bubble's own window is the truth about that, and it is read where it is needed (see
+/// `pin_bubble::bubble_box_on_screen`).
 #[derive(Clone, Copy)]
 struct SeatedFilm {
     hwnd: isize,
     pid: u32,
-    box_: ScreenRegion,
 }
 
 /// The film's window the bubble is standing around, or nothing while none is (see `SeatedFilm`).
@@ -76,7 +77,7 @@ pub(super) fn seat_film_window(box_: ScreenRegion) -> bool {
     let Ok(mut seated) = SEATED.lock() else {
         return false;
     };
-    *seated = Some(SeatedFilm { hwnd, pid, box_ });
+    *seated = Some(SeatedFilm { hwnd, pid });
     drop(seated);
 
     unsafe {
@@ -90,34 +91,83 @@ pub(super) fn seat_film_window(box_: ScreenRegion) -> bool {
     let _ = mpv_ipc::set_panscan(pid, true);
 
     raise_the_bubble();
+    repaint_the_bubble();
     true
 }
 
-/// Take the film's window out of the bubble.
+/// Take the film's window out of the bubble, and off the screen with it.
 ///
-/// **Where the window goes next is not this function's business**: a pin put back up places it in
-/// the pin's band a moment later, and a pin that ends hides it, and both of those know far more
-/// about where it belongs than a seat does. What is this side's own is what the seat put on it —
-/// the region and the pan — so both come off here, and the record goes with them.
+/// **The window goes with the seat rather than staying where the bubble left it**, because every
+/// road that unseats is a road where the bubble is going away: the pin put back up (which places the
+/// window in its band in the same call), the bubble turned into the taskbar stand-in, the pin ended,
+/// and a hand that has taken hold of the bubble to carry it somewhere. A window left standing in a
+/// square nobody is drawing anymore is the chrome-less film beside a bubble the app already refuses
+/// in one place — and, at the collapse's own size, a film in a 44-pixel box.
+///
+/// What is this side's own is what the seat put on it — the region and the pan — so both come off
+/// here, and the record goes with them; *where* the window goes next is still not this function's
+/// business, and hiding it is not a place: it is the absence of one.
 pub(super) fn unseat_film_window() {
     let Some(seated) = SEATED.lock().ok().and_then(|mut seat| seat.take()) else {
         return;
     };
 
-    // **The region is cleared before the window is left**, because a square window with a round
-    // region is a picture with its corners cut off everywhere it is put afterwards: the pin's band
-    // is the first place this window goes next, and it is not a bubble (see
-    // `put_the_film_window_in`).
     unsafe {
         let window = HWND(seated.hwnd as *mut _);
         if IsWindow(window).as_bool() {
+            // **The region is cleared before the window is hidden**, because a square window with a
+            // round region is a picture with its corners cut off everywhere it is put afterwards:
+            // the pin's band is the first place this window goes next, and it is not a bubble (see
+            // `put_the_film_window_in`).
             let _ = SetWindowRgn(window, None, true);
+            let _ = ShowWindow(window, SW_HIDE);
         }
     }
 
     // And mpv stops filling its window for a box it no longer stands in, so a film put back in the
     // pin's band is the film that was there rather than one cropped to a bubble's square.
     let _ = mpv_ipc::set_panscan(seated.pid, false);
+
+    repaint_the_bubble();
+}
+
+/// Keep the film the pin is showing in the bubble, answering whether the bubble has one.
+///
+/// This is what a tick owes a seat, and the road that puts one back: a film whose window is standing
+/// in the bubble is put back in the box the circle is standing in now, and a bubble with no film in
+/// it at all is given one where there is one to give — a file a walk landed on behind the bubble
+/// starts its player with the pin off the screen, and nothing else would put that window anywhere
+/// but the band of a window nobody can see.
+///
+/// **A bubble being carried by a hand is left showing its own still**, which is the same answer the
+/// release below gives from the other side: a film put back under a moving pointer would be a window
+/// chasing a drag (see `pin_bubble_proc` and `bubble_is_being_dragged`).
+pub(super) fn keep_the_film_in_the_bubble(box_: ScreenRegion) -> bool {
+    if bubble_is_being_dragged() {
+        return false;
+    }
+
+    if let Some(seated) = seated_film() {
+        put_it_back_were_it_has_moved(seated, box_);
+        raise_the_bubble();
+        return true;
+    }
+
+    // Nothing is seated, and whether a film belongs here is the seat's own question — asked again
+    // rather than remembered, because what changes under a bubble is the *film*.
+    if !seat_film_window(box_) {
+        return false;
+    }
+
+    // And the still that goes with the film just seated, where the one in hand is of another film or
+    // of none: the still is the ring's colour and the frame the bubble falls back to, and a still of
+    // the film before this one is wrong for both (see `grab_bubble_frame`).
+    if !the_still_in_hand_is_of_the_pinned_film() {
+        grab_bubble_frame(box_);
+    }
+
+    repaint_the_bubble();
+    true
 }
 
 /// Whether a film's window is standing in the bubble now.
@@ -135,25 +185,18 @@ pub(super) fn film_is_seated() -> bool {
 /// **A window already standing in its box is left exactly where it stands**, and that is not a
 /// micro-optimisation: the placement below is a call on somebody else's window, and a tick that
 /// re-placed a film every pass would be a film that flashes once a frame.
-pub(super) fn reseat_film_window() -> bool {
-    let Some(seated) = seated_film() else {
-        return false;
-    };
-
+fn put_it_back_were_it_has_moved(seated: SeatedFilm, box_: ScreenRegion) {
     let window = HWND(seated.hwnd as *mut _);
     unsafe {
         let mut rect = RECT::default();
         if GetWindowRect(window, &mut rect).is_err() {
-            return false;
+            return;
         }
 
-        if (rect.left, rect.top, rect.right, rect.bottom) != seated.box_ {
-            put_the_film_window_in(window, seated.box_);
+        if (rect.left, rect.top, rect.right, rect.bottom) != box_ {
+            put_the_film_window_in(window, box_);
         }
     }
-
-    raise_the_bubble();
-    true
 }
 
 /// The film's window standing in the bubble, where there is one to hold, and nothing where the
@@ -205,6 +248,15 @@ unsafe fn put_the_film_window_in(window: HWND, box_: ScreenRegion) {
         if SetWindowRgn(window, region, true) == 0 {
             let _ = DeleteObject(HGDIOBJ(region.0));
         }
+    }
+}
+
+/// Paint the bubble again for the frame the seat has just changed: what is inside the circle is the
+/// film's own window or this app's own face, and which of the two is a thing to be drawn (see
+/// `pin_chrome::BubbleArt::Hole`).
+fn repaint_the_bubble() {
+    unsafe {
+        repaint_pin_bubble();
     }
 }
 
@@ -329,12 +381,22 @@ mod tests {
         // holds no pipe for is a command nothing writes (see `mpv_ipc::deliver`).
         mpv_ipc::remember_pipe(std::process::id(), "a-seat-test-pipe", false);
 
+        // The bubble's own slots, emptied: a still another test left is a still of another film, and
+        // a drag left standing would keep the film out of the bubble for every test after it.
+        if let Ok(mut frame) = BUBBLE_FRAME.lock() {
+            *frame = None;
+        }
+        take_noted_grabs();
+        drop_bubble_drag();
+
         (window, machine)
     }
 
     fn put_the_machine_back(window: HWND, machine: ATestMachine) {
         unseat_film_window();
         mpv_ipc::forget_pipe(std::process::id());
+        take_noted_grabs();
+        drop_bubble_drag();
         VIDEO_HWND.store(machine.hwnd, Ordering::SeqCst);
         note_player_process(machine.pid, MPV_IMAGE_NAME);
         stand_pin(None);
@@ -344,6 +406,9 @@ mod tests {
         mpv_ipc::clear_noted();
         if let Ok(mut media) = CURRENT_MEDIA.lock() {
             *media = machine.media;
+        }
+        if let Ok(mut frame) = BUBBLE_FRAME.lock() {
+            *frame = None;
         }
         unsafe {
             let _ = DestroyWindow(window);
@@ -436,6 +501,10 @@ mod tests {
 
         unseat_film_window();
         assert!(!film_is_seated(), "the seat is given back");
+        assert!(
+            !unsafe { IsWindowVisible(window).as_bool() },
+            "and the film is taken off the screen with it: a 44-pixel window left standing where              the bubble was is a film in a box on a desktop that has no bubble over it"
+        );
         assert_eq!(
             the_region_holds(window, 32, 32),
             None,
@@ -487,21 +556,46 @@ mod tests {
     /// **A window something has moved out from under the ring is put back, and one standing where
     /// it belongs is left exactly there** — the second is not a micro-optimisation: the placement
     /// is a call on somebody else's window, and a tick that made it every pass would be a film that
-    /// flashes once a frame (see `reseat_film_window`).
+    /// flashes once a frame (see `keep_the_film_in_the_bubble`).
+    ///
+    /// **And a film nothing has seated is taken into the bubble by the same tick**, with a still of
+    /// its own asked for: a file a walk lands on behind a bubble begins its player while the pin is
+    /// off the screen, and its window is otherwise put nowhere but in the band of a window nobody
+    /// can see (see `grab_bubble_frame` and the module documentation).
     #[test]
-    fn a_moved_film_is_put_back_in_the_bubble_and_one_that_is_there_is_left_alone() {
+    fn a_film_is_kept_in_the_bubble_a_moved_one_is_put_back_and_one_that_is_there_is_left_alone() {
         let _one = PIN_TESTS_ONE_AT_A_TIME
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let (window, machine) = stand_a_film_and_a_pin();
 
-        assert!(
-            !reseat_film_window(),
-            "a film no bubble has seated is not placed anywhere by a tick"
-        );
-
         let box_ = (300, 300, 364, 364);
-        assert!(seat_film_window(box_));
+        assert!(
+            keep_the_film_in_the_bubble(box_),
+            "a film mpv is drawing and nothing has seated is taken into the bubble by a tick"
+        );
+        assert!(film_is_seated());
+        assert_eq!(
+            window_box_on_screen(window),
+            box_,
+            "at the box the circle is standing in rather than in the band of a window nobody can              see"
+        );
+        let asked = take_noted_grabs();
+        assert_eq!(asked.len(), 1, "and a still is asked for, once");
+        let (film, at, side) = &asked[0];
+        assert_eq!(
+            film,
+            &PathBuf::from("a-film-a-bubble-stands-around.mkv"),
+            "for the film the pin is showing: the one in hand is of another, or of none, and a still              is the ring's colour and the frame the bubble falls back to"
+        );
+        assert!(
+            *at >= 30.0,
+            "at the second the bar is showing ({at}), which is the transport's own clock"
+        );
+        assert_eq!(
+            *side, 44,
+            "and at the circle's own side on this display rather than at the box's width: the box is              the window's square and the still is the circle's (see `PIN_BUBBLE_PIXELS`)"
+        );
 
         // Something moved it: another app's `SetWindowPos`, or mpv itself resizing for a film whose
         // resolution changed mid-film — whichever, the bubble's square is where it belongs.
@@ -516,12 +610,15 @@ mod tests {
                 SWP_NOACTIVATE | SWP_NOZORDER,
             );
         }
-        assert!(reseat_film_window(), "a seated film is placed by a tick");
+        assert!(
+            keep_the_film_in_the_bubble(box_),
+            "a seated film is placed by a tick"
+        );
         assert_eq!(window_box_on_screen(window), box_);
 
         let standing = window_box_on_screen(window);
         assert!(
-            reseat_film_window(),
+            keep_the_film_in_the_bubble(box_),
             "and a tick over a film where it belongs answers true"
         );
         assert_eq!(
@@ -529,6 +626,53 @@ mod tests {
             standing,
             "while leaving a window that is already standing there alone"
         );
+        assert!(
+            take_noted_grabs().is_empty(),
+            "and asking for no second still: the one in hand is the film's own, which is what a              bubble that has not changed films keeps"
+        );
+
+        put_the_machine_back(window, machine);
+    }
+
+    /// **A bubble a hand is carrying keeps the film out of it.** A film's window cannot follow a
+    /// circle being dragged — that is a placement of somebody else's window on every move the
+    /// pointer makes — so a press takes the film out and the bubble shows its own still until the
+    /// hand lets go (see `keep_the_film_in_the_bubble` and `pin_bubble_proc`).
+    #[test]
+    fn a_bubble_being_carried_is_left_showing_its_own_face() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (window, machine) = stand_a_film_and_a_pin();
+
+        assert!(seat_film_window((300, 300, 364, 364)));
+        unseat_film_window();
+
+        // The press: the drag is what has hold of the bubble from here (see `pin_bubble_proc`).
+        if let Ok(mut drag) = PIN_BUBBLE_DRAG.lock() {
+            *drag = Some(((0, 0), (0, 0)));
+        }
+
+        let where_it_was = window_box_on_screen(window);
+        assert!(
+            !keep_the_film_in_the_bubble((300, 300, 364, 364)),
+            "a bubble being carried is not given a film to chase the pointer with"
+        );
+        assert!(!film_is_seated());
+        assert_eq!(
+            window_box_on_screen(window),
+            where_it_was,
+            "and nothing of the film's is moved for it"
+        );
+
+        // The release, which is where a drag ends in every road but the one that has lost its
+        // capture: the film goes back into the circle the hand left the bubble at.
+        drop_bubble_drag();
+        assert!(
+            keep_the_film_in_the_bubble((300, 300, 364, 364)),
+            "and the film is put back once the hand has let go"
+        );
+        assert_eq!(window_box_on_screen(window), (300, 300, 364, 364));
 
         put_the_machine_back(window, machine);
     }
