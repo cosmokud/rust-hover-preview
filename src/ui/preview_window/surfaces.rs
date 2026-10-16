@@ -53,12 +53,6 @@ thread_local! {
     /// caption's is: a pinned video repaints while it plays, and the two strips are painted one
     /// after the other — so they cannot share one surface without one of them being rebuilt.
     pub(super) static TRANSPORT_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
-    /// The frame a pinned window is being dragged to is scaled out of: the media's own pixels, in
-    /// a surface GDI can read, which is what lets a band of a size the frame is not be filled by
-    /// `StretchBlt` rather than by a pixel at a time. It is kept between repaints for the reason
-    /// the two strips above are — an edge under a hand is a repaint per pointer move — and its
-    /// size follows the frame, not the box being dragged to.
-    pub(super) static BAND_SOURCE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
     /// The membrane a caption's tooltip is written on. It is the size of the whole window rather
     /// than of a strip, because a name is measured and drawn through GDI and needs a device
     /// context of its own, and it is kept between paints for the reason the surfaces above are:
@@ -292,7 +286,7 @@ pub(super) fn hold_video_window_frame() -> bool {
         let mut pixels = std::slice::from_raw_parts(surface.bits(), wanted).to_vec();
         // GDI writes colour and not alpha, and a layered window is composited from premultiplied
         // coverage: this frame is opaque everywhere because a player's window has nothing behind
-        // it to be transparent over (see `stretch_into_band` for the same correction).
+        // it to be transparent over.
         for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel[3] = 255;
         }
