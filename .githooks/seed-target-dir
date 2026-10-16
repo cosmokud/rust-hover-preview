@@ -1,0 +1,51 @@
+#!/bin/sh
+# Bring a worktree's own cargo target dir up as the shared one's dependencies, linked.
+#
+# Why a worktree has a target dir of its own is in `post-checkout`. What this brings over
+# is the part that is the same for every checkout — the dependencies — as hard links, so
+# that the shared cache costs neither disk nor a second compile. Everything of *this*
+# package is deliberately left behind: its artifacts and fingerprints are the part that
+# differs between checkouts, and a fingerprint brought over would be a build called fresh
+# against another tree's sources, which is the fault the split exists to end. The crate
+# itself, and the tests of it, therefore always compile from the sources of the worktree
+# they are built in.
+#
+# Usage: seed-target-dir <shared dir> <this worktree's target dir>
+#
+# A target dir that already exists is left exactly as it is — delete it to seed again. A
+# shared dir that does not exist is nothing to do, and a file that will not link (another
+# volume, a filesystem without hard links) is simply missing: cargo compiles whatever a
+# target dir does not hold.
+
+set -eu
+
+shared=$1
+into=$2
+
+[ -d "$shared" ] || exit 0
+[ -d "$into" ] && exit 0
+
+mkdir -p "$into"
+
+for profile in "$shared"/*/; do
+    [ -d "$profile/deps" ] || continue
+    name=$(basename "$profile")
+
+    for part in deps build .fingerprint; do
+        [ -d "$profile/$part" ] || continue
+        mkdir -p "$into/$name/$part"
+
+        # Everything but this package's own files, in both spellings cargo writes them:
+        # the crate is `rust-hover-preview`, so its artifacts are `rust_hover_preview-*`
+        # and its fingerprint and build dirs are `rust-hover-preview-*`.
+        (
+            cd "$profile/$part"
+            find . -mindepth 1 -maxdepth 1 -print | while IFS= read -r entry; do
+                case ${entry#./} in
+                    rust_hover_preview* | rust-hover-preview*) continue ;;
+                esac
+                printf '%s\0' "$entry"
+            done | xargs -0 -r cp -al -t "$into/$name/$part/" 2>/dev/null || true
+        )
+    done
+done
