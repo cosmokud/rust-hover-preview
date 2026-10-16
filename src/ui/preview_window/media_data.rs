@@ -174,20 +174,21 @@ pub(super) fn fill_band_backdrop(
         let y = (row - first) as i32;
 
         if y < top || y >= bottom {
-            fill_backdrop_span(pixels, 0, stride, 0, background, y as u32);
+            fill_backdrop_span(pixels, 0, stride, background, y as u32);
             continue;
         }
 
-        fill_backdrop_span(pixels, 0, left, 0, background, y as u32);
-        fill_backdrop_span(pixels, right, stride, right / 4, background, y as u32);
+        fill_backdrop_span(pixels, 0, left, background, y as u32);
+        fill_backdrop_span(pixels, right, stride, background, y as u32);
     }
 }
 
 /// Fill one run of a band's row with the backdrop: the whole of it where the picture does not land on
 /// the row at all, and one of the two strips beside the picture where it does.
 ///
-/// `first_column` is the column of the band the run starts at, because a checkerboard's squares are
-/// placed by where a pixel is in the *band* rather than by where it is in the run.
+/// The run's own first column is what a checkerboard's squares are placed by, since they are squares
+/// of the *band*: a run that counted its own columns would start the strip beside a picture on its
+/// own first square rather than on the one the band is on.
 ///
 /// The flat colours are written from one value read before the loop, which is the half of this the walk
 /// over every pixel of a band could not do: the colour was chosen per pixel, and on a display's own band
@@ -196,13 +197,13 @@ fn fill_backdrop_span(
     pixels: &mut [u8],
     from: usize,
     to: usize,
-    first_column: usize,
     background: TransparentBackground,
     row: u32,
 ) {
     let Some(span) = pixels.get_mut(from..to) else {
         return;
     };
+    let first_column = from / 4;
 
     // Premultiplied by an alpha of 255, which is the pixel's own colour: the backdrop of a band this
     // app fills for itself is opaque where the picture over it is not, or the press the fill exists for
