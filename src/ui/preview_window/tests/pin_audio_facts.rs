@@ -87,6 +87,64 @@ fn a_film_is_named_by_its_soundtrack_not_its_picture() {
     assert_eq!(track.duration, Some(7331.0));
 }
 
+/// A track of the shape a probe answers for a sound, at a length: what the test below starts
+/// from, since what it is about is the length a probe's own answer is replaced by.
+fn a_track(codec: &str, duration: f64) -> audio_track::Track {
+    audio_track::Track {
+        player: audio_track::Player::Native,
+        codec: Some(codec.to_string()),
+        rate: Some(44_100),
+        channels: Some(2),
+        bitrate: Some(128_000),
+        duration: Some(duration),
+    }
+}
+
+/// A raw AAC stream's length is the one thing neither engine can read off the file — both read an
+/// estimate from the bit rate, which is out by seconds on ordinary streams and by minutes on long
+/// ones — so it is counted where the probe calls the file AAC. What a card's bar is a share of is
+/// then the file's own length rather than that estimate (see `aac_stream`).
+#[test]
+fn a_raw_aac_streams_length_is_counted_rather_than_estimated() {
+    let folder = std::env::temp_dir().join("rust-hover-preview-aac-counted");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    // Three frames of forty-four one, which is a stream of three times 1024 samples of it, and
+    // each frame written at a size of its own so that the count is not read off the file's.
+    let mut bytes = Vec::new();
+    for payload in [20, 300, 90] {
+        bytes.extend(aac_stream::a_frame(4, payload));
+    }
+    let stream = folder.join("stream.aac");
+    std::fs::write(&stream, &bytes).expect("a written file");
+
+    assert_eq!(
+        counted_length(a_track("AAC", 999.0), &stream).duration,
+        Some(3.0 * 1024.0 / 44_100.0),
+        "the length a card is drawn at is the frames the file holds, not the estimate"
+    );
+
+    // A sound that is not AAC is left exactly as the probe read it, whatever file is beside it.
+    assert_eq!(
+        counted_length(a_track("MP3", 180.0), &stream).duration,
+        Some(180.0),
+        "the walk is about a raw AAC stream and about nothing else"
+    );
+
+    // And a file the walk cannot answer for — here, one that is not ADTS frames at all — keeps
+    // the length the probe read, which is the answer every other file gets.
+    let other = folder.join("not-a-stream.aac");
+    std::fs::write(&other, b"\0\0\0\x18ftypM4A \0\0\0\0M4A mp42isom").expect("a written file");
+
+    assert_eq!(
+        counted_length(a_track("AAC", 999.0), &other).duration,
+        Some(999.0),
+        "a file that is not a stream of frames keeps the length its container states"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 /// The whole chain a hover runs, on the files it went wrong on: the track
 /// the probes answer and the facts line the card draws from it. Ignored, and
 /// driven by `RHP_AUDIO_FACTS_PROBE` —
