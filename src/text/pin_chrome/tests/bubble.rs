@@ -144,6 +144,16 @@ fn draws_the_bubbles_faces() {
                 [0.0; BUBBLE_BARS],
                 BubbleMark::Picture,
             ),
+            // And the hole a collapse with the film's own window standing in it draws: the ring,
+            // the bars and the mark, and another window's picture where the face would be — which
+            // over this strip's backdrop is the hole itself (see `BubbleArt::Hole`).
+            (
+                BubbleArt::Hole {
+                    ring: average_color(&picture),
+                },
+                BUBBLE_OVER_FRAME,
+                BubbleMark::Play,
+            ),
         ];
 
         let width = side * faces.len() as u32;
@@ -558,6 +568,89 @@ fn the_bars_over_a_frame_are_the_themes_ink_and_not_the_frames_own_colour() {
     // The buffer is the premultiplied BGRA a layered window is in, so the accent is read out of it
     // backwards — the order the ring's own test beside this one asks in (`paint_bubble`).
     let accent = palette().accent;
+    for (x, y) in differing {
+        assert_eq!(
+            pixel(&with, x, y),
+            [accent[2], accent[1], accent[0], 255],
+            "the bar at {x},{y} is not the theme's own ink"
+        );
+    }
+}
+
+/// The bubble of a film whose own window stands inside it: the ring, the bars and the mark are
+/// this app's, the face is not — it is a hole with another process's window behind it (see
+/// `BubbleArt::Hole`).
+///
+/// **What the hole's own pixels are written with is the whole of this test, and it is the one thing
+/// about a hole that is not visible to a hand.** A hole left fully transparent is a hole the mouse
+/// falls through: Win32 hit-tests a layered window by its alpha, and only a pixel whose alpha is
+/// *zero* lets the message past — so a bubble over a live film would stop taking the click that
+/// puts the pin back up, and the drag that carries it about. One level of 255 of black over
+/// whatever the film is showing is invisible and keeps the bubble the window the hand is talking
+/// to.
+#[test]
+fn the_hole_a_films_window_stands_in_is_still_the_windows_own_to_the_mouse() {
+    let ring = [12u8, 34, 56];
+    let hole = paint(BubbleArt::Hole { ring: Some(ring) }, BubbleMark::Pause);
+
+    // A pixel of the face, near the top of the circle: clear of the bars, which are drawn about
+    // the middle row, and clear of the mark and the scrim behind it, which are drawn in the middle
+    // (see `draw_histogram` and `paint_bubble`).
+    let face_of_the_hole = pixel(&hole, SIDE / 2, 6);
+    assert_eq!(
+        face_of_the_hole,
+        [0, 0, 0, 1],
+        "the face of a hole is the smallest alpha a layered window can hold and still take the \
+         mouse for, and a colour of its own would be a colour over somebody else's picture"
+    );
+    assert_ne!(
+        face_of_the_hole,
+        face(),
+        "and it is not the theme's own face: what is inside the ring is the film's window"
+    );
+
+    // The ring around it is this app's, at full coverage, in the colour the caller gave it — the
+    // film's own average, so that a hole is ringed in the colour a painted frame is ringed in and
+    // the ring does not change colour when the film pauses and the still takes over (see
+    // `render_pin_bubble`).
+    assert_eq!(pixel(&hole, SIDE - 3, SIDE / 2), [ring[2], ring[1], ring[0], 255]);
+
+    // And with no colour to give it is the theme's accent, exactly as the ring of a picture that
+    // is transparent everywhere is.
+    let plain = paint(BubbleArt::Hole { ring: None }, BubbleMark::Pause);
+    let accent = palette().accent;
+    assert_eq!(
+        pixel(&plain, SIDE - 3, SIDE / 2),
+        [accent[2], accent[1], accent[0], 255]
+    );
+
+    // A playback mark is drawn *over* a hole the way it is drawn over a frame, scrim and all: what
+    // is behind the glyph is a picture this app did not draw either way.
+    assert_ne!(
+        pixel(&hole, SIDE / 2, SIDE / 2),
+        face_of_the_hole,
+        "the mark of a film that is playing is drawn over the hole rather than left for the film"
+    );
+
+    // And the bars go over it too, in the theme's own ink. The mark is not part of this half — a
+    // bubble standing for something that does not play carries no glyph over anything — so what
+    // differs between a hole with bars and one without is a bar and nothing else.
+    let without = paint(BubbleArt::Hole { ring: None }, BubbleMark::Page);
+    let with = paint_bars(
+        BubbleArt::Hole { ring: None },
+        BUBBLE_OVER_FRAME,
+        BubbleMark::Page,
+    );
+    let differing = (0..SIDE)
+        .flat_map(|x| (0..SIDE).map(move |y| (x, y)))
+        .filter(|(x, y)| pixel(&with, *x, *y) != pixel(&without, *x, *y))
+        .collect::<Vec<(u32, u32)>>();
+
+    assert!(
+        !differing.is_empty(),
+        "the bars over a hole were not drawn at all, so a film whose window stands in the bubble \
+         would show a sound that is making nothing"
+    );
     for (x, y) in differing {
         assert_eq!(
             pixel(&with, x, y),
