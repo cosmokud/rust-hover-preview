@@ -1,4 +1,9 @@
 use super::*;
+// The two halves of the caption's own width rule, which `pin_chrome` re-exports only the second of:
+// a name's room and whether there is one are questions the caption asks itself, and the test of that
+// rule has to reach them where they live rather than through the glob — which finds the *test* module
+// named `caption` first.
+use crate::text::pin_chrome::caption::{title_fits, title_room};
 
 #[test]
 fn a_cut_name_is_the_whole_name_where_it_fits_and_the_longest_beginning_where_it_does_not() {
@@ -874,4 +879,59 @@ fn the_chevrons_arms_carry_a_share_of_the_ink() {
         "the walk buttons' chevron carries part of the ink in {partial} pixels only: the pixels \
          its arms cross hold the area of the stroke that is in them"
     );
+}
+
+/// A caption is narrowed in three steps, and each is the width the one before it stopped being worth
+/// it at: the name is cut, then the name is given up, then the strip is.
+///
+/// It is one test rather than three because the three are one rule read at three widths, and the thing
+/// worth pinning down is the *order*: a name given up before it was cut would be a title that vanished
+/// at the size it most needed to say something, and a strip given up at the same moment as the name
+/// would be a command bar thrown away while it still carried a row of buttons that work on it.
+#[test]
+fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
+    // Buttons are 46 logical pixels at 100% and the padding at either end of the name is 12, so a
+    // caption's room for its name is its width less the buttons it carries and less those 24. A
+    // caption wide enough for the pin's own walk carries seven buttons — the walk's four packed beside
+    // the window's three — and one too narrow drops the walk whole, which is why the room is not
+    // simply the width less a fixed number (see `button_boxes`).
+    assert_eq!(
+        title_room(600, 96, true),
+        600 - 7 * 46 - 24,
+        "a caption wide enough carries the walk as well"
+    );
+    assert_eq!(
+        title_room(200, 96, true),
+        200 - 3 * 46 - 24,
+        "and one too narrow for it carries the window's three alone"
+    );
+
+    // The three steps, at a width each of them is still worth taking at and one it is not.
+    assert!(
+        title_fits(600, 96, true) && caption_fits(600, 96, true),
+        "a wide caption says the name of what is pinned"
+    );
+    assert!(
+        !title_fits(200, 96, true) && caption_fits(200, 96, true),
+        "a narrow one gives the name up and keeps the strip: 200 less 162 is 38, which is room for          the ellipsis and not for a name"
+    );
+    assert!(
+        !title_fits(170, 96, true) && !caption_fits(170, 96, true),
+        "and one too narrow even for the ellipsis gives itself up, because a row of window buttons          over the top of somebody's picture is not worth the band of the picture"
+    );
+
+    // A pin with nothing to maximize carries two window buttons rather than three, so it has a button's
+    // width more to say a name in: at 350 the caption with a maximize has given its name up and the one
+    // without has not.
+    assert!(
+        !title_fits(350, 96, true) && title_fits(350, 96, false),
+        "a caption's room is measured against the buttons it is actually carrying"
+    );
+
+    // And the whole rule is the display's own scale, because every width it is asked about is: a
+    // caption on a display at 200% needs twice the room for the same name, and the window it is on is
+    // measured in the same doubled pixels.
+    assert!(!title_fits(200, 96, true) && !title_fits(400, 192, true));
+    assert!(caption_fits(200, 96, true) && caption_fits(400, 192, true));
+    assert!(!caption_fits(170, 96, true) && !caption_fits(340, 192, true));
 }

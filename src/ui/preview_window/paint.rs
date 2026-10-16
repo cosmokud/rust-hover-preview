@@ -529,7 +529,15 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             // there is no row above the media for one to be drawn in, and a strip painted over the
             // first row of a card is a title bar with the controls underneath it (see
             // `pinned_caption_height`).
-            caption: pin.caption > 0 && pin.chrome.caption,
+            //
+            // And a caption too narrow to be a command bar is drawn none at all, whatever the pointer
+            // is asking for: a window taken down to a hundredth of a display has no room for a strip,
+            // and a strip drawn into one is a title bar with no title in it and buttons that do not
+            // fit (see `caption_fits`). It is the same question the press is answered by, asked of the
+            // same width, so what the caption refuses to draw is what it also refuses to answer.
+            caption: pin.caption > 0
+                && pin.chrome.caption
+                && pin_chrome::caption_fits(width, pin.dpi, pin.frame != PinFrame::None),
             bar: pin.chrome.bar,
             dpi: pin.dpi,
             title: pin
