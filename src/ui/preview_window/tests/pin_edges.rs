@@ -585,6 +585,7 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         path: PathBuf::from("picture.png"),
         bound: Some(600),
         content: (100, 100, 700, 500),
+        zoom: Some(PinZoom::filling((100, 100, 700, 500))),
         restore: None,
         dpi: 96,
         audio_scale: None,

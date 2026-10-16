@@ -107,6 +107,7 @@ pub(super) fn replace_pinned_window() -> Option<PreviewMessage> {
 
     pin.content = content;
     pin.restore = None;
+    reset_pin_zoom(pin);
     Some(PreviewMessage::PinBox(content))
 }
 
@@ -179,6 +180,7 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
 
             pin.restore = restore;
             pin.content = content;
+            reset_pin_zoom(pin);
             Some(())
         })
         .is_some();
@@ -259,6 +261,9 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
         ),
     };
 
+    // The box a double-click puts back is the box the scaling settings ask for, so the picture is
+    // put back to filling it: there is no view of a zoomed picture to keep across a size that is
+    // the file's rather than the hand's (see `reset_pin_zoom`).
     let content = clamp_pinned_box(centred_box(size, room), dpi, &DESKTOPS);
 
     // The check and the write are one lock and one step, as they are for a maximize: a walk taken
@@ -276,6 +281,7 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
             pin.restore = None;
             pin.bound = None;
             pin.content = content;
+            reset_pin_zoom(pin);
             Some(())
         })
         .is_some();
@@ -683,6 +689,10 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // `PinnedPreview::bound`).
         if matches!(drag.action, PinDragAction::Resize(_)) {
             pin.bound = Some((content.2 - content.0).max(content.3 - content.1).max(1));
+            // A box the hand pulled to a size is a box chosen for the whole of a window, so the
+            // picture goes back to filling it: the two are one fact about the window, and a picture
+            // left zoomed into a box of another size is a picture hanging off it (see `reset_pin_zoom`).
+            reset_pin_zoom(pin);
         }
         // And a maximized window gives its restore up to any hand that has moved it, carried to
         // another place or pulled to a size of its own: a window the user has taken hold of is one
@@ -796,6 +806,7 @@ pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
         };
         pin.restore = pin_restore_box(restore, was, content);
         pin.content = content;
+        reset_pin_zoom(pin);
     }
 
     let placed = pinned_window_box_of(content, dpi, transport, overlay, caption);

@@ -337,10 +337,7 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 /// and `reconcile_swap_take_up`). The later tick therefore answers the give-up, not the cover.
 pub(super) fn pinned_player_is_coming(media_type: MediaType, path: &Path) -> bool {
     media_type == MediaType::Video
-        && matches!(
-            video_route(path),
-            VideoRoute::Ffplay | VideoRoute::Mpv
-        )
+        && matches!(video_route(path), VideoRoute::Ffplay | VideoRoute::Mpv)
 }
 
 /// Whether FFmpeg's player is on this machine, the half of [`pinned_player_is_coming`] that is
@@ -1068,6 +1065,13 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
             keeps_its_box,
             content,
         ),
+        // A picture the wheel zooms arrives filling its window: every take-up is a whole window
+        // built around the file it landed on, so there is no view of another picture to carry — a
+        // walk from a zoomed-in photograph to the one beside it is the new file at the size the window
+        // was given, which is what a walk has always been (see `reset_pin_zoom`).
+        zoom: kind
+            .is_some_and(|kind| kind.is_zoomable_picture())
+            .then(|| PinZoom::filling(content)),
         restore: carried.and_then(|(restore, ..)| restore),
         dpi,
         // The share the card was taken up at, which the card is
@@ -1425,9 +1429,8 @@ fn box_is_covered(
                 | MediaType::Calibre
                 | MediaType::Comic
         )
-        && held.is_some_and(|(held_width, held_height)| {
-            held_width >= width && held_height >= height
-        })
+        && held
+            .is_some_and(|(held_width, held_height)| held_width >= width && held_height >= height)
 }
 
 /// Which of the two roads asked for a relayout, for the one kind of media whose answer differs.

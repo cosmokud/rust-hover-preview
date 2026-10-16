@@ -210,6 +210,15 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     let band_width = width.max(1) as u32;
     let mem_dc = layered_surface_dc(hwnd.0 as isize);
 
+    // Where in that band the media lands. A picture is the band's own box unless the wheel has
+    // zoomed it into a window that stopped growing, in which case it lands on a box larger than the
+    // band and is carried around inside it — and a box outside the band is left to GDI to clip, since
+    // what makes it whole is the placement and not the size (see `PinZoom::picture_box`).
+    let frame = match paint.zoom {
+        Some(zoom) => zoom.picture_box((band_width as i32, band_height as i32)),
+        None => (0, 0, band_width as i32, band_height as i32),
+    };
+
     // A player parked for the length of a drag is painted over rather than painted through: the
     // band is transparent everywhere else so that FFmpeg's own window shows through it, and a
     // transparent band with the player hidden is a hole in the desktop shaped like a video. So the
@@ -230,6 +239,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     width: band_width,
                     origin_y: band_top.max(0) as u32,
                     height: band_height,
+                    frame,
                 },
             );
         } else {
@@ -241,6 +251,21 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         if let Ok(media) = CURRENT_MEDIA.lock() {
             if let Some(media) = media.as_ref() {
                 if !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video) {
+                    // The rows a zoomed picture has been carried off are the backdrop's rather than
+                    // nobody's, and they are filled before the picture goes on top: a layered window
+                    // is hit-tested by the shape of its pixels, so a band left transparent where the
+                    // picture used to be would be a band a press falls through (see
+                    // `fill_band_backdrop`).
+                    if frame != (0, 0, band_width as i32, band_height as i32) {
+                        fill_band_backdrop(
+                            out,
+                            band_width,
+                            band_top.max(0) as u32,
+                            band_height,
+                            preview_background(media.media_type),
+                        );
+                    }
+
                     compose_media_into_band(
                         media.current_pixels(),
                         media.current_width(),
@@ -254,6 +279,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                             width: band_width,
                             origin_y: band_top.max(0) as u32,
                             height: band_height,
+                            frame,
                         },
                     );
                 } else if film_band_is_hit_testable(
@@ -422,6 +448,13 @@ pub(super) struct PinnedPaint {
     pub(super) height: i32,
     pub(super) caption_height: i32,
     pub(super) transport_height: i32,
+    /// How the media is drawn inside its band, or nothing for a kind the wheel does not zoom: what
+    /// a picture the wheel has taken inside its window is placed by, rather than the band itself (see
+    /// `PinZoom`).
+    ///
+    /// Nothing means the media lands on the whole of its band, which is every repaint of everything
+    /// but a zoomed picture.
+    pub(super) zoom: Option<PinZoom>,
     /// Whether the chrome is drawn over the media rather than in bands around it, which is what
     /// says where the media's band of the window is and even whether there is one.
     pub(super) overlay: bool,
@@ -490,6 +523,7 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             height,
             caption_height: pin.caption,
             transport_height: pinned_transport_height(pin.dpi, pin.transport_bar),
+            zoom: pin.zoom,
             overlay: pin.overlay,
             // A kind with no caption of its own is asked for none whatever its chrome is doing:
             // there is no row above the media for one to be drawn in, and a strip painted over the
@@ -554,6 +588,14 @@ pub(super) struct BandTarget<'a> {
     pub(super) width: u32,
     pub(super) origin_y: u32,
     pub(super) height: u32,
+    /// Where in the band the media lands, `(left, top, width, height)` measured from the band's own
+    /// top-left — the whole of the band for every caller but a zoomed pin, whose picture is drawn
+    /// larger than the window it is inside and carried around by the hand (see `PinZoom`).
+    ///
+    /// It is what makes the band a *box* rather than a frame to be filled: the rows and columns
+    /// outside it are left exactly as they were, so a caller that wants a backdrop around a picture
+    /// smaller than its band fills one in first (see `fill_band_backdrop`).
+    pub(super) frame: (i32, i32, i32, i32),
 }
 
 /// Put the media of a pinned window into the band its window has left for it.
@@ -582,9 +624,16 @@ pub(super) fn compose_media_into_band(
         return;
     }
 
-    if (width, height) == band {
+    // A frame that is the band's own size and lands on the whole of it is composed row for row,
+    // which is the whole of the cost of an ordinary paint. A frame that lands on *part* of the
+    // band is not that case however its size compares, since the rows it lands on are the ones that
+    // matter and the rest of the band belongs to the caller (see `BandTarget::frame`).
+    let frame = target.frame;
+    let lands_on_everything = frame == (0, 0, band.0 as i32, band.1 as i32);
+
+    if lands_on_everything && (width, height) == band {
         compose_preview_pixels_into_band(bgra, width, height, background, opaque, target);
-    } else if !opaque || !stretch_into_band(bgra, (width, height), band, &mut target) {
+    } else if !opaque || !stretch_into_band(bgra, (width, height), &mut target) {
         resample_into_band(bgra, (width, height), band, background, opaque, target);
     }
 }
@@ -612,7 +661,6 @@ pub(super) fn compose_media_into_band(
 pub(super) fn stretch_into_band(
     bgra: &[u8],
     source: (u32, u32),
-    band: (u32, u32),
     target: &mut BandTarget<'_>,
 ) -> bool {
     let (source_width, source_height) = source;
@@ -626,8 +674,15 @@ pub(super) fn stretch_into_band(
     let (out_width, band_height, origin_y, dc) =
         (target.width, target.height, target.origin_y, target.dc);
     let out_row_bytes = out_width as usize * 4;
-    let rows = (band.1 as usize).min(band_height as usize);
-    if rows == 0 || out_row_bytes == 0 {
+
+    // The rows the picture lands on, which are its frame's own and never the rows past the band the
+    // surface was given: a picture drawn larger than its window arrives here with a frame that is
+    // bigger than the band in one or both directions, and GDI is left to clip whatever of it falls
+    // outside the surface (see `BandTarget::frame`).
+    let frame = target.frame;
+    let top = origin_y as i32 + frame.1;
+    let rows = frame.3.min(band_height as i32 - frame.1).max(0);
+    if rows == 0 || out_row_bytes == 0 || frame.2 <= 0 {
         return false;
     }
 
@@ -657,10 +712,10 @@ pub(super) fn stretch_into_band(
             let _ = SetBrushOrgEx(dc, 0, 0, None);
             let _ = StretchBlt(
                 dc,
-                0,
-                origin_y as i32,
-                out_width as i32,
-                rows as i32,
+                frame.0,
+                top,
+                frame.2,
+                rows,
                 source_surface.dc,
                 0,
                 0,
@@ -676,14 +731,21 @@ pub(super) fn stretch_into_band(
 
         // A `BI_RGB` surface carries no alpha as far as GDI is concerned, and what a layered
         // window is drawn from is premultiplied coverage: an opaque frame's is 255 everywhere.
+        //
+        // The coverage handed back is the frame's own, and not the band's: the rows and columns a
+        // picture smaller than its band has been carried off belong to whatever the caller put
+        // there, and a stretch that sealed them would be sealing somebody else's backdrop (see
+        // `fill_band_backdrop`).
+        let first = frame.0.max(0) as usize;
+        let last = ((frame.0 + frame.2) as usize).min(out_width as usize);
         let out = &mut *target.out;
-        for row in 0..rows {
-            let start = (origin_y as usize + row) * out_row_bytes;
+        for row in top.max(0) as usize..(top + rows).max(0) as usize {
+            let start = row * out_row_bytes;
             let Some(destination) = out.get_mut(start..start + out_row_bytes) else {
                 break;
             };
 
-            for pixel in destination.as_chunks_mut::<4>().0 {
+            for pixel in destination.as_chunks_mut::<4>().0[first..last].iter_mut() {
                 pixel[3] = 255;
             }
         }
@@ -806,10 +868,11 @@ pub(super) fn resample_into_band(
         width: out_width,
         origin_y,
         height: band_height,
+        frame,
         ..
     } = target;
 
-    if out_width == 0 || band_height == 0 {
+    if out_width == 0 || band_height == 0 || frame.2 <= 0 || frame.3 <= 0 {
         return;
     }
 
@@ -823,8 +886,13 @@ pub(super) fn resample_into_band(
     let out_row_bytes = out_width as usize * 4;
     // Where a destination pixel's center maps back to in the source, in 16.16 fixed point: the
     // mapping is two multiplies a row and two a pixel, and there is no division in the loop.
-    let step_x = ((source_width as u64) << 16) / band.0 as u64;
-    let step_y = ((source_height as u64) << 16) / band.1 as u64;
+    //
+    // The two are the *frame's* own widths rather than the band's, because the picture lands in the
+    // frame and not in the band: a picture drawn larger than its window maps a frame bigger than the
+    // band back to the whole of the source, and the rows and columns outside that frame are not its
+    // to write (see `BandTarget::frame`).
+    let step_x = ((source_width as u64) << 16) / frame.2 as u64;
+    let step_y = ((source_height as u64) << 16) / frame.3 as u64;
     let rows = (band.1 as usize).min(band_height as usize);
 
     for y in 0..rows {
@@ -834,7 +902,14 @@ pub(super) fn resample_into_band(
             break;
         };
 
-        let sy = (y as u64 * step_y + step_y / 2).saturating_sub(0x8000);
+        // A row the picture does not land on is left exactly as the caller left it, which is the
+        // backdrop a picture carried off its band has left behind (see `fill_band_backdrop`).
+        let offset_y = y as i32 - frame.1;
+        if offset_y < 0 || offset_y >= frame.3 {
+            continue;
+        }
+
+        let sy = (offset_y as u64 * step_y + step_y / 2).saturating_sub(0x8000);
         let top_row = ((sy >> 16) as usize).min(source_height as usize - 1);
         let bottom_row = (top_row + 1).min(source_height as usize - 1);
         let wy = ((sy & 0xFFFF) >> 8) as u32;
@@ -842,7 +917,12 @@ pub(super) fn resample_into_band(
         let bottom = &bgra[bottom_row * row_bytes..bottom_row * row_bytes + row_bytes];
 
         for (x, pixel) in destination.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-            let sx = (x as u64 * step_x + step_x / 2).saturating_sub(0x8000);
+            let offset_x = x as i32 - frame.0;
+            if offset_x < 0 || offset_x >= frame.2 {
+                continue;
+            }
+
+            let sx = (offset_x as u64 * step_x + step_x / 2).saturating_sub(0x8000);
             let left_column = ((sx >> 16) as usize).min(source_width as usize - 1);
             let right_column = (left_column + 1).min(source_width as usize - 1);
             let wx = ((sx & 0xFFFF) >> 8) as u32;
