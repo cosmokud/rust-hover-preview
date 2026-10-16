@@ -1,5 +1,5 @@
-use super::super::subtitle_files::VideoSubtitlesSetting;
 use super::*;
+use super::super::subtitle_files::VideoSubtitlesSetting;
 
 /// A video behind the pin, as the reload's own guard reads it: the kind this app plays with
 /// FFmpeg, taken away and handed back by the test that stands one — the same shape `ws_j` uses
@@ -214,10 +214,7 @@ fn a_pinned_film_steps_its_subtitles_by_a_relaunch_on_ffplay_and_by_a_command_on
     );
     assert_eq!(
         mpv_ipc::noted_lines(),
-        vec![format!(
-            "{}\n",
-            r#"{"command":["cycle","sub"],"async":true}"#
-        )],
+        vec![format!("{}\n", r#"{"command":["cycle","sub"],"async":true}"#)],
         "the step is mpv's own word for walking its tracks, written down the pipe it listens on"
     );
     assert_eq!(

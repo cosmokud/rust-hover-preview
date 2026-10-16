@@ -88,12 +88,6 @@ impl PinZoom {
         self.drawn.0 / region_size(content).0 as f32
     }
 
-    /// The size the picture is drawn at, in whole pixels — which is what a paint and a crop are both
-    /// asked for, and not what the arithmetic walks (see `PinZoom::drawn`).
-    fn drawn_box(&self) -> (i32, i32) {
-        drawn_pixels(self.drawn)
-    }
-
     /// Where the picture lands inside its window: the box in the window's own coordinates, which is
     /// the whole of what a repaint and a crop both need.
     ///
@@ -105,7 +99,7 @@ impl PinZoom {
     /// is a box that steps left.
     pub(super) fn picture_box(&self, window: (i32, i32)) -> (i32, i32, i32, i32) {
         let (width, height) = (window.0.max(1), window.1.max(1));
-        let (drawn_width, drawn_height) = self.drawn_box();
+        let (drawn_width, drawn_height) = drawn_pixels(self.drawn);
         if drawn_width <= width && drawn_height <= height {
             return (0, 0, width, height);
         }
@@ -375,7 +369,7 @@ pub(super) fn reset_pin_zoom(pin: &mut PinnedPreview) {
 
 /// The size a drawn picture is whole pixels at: what a paint, a crop and a pan's own limit are all
 /// asked for, and not what the arithmetic walks (see `PinZoom::drawn`).
-pub(super) fn drawn_pixels(drawn: (f32, f32)) -> (i32, i32) {
+fn drawn_pixels(drawn: (f32, f32)) -> (i32, i32) {
     (
         drawn.0.round().max(1.0) as i32,
         drawn.1.round().max(1.0) as i32,
@@ -383,7 +377,7 @@ pub(super) fn drawn_pixels(drawn: (f32, f32)) -> (i32, i32) {
 }
 
 /// Where the picture's centre sits on the screen: a box's middle carried by the pan.
-pub(super) fn pinned_centre(content: ScreenRegion, pan: (f32, f32)) -> (i32, i32) {
+fn pinned_centre(content: ScreenRegion, pan: (f32, f32)) -> (i32, i32) {
     (
         (content.0 + content.2) / 2 + pan.0.round() as i32,
         (content.1 + content.3) / 2 + pan.1.round() as i32,

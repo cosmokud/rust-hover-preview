@@ -1034,16 +1034,22 @@ pub(super) unsafe fn pinned_audio_control_press(hwnd: HWND, x: i32, y: i32) -> b
     let duration = pinned_audio_duration(&path).filter(|length| *length > 0.0);
 
     let (media_x, media_y) = media_point(x, y);
-    let Some(control) = audio_preview::control_at(media_x, media_y, width, dpi, options, true)
+    let Some(control) =
+        audio_preview::control_at(media_x, media_y, width, dpi, options, true)
     else {
         return false;
     };
 
     match control {
         CardControl::Seek => {
-            let Some(share) =
-                audio_preview::bar_share_at(media_x, media_y, width, dpi, options, true)
-            else {
+            let Some(share) = audio_preview::bar_share_at(
+                media_x,
+                media_y,
+                width,
+                dpi,
+                options,
+                true,
+            ) else {
                 return false;
             };
             let Some(duration) = duration else {

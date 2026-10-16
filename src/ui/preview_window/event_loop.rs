@@ -3576,10 +3576,8 @@ pub fn run_preview_window() {
                                     // remembering a track of its own (see `next_subtitle`).
                                     None,
                                 );
-                                let pid = video_process
-                                    .as_ref()
-                                    .map(|player| player.id())
-                                    .unwrap_or(0);
+                                let pid =
+                                    video_process.as_ref().map(|player| player.id()).unwrap_or(0);
 
                                 current_video_path = Some(path.clone());
                                 video_pos = (pos_x, pos_y, media_width, media_height);

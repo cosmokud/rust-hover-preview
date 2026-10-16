@@ -744,8 +744,13 @@ pub(super) fn stretch_into_band(
         // picture smaller than its band has been carried off belong to whatever the caller put
         // there, and a stretch that sealed them would be sealing somebody else's backdrop (see
         // `fill_band_backdrop`).
-        let first = frame.0.max(0) as usize;
-        let last = ((frame.0 + frame.2) as usize).min(out_width as usize);
+        //
+        // The columns are cut to the surface before the range is built rather than after it, so that a
+        // frame carried wholly off one side is a frame with no columns in the band at all: a sum that
+        // came out negative would be a range's own end read as an enormous unsigned one, which is the
+        // whole of the band sealed opaque with nothing drawn on it.
+        let first = frame.0.clamp(0, out_width as i32) as usize;
+        let last = (frame.0 + frame.2).clamp(0, out_width as i32) as usize;
         let out = &mut *target.out;
         for row in top.max(0) as usize..(top + rows).max(0) as usize {
             let start = row * out_row_bytes;

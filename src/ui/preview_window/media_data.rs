@@ -133,6 +133,9 @@ pub(super) fn fill_band_hit_testable(out: &mut [u8], width: u32, origin_y: u32, 
 /// backdrop the media would have been drawn over is filled in first, and the picture is composed on
 /// top of it (see `compose_media_into_band`).
 ///
+/// A transparent backdrop is written as the band's own emptiness, which is what the caller has
+/// already left there — the same pixels either way, and the fill is the one road that has a colour
+/// to place per *column* and so cannot be folded into the flat one above.
 pub(super) fn fill_band_backdrop(
     out: &mut [u8],
     width: u32,
@@ -141,7 +144,7 @@ pub(super) fn fill_band_backdrop(
     background: TransparentBackground,
 ) {
     let stride = width as usize * 4;
-    if stride == 0 || matches!(background, TransparentBackground::Transparent) {
+    if stride == 0 {
         return;
     }
 
@@ -289,9 +292,13 @@ impl MediaData {
             .audio_scale
             .map(audio_options_of)
             .unwrap_or_else(current_audio_options);
-        let Some((pixels, width, height)) =
-            audio_preview::render(&card, size.0.max(1), size.1.max(1), clock.dpi, options)
-        else {
+        let Some((pixels, width, height)) = audio_preview::render(
+            &card,
+            size.0.max(1),
+            size.1.max(1),
+            clock.dpi,
+            options,
+        ) else {
             return false;
         };
 

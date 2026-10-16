@@ -337,7 +337,10 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 /// and `reconcile_swap_take_up`). The later tick therefore answers the give-up, not the cover.
 pub(super) fn pinned_player_is_coming(media_type: MediaType, path: &Path) -> bool {
     media_type == MediaType::Video
-        && matches!(video_route(path), VideoRoute::Ffplay | VideoRoute::Mpv)
+        && matches!(
+            video_route(path),
+            VideoRoute::Ffplay | VideoRoute::Mpv
+        )
 }
 
 /// Whether FFmpeg's player is on this machine, the half of [`pinned_player_is_coming`] that is
@@ -1429,8 +1432,9 @@ fn box_is_covered(
                 | MediaType::Calibre
                 | MediaType::Comic
         )
-        && held
-            .is_some_and(|(held_width, held_height)| held_width >= width && held_height >= height)
+        && held.is_some_and(|(held_width, held_height)| {
+            held_width >= width && held_height >= height
+        })
 }
 
 /// Which of the two roads asked for a relayout, for the one kind of media whose answer differs.
