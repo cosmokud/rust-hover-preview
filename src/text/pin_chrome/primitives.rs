@@ -573,7 +573,8 @@ pub(super) fn draw_cross(
     }
 }
 
-/// One chevron pointing left or right, walked a column at a time the way the cross is.
+/// One chevron pointing left or right: two arms, each of them the stroke it is, closing on the
+/// column the mark points at.
 ///
 /// A chevron rather than an arrowhead: a walk has no end, so what the two buttons mean is
 /// which way along it to go and not where it stops.
@@ -585,8 +586,12 @@ pub(super) fn draw_cross(
 /// The arms part *half* a span either side of the middle row, so that the mark comes out the
 /// size the close cross and the maximize box beside it are drawn at.
 ///
-/// Walked in whole pixels rather than in `stroke_segment` because a vertex is the whole of
-/// what a chevron says: an anti-aliased stroke a pixel wide rounds its own point off.
+/// Two strokes rather than a walk of whole columns, because an arm is a slanted edge and a walk
+/// has nothing but the steps between its columns to draw one with. Each stops half a stroke-width
+/// short of the vertex, which is where a stroke's rounded end reaches with the ramp it is drawn by,
+/// so the two of them light the column the mark points at and stop inside it: a chevron whose arms
+/// met at the vertex carries a pixel more, each way, than the glyph square it is asked for once the
+/// display is at 200%.
 #[allow(clippy::too_many_arguments)] // Which way it points is a fact about the mark, not a drawing flag.
 pub(super) fn draw_chevron(
     buffer: &mut [u8],
@@ -598,30 +603,37 @@ pub(super) fn draw_chevron(
     color: [u8; 3],
     pointing_right: bool,
 ) {
-    let thickness = thickness.round().max(1.0) as i32;
-    let half = span / 2;
-    for step in 0..=span.max(1) {
-        // The columns are walked the same way whichever way the chevron points — what says
-        // which way it points is whether the arms are widest at the first column or the last.
-        // Measuring the arms from the middle instead is what draws an X; taking the columns
-        // one way and the arms the other is what draws both buttons as the same arrow.
-        let x = center_x - half + step;
-        let reach = if pointing_right { span - step } else { step };
-        // The reach is rounded to the nearer row, so that the column the arms part from is
-        // the one row on its own and not the two the rounding would otherwise leave on it.
-        // The reach is *half* the span and not the whole of it: arms that reach as far as the
-        // mark is walked are drawn a whole span either side of the middle row, which is twice
-        // as tall as every other glyph in the bar.
-        let offset = (reach * half * 2 + span.max(1)) / (span.max(1) * 2);
+    // What the mark asks for is the rows a *column* of an arm carries, and the stroke carrying
+    // those rows is narrower across than they are: by the root of two, which is the conversion the
+    // close cross's diagonal is drawn with. This arm's shallower slope would ask for a wider stroke,
+    // and one wide enough for those rows carries its round ends a row outside the square the walk
+    // covered once the display is at 200% — so the arms are drawn the narrower of the two.
+    let edge = (thickness * std::f32::consts::FRAC_1_SQRT_2).max(1.0);
+    let half = span as f32 / 2.0;
+    let (middle_x, middle_y) = (center_x as f32 + 0.5, center_y as f32 + 0.5);
+    let point = if pointing_right { half } else { -half };
 
-        // As many rows either side of the middle as the stroke is wide, taken in opposite
-        // directions, so that the two arms are each other turned about the mark's own middle
-        // row at any thickness: a stroke that ran the same way on both sides would close the
-        // arms into a blob on the row where they meet.
-        for depth in 0..thickness {
-            put(buffer, width, x, center_y - offset + depth, color, 1.0);
-            put(buffer, width, x, center_y + offset - depth, color, 1.0);
-        }
+    // Stopped half a stroke-width short of the vertex, which is where the end it rounds off with
+    // sits in the column the mark points at rather than in the one beside it.
+    let stop = edge / 2.0;
+    for down in [-1.0, 1.0] {
+        // From the middle of the end pixel the walk opened at to the middle of the column it
+        // pointed into, which is the same pair of ends the walk covered and no more: an arm
+        // stopped short of them would leave the mark's own corners lit by less than the rest.
+        let far = (middle_x - point, middle_y + down * half);
+        let vertex = (middle_x + point, middle_y);
+        let (dx, dy) = (vertex.0 - far.0, vertex.1 - far.1);
+        let length = (dx * dx + dy * dy).sqrt().max(f32::EPSILON);
+
+        stroke_segment(
+            buffer,
+            width,
+            far,
+            (vertex.0 - dx / length * stop, vertex.1 - dy / length * stop),
+            edge,
+            color,
+            1.0,
+        );
     }
 }
 
@@ -702,8 +714,8 @@ pub(super) fn draw_open_with_list(
     // The list: three rows across the top of the mark, each as wide as the mark itself, so
     // that it reads as a list rather than as three specks. A row shorter than the chevron
     // below it is a bullet, and a bullet at ten pixels is a dot. It is walked in whole pixels
-    // for the reason the chevron is: a row of a list is a row, and a row drawn in halves is
-    // a row of gaps at the scale a display runs at.
+    // because a row of a list is a row: the rows are as wide as the mark is, so their ends land
+    // on the pixel grid, and a row drawn in halves would be a row of gaps.
     let half = span / 2;
     for offset in [0, half / 2, half] {
         for x in (center_x - half)..=(center_x + half) {
