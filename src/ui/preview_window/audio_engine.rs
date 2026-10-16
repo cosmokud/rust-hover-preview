@@ -269,11 +269,38 @@ pub(super) fn probe_audio_track(path: &Path) -> Option<audio_track::Track> {
         None => ffprobe_audio_track(path),
     };
 
+    let track = track.map(|track| counted_length(track, path));
+
     if track.is_some() {
         measure_audio_gain(path);
     }
 
     track
+}
+
+/// The track a sound is held as, with the length its own frames answer for in place of the
+/// length the probe read where the file is a raw AAC stream (see `aac_stream`).
+///
+/// What a card draws its bar and its clock against is this number, and what both engines read
+/// off a raw stream is an estimate from the bit rate — which a stream estimated short turns
+/// into a card saying the end of the file has been reached, with the bar filled, while the last
+/// seconds of the sound are still being heard (see `audio_clock`).
+///
+/// A file the probe calls AAC and that is not a raw stream is left exactly as it was: the sound
+/// of an `.m4a` is AAC too, and its length is the container's own, stated rather than counted
+/// (see `aac_stream::duration`).
+pub(super) fn counted_length(track: audio_track::Track, path: &Path) -> audio_track::Track {
+    if track.codec.as_deref() != Some("AAC") {
+        return track;
+    }
+
+    match aac_stream::duration(path) {
+        Some(duration) => audio_track::Track {
+            duration: Some(duration),
+            ..track
+        },
+        None => track,
+    }
 }
 
 /// What FFmpeg's own probe reports about a file, and the player that would play it.
@@ -1175,6 +1202,23 @@ pub(super) fn wrap_audio_player(
     AUDIO_CARD_DIRTY.store(true, Ordering::Release);
 }
 
+/// The whole a sound the engine Windows has is drawn against: the file's own answer where the
+/// file has one, and the engine's where it has not.
+///
+/// The two are one number for everything but a raw AAC stream: both are the container's own
+/// header, read by the same part of Windows. For one of those, the file's own is the length its
+/// frames were counted to (see `counted_length`) and the engine's is an estimate from the bit
+/// rate, which is out by seconds on ordinary streams and by minutes on long ones — so the file's
+/// own is the one a card's bar is a share of, and the one the seek is measured against.
+///
+/// Neither argument rather than a session because the question has to be answerable without one:
+/// a session is a thread-local the preview thread holds, and a question that has to be asked with
+/// a borrow of it is a question that cannot be asked in a test at all — the same shape as
+/// `player_for_gain` and `a_sound_that_is_held` above it.
+pub(super) fn native_length(from_file: Option<f64>, from_engine: Option<f64>) -> Option<f64> {
+    from_file.or(from_engine)
+}
+
 /// Where the sound is and how long it is: the engine's own clock where Windows plays it, and
 /// this app's clock over the player's start where FFmpeg does. The whole is the file's own
 /// answer either way, and either half is nothing where there is nothing to say it — which is
@@ -1220,7 +1264,7 @@ pub(super) fn audio_clock(
         // the sound starts — so what it reports is the position with nothing added to it.
         return (
             video_player::position(),
-            video_player::duration().or(track.duration),
+            native_length(track.duration, video_player::duration()),
         );
     }
 
