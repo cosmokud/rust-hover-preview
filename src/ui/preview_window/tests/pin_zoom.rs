@@ -243,10 +243,7 @@ fn zooming_back_out_of_the_window_consumes_the_overhang_before_it_shrinks_it() {
     // picture is the window's own size again the window starts coming down with it and the pan is
     // given up, because a picture that size has nowhere to sit.
     let window = (0, 0, 1000, 800);
-    let inside = PinZoom {
-        drawn: (1500.0, 1200.0),
-        pan: (-80.0, 40.0),
-    };
+    let inside = PinZoom::still((1500.0, 1200.0), (-80.0, 40.0));
 
     let first = zoomed(window, inside, -1, Some((300, 300)));
     assert_eq!(first.content, window, "the overhang is spent first");
@@ -303,26 +300,17 @@ fn a_picture_is_drawn_on_the_whole_of_a_window_it_fills_and_inside_one_it_does_n
 
     // And twice the window's size is a picture centred until a hand carries it: half of the overhang
     // hangs off each side.
-    let inside = PinZoom {
-        drawn: (2000.0, 1600.0),
-        pan: (0.0, 0.0),
-    };
+    let inside = PinZoom::still((2000.0, 1600.0), (0.0, 0.0));
     assert_eq!(inside.picture_box((1000, 800)), (-500, -400, 1500, 1200));
 
     // A pan moves it the way the hand went: a pointer carried to the right shows the left of the
     // picture, so the box steps left.
-    let carried = PinZoom {
-        drawn: (2000.0, 1600.0),
-        pan: (120.0, -60.0),
-    };
+    let carried = PinZoom::still((2000.0, 1600.0), (120.0, -60.0));
     assert_eq!(carried.picture_box((1000, 800)), (-380, -460, 1620, 1140));
 
     // A picture with no room to be moved has nowhere to be but the whole window, whatever the pan
     // remembers of a bigger one.
-    let back = PinZoom {
-        drawn: (1000.0, 800.0),
-        pan: (400.0, 400.0),
-    };
+    let back = PinZoom::still((1000.0, 800.0), (400.0, 400.0));
     assert_eq!(back.picture_box((1000, 800)), (0, 0, 1000, 800));
 }
 
@@ -333,10 +321,7 @@ fn a_box_laid_out_again_puts_a_zoomed_picture_back_to_filling_it() {
     // kind the wheel does not zoom has no view to reset and must not be given one.
     let mut pin = PinnedPreview {
         content: (100, 100, 500, 400),
-        zoom: Some(PinZoom {
-            drawn: (1600.0, 1200.0),
-            pan: (200.0, -100.0),
-        }),
+        zoom: Some(PinZoom::still((1600.0, 1200.0), (200.0, -100.0))),
         ..PinnedPreview::for_test()
     };
 
@@ -353,6 +338,13 @@ fn a_box_laid_out_again_puts_a_zoomed_picture_back_to_filling_it() {
 
 #[test]
 fn the_wheel_is_handed_the_box_of_a_pinned_picture_and_of_nothing_else() {
+    // The lock every test that reaches the pin's own state takes: what is shared is process-wide, and
+    // a pin stood up here is a pin taken out from under whatever test beside this one is standing its
+    // own (see `PIN_TESTS_ONE_AT_A_TIME`).
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
     // What the wheel hook reads has to be answered without waiting for the pin's lock, and it has to
     // be answered about the picture on the screen and nothing else: a bubble has no window to point
     // at, a film's picture belongs to a player of somebody else's, and a hand already carrying the
@@ -411,4 +403,195 @@ fn a_wheel_that_asks_for_more_notches_than_any_hand_can_turn_is_answered_with_a_
         width >= 10 && height >= 8,
         "a notch out that no hand can turn stops at the floor rather than going past it: {width} by {height}"
     );
+}
+
+/// A zoom is a *travel* and not a jump, and the whole of what makes it one is that it closes on the size
+/// the wheel asked for: every frame brings the picture nearer to it, no frame takes it past it, and the
+/// frames stop once it is there.
+///
+/// The frames are asked for at the loop's own cadence, sixteen milliseconds apart, because that is the
+/// cadence a travel is taken at — and what is asserted is the shape of the whole travel rather than any
+/// one frame of it, since that is the difference between this and the two things it is not: a curve of a
+/// fixed length, which cannot take a second notch in the middle of its own travel, and a chase that
+/// closes a fixed share of the distance each frame, which arrives at a rate that depends on how many
+/// frames a second the machine happens to run at.
+#[test]
+fn a_travel_closes_on_the_size_the_wheel_asked_for_and_never_passes_it() {
+    let (from, toward) = (400.0f32, 440.0f32);
+    let (mut drawn, mut velocity) = (from, 0.0f32);
+    let mut frames = 0;
+
+    loop {
+        let (next, next_velocity) = pin_zoom_spring(drawn, toward, velocity, 0.016);
+        assert!(
+            next >= drawn && next <= toward,
+            "frame {frames} took the picture from {drawn} to {next}, and a zoom may only travel the way it was asked to"
+        );
+
+        drawn = next;
+        velocity = next_velocity;
+        frames += 1;
+
+        if drawn == toward {
+            break;
+        }
+        assert!(
+            frames < 120,
+            "a travel of two seconds is not a travel: {drawn} of {toward}"
+        );
+    }
+
+    assert!(
+        frames > 3,
+        "a step is a travel of some frames and not a jump: {frames}"
+    );
+    assert_eq!(
+        velocity, 0.0,
+        "and it arrives at rest rather than at a speed"
+    );
+}
+
+/// A notch taken while the last one is still travelling is counted from the size the wheel *asked for*
+/// and not from the size the picture happens to be passing — which is the whole of what makes a fast
+/// wheel and a slow one land in the same place, and what makes a notch in and a notch out leave the
+/// picture exactly where it was however fast they were turned.
+#[test]
+fn a_notch_taken_mid_travel_is_counted_from_the_size_the_wheel_asked_for() {
+    let window = (0, 0, 1000, 800);
+    let settled = PinZoom::filling(window);
+    let asked = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: None,
+    };
+
+    let first = pin_zoom_toward(&asked(settled), 1);
+
+    // The picture part of the way to the size it was asked for, which is the state a second notch
+    // arrives in whenever a hand turns the wheel faster than the picture can follow.
+    let mid = PinZoom {
+        drawn: (settled.drawn.0 * 1.05, settled.drawn.1 * 1.05),
+        toward: first,
+        ..settled
+    };
+
+    let second = pin_zoom_toward(&asked(mid), 1);
+    assert!(
+        (second - first * PIN_ZOOM_PER_NOTCH).abs() < 0.01,
+        "the second notch is counted from what the first one asked for: {second} against {first}"
+    );
+    assert!(
+        (second - mid.drawn.0 * PIN_ZOOM_PER_NOTCH).abs() > 1.0,
+        "and not from where the picture has got to"
+    );
+
+    // And two notches together are the one step they would have been: a fast wheel and a slow one come
+    // out at the same size.
+    assert!(
+        (second - pin_zoom_toward(&asked(settled), 2)).abs() < 0.01,
+        "two notches are the same size whether they were taken apart or together"
+    );
+}
+
+/// A travel of a picture the window has stopped growing for leaves the window exactly where it is and
+/// carries the picture inside it — which is the whole of what a zoom past the cap is, taken a frame at a
+/// time rather than in one step.
+///
+/// It is the frame the *loop* takes, and it is where the two stages of a zoom are held apart: the window
+/// is the box the cap allows and nothing the wheel asks for may move it again, while the picture goes on
+/// growing inside it and stays anchored on the point the wheel read (see `PinZoom::anchor`).
+#[test]
+fn a_travel_past_the_cap_leaves_the_window_where_it_is() {
+    let cap = at_the_cap((500, 400));
+    let stopped = cap.content;
+    let toward = cap.zoom.drawn.0 * PIN_ZOOM_PER_NOTCH;
+    let asking = |zoom| PinZoomInputs {
+        content: stopped,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some((500, 400)),
+    };
+
+    let step = pin_zoom_step(
+        &asking(PinZoom {
+            toward,
+            ..cap.zoom
+        }),
+        0.016,
+        &display(),
+    )
+    .expect("a picture on its way to a size is a frame to take");
+
+    assert_eq!(
+        step.content, stopped,
+        "the window has stopped and stays stopped"
+    );
+    assert!(
+        step.zoom.drawn.0 > cap.zoom.drawn.0 && step.zoom.drawn.0 < toward,
+        "and the picture is part of the way to the size it was asked for: {} of {toward}",
+        step.zoom.drawn.0
+    );
+    assert_eq!(step.zoom.toward, toward, "aimed where the wheel asked");
+    assert_ne!(step.zoom.velocity, 0.0, "and still moving");
+
+    assert!(
+        pin_zoom_step(&asking(cap.zoom), 0.016, &display()).is_none(),
+        "a picture already at the size it was asked for has nothing to carry"
+    );
+}
+
+/// A wheel notch does not move the picture at all: what it writes down is where the picture is *going*,
+/// and the frames that take it there are the loop's.
+///
+/// That is the whole of why a notch is cheap enough to be counted on a hook every wheel message on the
+/// desktop waits for — it is one number written under one lock — and it is what the loop's cadence is
+/// then kept for: a picture with somewhere to be is a picture with something to animate (see
+/// `pin_zoom_in_flight`).
+#[test]
+fn a_notch_aims_the_picture_and_leaves_it_where_it_is() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let pin = overlay_pin(content, PinChrome::always());
+    let drawn = pin.zoom.expect("a picture the wheel zooms").drawn;
+    stand_pin(Some(pin));
+
+    assert!(
+        !pin_zoom_in_flight(),
+        "a picture nothing has been asked of is going nowhere"
+    );
+    assert_eq!(
+        pin_zoom_drawn_box(),
+        Some((0, 0, drawn.0 as i32, drawn.1 as i32)),
+        "and the box it is drawn in is the window's own"
+    );
+
+    aim_pin_zoom(1);
+
+    let zoom = pin_state()
+        .and_then(|pinned| pinned.pin().and_then(|pin| pin.zoom))
+        .expect("the pin this test stood up");
+    assert_eq!(
+        zoom.drawn, drawn,
+        "a notch writes down where the picture is going and does not move it"
+    );
+    assert!(
+        (zoom.toward - drawn.0 * PIN_ZOOM_PER_NOTCH).abs() < 0.01,
+        "and what it wrote down is one notch further out: {} of {}",
+        zoom.toward,
+        drawn.0 * PIN_ZOOM_PER_NOTCH
+    );
+    assert!(
+        pin_zoom_in_flight(),
+        "so there is a travel for the loop to take"
+    );
+
+    stand_pin(None);
+    stand_pin(previous);
 }

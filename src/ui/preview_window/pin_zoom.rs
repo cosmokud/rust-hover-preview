@@ -22,6 +22,43 @@ use super::*;
 /// hand is to come back from either end without counting notches.
 pub(super) const PIN_ZOOM_PER_NOTCH: f32 = 1.10;
 
+/// How fast a zoom travels to the size the wheel asked for: the rate of the spring the picture's
+/// drawn size is carried by, in radians a second, doubled into the spring's own rate below.
+///
+/// It is a rate rather than a length of time because the thing it paces is a *travel* and not a
+/// curve: a hand that turns the wheel again while the last notch is still on its way does not
+/// restart anything, it only moves where the travel is going — so what a fast wheel and a slow one
+/// share is this number and not a duration either of them was given.
+///
+/// Twenty is a step that has visibly finished in about a fifth of a second, which is long enough to
+/// be seen as a movement and short enough that the picture is never behind the hand.
+///
+pub(super) const PIN_ZOOM_SPRING_SPEED: f32 = 20.0;
+
+/// How near the size it was asked for a zoom has to come, and how slowly, before it is *there*: a
+/// quarter of a pixel, and four pixels a second.
+///
+/// A spring closes on what it was asked for and never quite arrives, and what that costs is not the
+/// picture — a quarter of a pixel is not a pixel — but the *window*, which is whole pixels on a
+/// screen and would otherwise be given a `SetWindowPos` and a repaint on every frame for the rest of
+/// the pin's life. The pair is also what ends an animation, and therefore what says when a picture
+/// has stopped long enough to be worth laying out again at the size it has settled on (see
+/// `pin_zoom_step`).
+///
+pub(super) const PIN_ZOOM_SETTLED_PIXELS: f32 = 0.25;
+pub(super) const PIN_ZOOM_SETTLED_SPEED: f32 = 4.0;
+
+/// The longest a single frame of a travel is taken to have lasted, in seconds.
+///
+/// A spring is arithmetic on how much time has passed, and the loop that takes its frames wakes on
+/// input as well as on its own cadence: a tick that has been away for a second — a hover answered, a
+/// file read, a machine that went to sleep — would otherwise advance the spring by a second's worth
+/// of travel in one step, which is a picture that jumps. It is the same ceiling the animation this
+/// is modelled on keeps, and it is above the frame cadence rather than at it, so an ordinary frame
+/// is never shortened by it.
+///
+pub(super) const PIN_ZOOM_LONGEST_FRAME: f32 = 0.033;
+
 /// The share of the display's room a picture may be zoomed down to, in either direction: the hard
 /// limit a zoom out stops at.
 ///
@@ -57,11 +94,38 @@ pub(super) struct PinZoom {
     /// exactly the shape it started with however many notches a hand turns: a window's own box is
     /// whole pixels on a screen and a picture's shape is not, so a zoom that re-derived its shape
     /// from a rounded window would walk it out of true over a long scroll.
+    ///
+    /// It is where the picture *is* and not where it is going: a notch writes `toward` and this
+    /// follows it over the frames of a travel (see `pin_zoom_step`).
     pub(super) drawn: (f32, f32),
     /// Where the picture's centre sits inside the window, in device pixels, measured from the
     /// window's own centre. Nothing until a hand has carried it, and nothing at all while the picture
     /// is the window's own size — a picture that size has no room to be moved into.
     pub(super) pan: (f32, f32),
+    /// The width the wheel has asked the picture to be drawn at: where `drawn` is on its way to.
+    ///
+    /// A width rather than a pair, because a picture's height is its width through its shape — the one
+    /// thing about it a zoom never changes — so the width is the whole of what a travel carries.
+    pub(super) toward: f32,
+    /// How fast the drawn width is travelling toward it, in pixels a second.
+    ///
+    /// It is half of the spring and not a leftover: what a spring remembers between one frame and the
+    /// next is where it is *and* how fast it was going, and a step taken from the size alone is a
+    /// chase rather than a spring — it arrives at a rate that depends on how many frames a second the
+    /// machine happens to run at.
+    pub(super) velocity: f32,
+    /// The screen point the travel is anchored on: the point of the picture that stays where it is
+    /// while the picture grows and shrinks about it.
+    ///
+    /// It is read from the pointer once per notch and *kept* for every frame of the travel, which is
+    /// the whole of why it is written down: a picture anchored on the pointer afresh each frame is a
+    /// picture that follows a hand moving the mouse while the wheel is turning — a slide nobody asked
+    /// for, since what is being turned is the wheel and not the picture.
+    ///
+    /// Nothing before the cap, where the anchor is the picture's own middle: a window growing with the
+    /// picture has no overhang for an anchor to move the picture into, and the middle is what a
+    /// picture that has not been carried is measured about (see `pin_zoom_to`).
+    pub(super) anchor: Option<(i32, i32)>,
 }
 
 impl PinZoom {
@@ -70,10 +134,31 @@ impl PinZoom {
     pub(super) fn filling(content: ScreenRegion) -> Self {
         let (width, height) = region_size(content);
 
+        Self::still((width as f32, height as f32), (0.0, 0.0))
+    }
+
+    /// A picture standing at a size and a place with nothing on its way anywhere: what a zoom that has
+    /// arrived is, and the shape a test about where a picture *lands* is written in.
+    pub(super) fn still(drawn: (f32, f32), pan: (f32, f32)) -> Self {
         Self {
-            drawn: (width as f32, height as f32),
-            pan: (0.0, 0.0),
+            drawn,
+            pan,
+            toward: drawn.0,
+            velocity: 0.0,
+            anchor: None,
         }
+    }
+
+    /// Whether this view is still on its way to the size the wheel asked for, which is what the loop
+    /// keeps the frame cadence for (see `pin_zoom_in_flight`).
+    pub(super) fn travelling(&self) -> bool {
+        self.drawn.0 != self.toward || self.velocity != 0.0
+    }
+
+    /// The size the picture is drawn at in whole pixels, which is what a repaint crops against and what
+    /// the file itself is asked for once a travel has ended (see `drawn_pixels`).
+    pub(super) fn drawn_size(&self) -> (i32, i32) {
+        drawn_pixels(self.drawn)
     }
 
     /// The shape the picture is drawn at: the one thing about it a zoom never changes, and the reason
@@ -145,6 +230,11 @@ pub(super) struct PinZoomInputs {
 /// them is in the window calls, because this is the whole of what a zoom decides: a caller that
 /// placed a box of its own would be a second opinion about the size a picture is drawn at, which is
 /// what the tests of this function exist to prevent.
+///
+/// What it answers is where the notches *ask* the picture to be, which is the size a travel is aimed
+/// at rather than the size it is drawn at this frame: a notch is counted on a hook every wheel
+/// message on the desktop waits for, so what it can do is write one number down, and the drawing
+/// follows over the frames of the travel (see `pin_zoom_toward` and `pin_zoom_step`).
 pub(super) fn pin_zoom_after(
     input: &PinZoomInputs,
     notches: i32,
@@ -154,28 +244,79 @@ pub(super) fn pin_zoom_after(
         return None;
     }
 
+    let mut plan = pin_zoom_to(input, pin_zoom_toward(input, notches), displays);
+    // The plan is the view the picture would have if the notches landed at once, so the size it is drawn
+    // at in it is a size it has *arrived* at rather than one it is still on its way to: a caller that
+    // reads the plan as a state — which is what a test does, one notch at a time — is handed a settled
+    // one, and a caller that wants only where the wheel has asked for reads it straight off it (see
+    // `aim_pin_zoom`).
+    plan.zoom.toward = plan.zoom.drawn.0;
+
+    Some(plan)
+}
+
+/// The width a wheel's notches ask a pinned picture to be drawn at: the number a zoom accumulates
+/// into, and the whole of what "a notch is a tenth" means.
+///
+/// It accumulates on what the wheel has *asked for* rather than on where the picture has got to, and
+/// that is the whole of what makes a fast wheel and a slow one land in the same place: a notch taken
+/// while the last one is still travelling would otherwise be counted from the size the picture
+/// happened to be passing, and two hands turning the same number of notches would come out at two
+/// different sizes (see `pin_zoom_step`).
+pub(super) fn pin_zoom_toward(input: &PinZoomInputs, notches: i32) -> f32 {
     let step = PIN_ZOOM_PER_NOTCH.powi(notches);
+    let floor = pin_zoom_floor(input, input.zoom.toward);
+
+    (input.zoom.toward * step).max(floor).min(PIN_ZOOM_CEILING)
+}
+
+/// The narrowest a zoom may leave a picture: the display's own room at a hundredth of itself, in
+/// *either* direction.
+///
+/// It is a share of the room rather than a size in logical pixels because the limit is about the
+/// screen rather than about what is on it: a picture taken to a hundredth of a display is a mark that
+/// can still be found and grown again, and a limit in pixels would be a different one on every
+/// monitor.
+///
+/// A picture has a shape, so the two directions are asked together and it is the wider of the two
+/// shares that is the floor — the one that keeps both sides of it above the limit rather than only
+/// the one the room happened to be proportioned for.
+///
+/// And never more than `already`, which is the width the zoom is at: the floor is there to stop a
+/// zoom out and not to take one back, so a box taken up already below it is left where it is rather
+/// than grown by the notch that asked to shrink it.
+// shortcut: that leaves such a pin below the floor until it has been grown and shrunk again — which
+// needs a display wider than six thousand pixels before the 48-pixel floor a resize keeps stops
+// covering it; upgrade if a display that wide is seen.
+fn pin_zoom_floor(input: &PinZoomInputs, already: f32) -> f32 {
+    let shape = input.zoom.shape();
+    let (room_width, room_height) = input.room.room();
+
+    (PIN_ZOOM_FLOOR_SHARE * (room_width as f32).max(room_height as f32 / shape)).min(already)
+}
+
+/// Where a pinned picture drawn `drawn_width` across is left: the box its window ends up with, and the
+/// view the picture has inside it.
+///
+/// `drawn_width` is the size the picture is drawn at *now* — the number a travel walks frame by frame,
+/// and the number a notch lands on the instant it is taken — and it is the whole of what the two stages
+/// of a zoom are decided from.
+pub(super) fn pin_zoom_to(
+    input: &PinZoomInputs,
+    drawn_width: f32,
+    displays: &dyn Displays,
+) -> PinZoomPlan {
     let content = input.content;
     let (width, height) = region_size(content);
     let shape = input.zoom.shape();
 
-    // The picture one step further out, and the floor it may not be taken under: the display's own
-    // room at a hundredth of itself, in *either* direction. A picture has a shape, so the two
-    // directions are asked together and it is the wider of the two shares that is the floor — the one
-    // that keeps both sides of it above the limit rather than only the one the room happened to be
-    // proportioned for.
-    //
-    // Never more than the picture already is: the floor is there to stop a zoom out and not to take
-    // one back, so a box taken up already below it is left where it is rather than grown by the notch
-    // that asked to shrink it.
-    // shortcut: that leaves such a pin below the floor until it has been grown and shrunk again —
-    // which needs a display wider than six thousand pixels before the 48-pixel floor a resize keeps
-    // stops covering it; upgrade if a display that wide is seen.
-    let (room_width, room_height) = input.room.room();
-    let floor = (PIN_ZOOM_FLOOR_SHARE * (room_width as f32).max(room_height as f32 / shape))
-        .min(input.zoom.drawn.0);
-
-    let drawn_width = (input.zoom.drawn.0 * step).max(floor).min(PIN_ZOOM_CEILING);
+    // The picture at the size it is being drawn at, held inside the floor it may not be taken under and
+    // the ceiling the arithmetic can hold. The floor is asked of the width the picture *is* rather than
+    // of the width being asked for, so that a zoom out that has arrived at the floor stops there
+    // instead of being taken under it by the next frame of its own travel (see `pin_zoom_floor`).
+    let drawn_width = drawn_width
+        .max(pin_zoom_floor(input, input.zoom.drawn.0))
+        .min(PIN_ZOOM_CEILING);
     let drawn = (drawn_width, drawn_width * shape);
 
     // The largest the window may grow to: the picture's own width at the size `Fit to Screen` would
@@ -272,7 +413,7 @@ pub(super) fn pin_zoom_after(
         ((drawn_height - size.1).max(0) / 2) as f32,
     );
 
-    Some(PinZoomPlan {
+    PinZoomPlan {
         content: placed,
         zoom: PinZoom {
             drawn,
@@ -280,54 +421,204 @@ pub(super) fn pin_zoom_after(
                 pan.0.clamp(-overhang.0, overhang.0),
                 pan.1.clamp(-overhang.1, overhang.1),
             ),
+            // What the travel is aimed at, how fast it is going and what it is anchored on are not
+            // this function's business and are carried through it: where a picture *lands* is the whole
+            // of what is decided here, and a caller that is walking a size is the caller that knows
+            // what it is walking toward (see `pin_zoom_step`).
+            toward: input.zoom.toward,
+            velocity: input.zoom.velocity,
+            anchor: input.zoom.anchor,
         },
+    }
+}
+
+/// One frame of a travel: how far a picture drawn `drawn` across has got toward the size it was asked
+/// for by the time `elapsed` has passed, and how fast it is going when it gets there.
+///
+/// It is a *critically damped spring*, and each of the three things it is not is the answer to a
+/// question the other two get wrong. A curve of a fixed length — an ease of two hundred milliseconds
+/// from where the picture is to where it was asked to be — cannot take a second notch in the middle of
+/// its own travel: the wheel is a hand and not a script, so a picture that restarted a fixed ease from
+/// wherever it had got to would crawl under a fast wheel and lurch under a slow one. A chase that
+/// closed a fixed share of the distance each frame would arrive at a rate that depends on how many
+/// frames a second the machine happens to run at. And a *spring* has no overshoot while it is
+/// critically damped, which is the one thing a zoom may not have: a picture that bounced past the size
+/// it was asked for and came back would be a picture that grew and shrank again after the hand had
+/// stopped turning.
+///
+/// It is written in seconds rather than in frames for the same reason the chase is wrong: what the two
+/// constants above say is how long a travel takes, and a machine that takes its frames twice as often
+/// takes the same travel in twice as many of them.
+pub(super) fn pin_zoom_spring(drawn: f32, toward: f32, velocity: f32, elapsed: f32) -> (f32, f32) {
+    let dt = elapsed.clamp(0.0, PIN_ZOOM_LONGEST_FRAME);
+    let omega = PIN_ZOOM_SPRING_SPEED * 2.0;
+
+    let velocity = velocity + (omega * omega * (toward - drawn) - 2.0 * omega * velocity) * dt;
+    let next = drawn + velocity * dt;
+
+    // A spring closes on what it was asked for and never quite arrives, and a picture a quarter of a
+    // pixel from its size is a picture at its size: what the snap buys is the *window*, which is whole
+    // pixels on a screen and would otherwise be resized and repainted on every frame for the rest of
+    // the pin's life for a difference nothing can see. It is also what says a travel is over, and so
+    // what says the file is worth laying out again at the size the picture settled on (see
+    // `pin_zoom_step`).
+    if (toward - next).abs() < PIN_ZOOM_SETTLED_PIXELS && velocity.abs() < PIN_ZOOM_SETTLED_SPEED {
+        return (toward, 0.0);
+    }
+
+    // And a frame that crosses the size it is going to *is* the frame that arrives at it: a spring
+    // given a moving target — a hand turning the wheel back while the last notch is still travelling —
+    // can carry past it, and a picture that grew past the size it was asked for and came back would be
+    // a picture that bounced.
+    if (toward - next) * (toward - drawn) < 0.0 {
+        return (toward, 0.0);
+    }
+
+    (next, velocity)
+}
+
+/// Carry a travel one frame further on: where the picture has got to by the time `elapsed` has passed,
+/// and the box that comes with it — or nothing at all for a picture already at the size the wheel asked
+/// for.
+///
+pub(super) fn pin_zoom_step(
+    input: &PinZoomInputs,
+    elapsed: f32,
+    displays: &dyn Displays,
+) -> Option<PinZoomPlan> {
+    if !input.zoom.travelling() {
+        return None;
+    }
+
+    let (drawn, velocity) = pin_zoom_spring(
+        input.zoom.drawn.0,
+        input.zoom.toward,
+        input.zoom.velocity,
+        elapsed,
+    );
+
+    let mut plan = pin_zoom_to(input, drawn, displays);
+    plan.zoom.velocity = velocity;
+
+    Some(plan)
+}
+
+/// Everything a notch is decided from, read out of the pin in one look — or nothing at all where the
+/// wheel is not this pin's to take.
+///
+/// The four refusals are one question — is there a picture here for the wheel to zoom — asked of the
+/// four things that can say there is not: no pin, a pin whose media is a kind the wheel does not zoom,
+/// a pin put away as a bubble, and a pin whose box is under a hand already. The last is a *drag* and not
+/// a zoom: a wheel notch landing in the middle of one would be two answers to the same question.
+fn pin_zoom_inputs() -> Option<PinZoomInputs> {
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
+    let zoom = pin
+        .zoom
+        .filter(|_| !pin.collapsed && pin.dragging.is_none())?;
+    let window = pin.window_box();
+
+    Some(PinZoomInputs {
+        content: pin.content,
+        zoom,
+        dpi: pin.dpi,
+        room: work_area_at((window.0 + window.2) / 2, (window.1 + window.3) / 2),
+        // The point the travel is anchored on, which is the one the wheel last read and not where the
+        // pointer is now: a picture anchored afresh on every frame is a picture that follows a hand
+        // moving the mouse while the wheel is turning (see `PinZoom::anchor`).
+        pointer: zoom.anchor,
     })
 }
 
-/// Take a pinned picture one wheel's worth further in or out and draw it there, from the wheel hook's
-/// own count of notches.
+/// Whether a pinned picture's travel is still going, which is what the loop keeps the frame cadence
+/// for: a spring takes its frames at the frame cadence or it is not a spring (see
+/// `wait_before_the_next_tick`).
+pub(super) fn pin_zoom_in_flight() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().and_then(|pin| pin.zoom))
+        .is_some_and(|zoom| zoom.travelling())
+}
+
+/// The box a pinned picture is drawn in, in whole pixels — or nothing where there is no picture the
+/// wheel zooms.
 ///
-/// It is the window procedure's road rather than the loop's for the reason a drag is: the notches are
-/// read on a hook that every wheel message on the desktop waits for, so what they come to is written
-/// and drawn here rather than handed to the thread that owns the media — and a picture is drawn from
-/// the frame the window already holds, so there is nothing here the loop owns.
-pub(super) unsafe fn apply_pin_zoom(hwnd: HWND, notches: i32) {
-    let input = {
-        let Some(pinned) = pin_state() else {
-            return;
-        };
-        let Some(pin) = pinned.pin() else {
-            return;
-        };
-        // A collapsed pin has no window on the screen to point at or to draw, and a drag already
-        // under the hand is a box the hand is carrying: a wheel notch landing in the middle of one
-        // would be two answers to the same question.
-        let Some(zoom) = pin
-            .zoom
-            .filter(|_| !pin.collapsed && pin.dragging.is_none())
-        else {
-            return;
-        };
+/// It is what the loop asks for when a travel has ended: a picture drawn larger than its window is a
+/// frame the window is holding stretched, and the file itself is what it is owed (see
+/// `relayout_pinned_media`).
+pub(super) fn pin_zoom_drawn_box() -> Option<ScreenRegion> {
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
+    let (width, height) = pin.zoom?.drawn_size();
 
-        let window = pin.window_box();
-        PinZoomInputs {
-            content: pin.content,
-            zoom,
-            dpi: pin.dpi,
-            room: work_area_at((window.0 + window.2) / 2, (window.1 + window.3) / 2),
-            pointer: cursor_screen_point(),
-        }
+    Some((0, 0, width, height))
+}
+
+/// Aim a pinned picture at the size a wheel's notches ask for, from the hook's own count.
+///
+/// The picture is left exactly where it is: what is written down is where it is *going*, and the frames
+/// that take it there are the loop's (see `step_pin_zoom`). That is the whole of why a notch is cheap
+/// enough to be counted on a hook every wheel message on the desktop waits for — it is one number
+/// written under one lock — and it is what lets a hand turning the wheel twice as fast come out twice as
+/// far in, since a notch taken mid-travel moves the size the last one was already going to rather than
+/// the size the picture happens to be passing (see `pin_zoom_toward`).
+pub(super) fn aim_pin_zoom(notches: i32) {
+    let Some(input) = pin_zoom_inputs() else {
+        return;
     };
-
+    // What the notches ask for, as if the picture landed there at once: the plan is that landed view, so
+    // the size it is drawn at in it is the size the travel below is aimed at — and the box and the pan it
+    // carries are where the travel is going rather than where it is (see `pin_zoom_step`).
     let Some(plan) = pin_zoom_after(&input, notches, &DESKTOPS) else {
         return;
     };
+    let toward = plan.zoom.toward;
+    let (content, zoom) = (input.content, input.zoom);
 
     // The reading and the write are one lock and one step, as they are for a resize: a walk taken
-    // between the two has put another file in the window, and a box decided from the file that was
-    // there is not the box this one wants (see `reset_pinned_size`). The tick that answers such a
-    // walk is already queued, so the right answer here is to leave it to that rather than to lay out
-    // over the top of it — which is a decision not to write, so it is made beside the write.
+    // between the two has put another file in the window, and a size decided from the file that was
+    // there is not the size this one wants (see `reset_pinned_size`). The tick that answers such a walk
+    // is already queued, so the right answer here is to leave it to that rather than to write over the
+    // top of it — which is a decision not to write, so it is made beside the write.
+    pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        if pin.content != content || pin.zoom != Some(zoom) {
+            return None;
+        }
+
+        let view = pin.zoom.as_mut()?;
+        view.toward = toward;
+        // The point this travel is anchored on: read from the pointer once, here, and kept for every
+        // frame of the travel rather than re-read by each of them.
+        view.anchor = cursor_screen_point();
+        Some(())
+    });
+}
+
+/// Carry a pinned picture's travel one frame further on and draw it where it has got to, answering
+/// whether this is the frame it *arrived* at the size the wheel asked for.
+///
+/// It is the loop's road and not the window procedure's, because the clock a travel is measured by is
+/// the loop's: a spring is written in seconds, and the loop is the one thing here that knows how long
+/// its own last tick was (see `PIN_ZOOM_LONGEST_FRAME`).
+///
+/// The frame, its place and the window's size go to `UpdateLayeredWindow` in one call, exactly as the
+/// drag of an edge does it: a window sized first and painted after is a moment in which the surface
+/// holds the old box and the window the new one, which an eye reads as the picture jumping (see
+/// `apply_pin_drag`).
+///
+/// The answer is the moment worth knowing about, and the caller is the one that knows it: a picture
+/// that has just stopped is a picture whose file is worth laying out again at the size it settled on,
+/// and asking for that on every frame of a travel would be a decode per frame (see `pin_zoom_drawn_box`).
+pub(super) unsafe fn step_pin_zoom(hwnd: HWND, elapsed: f32) -> bool {
+    let Some(input) = pin_zoom_inputs() else {
+        return false;
+    };
+
+    let Some(plan) = pin_zoom_step(&input, elapsed, &DESKTOPS) else {
+        return false;
+    };
+    let arrived = !plan.zoom.travelling();
+
     let written = pin_state()
         .and_then(|mut pinned| {
             let pin = pinned.pin_mut()?;
@@ -346,12 +637,10 @@ pub(super) unsafe fn apply_pin_zoom(hwnd: HWND, notches: i32) {
         .is_some();
 
     if written {
-        // The frame, its place and the window's size in one call, exactly as the drag of an edge does
-        // it: a window sized first and painted after is a moment in which the surface holds the old
-        // box and the window the new one, which an eye reads as the picture jumping (see
-        // `apply_pin_drag`).
         render_pinned_preview_at(hwnd, plan.content.0, plan.content.1);
     }
+
+    written && arrived
 }
 
 /// Put a pinned picture back to filling its window, for the kinds the wheel zooms and nothing at all

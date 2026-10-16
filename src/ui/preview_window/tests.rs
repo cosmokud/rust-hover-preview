@@ -311,10 +311,10 @@ fn with_pin_zoom(pin: PinnedPreview, scale: f32) -> PinnedPreview {
     let (width, height) = region_size(pin.content);
 
     PinnedPreview {
-        zoom: Some(PinZoom {
-            drawn: (width as f32 * scale, height as f32 * scale),
-            pan: (0.0, 0.0),
-        }),
+        zoom: Some(PinZoom::still(
+            (width as f32 * scale, height as f32 * scale),
+            (0.0, 0.0),
+        )),
         ..pin
     }
 }
