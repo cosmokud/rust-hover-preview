@@ -2985,3 +2985,84 @@ fn a_double_click_puts_a_pin_in_the_middle_of_its_screen() {
         "the box put in the middle is the window's own, bands and all, rather than the media's"
     );
 }
+
+/// The backdrop a zoomed picture is drawn over fills the band *less* the box the picture lands on, and
+/// nothing else: the pixels the picture covers are written by the compose that follows, and on a band of
+/// a display's own size filling them first was 2.0 ms of the 6.94 ms a 144 Hz frame has.
+///
+/// The band is a surface of the window's own size, as the paint's is, and what is not filled is a
+/// sentinel: the answer this asks for is exactly which pixels the fill touched.
+#[test]
+fn a_backdrops_fill_leaves_the_box_the_picture_lands_on_alone() {
+    let (width, height) = (24u32, 8u32);
+    let surface = DibSurface::create(width, height).expect("a band to fill");
+    let out =
+        unsafe { std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize) };
+
+    let sentinel = [7u8, 7, 7, 7];
+    for pixel in out.as_chunks_mut::<4>().0.iter_mut() {
+        *pixel = sentinel;
+    }
+
+    // A picture landing on the middle of the band: rows 2 to 5, columns 8 to 15.
+    fill_band_backdrop(
+        out,
+        width,
+        0,
+        height,
+        (8, 2, 8, 4),
+        TransparentBackground::White,
+    );
+
+    let at = |x: u32, y: u32| {
+        let start = (y * width + x) as usize * 4;
+        [out[start], out[start + 1], out[start + 2], out[start + 3]]
+    };
+    let backdrop = [255u8, 255, 255, 255];
+
+    assert_eq!(at(8, 0), backdrop, "the rows above the picture are the backdrop");
+    assert_eq!(at(0, 3), backdrop, "and the columns before it on a row it lands on");
+    assert_eq!(at(23, 3), backdrop, "and the columns after it");
+    assert_eq!(at(8, 7), backdrop, "and the rows below it");
+
+    assert_eq!(at(8, 2), sentinel, "the picture's own box is left exactly as it was");
+    assert_eq!(at(15, 5), sentinel, "to its last row and column");
+    assert_eq!(at(7, 3), backdrop, "and the column it starts at is the first of the backdrop");
+    assert_eq!(at(16, 3), backdrop, "as the one it stops at is the first of the backdrop after it");
+}
+
+/// A checkerboard backdrop keeps the squares it had wherever the picture leaves it: the colour of a pixel
+/// is a question about the pixel's own column of the *band*, and the strip beside a picture is filled in
+/// two runs — one before the picture and one after it — so a run that counted its own columns would
+/// start the second strip's squares again from its own edge.
+#[test]
+fn a_checkerboard_backdrop_keeps_its_squares_wherever_the_picture_leaves_it() {
+    let (width, height) = (48u32, 4u32);
+    let surface = DibSurface::create(width, height).expect("a band to fill");
+    let out =
+        unsafe { std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize) };
+    out.fill(0);
+
+    // A picture across the band's first sixteen columns, so the strip that is filled starts at column 16
+    // — which is the second square of a checkerboard sixteen pixels across.
+    fill_band_backdrop(
+        out,
+        width,
+        0,
+        height,
+        (0, 0, 16, height as i32),
+        TransparentBackground::Checkerboard,
+    );
+
+    let at = |x: u32, y: u32| {
+        let start = (y * width + x) as usize * 4;
+        [out[start], out[start + 1], out[start + 2], out[start + 3]]
+    };
+
+    // A square is sixteen pixels, and the colours are the pair `checkerboard_color` names: the squares of
+    // the band's own first row start dark and the next one along is light.
+    assert_eq!(at(16, 0), [144, 144, 144, 255], "the strip begins on the band's own second square");
+    assert_eq!(at(31, 0), [144, 144, 144, 255], "which runs to the end of its sixteen");
+    assert_eq!(at(32, 0), [224, 224, 224, 255], "and the square after it is the other colour");
+    assert_eq!(at(0, 0), [0, 0, 0, 0], "the picture's own columns were left as the caller left them");
+}

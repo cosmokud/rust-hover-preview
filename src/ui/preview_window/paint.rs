@@ -231,6 +231,47 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         None => (0, 0, band_width as i32, band_height as i32),
     };
 
+    // Whether the picture is drawn on a box other than the band's own, which is the case a backdrop is
+    // filled for at all (see `pinned_band_backdrop`).
+    let zoomed = frame != (0, 0, band_width as i32, band_height as i32);
+
+    // And whether this window is going to compose the media into the band itself: an engine's page and a
+    // player's window stand in the band and are somebody else's to draw, and a band with no media behind
+    // it is one nothing is composed into at all. A band that is not composed into is filled *whole*,
+    // because the surface's own pixels are then the last frame this window drew.
+    let composed_here = mem_dc.is_some()
+        && CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| {
+                media.as_ref().map(|media| {
+                    !media.media_type.is_engine()
+                        && !matches!(media.media_type, MediaType::Video)
+                })
+            })
+            .unwrap_or(false);
+
+    // The rows a zoomed picture has been carried off are the backdrop's rather than nobody's, and they
+    // are filled before the picture goes on top: a layered window is hit-tested by the shape of its
+    // pixels, so a band left transparent where the picture used to be would be a band a press falls
+    // through (see `fill_band_backdrop`). What is filled is the band *less* the box the picture lands
+    // on, since the compose below writes that box — which on a band of a display's own size is 2.0 ms
+    // of the 6.94 ms a 144 Hz frame has that was spent painting pixels the picture then covered.
+    if zoomed && mem_dc.is_some() {
+        fill_band_backdrop(
+            out,
+            band_width,
+            band_top.max(0) as u32,
+            band_height,
+            if composed_here {
+                frame
+            } else {
+                (0, 0, band_width as i32, band_height as i32)
+            },
+            zoom_background(),
+        );
+    }
+
     // A player parked for the length of a drag is painted over rather than painted through: the
     // band is transparent everywhere else so that FFmpeg's own window shows through it, and a
     // transparent band with the player hidden is a hole in the desktop shaped like a video. So the
@@ -261,30 +302,14 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     if mem_dc.is_some() {
         if let Ok(media) = CURRENT_MEDIA.lock() {
             if let Some(media) = media.as_ref() {
-                if !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video) {
+                if composed_here {
                     // What the band is filled with: a picture the wheel has taken past its window is
                     // drawn over the tray's own backdrop for a zoom, and every other picture over the
                     // backdrop its own kind asks for. The two are two different things to look at —
                     // what stands behind a picture nobody has touched is the picture's business, and
                     // what fills the band beside one a hand has carried off is the window's (see
                     // `pinned_band_backdrop`).
-                    let zoomed = frame != (0, 0, band_width as i32, band_height as i32);
                     let backdrop = pinned_band_backdrop(media.media_type, zoomed);
-
-                    // The rows a zoomed picture has been carried off are the backdrop's rather than
-                    // nobody's, and they are filled before the picture goes on top: a layered window
-                    // is hit-tested by the shape of its pixels, so a band left transparent where the
-                    // picture used to be would be a band a press falls through (see
-                    // `fill_band_backdrop`).
-                    if zoomed {
-                        fill_band_backdrop(
-                            out,
-                            band_width,
-                            band_top.max(0) as u32,
-                            band_height,
-                            backdrop,
-                        );
-                    }
 
                     compose_media_into_band(
                         media.current_pixels(),
