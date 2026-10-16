@@ -922,3 +922,84 @@ fn a_pin_with_no_bound_is_fitted_into_the_room_the_display_has() {
     };
     assert_eq!(pin_swap_room(banded, bounds, 96), (0, 30, 1920, 1050));
 }
+
+/// A box change that the pin's own frame already covers owes it no decode, and the kinds whose
+/// frame is a layout rather than a picture are owed one whatever the frame's size is.
+///
+/// This is the rule the window a user drags small and opens again lives or dies by. The band is the
+/// pin's own box and the frame in the media is stretched into it, so a frame decoded for a bigger
+/// box is every pixel the smaller box would have been given: decoding the smaller size replaces it,
+/// and a window shut small and opened again is then soft from a thumbnail until a whole decode of
+/// the file lands. What the frame answers is asked of the frame rather than of the cache, so it holds
+/// however many hovers have gone through the cache since (see `box_is_covered`).
+///
+/// A page of text is the other side of it, and the side that keeps the rule honest: text is drawn at
+/// a fixed size, so half the box is half the lines rather than the same page smaller, and a smaller
+/// frame of it would be a *sheared* page rather than a soft one.
+#[test]
+fn a_box_the_frames_pixels_already_cover_owes_the_pin_no_decode() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let held = |kind: MediaType, width: u32, height: u32| {
+        if let Ok(mut media) = CURRENT_MEDIA.lock() {
+            *media = Some(static_image_media(
+                Arc::new(ImageFrame::new(
+                    vec![0u8; (width * height * 4) as usize],
+                    width,
+                    height,
+                    0,
+                )),
+                kind,
+            ));
+        }
+    };
+    let path = PathBuf::from("a-pin-frame.png");
+    let owed = |path: &Path, box_: ScreenRegion, road| {
+        relayout_pinned_media(path, box_, 96, None, road).is_some()
+    };
+
+    // A picture whose frame was decoded for a box the size of a display, dragged small.
+    held(MediaType::StaticImage, 1600, 1200);
+    assert!(
+        !owed(&path, (100, 100, 500, 400), PinRelayoutRoad::BoxChange),
+        "a 400x300 box is answered by the 1600x1200 frame the pin already has: it is every pixel \
+             that box would have been decoded to, and the frame an enlargement back is stretched \
+             from"
+    );
+    assert!(
+        owed(&path, (100, 100, 1900, 1525), PinRelayoutRoad::BoxChange),
+        "while a box bigger than the frame is not, and is decoded for"
+    );
+    assert!(
+        owed(&path, (100, 100, 500, 400), PinRelayoutRoad::TakeUp),
+        "and a take-up is never covered: the media on screen is the file the pin is leaving, and \
+             the size of its frame says nothing about the file arriving"
+    );
+
+    // The three raster kinds this app draws the same way are covered alike; a page of text is not.
+    for kind in [
+        MediaType::Dds,
+        MediaType::Design,
+        MediaType::Magick,
+        MediaType::StaticImage,
+    ] {
+        held(kind, 1600, 1200);
+        assert!(
+            !owed(&path, (100, 100, 500, 400), PinRelayoutRoad::BoxChange),
+            "{kind:?} is a picture at a size, so a smaller box of it is the frame it already has"
+        );
+    }
+    held(MediaType::Text, 1600, 1200);
+    assert!(
+        owed(&path, (100, 100, 500, 400), PinRelayoutRoad::BoxChange),
+        "a page of text at half the box is half the lines rather than the same page smaller, so its \
+             frame is laid out again at the box it is now shown in"
+    );
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous;
+    }
+}
