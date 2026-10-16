@@ -18,7 +18,8 @@ use super::defaults::{
     sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
 };
 use super::setting_types::{
-    sanitize_afk_timer_secs, sanitize_dds_background, sanitize_html_background, AudioSeek,
+    sanitize_afk_timer_secs, sanitize_dds_background, sanitize_html_background,
+    sanitize_zoom_background, AudioSeek,
     AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile, PinMinimizeTo, PinNavFileTypes,
     PreviewScale, TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine,
 };
@@ -173,6 +174,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "image_background",
             Some(self.image_background.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "zoom_background",
+            Some(self.zoom_background.as_str().to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -690,6 +696,15 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "image_background") {
             if let Some(background) = TransparentBackground::from_str(&value) {
                 self.image_background = background;
+            }
+        }
+        // The band beside a zoomed picture's backdrop, by its own name: it is the window's
+        // answer rather than the file's, so it is a key of its own — and the one backdrop
+        // the menu has no item for is read as the one this setting starts at, the way a
+        // texture's and a page's are (see `sanitize_zoom_background`).
+        if let Some(value) = ini.get(CONFIG_SECTION, "zoom_background") {
+            if let Some(background) = TransparentBackground::from_str(&value) {
+                self.zoom_background = sanitize_zoom_background(background);
             }
         }
         // The backdrop a vector drawing is drawn over, which is one setting for the two halves

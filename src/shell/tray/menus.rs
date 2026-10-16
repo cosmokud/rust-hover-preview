@@ -13,6 +13,7 @@
 use super::ids::{
     EngineIdleIds, BACKGROUND_CHOICES, CACHE_SIZE_CHOICES_MB, DDS_BACKGROUND_CHOICES,
     DECODE_BUDGET_CHOICES_GB, FONT_SIZE_CHOICES, HTML_BACKGROUND_CHOICES,
+    ZOOM_BACKGROUND_CHOICES,
     ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SHUFFLE, ID_TRAY_AUDIO_VOLUME_BASE,
     ID_TRAY_AVOID_BASE, ID_TRAY_CHECK_UPDATES, ID_TRAY_DDS_BACKGROUND_BASE,
     ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
@@ -40,7 +41,8 @@ use super::ids::{
     ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE,
     ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE,
-    ID_TRAY_WEBVIEW_IDLE_BASE, MAX_TRAY_CUSTOM_THEMES, TRAY_CUSTOM_THEMES,
+    ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE, MAX_TRAY_CUSTOM_THEMES,
+    TRAY_CUSTOM_THEMES,
 };
 use super::submenus::{
     append_afk_timer_menu, append_audio_scale_menu, append_avoid_menu,
@@ -82,6 +84,7 @@ use crate::config::config::{
     DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_LOOP, DEFAULT_VIDEO_SCALE,
     DEFAULT_VIDEO_SUBTITLES,
     DEFAULT_VIDEO_VOLUME, DEFAULT_WEBVIEW_IDLE_SECS,
+    DEFAULT_ZOOM_BACKGROUND,
     VOLUME_CHOICES,
 };
 use crate::config::theme_files;
@@ -564,6 +567,40 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         image_pin_mode.0 as usize,
         w!("Pin Mode"),
     );
+
+    // And the picture's zoom: what the band beside a picture the wheel has taken past its
+    // window is filled with. It is a question of the window's rather than the file's — what
+    // stands behind a picture nobody has touched is the `Background → Image` setting above,
+    // while this band is what the zoom opened — so it hangs off the picture's own `Zoom`
+    // row rather than beside the backdrop halves, and it offers the three backdrops that
+    // fill a band rather than the four a preview can be drawn over.
+    let zoom_background = CONFIG
+        .lock()
+        .map(|c| c.zoom_background)
+        .unwrap_or(DEFAULT_ZOOM_BACKGROUND);
+    let image_zoom = CreatePopupMenu().unwrap();
+    let zoom_background_menu = CreatePopupMenu().unwrap();
+    append_background_menu(
+        zoom_background_menu,
+        w!("Background"),
+        ID_TRAY_ZOOM_BACKGROUND_BASE,
+        &ZOOM_BACKGROUND_CHOICES,
+        zoom_background,
+        DEFAULT_ZOOM_BACKGROUND,
+    );
+    let _ = AppendMenuW(
+        image_zoom,
+        MF_STRING | MF_POPUP,
+        zoom_background_menu.0 as usize,
+        w!("Background"),
+    );
+    let _ = AppendMenuW(
+        image_menu,
+        MF_STRING | MF_POPUP,
+        image_zoom.0 as usize,
+        w!("Zoom"),
+    );
+
     let _ = AppendMenuW(
         preview_settings,
         MF_STRING | MF_POPUP,

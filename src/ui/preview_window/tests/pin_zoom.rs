@@ -567,9 +567,9 @@ fn a_notch_aims_the_picture_and_leaves_it_where_it_is() {
         "a picture nothing has been asked of is going nowhere"
     );
     assert_eq!(
-        pin_zoom_drawn_box(),
-        Some((0, 0, drawn.0 as i32, drawn.1 as i32)),
-        "and the box it is drawn in is the window's own"
+        pin_zoom_oversize_box(),
+        None,
+        "and a picture the size of its window is not a picture a frame is owed to"
     );
 
     aim_pin_zoom(1);

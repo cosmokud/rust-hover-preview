@@ -119,6 +119,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "html_background",
             "image_background",
             "vector_background",
+            "zoom_background",
         ],
     ),
     (

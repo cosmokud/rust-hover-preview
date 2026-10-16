@@ -289,6 +289,39 @@ pub(super) fn preview_background(kind: MediaType) -> TransparentBackground {
     }
 }
 
+/// What a *zoomed* pinned picture is drawn over: the band a picture a hand has carried off its window
+/// leaves behind it, which is a question about the zoom rather than about the file.
+///
+/// It is a setting of its own rather than the picture's own backdrop because the two are two different
+/// things to look at. What stands behind the transparency of a picture nobody has touched is the
+/// picture's own business, and it is answered by the `Background` submenu; what fills the band beside a
+/// picture that has been taken past its window is the window's, and it is answered by
+/// `Image → Zoom → Background` (see the tray's own menu for the two).
+///
+/// It is deliberately *not* read for anything else: a hover's picture and a pinned picture at the size
+/// of its window are composited over the backdrop the file's kind asks for, exactly as they always
+/// were, and the only band this fills is the one a zoom opened.
+pub(super) fn zoom_background() -> TransparentBackground {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.zoom_background)
+        .unwrap_or(DEFAULT_ZOOM_BACKGROUND)
+}
+
+/// What the band of a *pinned* picture is filled with: the tray's own backdrop for a zoom when the
+/// picture has been taken past its window, and the one the file's kind asks for otherwise.
+///
+/// It is the whole of what tells the two apart, and it is a function rather than two lines at the paint
+/// so that the rule can be asked without a window: the paint is one call away from a layered surface,
+/// and what stands behind a picture is a question about the picture (see `zoom_background`).
+pub(super) fn pinned_band_backdrop(kind: MediaType, zoomed: bool) -> TransparentBackground {
+    if zoomed {
+        zoom_background()
+    } else {
+        preview_background(kind)
+    }
+}
+
 /// The pinned preview: the preview that stopped being a hover.
 ///
 /// The media is the same media — pinning is not a reload, so nothing about the picture moves

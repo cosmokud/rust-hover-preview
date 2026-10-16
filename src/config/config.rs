@@ -57,7 +57,8 @@ pub use defaults::{
 };
 #[allow(unused_imports)]
 pub use setting_types::{
-    sanitize_dds_background, sanitize_html_background, AudioSeek, AvoidMode, EngineIdle,
+    sanitize_dds_background, sanitize_html_background, sanitize_zoom_background, AudioSeek,
+    AvoidMode, EngineIdle,
     MarkdownMode, OfficeEngine, PinEndOfFile, PinMinimizeTo, PinNavFileTypes, PreviewScale,
     PreviewType,
     TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine, DEFAULT_ANIMATED_SCALE,
@@ -75,6 +76,7 @@ pub use setting_types::{
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_PREVIEW_SCALE, DEFAULT_TEXT_SCALE, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
     DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_LOOP, DEFAULT_VIDEO_SCALE,
+    DEFAULT_ZOOM_BACKGROUND,
 };
 
 // The names below are this module's own rather than the app's: the section name the file is

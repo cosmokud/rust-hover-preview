@@ -1179,6 +1179,49 @@ fn a_pages_backdrop_is_one_of_the_three_it_is_offered() {
     assert_eq!(config.html_background, DEFAULT_HTML_BACKGROUND);
 }
 
+/// The backdrop the band beside a zoomed picture is filled with is a key of its own for the reason a
+/// specimen's is: it is a question about the *window* rather than about the file, so the key a picture
+/// was written under is read for a picture and leaves this one where it starts — and the one backdrop a
+/// band may not be filled with is read as the one it starts at.
+#[test]
+fn a_zoomed_pictures_band_is_read_from_its_own_key() {
+    let mut ini = Ini::new();
+    ini.set(
+        CONFIG_SECTION,
+        "image_background",
+        Some("checkerboard".to_string()),
+    );
+
+    assert_eq!(
+        read_file(&mut ini).zoom_background,
+        DEFAULT_ZOOM_BACKGROUND,
+        "a file that says nothing about it leaves it where it starts"
+    );
+
+    ini.set(CONFIG_SECTION, "zoom_background", Some("white".to_string()));
+    let config = read_file(&mut ini);
+
+    assert_eq!(config.zoom_background, TransparentBackground::White);
+    assert_eq!(
+        config.image_background,
+        TransparentBackground::Checkerboard,
+        "and the picture's own backdrop is read from the key of its own"
+    );
+
+    // A band beside a picture is filled rather than looked through: a layered window is hit-tested by
+    // the shape of its pixels, so the one backdrop the menu has no item for is read as the one the
+    // setting starts at (see `sanitize_zoom_background`).
+    ini.set(
+        CONFIG_SECTION,
+        "zoom_background",
+        Some("transparent".to_string()),
+    );
+    assert_eq!(
+        read_file(&mut ini).zoom_background,
+        DEFAULT_ZOOM_BACKGROUND
+    );
+}
+
 /// A page's backdrop is a key of its own for the reason a specimen's is: the kind is one
 /// of its own, so the key a picture was written under is read for a picture and leaves
 /// this one where it starts.
