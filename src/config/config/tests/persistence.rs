@@ -465,3 +465,41 @@ fn a_tests_own_configuration_file_is_never_the_machines() {
         "and it is the file this test reads and writes"
     );
 }
+
+/// And that folder is handed to the thread that *took* it and to no other. The app is asked for its
+/// configuration from wherever the app is running, and in a test binary that is a test's own thread:
+/// an unguarded test — a tray menu, a chrome button, a save of its own — asking from its own thread
+/// must be answered with the tests' own folder rather than with the folder a guarded test is in the
+/// middle of a save and a read-back through.
+#[test]
+fn a_tests_own_folder_is_handed_to_the_thread_that_took_it_and_to_no_other() {
+    let file = ConfigFileAsItWas::take();
+    let mine = file
+        .path
+        .parent()
+        .expect("the folder the file is in")
+        .to_path_buf();
+
+    assert_eq!(
+        AppConfig::config_path()
+            .expect("the configuration file's path")
+            .parent(),
+        Some(mine.as_path()),
+        "the thread holding the folder is the one answered with it"
+    );
+
+    let elsewhere = std::thread::spawn(|| {
+        AppConfig::config_path()
+            .expect("the configuration file's path")
+            .parent()
+            .map(std::path::Path::to_path_buf)
+    })
+    .join()
+    .expect("the thread that asked");
+
+    assert_ne!(
+        elsewhere,
+        Some(mine),
+        "and a test beside this one, asking from its own thread, is answered with the tests' own folder"
+    );
+}
