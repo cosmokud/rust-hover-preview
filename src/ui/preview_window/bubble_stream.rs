@@ -32,7 +32,9 @@
 //! a frame lands, and stands again wherever there is no frame of the film to hold — a stream that
 //! cannot start, a player whose film has gone, a build whose decoder refuses the command (see
 //! `grab_bubble_frame` and `bubble_art`): each of them is a bubble showing what every bubble showed
-//! before this module existed.
+//! before this module existed. A pause is the one thing that puts a frame in that place: the frame
+//! the film stopped on, which is the newest frame of the film this app has, so that a film let go of
+//! again is not shown the second the pin went down (see `keep_bubble_frame`).
 
 use super::*;
 use std::process::ChildStdout;
@@ -197,6 +199,11 @@ pub(super) fn settle(playing: bool, box_: Option<ScreenRegion>) {
                 end(running);
 
                 if let Some(frame) = stopped_on {
+                    // And the bubble falls back to it as well as showing it: a film let go of again
+                    // begins a read whose first frame is a moment away, and what the bubble shows
+                    // until it lands has to be the second the film is at rather than the one the pin
+                    // was collapsed at (see `keep_bubble_frame`).
+                    keep_bubble_frame(&frame, key.side);
                     return hold(Stream::Held {
                         key,
                         latest: Some(frame),
@@ -707,6 +714,10 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
         let previous_pin = take_pin_for_a_test();
+        // The pause below hands the frame it keeps to the bubble as well as showing it, and a test
+        // that leaves a still in that slot is a test every test after it is standing inside (see
+        // `keep_bubble_frame`).
+        let previous_still = BUBBLE_FRAME.lock().ok().and_then(|mut frame| frame.take());
         stand_no_stream();
         stand_ffplay_in(Some(true));
         stand_mpv_in(Some(false));
@@ -823,6 +834,9 @@ mod tests {
         );
 
         stand_no_stream();
+        if let Ok(mut still) = BUBBLE_FRAME.lock() {
+            *still = previous_still;
+        }
         stand_pin(previous_pin);
         stand_video_engine_in(None);
         stand_mpv_in(None);

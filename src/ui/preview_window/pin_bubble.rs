@@ -33,7 +33,8 @@ pub(super) struct BubbleFrame {
     pub(super) side: u32,
 }
 
-/// The frame taken for the bubble a collapsed film left, if it has landed yet.
+/// The frame taken for the bubble a collapsed film left, if it has landed yet — or the frame a
+/// pause of that film handed over in its place (see `keep_bubble_frame`).
 ///
 /// It is a slot beside the bubble rather than a part of the pin, because that is what it is: the
 /// frame belongs to the *collapsed* window, whose own media is off the screen and whose process is
@@ -613,6 +614,24 @@ pub(super) fn grab_bubble_frame(box_: ScreenRegion) {
 
         BUBBLE_FRAME_READY.store(true, Ordering::Release);
     });
+}
+
+/// Keep a frame read beside a film's player as the picture the bubble falls back to, in place of
+/// the still the collapse grabbed.
+///
+/// **The picture a bubble falls back to is the newest frame of the film this app has**, and a pause
+/// is a newer one than the grab: a film held behind a bubble is one whose read stopped on a frame
+/// of the film at the second it stopped at, while the grab is a frame of the second the pin went
+/// down. A bubble that fell back to the grab the moment the film was let go of again would show the
+/// second the pin was collapsed at, for as long as the read it has just begun takes to land its
+/// first frame (see `bubble_stream::settle`).
+pub(super) fn keep_bubble_frame(pixels: &[u8], side: u32) {
+    if let Ok(mut frame) = BUBBLE_FRAME.lock() {
+        *frame = Some(BubbleFrame {
+            pixels: pixels.to_vec(),
+            side,
+        });
+    }
 }
 
 /// The films a still has been asked for, with the second and the side it was asked at, for a test

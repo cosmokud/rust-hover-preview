@@ -2507,3 +2507,146 @@ fn a_pin_taken_up_on_a_film_already_playing_starts_where_the_picture_is() {
         *media = previous_media;
     }
 }
+
+/// **A film let go of behind a bubble goes on from the second it was held at, and what the bubble
+/// shows while the read beside it begins again is the frame the film stopped on.**
+///
+/// The user's report, on a bubble they watch a film in: a film watched to the eleventh second,
+/// held with SPACE, and let go of again with SPACE was showing the fifth — the second the pin was
+/// collapsed at. Both halves of that are asked here, because either one could put the old second
+/// back on the screen: the second the press re-bases the film onto, and the picture the bubble
+/// falls back to while the read it has just begun is landing its first frame (see
+/// `bubble_stream::settle` and `grab_bubble_frame`).
+#[test]
+fn a_film_let_go_of_behind_a_bubble_is_shown_the_second_it_was_held_at() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    // The film plays on behind the bubble: a bubble whose film is *held* is a bubble whose second
+    // never moves, which is not the report (see `bubble_playback_to_park`).
+    let _switches = PausePreviewSettings::stood_at(false, false);
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+    let previous_still = BUBBLE_FRAME.lock().ok().and_then(|mut frame| frame.take());
+    bubble_stream::stand_no_stream();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("bubble-let-go-film.mkv");
+    clear_restart_count();
+    mpv_ipc::clear_noted();
+
+    stand_mpv_in(Some(false));
+    stand_ffplay_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+
+    // A pin collapsed on a film six seconds into a pass begun at the fifth second. The app's own
+    // clock over the player's start is the only thing that says where such a film is, and it says
+    // the eleventh second (see `pin_playhead`).
+    let mut pin = a_playing_pin(&film, content);
+    pin.transport.started = Some((Instant::now() - Duration::from_secs(6), 5.0));
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+
+    let box_ = (300, 300, 364, 364);
+    let side = bubble_side(box_);
+
+    // The read beside the player is begun where the film is.
+    bubble_stream::settle(true, Some(box_));
+    let asked = bubble_stream::take_noted_streams();
+    assert_eq!(asked.len(), 1, "a playing film is read beside its player");
+    assert!(
+        (asked[0].1 - 11.0).abs() < 1.0,
+        "from the second the film is at rather than the one the pin was collapsed at (was {})",
+        asked[0].1
+    );
+
+    // The instant the pin's own player was begun at, which is what makes a read the one a tick is
+    // looking for — read before the press below, because a film held without a key is a player
+    // ended and a start given up (see `hold_pinned_player_without_a_key`).
+    let begun = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport.started))
+        .flatten()
+        .expect("a player was begun")
+        .0;
+
+    // SPACE holds the film where it is.
+    let mut started = None;
+    let mut offset = 0.0;
+    toggle_pinned_by_key(&mut started, &mut offset, &mut None);
+    let held = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("a pin is up");
+    assert!(
+        (held.paused_at.unwrap_or(-1.0) - 11.0).abs() < 1.0,
+        "the press holds the film at the second it is at (was {:?})",
+        held.paused_at
+    );
+
+    // The read this bubble had, stood in with the frame it had just landed: a test build starts no
+    // process, and the instant the pin's own player was begun at is what makes it the read the tick
+    // is looking for (see `stand_a_running_stream`).
+    let frame = [90u8, 90, 90, 255]
+        .iter()
+        .cycle()
+        .take(side as usize * side as usize * 4)
+        .copied()
+        .collect::<Vec<u8>>();
+    bubble_stream::stand_a_running_stream(film.clone(), begun, side, frame.clone());
+    bubble_stream::settle(false, Some(box_));
+    assert_eq!(
+        bubble_stream::latest_frame(),
+        Some((frame.clone(), side)),
+        "a held film's bubble shows the frame it stopped on"
+    );
+
+    // SPACE again lets the film go from the second it was held at.
+    toggle_pinned_by_key(&mut started, &mut offset, &mut None);
+    let let_go = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.transport))
+        .expect("a pin is up");
+    let from = let_go.started.map(|(_, from)| from).unwrap_or(-1.0);
+    assert!(
+        (from - 11.0).abs() < 1.0,
+        "the player is let go at the second it was held at (was {from})"
+    );
+
+    bubble_stream::settle(true, Some(box_));
+    let asked = bubble_stream::take_noted_streams();
+    assert_eq!(
+        asked.len(),
+        1,
+        "and the film is read beside its player again"
+    );
+    assert!(
+        (asked[0].1 - 11.0).abs() < 1.0,
+        "from the second the film went on at (was {})",
+        asked[0].1
+    );
+
+    // And what the bubble shows while that read lands its first frame is the frame the film
+    // stopped on: a read that has just begun has no frame of its own yet, and the still the
+    // collapse grabbed is the second the pin went down.
+    match bubble_art(side).0 {
+        BubbleArtOwned::Picture(pixels, _, _, _) => assert_eq!(
+            pixels, frame,
+            "a film let go of is shown the frame it stopped on rather than the still the collapse \
+             grabbed"
+        ),
+        _ => panic!("a film let go of has a picture in its bubble"),
+    }
+
+    bubble_stream::stand_no_stream();
+    if let Ok(mut still) = BUBBLE_FRAME.lock() {
+        *still = previous_still;
+    }
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    clear_restart_count();
+}
