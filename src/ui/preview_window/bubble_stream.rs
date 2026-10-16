@@ -1,26 +1,37 @@
-//! The frames a bubble shows of a film FFmpeg's player is drawing: one decode beside the player,
-//! read as it comes.
+//! The frames a bubble shows of a film a player of somebody else's is drawing: one decode beside
+//! that player, read as it comes.
 //!
-//! **A film FFmpeg's player is drawing is on the screen and nowhere else.** That window is a
-//! player's rather than this app's — so unlike a still, a frame cannot be looked up in memory, and
-//! unlike mpv there is nothing to ask it with: `ffplay` has no interface at all (see `bubble_film`
-//! for the route that has one). The picture a bubble can show of such a film *moving* is therefore a
+//! **A film another process draws is on the screen and nowhere else.** That window is a player's
+//! rather than this app's, so unlike a still a frame cannot be looked up in memory — and neither
+//! player can hand one over: `ffplay` has no interface at all, and mpv's own answer cannot cross
+//! its pipe (see `mpv_ipc`). The picture a bubble can show of such a film *moving* is therefore a
 //! second read of the file, and the whole of this module is making that read cheap: **one** decode,
 //! begun where the player is, throwing away everything but the newest frame, scaled and cropped to
 //! the bubble's own square and capped at the rate a bubble is looked at.
 //!
+//! **And the two players are read the same way, which is the whole of why this is not two
+//! modules.** What a bubble is around is a window of somebody else's, and moving that window into a
+//! forty-four pixel circle is a fight with its own region, its own idea of being topmost and its own
+//! resizes — the picture a bubble paints itself has none of those, and is the one road that looks
+//! the same on either player. The second it is begun at is the transport's own clock rather than a
+//! question put to the player, which on this route means the frame follows the clock the bar is
+//! drawn from: an mpv whose own opening lag is a few hundred milliseconds is a bubble following it
+//! by that much, and asking mpv for its position is the change that would close that gap (see
+//! `wanted_stream`).
+//!
 //! **The player's own start is the key a stream is kept for.** A stream is a decode of *a play* —
 //! this film, from this second, in this square — so what it is compared against is the transport's
-//! own record of when the player was begun: a level change or a seek on this route kills the player
-//! and begins another at a new second (see `restart_pinned_player`), which is a new start and so a
-//! stream that has to be begun again. A stream that has gone is not tried again under the same key,
-//! because a command the build refuses would otherwise be a process every tick; a player begun
-//! afresh is a new key and is streamed again.
+//! own record of when the player was begun: a level change or a seek on FFmpeg's route kills the
+//! player and begins another at a new second, and on mpv's the transport is rebased onto the second
+//! the seek went to (see `restart_pinned_player` and `seek_pinned_playback`). Either way it is a new
+//! start, and so a stream that has to be begun again. A stream that has gone is not tried again
+//! under the same key, because a command the build refuses would otherwise be a process every tick;
+//! a player begun afresh is a new key and is streamed again.
 //!
 //! **Nothing here is a frame the bubble must have.** The still grabbed at the collapse stands until
-//! a frame lands, stands again whenever the stream ends, and is the ring's colour throughout (see
-//! `grab_bubble_frame` and `bubble_art`): a stream that cannot start, a film that ends, a build
-//! whose decoder refuses the command — each of them is a bubble showing what every bubble showed
+//! a frame lands, and stands again wherever there is no frame of the film to hold — a stream that
+//! cannot start, a player whose film has gone, a build whose decoder refuses the command (see
+//! `grab_bubble_frame` and `bubble_art`): each of them is a bubble showing what every bubble showed
 //! before this module existed.
 
 use super::*;
@@ -193,27 +204,34 @@ pub(super) fn settle(playing: bool, box_: Option<ScreenRegion>) {
     hold(start(wanted));
 }
 
-/// What the bubble's stream should be, where there is one to have: a film FFmpeg's player is
-/// drawing, at the second that player is at, in the square the bubble is standing in.
+/// What the bubble's stream should be, where there is one to have: a film a player of somebody
+/// else's is drawing, at the second that player is at, in the square the bubble is standing in.
 ///
-/// **The route is the whole of the choice.** A film mpv draws has its own window standing in the
-/// bubble already (see `bubble_film`) and a film this app's engine draws holds its frame here, so
-/// neither has anything a second decode would add. Nothing is asked of the machine here — no probe,
-/// no process — which is what lets this sit on a tick.
+/// **Both players are read this way and the app's own engine is not.** A film this app's engine
+/// draws is in this app's own window and its frame is in this app's hands already, so a second
+/// decode of it would be a picture nobody is looking at (see `bubble_art`); a film either external
+/// player draws has no frame here at all, and mpv's being *askable* changes nothing about that —
+/// what it can be asked is a position, not a picture. Nothing is asked of the machine here — no
+/// probe, no process — which is what lets this sit on a tick.
 ///
 /// The second is the *playhead* rather than the second the player began at, because a film pinned
 /// half an hour ago and collapsed now is a bubble that has to show the film where it is: the stream
 /// is a decode of the same play, begun at the same point in it, and the two read at the same rate
 /// from there.
+///
+/// **The playhead is this app's clock over the player's start and never the player's own answer.**
+/// It is the same second the pin's bar is drawn from, so what a collapse leaves is a bubble in step
+/// with the transport the user is looking at rather than with a second read of anything — and the
+/// one lag it cannot know about is the player's own: mpv takes a moment to open a file and begin,
+/// which this clock has already started counting. shortcut: mpv's own `time-pos` over its pipe is
+/// what would close that gap where it is ever visible, at the cost of a read on a pipe that is
+/// write-only by decision (see `mpv_ipc`).
 fn wanted_stream(box_: ScreenRegion) -> Option<Wanted> {
     if current_media_type() != Some(MediaType::Video) {
         return None;
     }
 
     let (path, _) = pinned_media_owner()?;
-    if video_route(&path) != VideoRoute::Ffplay {
-        return None;
-    }
 
     let started =
         pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.transport.started))??;
@@ -543,14 +561,15 @@ mod tests {
         );
     }
 
-    /// **What the bubble's stream is, is the state of the world every tick**: a film FFmpeg's player
-    /// is drawing is read beside it while the pin is a bubble and the film is playing, and nothing is
-    /// asked for any other kind, any other route, any other playback or any other place.
+    /// **What the bubble's stream is, is the state of the world every tick**: a film a player of
+    /// somebody else's is drawing is read beside it while the pin is a bubble and the film is
+    /// playing, on either player, and nothing is asked for any other kind, any other playback or any
+    /// other place.
     ///
     /// The ask is what a test build answers — no child is ever started (see `start`) — so what is
     /// asserted is the decision: which film, at which second, at which side, and how often.
     #[test]
-    fn a_film_ffmpegs_player_is_drawing_is_read_beside_it_while_it_plays() {
+    fn a_film_a_player_is_drawing_is_read_beside_it_while_it_plays() {
         let _one = PIN_TESTS_ONE_AT_A_TIME
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -623,16 +642,21 @@ mod tests {
             "a player begun again is read again, from the second it was begun at"
         );
 
-        // A film mpv is drawing is not read at all: its own window stands in the bubble already (see
-        // `bubble_film`).
+        // A film mpv is drawing is read the same way: the window this used to stand in the bubble is
+        // not carried anywhere, and what a bubble shows of that film is a picture it paints itself
+        // like any other.
         stand_mpv_in(Some(true));
+        stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+        stand_pin(Some(a_pin_playing_a_film(32.0)));
         settle(true, Some(box_));
-        assert!(
-            take_noted_streams().is_empty(),
-            "the mpv route is the window in the ring, and a second decode of it would be a picture \
-             nobody is looking at"
+        assert_eq!(
+            take_noted_streams().len(),
+            1,
+            "a film mpv is drawing is read beside it, because mpv can be told nothing and asked \
+             for no picture"
         );
         stand_mpv_in(Some(false));
+        stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
 
         // Nor is anything that is not a film: a picture's bubble is the picture.
         if let Ok(mut current) = CURRENT_MEDIA.lock() {

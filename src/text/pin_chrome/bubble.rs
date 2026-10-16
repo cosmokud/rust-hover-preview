@@ -321,28 +321,9 @@ pub(crate) enum BubbleArt<'a> {
         height: u32,
         ring: Option<[u8; 3]>,
     },
-    /// A hole where the picture would be, with the picture itself standing *behind* the bubble: the
-    /// face is not painted at all, because what is in it is another window — a film's own player,
-    /// parked inside the circle (see `render_pin_bubble`). Only the bars and the mark are drawn
-    /// inside it.
-    ///
-    /// `ring` is the colour the ring is drawn in where the caller has one to give, which is the
-    /// average of the frame the film's window is standing in front of: the ring of a painted frame
-    /// is the file's own colour, and a hole whose ring fell back to the theme's accent would change
-    /// colour the moment the film paused and the still took the hole's place.
-    Hole { ring: Option<[u8; 3]> },
     /// No art: the face alone, with the mark on it.
     None,
 }
-
-/// The alpha a hole's face is written with: the smallest a layered window's pixel can hold and
-/// still be this window's to the mouse.
-///
-/// **A layered window is passed the mouse only where its alpha is zero**, which is what makes a
-/// fully transparent hole unusable: the click that puts the pin back up, the drag that carries the
-/// bubble about and the press that gives it the keyboard all land on the film's own window instead.
-/// One level of 255 of black over whatever the film is showing is invisible (see `BubbleArt::Hole`).
-const HOLE_ALPHA: f32 = 1.0 / 255.0;
 
 /// Paint the round bubble a collapsed pin becomes: a face of the theme's own color, a ring around
 /// it, the picture that was pinned inside it where there is one, the row of bars this app's own
@@ -381,7 +362,6 @@ pub(crate) fn paint_bubble(
             ring: Some(ring), ..
         } => *ring,
         BubbleArt::Picture { pixels, .. } => average_color(pixels).unwrap_or(palette.accent),
-        BubbleArt::Hole { ring } => ring.unwrap_or(palette.accent),
         _ => palette.accent,
     };
 
@@ -389,28 +369,14 @@ pub(crate) fn paint_bubble(
 
     let inner = radius - ring_thickness;
 
-    // Whether the face is a hole rather than the bubble's own, which is asked twice below for two
-    // different things: what the face is made of, and whether the shadow under the bubble shows
-    // through it (see `BubbleArt::Hole`).
-    let hole = matches!(&art, BubbleArt::Hole { .. });
-
     // The shadow: the ring's own coverage, held a couple of pixels lower and spread a little,
     // at a fraction of an opaque black. It is what makes a flat circle read as a thing lying
     // over the desktop rather than a hole in it.
-    //
-    // **A hole's face is given none of it, and the reason is that a shadow is a disc and not a
-    // ring.** Under a painted face the whole of it is covered up; under a hole it would be a grey
-    // film laid over somebody else's picture. What is kept is the shadow a painted bubble shows:
-    // all of it beyond the face, which is the crescent below the circle.
     let shadow_offset = (1.5 * scale).max(1.0);
     let shadow_spread = (1.5 * scale).max(1.0);
     for y in 0..height {
         for x in 0..width {
             let (dx, dy) = (x as f32 + 0.5 - center.0, y as f32 + 0.5 - center.1);
-            if hole && (dx * dx + dy * dy).sqrt() <= inner {
-                continue;
-            }
-
             let dy = dy - shadow_offset;
             let distance = (dx * dx + dy * dy).sqrt();
             let coverage =
@@ -461,13 +427,9 @@ pub(crate) fn paint_bubble(
             // another: two partial coverages written one after the other are a pixel that covers
             // less than their sum, and the desktop shows through the seam between a ring and the
             // face inside it.
-            let (inside, face_alpha) = if hole {
-                ([0, 0, 0], HOLE_ALPHA)
-            } else {
-                sample.map_or((palette.background, 1.0), |sample| {
-                    ([sample[0], sample[1], sample[2]], sample[3] as f32 / 255.0)
-                })
-            };
+            let (inside, face_alpha) = sample.map_or((palette.background, 1.0), |sample| {
+                ([sample[0], sample[1], sample[2]], sample[3] as f32 / 255.0)
+            });
             let share = face_coverage / coverage;
             let colour = if share >= 1.0 {
                 inside
@@ -475,16 +437,10 @@ pub(crate) fn paint_bubble(
                 text_paint::blend(ring, inside, share)
             };
 
-            // And a hole's alpha is not a painted face's. A picture's face is the bubble's own, so
-            // its share of the pixel is written at the picture's own alpha; a hole's face belongs to
-            // somebody else, so it is written at the one alpha the mouse still comes through — while
-            // the share of the pixel that is the *ring* stays opaque, or the bubble would have no
-            // edge at all.
-            let alpha = if hole {
-                coverage - face_coverage * (1.0 - HOLE_ALPHA)
-            } else {
-                coverage * face_alpha
-            };
+            // The share of the pixel that is the *ring* is written opaque and the face inside it
+            // at the picture's own alpha, which is what keeps the bubble's edge a thing on the
+            // desktop while a frame with transparency in it stays transparent.
+            let alpha = coverage * face_alpha;
 
             put(buffer, width, x, y, colour, alpha);
         }
@@ -515,10 +471,9 @@ pub(crate) fn paint_bubble(
             // A glyph over a picture is a glyph over anything a picture can be, and half of
             // what a photograph can be is as bright as the glyph. So a faint dark disc goes down
             // first, which does not hide the frame — it is a third of an opaque black, at half
-            // the face — and does make the triangle read on a white sky. A *hole's* picture is
-            // another window's, which is everything a photograph can be with a film playing on top
-            // of it, so it is given the same disc. The audio face needs none of it: it is the
-            // theme's own background, and the theme is what the glyph was chosen against.
+            // the face — and does make the triangle read on a white sky. The audio face needs none
+            // of it: it is the theme's own background, and the theme is what the glyph was chosen
+            // against.
             fill_disc(
                 buffer,
                 width,
