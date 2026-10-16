@@ -7,6 +7,7 @@
   - More design & project files (`.xcf`, ...)
   - CAD files (`.dwg`, `.step`, `.stl`, ...)
   - 3D files (`.obj`, `.fbx`, `.gltf`, `.glb`, ...)
+- **True portable mode:** a marker file beside the exe keeps the settings, the themes and the engine state in a folder there rather than in `%APPDATA%`, and the run then leaves the startup entry and the installer-based update alone; with no marker beside it the app keeps behaving exactly as it does now. Not a path change alone: the path plumbing is five root functions, while the work is the autostart repair and the update, which are what leave a mark on the host.
 
 ## Multi-Frame Formats The Front Does Not Count
 
