@@ -1265,7 +1265,7 @@ fn a_press_on_a_picture_bigger_than_its_window_carries_the_picture_rather_than_t
     // What a move carries the pan out to: the picture's own centre travels with the pointer, and the
     // window it is drawn in does not move at all — which is the whole of the difference between a pan
     // and the window drag it replaced.
-    super::probes::send_pointer_to(content.0 + 40, content.1 + 25);
+    super::probes::step_the_pin_drag_by(40, 25);
     unsafe { apply_pin_drag(hwnd) };
 
     let zoom = pin_state()
