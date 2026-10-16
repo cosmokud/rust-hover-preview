@@ -1196,6 +1196,57 @@ fn a_collapsed_pin_takes_a_players_window_off_the_screen() {
     stand_pin(previous_pin);
 }
 
+/// A player begun behind a bubble is begun off the desktop, which is what keeps its window from
+/// being seen at all: the monitor's hide is a pass of a thread later, and a window that has just
+/// been shown is a black rectangle over the desktop in the meantime (see `bubble_players_box`).
+///
+/// What the box is *not* is a different size: a player renders at the size it was begun at, so the
+/// width the band has is kept and only the place moves — and a box asked for with no bubble up, or
+/// with a pin that is not a bubble, is the box it always was.
+#[test]
+fn a_player_begun_behind_a_bubble_is_begun_off_the_desktop() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let content = (100, 80, 420, 320);
+    let width = content.2 - content.0;
+
+    // No pin at all: a hover's player, at the box the preview was laid out at.
+    stand_pin(None);
+    assert_eq!(
+        bubble_players_box(content.0, content.1, width),
+        (content.0, content.1),
+        "a hover's player is the picture and is begun where the preview was laid out"
+    );
+
+    // A pin whose window is up: the film's window stands in the band, which is where it goes.
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    assert_eq!(
+        bubble_players_box(content.0, content.1, width),
+        (content.0, content.1),
+        "a windowed pin's player is begun in the band it is watched in"
+    );
+
+    // And a collapsed pin: the same box, moved clear of every display the desktop has.
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+
+    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let (x, y) = bubble_players_box(content.0, content.1, width);
+    assert_eq!(y, content.1, "only the place across the desktop moves");
+    assert!(
+        x + width < left,
+        "a window of the band's own width wholly beyond the desktop's left edge ({x} + {width} \
+         against {left}) is over no display at all, so a player that shows its window the moment it \
+         has one shows nothing"
+    );
+
+    stand_pin(previous_pin);
+}
+
 /// A press on the film of a pin whose player is mpv is a move of the pin, from the pin's own box.
 ///
 /// This is the far end of the band such a pin now wins the point of: what a press that arrives
