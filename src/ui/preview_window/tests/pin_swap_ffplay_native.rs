@@ -91,7 +91,7 @@ fn ffplay_to_native_swap_delivers_a_frame() {
     pdf_preview::initialize_apartment();
     wic_image::initialize_apartment();
 
-    eprintln!("repro: ffplay_available={} mf_started={} hwaccel={:?}", codecs::ffplay_available(), codecs::mf_started(), video_hw_accel_device());
+    eprintln!("repro: ffplay_available={} mf_started={}", codecs::ffplay_available(), codecs::mf_started());
 
     // Save the process-wide state this touches, so the next test walks
     // into what it walked into before.

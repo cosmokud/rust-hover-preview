@@ -56,14 +56,14 @@ pub const DEFAULT_REMEMBER_AUDIO_VOLUME: bool = true;
 /// same reason the sound's own is: a level that is kept is what a person who turned it up once
 /// meant for the rest of the folder (see `remember_video_volume`).
 pub const DEFAULT_REMEMBER_VIDEO_VOLUME: bool = true;
-/// Whether a video is decoded on the graphics card, which is the `Video` toggle under
+/// Whether a video is decoded on the graphics card, which is the `Video` row under
 /// `Performance → Hardware Acceleration` in the tray.
 ///
-/// It is on where the app starts, because the answer is a machine's rather than a person's: a
-/// film previewed in software decoding costs a core for as long as the hover lasts, and every
-/// machine this app runs on has a Direct3D 11 device FFmpeg can decode on. It is a setting
-/// because the one machine that cannot is a machine where the fallback is the whole answer — and
-/// FFmpeg falls back by itself rather than being asked to (see `video_hw_accel_device`).
+/// It is on where the app starts, because the answer is a machine's rather than a person's: a film
+/// previewed in software decoding costs a core for as long as the hover lasts, and mpv decodes on
+/// the card on a machine that has one. It is mpv's switch and nothing else's, so the default stands
+/// for every config already written and is read as off on a machine with no `mpv.exe` (see
+/// `video_hw_accel_wanted`).
 pub const DEFAULT_VIDEO_HW_ACCEL: bool = true;
 /// The levels either volume is offered at: silence, the one step above it, and the decades
 /// between — smallest first here, and listed the other way round in the tray, loudest first.

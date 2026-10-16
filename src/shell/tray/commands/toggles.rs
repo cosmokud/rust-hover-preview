@@ -227,20 +227,15 @@ pub(in super::super) fn toggle_engine_persistent(index: u16) {
 /// in this menu makes, and it is why the row is a question about the next preview rather than about
 /// the one under the pointer.
 ///
-/// The *next* preview, though, is the next one in this run of the app and not the next one after a
-/// restart, which is what the answer had to be told for it to be true: the device is found by a
-/// probe that asks FFmpeg to decode a tenth of a second of a synthetic pattern on each candidate in
-/// turn, and a probe that ran with the setting off names no device at all. So the answer found
-/// before the switch is an answer to the question as it stood then, and `forget` is what makes every
-/// answer so far one to a question no longer being asked. Without it this row would take effect on
-/// the next run of the app and its own note above would be quietly wrong.
+/// It is mpv's switch and nobody else's, so the file is the whole of what this writes: there is no
+/// answer of this app's own to give up with it. A machine whose `config.ini` says on and which has
+/// no `mpv.exe` reads it as off all the same, which is what keeps every config written before the
+/// row said so working (see `video_hw_accel_wanted`).
 pub(in super::super) fn toggle_video_hw_accel() {
     if let Ok(mut config) = CONFIG.lock() {
         config.video_hw_accel = !config.video_hw_accel;
         config.save();
     }
-
-    crate::ui::preview_window::forget_video_hw_accel_answer();
 }
 
 /// Whether an explicitly chosen video engine falls through to the others when it cannot play a
