@@ -372,6 +372,7 @@ fn dragged_overlay(
     content_box_of(window, 96, false, overlay, pinned_caption_height(96, None))
 }
 
+mod audio_bands;
 mod cache;
 mod engine_probes;
 mod hover;
