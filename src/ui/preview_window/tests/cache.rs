@@ -302,3 +302,35 @@ fn an_animation_floor_holds_back_nothing_a_file_itself_timed() {
              a mark is not a picture to be run at a picture's speed"
     );
 }
+
+/// A travel's frames are paced by the compositor, and the two ways that does not happen are both
+/// refusals to pace them rather than fallbacks *into* the compositor: a flush that could not be made
+/// at all, and one that came back before anything was drawn.
+///
+/// The second is the one worth writing down. A flush that returns at once is a compositor with
+/// nothing to draw, and a loop that read it as a frame rate would turn at the speed of an empty call
+/// — a spin rather than a cadence — where the loop's own wait is what it had before any of this (see
+/// `wait_for_the_compositor`).
+#[test]
+fn a_compositor_frame_is_only_the_pace_of_a_tick_that_was_drawn() {
+    assert!(
+        compositor_paced_the_tick(true, COMPOSITOR_FRAME_FLOOR),
+        "a flush that waited a millisecond of a floor is a tick that was paced"
+    );
+    assert!(
+        compositor_paced_the_tick(true, Duration::from_millis(7)),
+        "and so is the period of a 144 Hz display's frame"
+    );
+    assert!(
+        !compositor_paced_the_tick(true, Duration::from_micros(100)),
+        "a flush that came back at once is not a frame rate: the tick keeps its own wait"
+    );
+    assert!(
+        !compositor_paced_the_tick(false, Duration::from_millis(7)),
+        "and a compositor that cannot be asked at all is the same answer"
+    );
+    assert!(
+        COMPOSITOR_FRAME_FLOOR < Duration::from_millis(7),
+        "the floor is under any display's period, so a frame a display drew is never refused"
+    );
+}
