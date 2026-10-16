@@ -29,12 +29,20 @@
 //!
 //! The count is only used where it is beyond doubt, because the estimate it replaces is only
 //! ever wrong about the length while a count that is wrong is a *new* wrong length: a walk that
-//! had to step over a byte that is not a frame, that ran out before the frame a header promised,
-//! or whose frames disagree about the rate they are written at — the one field that has to agree,
-//! since it is what a frame's 1024 samples are counted in, where a channel layout a stream
-//! changes its mind about halfway through is nothing a length is counted by — is a file this
-//! answers nothing for. The length the probe read stands for one of those, which is what every
-//! file that is not a raw AAC stream gets anyway (see [`duration`]).
+//! had to step over a byte that is not a frame — a stream damaged between two frames, a byte of
+//! something written into the middle of one — or whose frames disagree about the rate they are
+//! written at is a file this answers nothing for (the rate being the one field that has to agree,
+//! since it is what a frame's 1024 samples are counted in, while a channel layout a stream
+//! changes its mind about halfway through is nothing a length is counted by). The length the
+//! probe read stands for a file of those, which is what every file that is not a raw AAC stream
+//! gets anyway (see [`duration`]).
+//!
+//! A stream the *file* ends inside of is not one of those: a download that never finished, a rip
+//! cut short. What is counted for one is the frames that are whole, which is what a player has of
+//! it and within a single frame of what it plays, and the length is offered rather than withheld
+//! over the last frame the file never held. Neither is a tag written *after* the stream — an
+//! ID3v1 tag is not part of any sound — so a file whose frames are followed by one is counted for
+//! its frames alone (see [`duration`]).
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom};
@@ -74,6 +82,11 @@ const SAMPLES_PER_FRAME: u64 = 1024;
 /// the frame whose header stands at the front of the buffer is inside it.
 const READ_BYTES: usize = 8192;
 
+/// What an ID3v1 tag is: the three bytes it begins with, and the bytes of the whole of one — a
+/// tag written *after* a stream, which is not part of it, and of a fixed length, which is what
+/// tells one from a few bytes of something else standing where a frame should.
+const ID3V1_BYTES: u64 = 128;
+
 /// One frame's header, read for the two things it decides: where the next frame begins and how
 /// much time this one holds.
 struct Frame {
@@ -87,8 +100,13 @@ struct Frame {
 }
 
 /// How long the raw AAC stream in `path` plays, where the whole of the file is ADTS frames —
-/// and nothing where the file is anything else, which is the answer every container, every
-/// other sound and every damaged stream is given (see the module's note).
+/// and nothing where the file is anything else, which is the answer every container, every other
+/// sound and every stream damaged between two frames is given (see the module's note).
+///
+/// A file the stream is *cut off* inside of is counted for the frames that are whole: it is the
+/// last frame the file does not hold, and a frame is 1024 samples — a twenty-third of a second
+/// at forty-four one — so what is offered is the length a player has of the sound, less that
+/// frame at the very most.
 pub fn duration(path: &Path) -> Option<f64> {
     let mut file = BufReader::with_capacity(READ_BYTES, File::open(path).ok()?);
     skip_id3(&mut file);
@@ -107,15 +125,27 @@ pub fn duration(path: &Path) -> Option<f64> {
     let mut body = Vec::new();
     let mut frames = 0u64;
     let mut rate = None;
-    // Whether every byte of the file was frames: a byte that had to be stepped over, a frame
-    // that ran out before its own length said it would, and a header left half-read are all a
-    // file nothing is counted for (see the module's note).
+    // Whether every byte of the file *before its end* was frames: a byte that had to be stepped
+    // over, and frames that disagree about their rate, are a file nothing is counted for (see the
+    // module's note). A file the stream is cut off inside of is not one of those — see the frame
+    // the tail holds below.
     let mut whole = true;
 
     loop {
         let Some(frame) = frame_of(&header) else {
             // A byte that is not the front of a frame: a stream damaged where this stands, or
-            // something else entirely. The walk steps over it rather than giving up, because the
+            // something else entirely — unless it is a tag written *after* the stream, which is
+            // not part of it and is where the walk ends (see `ID3V1_BYTES`). Only a walk that has
+            // had nothing to step over yet can be standing in front of a whole tag: after a skip
+            // the position is not a frame boundary, and the file is not answered for either way.
+            if whole
+                && &header[0..3] == b"TAG"
+                && left_from(&mut file, header.len()) == Some(ID3V1_BYTES)
+            {
+                break;
+            }
+
+            // The walk steps over a byte that is not a frame rather than giving up, because the
             // frames after it are still frames and counting them costs a walk either way — and
             // stepping over any byte at all is itself the end of the answer.
             whole = false;
@@ -137,15 +167,18 @@ pub fn duration(path: &Path) -> Option<f64> {
         // frames it holds and how much time a frame is (see [`SAMPLES_PER_FRAME`]).
         body.resize(frame.length - header.len(), 0);
         if !read_or_end(&mut file, &mut body)? {
-            whole = false;
+            // The file ends inside the frame this header promised — a stream cut off at the tail,
+            // a download that never finished. The walk is over, and what is counted is the frames
+            // that are whole (see `whole`).
             break;
         }
 
         frames += 1;
 
         // The end of the file is the end of the walk: nothing at all left to read. A few bytes
-        // that cannot make a whole frame are a stream cut off, and a read that fails outright is
-        // no better — neither is a file this answers for (see `whole`).
+        // that cannot make a whole header are the same end, a stream cut off inside the frame it
+        // was about to name. A read that fails outright is not — a file this walk cannot read is
+        // not one it answers for (see `whole`).
         match file.fill_buf() {
             Ok([]) => break,
             Ok(_) => {}
@@ -156,7 +189,6 @@ pub fn duration(path: &Path) -> Option<f64> {
         }
 
         if !read_or_end(&mut file, &mut header)? {
-            whole = false;
             break;
         }
     }
@@ -169,23 +201,22 @@ pub fn duration(path: &Path) -> Option<f64> {
 
 /// The frame a header begins, where these seven bytes are the front of one.
 ///
-/// Nothing here is guessed at: twelve bits of sync, a layer of zero beneath them, an object type
-/// that is one of the three the format defines, a rate its own index names, and a length long
-/// enough to hold the header — anything else is a byte that is not the front of a frame, which
-/// the caller either refuses the file over or steps over and refuses it later for.
+/// Nothing here is guessed at: twelve bits of sync, a layer of zero beneath them, a rate its own
+/// index names, and a length long enough to hold the header — anything else is a byte that is not
+/// the front of a frame, which the caller either refuses the file over or steps over and refuses
+/// it later for.
+///
+/// The header's two bits of object type are deliberately *not* asked about: every type the field
+/// can name holds a frame of 1024 samples, a decoder reads the payload's own type in any case,
+/// and a byte of something written into those two bits by a broken encoder is not a reason to
+/// leave a card's bar drawn against a length nobody measured (see [`SAMPLES_PER_FRAME`]).
 fn frame_of(header: &[u8; 7]) -> Option<Frame> {
     // The sync's twelve bits — `0xFF`, and the top half of the byte after it — with a layer of
     // zero beneath them. The version bit between the two (MPEG-2 against MPEG-4) and the low bit
     // of the second byte, which says whether the frame carries a CRC, are masked out rather than
-    // compared: neither is anything a length is counted by.
+    // compared: neither is anything a length is counted by. The two bits above the rate are the
+    // object type, and are not read either (see the note above).
     if header[0] != 0xFF || header[1] & 0xF6 != 0xF0 {
-        return None;
-    }
-
-    // The two bits of object type, of which the fourth names nothing any encoder writes. The
-    // three it can name hold 1024 samples a frame, which is what the samples below are counted
-    // in.
-    if header[2] & 0xC0 == 0xC0 {
         return None;
     }
 
@@ -217,6 +248,20 @@ fn read_or_end(file: &mut BufReader<File>, into: &mut [u8]) -> Option<bool> {
         Err(error) if error.kind() == ErrorKind::UnexpectedEof => Some(false),
         Err(_) => None,
     }
+}
+
+/// How much of the file is left from the front of the header the walk has just read at: the
+/// file's own length, less where the walk stands now, and the header itself added back on — that
+/// being the seven bytes it read past the front it is asking about.
+///
+/// It is what tells a tag written after a stream from a byte of something else standing where a
+/// frame should have: one is a whole tag's worth of file, which is a fixed number of bytes, and
+/// the other is whatever happens to be there (see [`ID3V1_BYTES`]).
+fn left_from(file: &mut BufReader<File>, header: usize) -> Option<u64> {
+    let at = file.stream_position().ok()?;
+    let length = file.get_ref().metadata().ok()?.len();
+
+    Some(length + header as u64 - at)
 }
 
 /// Step over the ID3v2 tag a file may begin with, which is not part of the stream behind it: a
@@ -389,9 +434,9 @@ mod tests {
         );
     }
 
-    /// A stream is answered for only where every byte of it was frames: one byte that had to be
-    /// stepped over, one frame that ran out before its own length said it would, or one frame
-    /// written at a rate the others are not is a file whose count is not its length.
+    /// A stream is answered for only where every byte of the file before its end was frames: one
+    /// byte that had to be stepped over, or one frame written at a rate the others are not, is a
+    /// file whose count is not its length.
     #[test]
     fn a_stream_anything_had_to_be_stepped_over_in_answers_nothing() {
         let mut straddled = a_frame(4, 40);
@@ -403,20 +448,93 @@ mod tests {
             "a byte that is not a frame is not one to count around"
         );
 
-        let mut cut = a_frame(4, 40);
-        cut.extend_from_slice(&a_frame(4, 500)[0..20]); // a frame that is not all there
-        assert_eq!(
-            duration(&a_file("cut-frame.aac", &cut)),
-            None,
-            "a frame the file ran out inside is not one that played"
-        );
-
         let mut disagreeing = a_frame(4, 40);
         disagreeing.extend(a_frame(3, 40)); // 48000 against 44100
         assert_eq!(
             duration(&a_file("disagreeing.aac", &disagreeing)),
             None,
             "two rates are two streams, and this is one file"
+        );
+    }
+
+    /// A file the stream is *cut off* inside of is counted for the frames that are whole: what a
+    /// player has of such a file is those frames and a part of the one the file does not hold,
+    /// while a length withheld is a card drawn against the probe's estimate instead — which is
+    /// the fault this walk is here to answer for, and a download that never finished is the file
+    /// it is written for.
+    #[test]
+    fn a_stream_the_file_was_cut_off_inside_of_is_counted_for_its_frames() {
+        let mut whole = a_frame(4, 40);
+        whole.extend(a_frame(4, 300));
+
+        // Cut inside the third frame's payload.
+        let mut inside = whole.clone();
+        inside.extend_from_slice(&a_frame(4, 500)[0..20]);
+        assert_eq!(
+            duration(&a_file("cut-inside.aac", &inside)),
+            Some(2.0 * 1024.0 / 44_100.0),
+            "the two frames the file holds are counted and the one it does not is not"
+        );
+
+        // Cut inside the third frame's header.
+        let mut header_cut = whole.clone();
+        header_cut.extend_from_slice(&a_frame(4, 500)[0..3]);
+        assert_eq!(
+            duration(&a_file("cut-header.aac", &header_cut)),
+            Some(2.0 * 1024.0 / 44_100.0),
+            "and a file cut inside a header holds the same two frames"
+        );
+
+        assert_eq!(
+            duration(&a_file("one-frame.aac", &a_frame(4, 40))),
+            Some(1024.0 / 44_100.0),
+            "a file of one whole frame is a sound of one frame, not of nothing"
+        );
+    }
+
+    /// The object type a header names is not one a length is counted by: the field's four values
+    /// hold a frame of 1024 samples each, a decoder reads the payload's own type in any case, and
+    /// a file whose two bits are something else is one to measure rather than one to leave at the
+    /// probe's estimate (see `frame_of`).
+    #[test]
+    fn a_frame_of_any_object_type_is_counted() {
+        let mut bytes = Vec::new();
+        for _ in 0..3 {
+            let mut frame = a_frame(4, 50);
+            frame[2] = (frame[2] & 0x3F) | 0xC0; // the fourth object type's two bits
+            bytes.extend(frame);
+        }
+
+        assert_eq!(
+            duration(&a_file("odd-object-type.aac", &bytes)),
+            Some(3.0 * 1024.0 / 44_100.0),
+            "three frames of forty-four one are three times 1024 samples of it, whatever they name"
+        );
+    }
+
+    /// A tag written *after* a stream is not part of it: a file whose frames are followed by an
+    /// ID3v1 tag is counted for its frames alone, which is where a player leaves off as well —
+    /// while the same trailing bytes with three of something else at the front of them are a
+    /// stream this refuses (see `left_from`).
+    #[test]
+    fn a_tag_written_after_a_stream_is_not_part_of_it() {
+        let mut tagged = a_frame(4, 40);
+        tagged.extend(a_frame(4, 40));
+        tagged.extend_from_slice(b"TAG");
+        tagged.resize(tagged.len() + 125, 0x00);
+        assert_eq!(
+            duration(&a_file("id3v1.aac", &tagged)),
+            Some(2.0 * 1024.0 / 44_100.0),
+            "the frames before a tag are the whole of the sound a player has of the file"
+        );
+
+        let mut not_a_tag = a_frame(4, 40);
+        not_a_tag.extend(a_frame(4, 40));
+        not_a_tag.extend_from_slice(b"JUNKJUNKJUNK");
+        assert_eq!(
+            duration(&a_file("not-a-tag.aac", &not_a_tag)),
+            None,
+            "a run of bytes that is not a whole tag is a stream this refuses"
         );
     }
 
