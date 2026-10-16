@@ -600,6 +600,7 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         bubble_run: false,
         hovered: None,
         pressed: None,
+        last_press: None,
         tooltip: PinTooltip::default(),
         dragging: None,
         parked: false,

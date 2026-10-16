@@ -48,6 +48,7 @@ fn banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
         bubble_run: false,
         hovered: None,
         pressed: None,
+        last_press: None,
         tooltip: PinTooltip::default(),
         dragging: None,
         parked: false,

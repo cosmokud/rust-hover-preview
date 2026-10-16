@@ -584,3 +584,30 @@ pub fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
 
     None
 }
+
+/// The box of this app's own preview window — the pinned one where a pin is up — read from the
+/// window itself rather than from whatever was last published for a surface on screen.
+///
+/// It is deliberately not `preview_screen_rect`'s question. A document the engine draws has a
+/// window of its own standing *inside* the pin's, and that one is the surface on screen, while
+/// what the Explorer hook watches for is this app's own window moving under a hand that has not
+/// moved (see `PinUpdateWatch::note_pin_box`). The window is read whether or not it is visible,
+/// because a pin that has collapsed into its bubble has hidden its window rather than moved it.
+pub fn preview_window_rect() -> Option<(i32, i32, i32, i32)> {
+    let value = PREVIEW_HWND.load(Ordering::SeqCst);
+    if value == 0 {
+        return None;
+    }
+
+    unsafe {
+        let mut rect = RECT::default();
+        if GetWindowRect(HWND(value as *mut _), &mut rect).is_ok()
+            && rect.right > rect.left
+            && rect.bottom > rect.top
+        {
+            return Some((rect.left, rect.top, rect.right, rect.bottom));
+        }
+    }
+
+    None
+}

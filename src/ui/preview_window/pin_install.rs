@@ -1115,6 +1115,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         bubble_run: false,
         hovered: None,
         pressed: None,
+        last_press: None,
         // The name the hand-off button says. It is left empty here
         // and filled in when the planner's answer lands, because
         // the Shell is asked on a thread of its own and this
@@ -1204,10 +1205,21 @@ pub(super) fn relayout_pinned_media(
 ) -> Option<PinRelayout> {
     let width = (content.2 - content.0).max(1) as u32;
     let height = (content.3 - content.1).max(1) as u32;
-    let kind = CURRENT_MEDIA
+
+    // What is on screen, read in one look: what it is decides which arm answers below, and how big
+    // its frame is decides whether this box owes it anything at all (see `box_is_covered`).
+    let (kind, held) = CURRENT_MEDIA
         .lock()
         .ok()
-        .and_then(|media| media.as_ref().map(|media| media.media_type));
+        .and_then(|media| {
+            media.as_ref().map(|media| {
+                (
+                    media.media_type,
+                    (media.current_width(), media.current_height()),
+                )
+            })
+        })
+        .unzip();
 
     match kind {
         // A player with a window of its own — FFmpeg's or mpv's — draws in it and scales the
@@ -1343,6 +1355,16 @@ pub(super) fn relayout_pinned_media(
             }
             None
         }
+        // And a box change that the frame on screen already covers owes nothing at all: the band is
+        // the window's own box and stretches whatever frame is there into it, so a decode here would
+        // be paid to *replace* pixels the smaller box already has — and it is those pixels that
+        // every later enlargement is stretched from, which is what makes a window dragged small and
+        // opened again soft until a whole decode of the file lands (see `box_is_covered`).
+        //
+        // shortcut: a pin left smaller than its frame keeps the pixels it was decoded at, so a
+        // repaint copies a frame bigger than the box it fills; upgrade to a decode at the settled box
+        // if that ever shows as a stutter while an edge is under the hand.
+        Some(kind) if box_is_covered(kind, road, held, width, height) => None,
         // A frame this app draws for itself: the media is read and decoded again at the box it
         // is now shown in, which is the same call a hover's own load makes — and the same
         // wait one is, on a thread of its own. The decode used to run here, inline, which
@@ -1355,6 +1377,55 @@ pub(super) fn relayout_pinned_media(
         }),
         None => None,
     }
+}
+
+/// Whether the frame the pin is already drawing covers the box it has just been given — which is a
+/// box change that owes no decode at all.
+///
+/// The frame answers this, not the cache and not the file. A pin's band is its own window's box and
+/// the media is stretched into it (see `render_pinned_preview_at` and `compose_media_into_band`), so
+/// a frame decoded for a bigger box is every pixel the smaller box would have been given.
+///
+/// What that saves is not only the decode: it is the frame the *next* enlargement is stretched from.
+/// A window dragged small and opened again stays sharp, where decoding the smaller box would have
+/// left a thumbnail of it under a window the size of the display until a full decode of the file
+/// landed — the one road on which a frame smaller than its box is not merely cheaper to avoid.
+///
+/// The kinds are the ones a box gives another *size* rather than another page. A picture is one, and
+/// so is a page: a PDF, the page Office, the render engine or Calibre drew, and a plate out of a
+/// comic are each a page rasterized at the box it is shown in, and what that box decides is how many
+/// pixels the page is drawn at rather than what is on it — so the pixels a bigger frame already
+/// holds are every one the smaller box would have been given. What is left out is the three kinds a
+/// box lays out again rather than scales: a page of text in half the box is half the lines at the
+/// same size, a listing is another page of rows, and a sound's card is another card, so a frame of
+/// one stretched into a box it was not laid out for is a different pageful rather than the same one
+/// smaller — and each is answered below as it always was.
+///
+/// A *take-up* is never covered, whatever the frame says: the media on screen is the file the pin is
+/// leaving, and the size of its frame says nothing about the file arriving (see `PinRelayoutRoad`).
+fn box_is_covered(
+    kind: MediaType,
+    road: PinRelayoutRoad,
+    held: Option<(u32, u32)>,
+    width: u32,
+    height: u32,
+) -> bool {
+    matches!(road, PinRelayoutRoad::BoxChange)
+        && matches!(
+            kind,
+            MediaType::StaticImage
+                | MediaType::Dds
+                | MediaType::Design
+                | MediaType::Magick
+                | MediaType::Pdf
+                | MediaType::Office
+                | MediaType::Libre
+                | MediaType::Calibre
+                | MediaType::Comic
+        )
+        && held.is_some_and(|(held_width, held_height)| {
+            held_width >= width && held_height >= height
+        })
 }
 
 /// Which of the two roads asked for a relayout, for the one kind of media whose answer differs.
