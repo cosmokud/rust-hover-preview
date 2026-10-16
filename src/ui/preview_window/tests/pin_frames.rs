@@ -1,5 +1,80 @@
 use super::*;
 
+/// A band tall enough to be worth splitting is scaled by more than one thread, row for row where the
+/// single-threaded walk put them and nowhere else.
+///
+/// Two things are asked of it that a band of a handful of rows cannot ask. The rows are split across
+/// threads at `resample_threads`' floor, so a band this tall is written by several walks at once; and
+/// the band is *not* the whole surface, so a walk that took its rows from the surface rather than from
+/// the band would read the frame's box a band's height out, which is a picture drawn at the wrong row
+/// of itself rather than an empty band (see `BandTarget::frame`).
+///
+/// The frame is its own size scaled one for one, so every row of the source is a row of the band and
+/// the answer is the source itself: a row of the destination is a value written down here and not an
+/// arithmetic result of the sampler's.
+#[test]
+fn a_band_tall_enough_to_split_is_scaled_row_for_row_where_the_band_is() {
+    let (width, height) = (4u32, 80u32);
+    let (band_height, origin_y) = (64u32, 8u32);
+    assert!(
+        resample_threads(band_height as usize) > 1,
+        "a band of {band_height} rows is one the sampler splits across threads"
+    );
+
+    let source_height = band_height;
+    let mut media = Vec::new();
+    for row in 0..source_height {
+        for _ in 0..width {
+            media.extend_from_slice(&[row as u8 * 4, row as u8 * 4, row as u8 * 4, 255]);
+        }
+    }
+
+    let surface = DibSurface::create(width, height).expect("a surface to scale into");
+    let out = unsafe {
+        std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize)
+    };
+
+    resample_into_band(
+        &media,
+        (width, source_height),
+        (width, band_height),
+        // Never reached: an opaque frame covers the box it lands in.
+        TransparentBackground::Black,
+        true,
+        BandTarget {
+            out,
+            width,
+            origin_y,
+            height: band_height,
+            frame: (0, 0, width as i32, band_height as i32),
+        },
+    );
+
+    for row in 0..height as usize {
+        let wanted = (origin_y as usize..origin_y as usize + band_height as usize).contains(&row);
+        let line = &out[row * width as usize * 4..(row + 1) * width as usize * 4];
+
+        if !wanted {
+            assert_eq!(
+                line,
+                vec![0u8; width as usize * 4],
+                "row {row} is outside the band and is nothing at all"
+            );
+            continue;
+        }
+
+        let source_row = (row - origin_y as usize) as u8 * 4;
+        for pixel in line.as_chunks::<4>().0 {
+            assert_eq!(
+                pixel,
+                &[source_row, source_row, source_row, 255],
+                "row {row} is row {} of the picture",
+                row - origin_y as usize
+            );
+        }
+    }
+}
+
 /// A band the frame is not the size of is filled by the frame, sampled: it is what a pinned
 /// window draws while an edge of it is being dragged, and what it may never draw is the frame
 /// standing at its own size with nothing around it.
@@ -21,10 +96,6 @@ fn a_frame_of_another_size_is_sampled_into_the_band_it_is_drawn_in() {
             opaque,
             BandTarget {
                 out: &mut out,
-                // The sampler is the road that has no surface of its own — what the frame is
-                // scaled *out of* is the fast road's business, and this is the test of the
-                // road that scales the frame itself (see `stretch_into_band`).
-                dc: HDC(std::ptr::null_mut()),
                 width: size.0,
                 origin_y: 0,
                 height: size.1,
@@ -99,37 +170,36 @@ fn a_frame_of_another_size_is_sampled_into_the_band_it_is_drawn_in() {
     );
 }
 
-/// And the other road a scaled band is filled by, which is the one an opaque frame takes: GDI
-/// stretches the frame into the window's own surface, which is what keeps a window a hand is
-/// dragging by its edge at the pace of the hand rather than at the pace of a sample per pixel
-/// of a display's worth of them (see `stretch_into_band`).
+/// And the same frame with every pixel of it opaque, which is the kind every photograph and every
+/// screenshot the wheel is tried on is: the frame fills the band's rows and nowhere else, and every
+/// pixel of it is opaque.
 ///
-/// What is asked of the result is what a layered window needs of it: the frame at the band's
-/// size, in the band's rows and nowhere else, with every pixel of it opaque. The last is the
-/// part worth a test of its own — a 32-bit `BI_RGB` surface has no alpha channel as far as GDI
-/// is concerned, so the byte it leaves there is one this side has to write rather than trust.
+/// The last is the part worth asking about: a layered window is composited from premultiplied
+/// coverage, so an opaque frame's alpha byte is 255 everywhere — and it comes from the frame itself
+/// rather than from the road that drew it (see `pixels_are_opaque`).
 #[test]
-fn a_stretched_band_is_the_frame_at_the_size_it_is_drawn_at() {
+fn an_opaque_frame_of_another_size_fills_the_band_it_is_drawn_in() {
     let (width, height, band_height, origin_y) = (8u32, 6u32, 4u32, 2u32);
-    let surface = DibSurface::create(width, height).expect("a surface to stretch into");
+    let surface = DibSurface::create(width, height).expect("a surface to fill");
     let out =
         unsafe { std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize) };
 
     let media = [32u8, 64, 128, 255].repeat(4);
-    assert!(
-        stretch_into_band(
-            &media,
-            (2, 2),
-            &mut BandTarget {
-                out,
-                dc: surface.dc,
-                width,
-                origin_y,
-                height: band_height,
-                frame: (0, 0, width as i32, band_height as i32),
-            },
-        ),
-        "a frame of the surface's own format is one GDI stretches"
+    compose_media_into_band(
+        &media,
+        2,
+        2,
+        (width, band_height),
+        // Never reached: an opaque frame covers the box it lands in.
+        TransparentBackground::Black,
+        true,
+        BandTarget {
+            out,
+            width,
+            origin_y,
+            height: band_height,
+            frame: (0, 0, width as i32, band_height as i32),
+        },
     );
 
     for (row, line) in out.chunks(width as usize * 4).enumerate() {
@@ -164,9 +234,8 @@ fn a_stretched_band_is_the_frame_at_the_size_it_is_drawn_at() {
 /// squashed by however much of it had been carried off — and a picture that changes shape as the
 /// hand carries it is the one thing a zoom may never be.
 ///
-/// It is the road GDI is asked for and not the sampler's, because it is the road an *opaque* frame
-/// takes and therefore the road every photograph and every screenshot a zoom is tried on takes (see
-/// `stretch_into_band`).
+/// It is the road an opaque frame takes, which is every photograph and every screenshot a zoom is
+/// tried on (see `compose_media_into_band`).
 #[test]
 fn a_frame_bigger_than_its_band_is_drawn_at_the_size_it_is_drawn_at() {
     // Four rows, the last of them white and the rest black. Drawn eight times as tall as the band
@@ -183,26 +252,27 @@ fn a_frame_bigger_than_its_band_is_drawn_at_the_size_it_is_drawn_at() {
     }
 
     let (width, height) = (2u32, 8u32);
-    let surface = DibSurface::create(width, height).expect("a surface to stretch into");
+    let surface = DibSurface::create(width, height).expect("a surface to fill");
     let out =
         unsafe { std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize) };
 
     // A band the whole of the surface, which is what a picture's band is: a pin whose chrome is
     // drawn over its media is media the whole of its window down (see `pinned_band_rows`).
-    assert!(
-        stretch_into_band(
-            &media,
-            (source_width, source_height),
-            &mut BandTarget {
-                out,
-                dc: surface.dc,
-                width,
-                origin_y: 0,
-                height,
-                frame: (0, (height as i32 - 32) / 2, source_width as i32, 32),
-            },
-        ),
-        "an opaque frame is one GDI stretches"
+    compose_media_into_band(
+        &media,
+        source_width,
+        source_height,
+        (width, height),
+        // Never reached: an opaque frame covers the box it lands in.
+        TransparentBackground::Black,
+        true,
+        BandTarget {
+            out,
+            width,
+            origin_y: 0,
+            height,
+            frame: (0, (height as i32 - 32) / 2, source_width as i32, 32),
+        },
     );
 
     for (row, line) in out.chunks(width as usize * 4).enumerate() {
@@ -311,7 +381,6 @@ fn a_frame_drawn_at_its_own_size_is_a_crop_of_it() {
             true,
             &mut BandTarget {
                 out,
-                dc: HDC(std::ptr::null_mut()),
                 width,
                 origin_y: 0,
                 height,
@@ -359,7 +428,6 @@ fn a_frame_drawn_at_its_own_size_is_a_crop_of_it() {
             true,
             &mut BandTarget {
                 out: &mut out,
-                dc: HDC(std::ptr::null_mut()),
                 width,
                 origin_y: 0,
                 height,
@@ -379,7 +447,6 @@ fn a_frame_drawn_at_its_own_size_is_a_crop_of_it() {
             false,
             &mut BandTarget {
                 out: &mut out,
-                dc: HDC(std::ptr::null_mut()),
                 width,
                 origin_y: 0,
                 height,
@@ -453,8 +520,8 @@ fn a_page_that_is_laid_out_to_its_box_is_resized_one_edge_at_a_time() {
 fn a_band_whose_player_is_parked_is_the_last_frame_scaled_and_never_a_hole() {
     // A window's own surface with a band of it four rows down, so what is asserted is the band and
     // the rows around it: a fill that reached past the band would be as wrong as one that stopped
-    // short of it. The band is always the window's own width — that is what a band is, and what
-    // `stretch_into_band` stretches into — so the dimension a drag changes is the height.
+    // short of it. The band is always the window's own width — that is what a band is — so the
+    // dimension a drag changes is the height.
     fn painted(
         held: Option<(&[u8], (u32, u32))>,
         window: (u32, u32),
@@ -472,7 +539,6 @@ fn a_band_whose_player_is_parked_is_the_last_frame_scaled_and_never_a_hole() {
             width,
             BandTarget {
                 out,
-                dc: surface.dc,
                 width,
                 origin_y,
                 height: band_height,
