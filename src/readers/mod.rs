@@ -1,3 +1,4 @@
+pub(crate) mod aac_stream;
 pub(crate) mod archive_listing;
 pub(crate) mod audio_seek;
 pub(crate) mod audio_track;

@@ -593,6 +593,30 @@ fn a_sound_a_key_held_is_drawn_where_it_was_held() {
     let _ = std::fs::remove_dir_all(&_folder);
 }
 
+/// A sound the engine Windows has is drawn against the length its own *file* answers for: the
+/// probe's number where the file has one — which for a raw AAC stream is the length its frames
+/// were counted to, and not the estimate the engine reads off the bit rate (see `aac_stream`)
+/// — and the engine's own where the file says nothing, which is a container that states no
+/// length of its own.
+#[test]
+fn a_native_sounds_length_is_the_one_its_own_file_answers_for() {
+    assert_eq!(
+        native_length(Some(160.0), Some(174.753745)),
+        Some(160.0),
+        "the file's own length is the whole a card's bar is a share of"
+    );
+    assert_eq!(
+        native_length(None, Some(174.753745)),
+        Some(174.753745),
+        "and where the file says nothing, the engine's own answer is the one there is"
+    );
+    assert_eq!(
+        native_length(None, None),
+        None,
+        "a sound neither of them knows the length of is drawn with no whole at all"
+    );
+}
+
 /// The sound's own loop switch, put where the two clock tests below ask and put back when the
 /// guard is dropped, so a test beside this one is answered with the machine's own — the way the
 /// two `Audio Seek` settings are put (see `pin_audio_seek::SeekSettings`).
