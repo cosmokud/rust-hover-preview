@@ -380,6 +380,30 @@ pub(super) fn centred_at(size: (i32, i32), centre: (i32, i32)) -> ScreenRegion {
     (left, top, left + width, top + height)
 }
 
+/// The media box a pinned window's own middle puts it in: the window box it has now, centred in the
+/// room with its size untouched — the whole of what a double-click on a pin asks for (see
+/// `centre_pinned_window`).
+///
+/// The box centred is the *window's* rather than the media's, and the two are one box for a kind
+/// whose chrome is drawn over its media. That is the kind a window fitted to the screen is, and such
+/// a window is the whole of the work area's height: the middle of the room is the place it already
+/// stands in, so no gap is opened above it and none below — which is the one thing a fit is owed by
+/// a move that is not allowed to touch the size (see `pin_overlay_chrome`). A kind whose chrome is
+/// in bands is centred with those bands, so the bars are the window's own business rather than the
+/// screen's.
+pub(super) fn centred_pin_box(
+    window: ScreenRegion,
+    dpi: u32,
+    transport: bool,
+    overlay: bool,
+    caption: i32,
+    room: ScreenBounds,
+) -> ScreenRegion {
+    let size = ((window.2 - window.0).max(1), (window.3 - window.1).max(1));
+
+    content_box_of(centred_box(size, room), dpi, transport, overlay, caption)
+}
+
 /// The pin's own answers to the chrome, once a tick: its buttons, a key it was given, and whether
 /// the media behind the pin is still there at all.
 ///
@@ -618,6 +642,67 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
 
     // Whatever stands in the media band travels with it — after the box it stands in is the
     // window's, so that a player's window is never put where the surface has not caught up.
+    place_pinned_siblings();
+}
+
+/// Put a pinned window in the middle of the screen it stands on, its size untouched: what a
+/// double-click on the window's own body asks for (see `press_carries_the_pin`).
+///
+/// It is the road a *move* is rather than the road a new box is: only the place changes, so nothing
+/// is laid out again at a size it never had and no player is begun again — the road a drag of the
+/// window already follows, and the reason a picture is drawn from the surface the window already
+/// carries and travels with it (see `apply_pin_drag`).
+///
+/// The screen is read at the middle of the window rather than at a corner of it, so the display the
+/// window is put in the middle of is the one it is mostly standing on — a window half over the seam
+/// of two of them is not a window either of them can be said to own by a corner.
+///
+/// A window the hand has moved gives up the maximize it may have carried, exactly as one moved by a
+/// drag does: a maximize is the button's own arrangement of the box, and this is another one (see
+/// `pin_restore_box`).
+pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
+    let Some((window, was, restore, dpi, transport, overlay, caption)) =
+        pin_state().and_then(|pinned| {
+            let pin = pinned.pin()?;
+            Some((
+                pin.window_box(),
+                pin.content,
+                pin.restore,
+                pin.dpi,
+                pin.transport_bar,
+                pin.overlay,
+                pin.caption,
+            ))
+        })
+    else {
+        return;
+    };
+
+    let size = ((window.2 - window.0).max(1), (window.3 - window.1).max(1));
+    let room = work_area_at((window.0 + window.2) / 2, (window.1 + window.3) / 2);
+    let content = centred_pin_box(window, dpi, transport, overlay, caption, room);
+
+    {
+        let Some(mut pinned) = pin_state() else {
+            return;
+        };
+        let Some(pin) = pinned.pin_mut() else {
+            return;
+        };
+        pin.restore = pin_restore_box(restore, was, content);
+        pin.content = content;
+    }
+
+    let placed = pinned_window_box_of(content, dpi, transport, overlay, caption);
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        placed.0,
+        placed.1,
+        size.0,
+        size.1,
+        SWP_NOACTIVATE | SWP_NOZORDER,
+    );
     place_pinned_siblings();
 }
 

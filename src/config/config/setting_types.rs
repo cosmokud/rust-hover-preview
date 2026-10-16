@@ -905,6 +905,12 @@ pub const DEFAULT_PIN_UPDATE_ENABLED: bool = true;
 /// pointer crossed over a listing — or parked over another file — leaves it where it is.
 pub const DEFAULT_PIN_UPDATE_ON_HOVER: bool = false;
 
+/// Whether a double-click on a pinned window puts it in the middle of the screen it stands on:
+/// the window's own size kept and its place moved, which for a window fitted to the screen is the
+/// place it already stands in — a fit is the whole of the work area's height, so the middle of
+/// the screen is a window with no gap above it and none below.
+pub const DEFAULT_PIN_DOUBLE_CLICK_CENTER: bool = true;
+
 /// Whether a pin collapsed into its bubble holds the video it is playing where it is, which it
 /// does unless the configuration says otherwise: a bubble is a pin put away, and a film playing
 /// on behind one is heard from a window nobody can see. What is held is put back by the pin

@@ -247,6 +247,17 @@ pub(super) fn pin_pause_audio() -> bool {
         .unwrap_or(DEFAULT_PIN_PAUSE_AUDIO)
 }
 
+/// Whether a double-click on a pinned window puts it in the middle of the screen it stands on, as
+/// the configuration has it. It is read as the second press of a pair arrives, which is the only
+/// moment the question is asked: a switch thrown while a pin is up is answered by the next
+/// double-click rather than by the next pin.
+pub(super) fn pin_double_click_center() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_double_click_center)
+        .unwrap_or(DEFAULT_PIN_DOUBLE_CLICK_CENTER)
+}
+
 /// Where a pin the minimize button puts away goes — the round bubble on the desktop, or the app's
 /// own button in the taskbar, as the configuration has it (see `Pin Mode → Minimize`).
 ///

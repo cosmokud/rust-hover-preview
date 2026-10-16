@@ -94,6 +94,7 @@ fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() 
             bubble_run: false,
             hovered: None,
             pressed: None,
+            last_press: None,
             tooltip: PinTooltip::default(),
             dragging: None,
             parked: false,

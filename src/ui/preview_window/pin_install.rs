@@ -1115,6 +1115,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         bubble_run: false,
         hovered: None,
         pressed: None,
+        last_press: None,
         // The name the hand-off button says. It is left empty here
         // and filled in when the planner's answer lands, because
         // the Shell is asked on a thread of its own and this
