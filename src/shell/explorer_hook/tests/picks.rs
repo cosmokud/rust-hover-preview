@@ -615,14 +615,12 @@ fn a_second_click_on_the_file_the_pin_shows_keeps_the_place_the_first_was_made_i
     let first_at = watch.pending.as_ref().expect("a held click").at;
 
     // The second click is on the file the pin is already showing, which is the case that
-    // re-arms rather than releases.
-    watch.answer_click(
-        showing,
-        showing,
-        true,
-        Instant::now(),
-        POINT { x: 30, y: 40 },
-    );
+    // re-arms rather than releases. Its clock is named rather than read from the machine, because
+    // the two `Instant::now()`s of a test are as likely as not to be the same instant: the clock a
+    // retry is armed by has a granularity, and a test that read it twice would be asserting that a
+    // tick went by between two reads of it.
+    let later = first_at + Duration::from_millis(1);
+    watch.answer_click(showing, showing, true, later, POINT { x: 30, y: 40 });
 
     let held = watch.pending.as_ref().expect("the click is re-armed");
     let carried = held.place.as_ref().expect("the place is carried forward");
@@ -630,9 +628,9 @@ fn a_second_click_on_the_file_the_pin_shows_keeps_the_place_the_first_was_made_i
         !hover_location_changed(carried, &here),
         "the listing the first click was made in is carried forward, not re-read"
     );
-    assert!(
-        held.at > first_at,
-        "and the hold's own clock moves on, which is what arms the retry"
+    assert_eq!(
+        held.at, later,
+        "and the hold's own clock moves on to the tick that saw the click, which is what arms the retry"
     );
     assert_eq!(
         (held.point.x, held.point.y),
