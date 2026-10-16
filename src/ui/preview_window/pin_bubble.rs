@@ -3,10 +3,10 @@
 //!
 //! What is drawn inside it is the pin's own media where a bubble can show it — the frame a film is
 //! on, the first plate of a page, the picture a picture is — and a mark saying what kind of thing
-//! it stands for where it cannot (see `bubble_art` and `pin_chrome::BubbleMark`). One kind is
-//! neither: a film FFmpeg's player is drawing holds no frame on this side at all, so a frame is
-//! taken out of the file for it, off this thread and off the collapse's own path (see
-//! `grab_video_frame`).
+//! it stands for where it cannot (see `bubble_art` and `pin_chrome::BubbleMark`). A film a player of
+//! somebody else's is drawing is the one kind that is both: it holds no frame on this side at all, so
+//! one is taken out of the file for the still a bubble goes up with (see `grab_video_frame`), and the
+//! frames of the film *moving* are read beside that player (see `bubble_stream`).
 
 use super::*;
 
@@ -21,8 +21,8 @@ pub(super) const PIN_BUBBLE_CLASS: PCWSTR = w!("RustHoverPreviewPinBubble");
 /// a pin is one (see `bubble_window_is_at`).
 pub(crate) static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
 
-/// One frame of a film FFmpeg's player is drawing, as the bubble shows it: the picture, already
-/// scaled to cover a square and cropped to the middle of it, and the side of that square.
+/// One frame of a film a player of somebody else's is drawing, as the bubble shows it: the picture,
+/// already scaled to cover a square and cropped to the middle of it, and the side of that square.
 ///
 /// It is held as one thing rather than as a pair of statics because the two are one fact — a
 /// picture of `side × side` BGRA is what the bubble paints — and a reader that could see the
@@ -31,11 +31,6 @@ pub(crate) static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
 pub(super) struct BubbleFrame {
     pub(super) pixels: Vec<u8>,
     pub(super) side: u32,
-    /// The film the frame was read out of, because a still of *another* film is the wrong colour
-    /// around the ring and the wrong frame to fall back to: a file the walk landed on behind a
-    /// bubble asks for a still of its own rather than keeping the one before it (see
-    /// `grab_bubble_frame` and `bubble_film::keep_the_film_in_the_bubble`).
-    pub(super) path: PathBuf,
 }
 
 /// The frame taken for the bubble a collapsed film left, if it has landed yet.
@@ -543,23 +538,15 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
         if target == PinMinimizeTo::Taskbar {
             show_pin_taskbar();
         } else {
-            // The film's own window first, where the thing being collapsed is a film mpv is
-            // drawing: it is seated in the circle the bubble is about to stand around rather than
-            // hidden with the rest of the pin, which is what makes the bubble show a film *playing*
-            // for nothing — no frame is read, decoded or copied, and mpv is the one keeping the
-            // picture moving (see `bubble_film`). It goes in before the bubble is shown so that the
-            // bubble's very first frame is the hole rather than the face it has to be corrected
-            // from. Every other kind, and every other engine, keeps what it has always had, which
-            // is the frame grabbed below.
-            bubble_film::seat_film_window(bubble_box(anchor));
-
             show_pin_bubble(anchor);
 
-            // And the frame the bubble of a film FFmpeg plays is to show, which no player of that
-            // kind has left here: it is read out of the file at the second the pin's bar was
-            // showing, on a thread of its own, and the bubble goes up on the theme's face until it
-            // lands (see `grab_bubble_frame`). A seated film keeps it too — as the colour its ring
-            // is drawn in, and as the still that stands wherever the seat is not.
+            // And the frame the bubble of a film is to show until its player is read: every player
+            // a film here is drawn by is somebody else's process and holds no frame on this side, so
+            // it is read out of the file at the second the pin's bar was showing, on a thread of its
+            // own, and the bubble goes up on the theme's face until it lands (see
+            // `grab_bubble_frame`). It is also the colour the ring is drawn in, and the picture the
+            // bubble falls back to wherever the frames read beside the player are not there (see
+            // `bubble_stream`).
             grab_bubble_frame(bubble_box(anchor));
         }
     }
@@ -567,10 +554,10 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
 
 /// Take the frame the bubble a collapsed film leaves is to show, and leave it in the slot above.
 ///
-/// **A film FFmpeg's player is drawing holds no frame on this side**, which is the whole of why
-/// this exists: that engine draws in a window of somebody else's and what this app has of it is a
-/// process and a second on a bar, so the one picture a bubble can show of such a film is a frame
-/// read out of the file (see `grab_video_frame`). Every other kind has its picture already — a
+/// **A film a player of somebody else's is drawing holds no frame on this side**, which is the whole
+/// of why this exists: that player draws in a window of its own and what this app has of the film is
+/// a process and a second on a bar, so the one picture a bubble can show of it is a frame read out
+/// of the file (see `grab_video_frame`). Every other kind has its picture already — a
 /// picture, a page and an engine's document are decoded or drawn by this app and the bubble samples
 /// what the pin is holding, a film the media engine plays keeps its frame in memory, and a sound is
 /// drawn as a meter rather than as a picture (see `bubble_art`).
@@ -584,9 +571,10 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
 /// needs — the kind, the file, the second the bar is showing and the size the bubble was made — is
 /// read here, one ask at a time, and what the thread is handed is the answers rather than the pin.
 ///
-/// It is asked for more than once in a collapse's life, and the second question it answers is
-/// whether the still in hand is still the film's: a file the walk landed on behind a bubble is a
-/// still of the film before it (see `bubble_film::keep_the_film_in_the_bubble`).
+/// It is asked for once per collapse, and the slot is emptied before the ask rather than when the
+/// frame lands: a grab that never answers — no FFmpeg on the machine, a file it will not open —
+/// leaves a bubble with nothing in it rather than one still showing a frame of the film before this
+/// one.
 pub(super) fn grab_bubble_frame(box_: ScreenRegion) {
     // A frame from the last collapse is a frame of another file: the slot is emptied here rather
     // than when the frame lands, so a grab that never answers leaves a bubble with nothing in it
@@ -619,7 +607,7 @@ pub(super) fn grab_bubble_frame(box_: ScreenRegion) {
     std::thread::spawn(move || {
         if let Some(pixels) = grab_video_frame(&path, at, side) {
             if let Ok(mut frame) = BUBBLE_FRAME.lock() {
-                *frame = Some(BubbleFrame { pixels, side, path });
+                *frame = Some(BubbleFrame { pixels, side });
             }
         }
 
@@ -641,24 +629,8 @@ pub(super) fn take_noted_grabs() -> Vec<(PathBuf, f64, u32)> {
         .unwrap_or_default()
 }
 
-/// Whether the still in hand is one of the film the pin is showing now.
-///
-/// The two are read one after the other and never across each other: the frame is the bubble's own
-/// slot and the film is the pin's, and neither lock is taken while the other is held (see
-/// `pinned_media_owner` for the rule this keeps).
-pub(super) fn the_still_in_hand_is_of_the_pinned_film() -> bool {
-    let still = BUBBLE_FRAME
-        .lock()
-        .ok()
-        .and_then(|frame| frame.as_ref().map(|frame| frame.path.clone()));
-    let Some(still) = still else {
-        return false;
-    };
-
-    pinned_media_owner().is_some_and(|(path, _)| path == still)
-}
-
-/// One frame of a film FFmpeg's player is drawing, taken for the bubble the pin collapses into.
+/// One frame of a film a player of somebody else's is drawing, taken for the bubble the pin
+/// collapses into.
 ///
 /// The frame is *read* rather than copied, and that is the whole of the difference between this and
 /// every other kind's picture: what a bubble shows of a film the media engine plays is the frame
@@ -1179,12 +1151,6 @@ unsafe extern "system" fn hide_player_windows_callback(
 
 /// Take the round bubble down, if one is up.
 pub(super) fn hide_pin_bubble() {
-    // A film's window standing in the bubble comes out of it with the bubble: the region comes off
-    // it and mpv stops filling a square nobody can see (see `bubble_film`). Nothing is *moved* here
-    // — whoever took the bubble down says where the window goes next, and a restore is the pin's
-    // band a moment later.
-    bubble_film::unseat_film_window();
-
     // No bubble carries a menu: a pin put back up or taken down has no menu for one to be shown
     // in, and the next bubble starts without one.
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
@@ -1242,9 +1208,8 @@ pub(super) unsafe fn show_pin_bubble(anchor: ScreenRegion) {
 /// work area so that a bubble at an edge comes back up inside it (see `show_pin_bubble`).
 ///
 /// It is one function rather than a computation inside the window's own placement because the
-/// film's window is carried into the very same square where the bubble seats one: a seat whose box
-/// disagreed with the bubble's would be a film whose edges the ring does not reach (see
-/// `bubble_film`).
+/// frame a film's player is decoded into is cut to the very same square: a box that disagreed with
+/// the bubble's would be a picture whose edges the ring does not reach (see `bubble_stream`).
 pub(super) fn bubble_box(anchor: ScreenRegion) -> ScreenRegion {
     let dpi = dpi_at(anchor.0, anchor.1);
     let side = logical_px(dpi, PIN_BUBBLE_PIXELS).max(16);
@@ -1268,16 +1233,17 @@ pub(super) fn bubble_side(box_: ScreenRegion) -> u32 {
 }
 
 /// The box the bubble's own window is standing in, where one is **up**: the square the circle is
-/// painted in, and the square a film standing in the bubble is put in.
+/// painted in.
 ///
 /// It is read off the window rather than remembered, because a bubble the hand has carried is a
-/// bubble standing somewhere else — and the film has to be carried with it (see `bubble_film`).
+/// bubble standing somewhere else — and the frames read beside a film have to follow it (see
+/// `bubble_stream`).
 /// **The circle's own side and not the window's height**, because the window grows downwards while
 /// its menu is up (see `open_bubble_menu`).
 ///
 /// **A bubble that is not on screen has no box**, which is the whole of what a pin put away into the
-/// taskbar is: what a seat or a stream would do with the box it still has is move somebody else's
-/// window and decode a film for a circle nobody is looking at.
+/// taskbar is: what a stream would do with the box it still has is decode a film for a circle nobody
+/// is looking at.
 pub(super) fn bubble_box_on_screen() -> Option<ScreenRegion> {
     let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
     if hwnd == 0 {
@@ -1297,18 +1263,6 @@ fn bubble_box_of(hwnd: HWND) -> Option<ScreenRegion> {
     let (x, y, ..) = window_origin(hwnd)?;
     let side = logical_px(dpi_at(x, y), PIN_BUBBLE_PIXELS).max(16);
     Some((x, y, x + side, y + side))
-}
-
-/// Put the film the pin is showing back into the bubble a hand has just let go of: a seat at the
-/// box the circle is standing in now, which is where the drag left it (see `bubble_film` and the
-/// press and release it belongs to in `pin_bubble_proc`).
-///
-/// A film that is already seated, and one no bubble can hold at all, are both answered here without a
-/// window call: the keep is the same road the tick takes (see `bubble_film::keep_the_film_in_the_bubble`).
-fn put_the_film_back_in_the_bubble(hwnd: HWND) {
-    if let Some(box_) = bubble_box_of(hwnd) {
-        bubble_film::keep_the_film_in_the_bubble(box_);
-    }
 }
 
 /// The bubble's window, created once for the run: a layered popup that never takes focus and is
@@ -1392,12 +1346,10 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
     let bars = match &art {
         BubbleArtOwned::Bands(bands) => *bands,
         BubbleArtOwned::Level(level) => pin_chrome::peak_bars(*level, phase),
-        // A film's bars are drawn over its own picture — a frame this app painted, or the window it
-        // is standing in — and only while it is playing: a picture with a play mark is a film that
-        // is playing, and one with a picture mark is a page or a still.
-        BubbleArtOwned::Picture(..) | BubbleArtOwned::Hole(..)
-            if mark == pin_chrome::BubbleMark::Play =>
-        {
+        // A film's bars are drawn over its own picture — a frame this app painted — and only while
+        // it is playing: a picture with a play mark is a film that is playing, and one with a picture
+        // mark is a page or a still.
+        BubbleArtOwned::Picture(..) if mark == pin_chrome::BubbleMark::Play => {
             audio_meter::output_bands().unwrap_or([0.0; pin_chrome::BUBBLE_BARS])
         }
         _ => [0.0; pin_chrome::BUBBLE_BARS],
@@ -1415,7 +1367,6 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
                 ring: *ring,
             }
         }
-        BubbleArtOwned::Hole(ring) => pin_chrome::BubbleArt::Hole { ring: *ring },
         _ => pin_chrome::BubbleArt::None,
     };
 
@@ -1534,11 +1485,6 @@ pub(super) enum BubbleArtOwned {
     /// colour rather than the average of every frame that passes. A still passes `None` and is
     /// ringed in its own colour, which is the same thing it would have been given here.
     Picture(Vec<u8>, u32, u32, Option<[u8; 3]>),
-    /// A hole where the picture would be, with the film's own window standing in it: the middle is
-    /// left to that window, the bars and the mark are drawn over it, and the ring is drawn in the
-    /// colour here — the still's own average, so that the ring is the film's colour whether the film
-    /// is painted in the bubble or standing in it (see `pin_chrome::BubbleArt::Hole`).
-    Hole(Option<[u8; 3]>),
     /// The seven bands of this app's own sound, 0.0..=1.0 each (see `audio_meter::output_bands`).
     Bands([f32; pin_chrome::BUBBLE_BARS]),
     /// The level the sound on screen is being heard at, 0.0..=1.0, for the machine whose bands
@@ -1552,9 +1498,10 @@ pub(super) enum BubbleArtOwned {
 /// bands a sound is doing, the level it is being heard at, or nothing — together with the mark its
 /// kind carries.
 ///
-/// The kind decides which, and each arm answers the question its own way: a film FFmpeg plays
-/// shows the frame that was grabbed for it, a film the media engine plays shows the frame the
-/// engine is holding, a sound shows the bands of this app's own sound — or the mixer's own peak
+/// The kind decides which, and each arm answers the question its own way: a film a player of
+/// somebody else's is drawing shows the frame read out of the file beside that player where one has
+/// landed and the frame grabbed for it where none has, a film the media engine plays shows the frame
+/// the engine is holding, a sound shows the bands of this app's own sound — or the mixer's own peak
 /// through the shape a level has always been drawn as, where this machine will not read bands at
 /// all. A sound is answered **while it is playing** and not before: a histogram is a picture of a
 /// sound being made, and a paused sound has none to draw, so it is answered with the pause glyph
@@ -1581,21 +1528,16 @@ pub(super) fn bubble_art(side: u32) -> (BubbleArtOwned, pin_chrome::BubbleMark) 
         MediaType::Video => {
             let frame = BUBBLE_FRAME.lock().ok().and_then(|frame| frame.clone());
 
-            // **The film's own window standing in the bubble is the picture, where one is.** What
-            // is inside the circle is then another process's window rather than anything this side
-            // can paint, so the bubble draws its ring around a hole and leaves the middle to the
-            // film (see `bubble_film` and `pin_chrome::BubbleArt::Hole`). The still is kept either
-            // way: its colour is the ring's, and it is what the bubble shows again the moment the
-            // seat is not honest.
-            if bubble_film::film_is_seated() {
-                BubbleArtOwned::Hole(
-                    frame.and_then(|frame| pin_chrome::average_color(&frame.pixels)),
-                )
-            } else if let Some((pixels, side)) = bubble_stream::latest_frame() {
-                // **And where it is FFmpeg's player, the picture is the frames read beside it** (see
-                // `bubble_stream`). The ring's colour is the still's and not the frame's: a hairline
-                // averaged from every frame that passes is a hairline that changes twenty-five times
-                // a second, and a ring is the file's colour rather than a reading of it.
+            // **A film a player of somebody else's is drawing is painted by this app**, out of the
+            // frames read beside that player: the film's own window is hidden with the pin and never
+            // moved into the circle, because a window of somebody else's cannot be cut to a circle
+            // and carried about without a fight with its own region, its own topmost band and its own
+            // resizes (see `bubble_stream`). The still is kept either way: its colour is the ring's,
+            // and it is what the bubble shows wherever there is no frame of the film to hold.
+            if let Some((pixels, side)) = bubble_stream::latest_frame() {
+                // The ring's colour is the still's and not the frame's: a hairline averaged from
+                // every frame that passes is a hairline that changes twenty-five times a second, and
+                // a ring is the file's colour rather than a reading of it.
                 let ring = frame.and_then(|frame| pin_chrome::average_color(&frame.pixels));
                 BubbleArtOwned::Picture(pixels, side, side, ring)
             } else {
@@ -1782,11 +1724,10 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
             PIN_BUBBLE_MOVED.store(false, Ordering::Release);
             let _ = SetCapture(hwnd);
 
-            // And the film comes out of the bubble for as long as a hand has it: a film's window
-            // cannot follow a carried circle without a placement of somebody else's window on every
-            // move the pointer makes, so the bubble goes back to its own still while it is in flight
-            // and the film is put back in the box the hand leaves the bubble at (see `bubble_film`).
-            bubble_film::unseat_film_window();
+            // A film's window is hidden with the rest of the pin at the collapse, and this is the
+            // press that carries the bubble about rather than the film: what the frames read beside
+            // the player follow is the box the circle is standing in, which is what the drag's own
+            // moves write (see `bubble_stream` and `drag_pin_bubble`).
 
             // And the drag is carried here rather than left to the preview loop's next tick: what
             // has hold of the bubble is the pointer, and the pointer does not wait for a tick of
@@ -1820,9 +1761,6 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
 
             if dragging {
                 let _ = ReleaseCapture();
-                // The hand has let go, wherever it left the bubble: the film goes back into the
-                // circle, which is standing where the drag left it (see `bubble_film`).
-                put_the_film_back_in_the_bubble(hwnd);
                 let was_focused = BUBBLE_PRESS_FOCUSED.swap(false, Ordering::AcqRel);
                 if bubble_click_restores(was_focused, PIN_BUBBLE_MOVED.load(Ordering::Acquire)) {
                     // A press that did not move is a click, and a click on a bubble the hand is
@@ -1840,7 +1778,6 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
             // pointer goes with it, or it would stand past the hand that left it.
             drop_bubble_drag();
             close_bubble_menu(hwnd);
-            put_the_film_back_in_the_bubble(hwnd);
             LRESULT(0)
         }
         WM_RBUTTONUP => {

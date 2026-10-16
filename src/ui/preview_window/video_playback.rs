@@ -1030,17 +1030,12 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
     // hidden window a hold-off would otherwise put back: that place is a chrome-less film over
     // Explorer beside the bubble (see `hide_pinned_windows`).
     //
-    // **The one window that is placed is the film's, where a bubble has seated it**, and it is put
-    // back in the bubble's own square rather than in any band: what the bubble holds is a window
-    // that somebody else keeps drawing, and a window that something has moved out from under the
-    // ring is a bubble with the desktop showing through the middle of it (see `bubble_film`).
+    // **And a collapsed pin places no window of anybody else's at all.** What a bubble shows of a
+    // film is a picture it paints itself out of the frames read beside the player (see
+    // `bubble_stream`), so there is nothing of the player's to carry into the circle and nothing to
+    // put back where something has moved it.
     if pin_is_collapsed() {
-        // **The one window that is placed is the film's, where a bubble has seated it** — and a
-        // bubble with no film in it is given one where there is one to give, since the window of a
-        // film a walk landed on behind the bubble is nowhere else to be put. The box is the circle's
-        // own, read off the bubble's window: a bubble the hand has carried is a bubble standing
-        // somewhere else (see `bubble_film`).
-        return bubble_box_on_screen().is_some_and(bubble_film::keep_the_film_in_the_bubble);
+        return false;
     }
     // What is to be done with the window, from the one answer both of the places that put one
     // somewhere read: everything held off — the pin's own chrome or popup — is nothing this road

@@ -705,13 +705,12 @@ pub fn run_preview_window() {
                     let changed = last_bubble_playing != Some(playing);
                     let due = animating && last_bubble_repaint.elapsed() >= BUBBLE_REPAINT;
 
-                    // And the frames a film FFmpeg's player is drawing are read beside it, which is
-                    // the one picture this app has to *make*: mpv's own window stands in the bubble
-                    // and a film this app draws holds its frame here (see `bubble_film` and
-                    // `bubble_stream`). The state of the world is what this is given — where the
-                    // bubble is standing, and whether the film is playing — so that a level change, a
-                    // seek, a loop and a swap behind the bubble are one answer rather than four
-                    // hooks.
+                    // And the frames a film is being drawn by are read beside its player, which is
+                    // the one picture this app has to *make*: neither external player can hand a frame
+                    // over, and a film this app draws holds its frame here (see `bubble_stream`). The
+                    // state of the world is what this is given — where the bubble is standing, and
+                    // whether the film is playing — so that a level change, a seek, a loop and a swap
+                    // behind the bubble are one answer rather than four hooks.
                     bubble_stream::settle(playing, bubble_box_on_screen());
 
                     if changed || due || frame_ready {
