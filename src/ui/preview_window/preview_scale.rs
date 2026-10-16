@@ -130,6 +130,22 @@ pub(super) fn effective_preview_scale(path: &Path, scales: HoverScales) -> Previ
     effective_preview_scale_of(&HoverFacts::read(path), scales)
 }
 
+/// The share a *hover* of this file is placed at — which is the share a fresh take-up of it is
+/// given, and so the size a pinned window is put back to when its size is worked out again rather
+/// than kept (see `reset_pinned_size`).
+///
+/// The path-taking half of `hover_preview_scale_of`, as `effective_preview_scale` is of
+/// `effective_preview_scale_of`, and read from the file the way that one is. The two are not
+/// interchangeable: a film is the one kind whose share the two roads read differently, and a
+/// reduced fit is where they part — half of the screen is half of the film to a take-up and half of
+/// the room to a pinned window's own swaps (see `hover_preview_scale_of`).
+///
+/// It is the take-up's the reset is owed, because the size a window comes back to is the size it
+/// was pinned at: a pair is that same placing asked for again.
+pub(super) fn hover_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
+    hover_preview_scale_of(&HoverFacts::read(path), scales)
+}
+
 /// The share one file is placed at, asked of the answer that hover already has.
 ///
 /// Everything this asks is a field of `hover` or something `hover` holds: the file's kind, the

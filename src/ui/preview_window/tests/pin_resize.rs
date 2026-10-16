@@ -360,6 +360,203 @@ fn a_maximized_pin_fits_a_file_smaller_than_the_room_to_the_room() {
     let _ = std::fs::remove_dir_all(&folder);
 }
 
+/// A double-click that asks for the window's size back is the whole of what a fresh take-up of the
+/// file would have been given: the file measured as its kind is measured, fitted into the room the
+/// pin's own chrome leaves at the share the scaling setting names for that kind, and put in the
+/// middle of that room — with the size a hand pulled the window to given up and a maximize with it.
+///
+/// The size comes from the *setting* rather than from the box the window is standing in, and both
+/// ways it can be wrong are asked of: a window pulled down to 200 by 150 comes back 400 by 300 at
+/// the picture's own `100%`, and one pulled out to 800 by 600 comes back down to 200 by 150 at
+/// `50%`.
+#[test]
+fn a_window_the_hand_sized_is_put_back_to_the_size_the_setting_asks_for() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-pin-reset-size");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    let path = folder.join("400x300.png");
+    image::save_buffer(
+        &path,
+        &vec![0x40u8; (400 * 300 * 3) as usize],
+        400,
+        300,
+        image::ExtendedColorType::Rgb8,
+    )
+    .expect("a written picture");
+
+    // A pin showing that picture, with its window pulled by hand to a size of its own: a box in the
+    // corner of the screen it stands on, the bound such a drag leaves behind written down with it
+    // (see `overlay_pin`), and a maximize standing that the reset has to give up.
+    let room = work_area_at(0, 0);
+    let pulled_small = (room.left, room.top, room.left + 200, room.top + 150);
+    let pulled_wide = (room.left, room.top, room.left + 800, room.top + 600);
+
+    // The media behind the window, so that the tick this asks is a tick with a pin still standing:
+    // a pin whose media reads as gone is taken down rather than given a box (see
+    // `pin_media_is_alive`).
+    let mut media = create_loading_media(400, 300);
+    media.media_type = MediaType::StaticImage;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    // One reset through the loop's own drain, which is where a double-click's own reset is answered:
+    // the pair itself is what asks for it, and a press is a procedure this test has no window for
+    // (see `press_carries_the_pin`).
+    let reset = || {
+        let mut request = None;
+        let mut wait = None;
+        let mut started = None;
+        let mut offset = 0.0;
+        let mut paused = None;
+        ask_pin(PinCommand::ResetSize);
+        pin_command_request(
+            &mut request,
+            &mut wait,
+            &mut started,
+            &mut offset,
+            &mut paused,
+            false,
+            None,
+        );
+        request
+    };
+
+    for (setting, content, size) in [
+        (PreviewScale::Percent(100), pulled_small, (400, 300)),
+        (PreviewScale::Percent(50), pulled_wide, (200, 150)),
+    ] {
+        let _picture_scale = PictureScale::stood_at(setting);
+
+        let mut pin = overlay_pin(content, PinChrome::always());
+        pin.path = path.clone();
+        pin.restore = Some((0, 0, 800, 600));
+        stand_pin(Some(pin));
+
+        let Some(PreviewMessage::PinBox(reset_box)) = reset() else {
+            panic!("a reset at {setting:?} asked for no box");
+        };
+
+        assert_eq!(
+            (reset_box.2 - reset_box.0, reset_box.3 - reset_box.1),
+            size,
+            "the window is not the size a picture of 400 by 300 is given at {setting:?}"
+        );
+
+        // The room the pin leaves its media is the screen's own work area, this pin's chrome being
+        // drawn over its media: what the box is put in the middle of is asked as the rule rather
+        // than as a number, the display being the machine's own.
+        let (left, right) = (reset_box.0 - room.left, room.right - reset_box.2);
+        assert!(
+            (left - right).abs() <= 1,
+            "the window is not in the middle of the room it stands on: {reset_box:?} in {room:?}"
+        );
+
+        let (bound, restore, written) = pin_state()
+            .and_then(|pinned| {
+                let pin = pinned.pin()?;
+                Some((pin.bound, pin.restore, pin.content))
+            })
+            .expect("the pin this test stood");
+        assert_eq!(
+            written, reset_box,
+            "the box asked for is not the box the pin was written with"
+        );
+        assert_eq!(
+            bound, None,
+            "the size a hand pulled the window to was left behind as the bound the files after it \
+             are fitted into"
+        );
+        assert_eq!(
+            restore, None,
+            "a reset left the maximize it found standing, so the caption goes on drawing a restore"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&folder);
+    stand_pin(previous_pin);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}
+
+/// A sound's card is the one kind a pair hands no size back to: a card is framed by nothing — no
+/// hand can pull one to another size — so the size it has is the size its setting asked for, and
+/// what a double-click owes it is the middle. The measure goes with it, so a card is never measured
+/// again at a scale the pin was not taken up at (see `reset_pinned_size`).
+#[test]
+fn a_card_is_given_the_middle_and_keeps_the_size_it_is_drawn_at() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    // A card at a size of its own, in the corner of the screen it stands on, showing a sound no
+    // machine has ever seen: a measure taken for this file would be a wait rather than a size, and
+    // the whole of what is asked here is that none is taken at all.
+    let room = work_area_at(0, 0);
+    let content = (room.left, room.top, room.left + 320, room.top + 96);
+    let mut pin = PinnedPreview {
+        frame: PinFrame::None,
+        overlay: false,
+        content,
+        caption: 0,
+        bound: None,
+        ..PinnedPreview::for_test()
+    };
+    pin.path = std::env::temp_dir().join("a-card-no-machine-has.flac");
+    stand_pin(Some(pin));
+
+    let mut media = create_loading_media(320, 96);
+    media.media_type = MediaType::Audio;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    let mut request = None;
+    let mut wait = None;
+    let mut started = None;
+    let mut offset = 0.0;
+    let mut paused = None;
+    ask_pin(PinCommand::ResetSize);
+    pin_command_request(
+        &mut request,
+        &mut wait,
+        &mut started,
+        &mut offset,
+        &mut paused,
+        false,
+        None,
+    );
+
+    let Some(PreviewMessage::PinBox(reset_box)) = request else {
+        panic!("a reset of a card asked for no box");
+    };
+    assert_eq!(
+        (reset_box.2 - reset_box.0, reset_box.3 - reset_box.1),
+        (320, 96),
+        "a card was given a size of its own rather than the one it is drawn at"
+    );
+
+    let (left, right) = (reset_box.0 - room.left, room.right - reset_box.2);
+    assert!(
+        (left - right).abs() <= 1,
+        "a card was not put in the middle of the room it stands on: {reset_box:?} in {room:?}"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}
+
 fn room_bounds_as_region(room: ScreenBounds) -> ScreenRegion {
     (room.left, room.top, room.right, room.bottom)
 }

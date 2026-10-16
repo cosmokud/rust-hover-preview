@@ -911,6 +911,13 @@ pub const DEFAULT_PIN_UPDATE_ON_HOVER: bool = false;
 /// the screen is a window with no gap above it and none below.
 pub const DEFAULT_PIN_DOUBLE_CLICK_CENTER: bool = true;
 
+/// Whether a double-click on a pinned window puts it back to the size the scaling settings ask for
+/// the kind it is showing, rather than keeping the size a hand dragged it to: the size a fresh
+/// take-up of the file would have been given, at the share its kind's own setting names, in the
+/// middle of the screen it stands on. Off, a double-click is the move alone — the size left exactly
+/// as the hand left it (see `pin_double_click_center`).
+pub const DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE: bool = true;
+
 /// Whether a pin collapsed into its bubble holds the video it is playing where it is, which it
 /// does unless the configuration says otherwise: a bubble is a pin put away, and a film playing
 /// on behind one is heard from a window nobody can see. What is held is put back by the pin

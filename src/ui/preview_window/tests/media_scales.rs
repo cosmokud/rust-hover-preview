@@ -433,6 +433,22 @@ fn a_hovered_video_fills_the_room_at_a_fit_and_takes_its_own_size_below_one() {
         (1920, 1080),
         "a pinned window is fitted to the room a reduced fit names, reduced"
     );
+
+    // And a size worked out again — the one a double-click puts a pinned window back to — is read
+    // at the *hover's* share of those two, because a window put back to the size the settings ask
+    // for is a window taken up again: what the pair resets is the size the window was pinned at
+    // (see `hover_preview_scale` and `reset_pinned_size`).
+    assert_eq!(
+        hover_preview_scale(&small, at_half_fit),
+        PreviewScale::Percent(50),
+        "a size worked out again is read at the share a pinned window's own swaps use rather than \
+         at the one a take-up of the film is given"
+    );
+    assert_eq!(
+        hover_preview_scale(&small, at_fit),
+        effective_preview_scale(&small, at_fit),
+        "the two roads part company on a fit, which is not where they may"
+    );
 }
 
 /// A GIF that moves, a WebP that moves and a PNG that moves are one kind of preview —
