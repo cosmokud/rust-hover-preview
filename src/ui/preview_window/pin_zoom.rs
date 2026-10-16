@@ -31,6 +31,17 @@ pub(super) const PIN_ZOOM_PER_NOTCH: f32 = 1.10;
 /// monitor.
 pub(super) const PIN_ZOOM_FLOOR_SHARE: f32 = 0.01;
 
+/// The largest a picture may be *drawn* at, which is not a limit on a zoom in but on the arithmetic:
+/// a step is a power of a count the wheel hook accumulates, and a single wheel message can carry a
+/// delta of thirty thousand notches, so a device — or a driver — sending one would ask for a size no
+/// number holds.
+///
+/// What it is set to keep is the *placement*: the box a picture lands in is a whole-pixel rectangle
+/// on a screen, and a drawn width at a billion is a rectangle its half still fits in an `i32` with
+/// room to spare. Nothing can be looking at a picture four hundred million pixels wide, so the
+/// ceiling is past every size any eye or any engine will ever be shown.
+pub(super) const PIN_ZOOM_CEILING: f32 = 1.0e9;
+
 /// How a pinned picture is drawn inside its window, or `None` for a kind the wheel does not zoom.
 ///
 /// It is a field of the pin rather than a local of the paint because it outlives both: a picture
@@ -170,7 +181,7 @@ pub(super) fn pin_zoom_after(
     let floor = (PIN_ZOOM_FLOOR_SHARE * (room_width as f32).max(room_height as f32 / shape))
         .min(input.zoom.drawn.0);
 
-    let drawn_width = (input.zoom.drawn.0 * step).max(floor);
+    let drawn_width = (input.zoom.drawn.0 * step).max(floor).min(PIN_ZOOM_CEILING);
     let drawn = (drawn_width, drawn_width * shape);
 
     // The largest the window may grow to: the picture's own width at the size `Fit to Screen` would
