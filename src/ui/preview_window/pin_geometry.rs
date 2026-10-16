@@ -671,7 +671,6 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
                 // loop owes the frame of that size for the same reason it owes one to any other size a
                 // picture has settled at (see `pin_zoom_oversize_box`).
                 toward: zoom.drawn.0,
-                velocity: 0.0,
                 ..zoom
             });
             // Where the pointer has been carried out to, so that the next ask for a pointer that has

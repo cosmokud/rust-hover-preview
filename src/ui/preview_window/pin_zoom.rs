@@ -26,40 +26,44 @@ use super::*;
 /// exponent (see `notch_step`).
 pub(super) const PIN_ZOOM_PER_NOTCH: f32 = 1.10;
 
-/// How fast a zoom travels to the size the wheel asked for: the rate of the spring the picture's
-/// drawn size is carried by, in radians a second, doubled into the spring's own rate below.
+/// How near the size it was asked for a zoom has to come before it is *there*: a quarter of a pixel.
 ///
-/// It is a rate rather than a length of time because the thing it paces is a *travel* and not a
-/// curve: a hand that turns the wheel again while the last notch is still on its way does not
-/// restart anything, it only moves where the travel is going — so what a fast wheel and a slow one
-/// share is this number and not a duration either of them was given.
-///
-/// Twenty is a step that has visibly finished in about a fifth of a second, which is long enough to
-/// be seen as a movement and short enough that the picture is never behind the hand.
-///
-pub(super) const PIN_ZOOM_SPRING_SPEED: f32 = 20.0;
-
-/// How near the size it was asked for a zoom has to come, and how slowly, before it is *there*: a
-/// quarter of a pixel, and four pixels a second.
-///
-/// A spring closes on what it was asked for and never quite arrives, and what that costs is not the
-/// picture — a quarter of a pixel is not a pixel — but the *window*, which is whole pixels on a
-/// screen and would otherwise be given a `SetWindowPos` and a repaint on every frame for the rest of
-/// the pin's life. The pair is also what ends an animation, and therefore what says when a picture
-/// has stopped long enough to be worth laying out again at the size it has settled on (see
+/// A chase closes on what it was asked for and never quite arrives, and what that costs is not the
+/// picture — a quarter of a pixel is not a pixel — but the *window*, which is whole pixels on a screen
+/// and would otherwise be given a `SetWindowPos` and a repaint on every frame for the rest of the pin's
+/// life. It is also what ends a travel, and therefore what says when a picture has stopped long enough
+/// to be worth laying out again at the size it has settled on (see `pin_zoom_release` and
 /// `pin_zoom_step`).
 ///
 pub(super) const PIN_ZOOM_SETTLED_PIXELS: f32 = 0.25;
-pub(super) const PIN_ZOOM_SETTLED_SPEED: f32 = 4.0;
+
+/// How long a wheel's ask takes to be carried out: nine tenths of what is left of it within this, and
+/// the rest of it behind that.
+///
+/// It is a share of the *remainder* rather than of the ask, which is the whole of what makes the curve
+/// the same on a machine that takes its frames twice as often: a share of the ask is a curve in frames,
+/// and two frames of half the length are one frame of the whole (see `released_share`).
+///
+/// A tenth of a second is the rate the viewer this is modelled on releases its own wheel by, and what
+/// it is worth to an eye is the same thing a notch is: long enough to be seen as a movement, and short
+/// enough that the picture is never far behind the hand — measured on a spin of twelve notches in a
+/// third of a second, the picture trails the wheel by a seventh of itself and the glide that follows
+/// the last notch is a third of a second long.
+///
+pub(super) const PIN_ZOOM_RELEASE_SECONDS: f32 = 0.1;
+
+/// The share of the ask that is still left to carry out at `PIN_ZOOM_RELEASE_SECONDS`: a tenth, which
+/// is what makes the release nine tenths of the ask in a tenth of a second and ninety-nine hundredths
+/// of it in twice that.
+const PIN_ZOOM_RELEASE_LEFT: f32 = 0.1;
 
 /// The longest a single frame of a travel is taken to have lasted, in seconds.
 ///
-/// A spring is arithmetic on how much time has passed, and the loop that takes its frames wakes on
+/// A release is arithmetic on how much time has passed, and the loop that takes its frames wakes on
 /// input as well as on its own cadence: a tick that has been away for a second — a hover answered, a
-/// file read, a machine that went to sleep — would otherwise advance the spring by a second's worth
-/// of travel in one step, which is a picture that jumps. It is the same ceiling the animation this
-/// is modelled on keeps, and it is above the frame cadence rather than at it, so an ordinary frame
-/// is never shortened by it.
+/// file read, a machine that went to sleep — would otherwise carry a second's worth of the wheel's ask
+/// out in one step, which is a picture that jumps. It is above the frame cadence rather than at it, so
+/// an ordinary frame is never shortened by it.
 ///
 pub(super) const PIN_ZOOM_LONGEST_FRAME: f32 = 0.033;
 
@@ -111,13 +115,6 @@ pub(super) struct PinZoom {
     /// A width rather than a pair, because a picture's height is its width through its shape — the one
     /// thing about it a zoom never changes — so the width is the whole of what a travel carries.
     pub(super) toward: f32,
-    /// How fast the drawn width is travelling toward it, in pixels a second.
-    ///
-    /// It is half of the spring and not a leftover: what a spring remembers between one frame and the
-    /// next is where it is *and* how fast it was going, and a step taken from the size alone is a
-    /// chase rather than a spring — it arrives at a rate that depends on how many frames a second the
-    /// machine happens to run at.
-    pub(super) velocity: f32,
     /// The screen point the travel is anchored on: the point of the picture that stays where it is
     /// while the picture grows and shrinks about it.
     ///
@@ -148,7 +145,6 @@ impl PinZoom {
             drawn,
             pan,
             toward: drawn.0,
-            velocity: 0.0,
             anchor: None,
         }
     }
@@ -156,7 +152,7 @@ impl PinZoom {
     /// Whether this view is still on its way to the size the wheel asked for, which is what the loop
     /// keeps the frame cadence for (see `pin_zoom_in_flight`).
     pub(super) fn travelling(&self) -> bool {
-        self.drawn.0 != self.toward || self.velocity != 0.0
+        self.drawn.0 != self.toward
     }
 
     /// The size the picture is drawn at in whole pixels, which is what a repaint crops against and what
@@ -437,65 +433,63 @@ pub(super) fn pin_zoom_to(
         zoom: PinZoom {
             drawn,
             pan,
-            // What the travel is aimed at, how fast it is going and what it is anchored on are not
-            // this function's business and are carried through it: where a picture *lands* is the whole
-            // of what is decided here, and a caller that is walking a size is the caller that knows
-            // what it is walking toward (see `pin_zoom_step`).
+            // What the travel is aimed at and what it is anchored on are not this function's
+            // business and are carried through it: where a picture *lands* is the whole of what is
+            // decided here, and a caller that is walking a size is the caller that knows what it is
+            // walking toward (see `pin_zoom_step`).
             toward: input.zoom.toward,
-            velocity: input.zoom.velocity,
             anchor: input.zoom.anchor,
         },
     }
 }
 
-/// One frame of a travel: how far a picture drawn `drawn` across has got toward the size it was asked
-/// for by the time `elapsed` has passed, and how fast it is going when it gets there.
+/// How far a travel has got by the time `elapsed` has passed: the width the picture is drawn at after a
+/// frame, on its way to the width the wheel asked for and never past it.
 ///
-/// It is a *critically damped spring*, and each of the three things it is not is the answer to a
-/// question the other two get wrong. A curve of a fixed length — an ease of two hundred milliseconds
-/// from where the picture is to where it was asked to be — cannot take a second notch in the middle of
-/// its own travel: the wheel is a hand and not a script, so a picture that restarted a fixed ease from
-/// wherever it had got to would crawl under a fast wheel and lurch under a slow one. A chase that
-/// closed a fixed share of the distance each frame would arrive at a rate that depends on how many
-/// frames a second the machine happens to run at. And a *spring* has no overshoot while it is
-/// critically damped, which is the one thing a zoom may not have: a picture that bounced past the size
-/// it was asked for and came back would be a picture that grew and shrank again after the hand had
-/// stopped turning.
+/// A notch is a step, and a step landed whole is a jump: what a hand turning a wheel is looking at is a
+/// *movement*, and a wheel that has stopped would be doing nothing at all. So the ask is carried out
+/// over the frames that follow it, and the part of it that is left when the hand stops is what the
+/// picture is still doing — a fast wheel builds a longer glide than a slow one, because every notch
+/// leaves its own remainder behind it.
 ///
-/// It is written in seconds rather than in frames for the same reason the chase is wrong: what the two
-/// constants above say is how long a travel takes, and a machine that takes its frames twice as often
-/// takes the same travel in twice as many of them.
-pub(super) fn pin_zoom_spring(drawn: f32, toward: f32, velocity: f32, elapsed: f32) -> (f32, f32) {
+/// It is a share of what is *left* rather than of the ask, which is the whole of what makes the curve
+/// the same on a machine that takes its frames twice as often: two frames of half the length are one
+/// frame of the whole (see `released_share`). And it is a chase written in seconds rather than a spring:
+/// what a spring remembers between one frame and the next is where the picture is *and* how fast it was
+/// going, and a step taken from the size alone arrives at the rate the seconds say rather than at the
+/// rate the frames happen to come.
+///
+/// And the last quarter of a pixel of it is not a release but an arrival: a chase closes on what it was
+/// asked for and never quite arrives, and a release left dribbling a hundredth of a pixel a frame would
+/// keep the loop at the frame cadence for the rest of the pin's life (see `PIN_ZOOM_SETTLED_PIXELS`).
+pub(super) fn pin_zoom_release(drawn: f32, toward: f32, elapsed: f32) -> f32 {
+    let left = toward - drawn;
+    if left.abs() < PIN_ZOOM_SETTLED_PIXELS {
+        return toward;
+    }
+
+    drawn + left * released_share(elapsed)
+}
+
+/// The share of what is left of a wheel's ask that one frame carries out: nine tenths of it within
+/// `PIN_ZOOM_RELEASE_SECONDS`, and the rest of it behind that.
+///
+/// It is the *curve in seconds* and not the shape of the release, which is the whole of what a share of
+/// the remainder buys: a share of the ask itself would be a curve in frames, and a machine that takes
+/// its frames twice as often would take the same notch in half the time.
+fn released_share(elapsed: f32) -> f32 {
     let dt = elapsed.clamp(0.0, PIN_ZOOM_LONGEST_FRAME);
-    let omega = PIN_ZOOM_SPRING_SPEED * 2.0;
 
-    let velocity = velocity + (omega * omega * (toward - drawn) - 2.0 * omega * velocity) * dt;
-    let next = drawn + velocity * dt;
-
-    // A spring closes on what it was asked for and never quite arrives, and a picture a quarter of a
-    // pixel from its size is a picture at its size: what the snap buys is the *window*, which is whole
-    // pixels on a screen and would otherwise be resized and repainted on every frame for the rest of
-    // the pin's life for a difference nothing can see. It is also what says a travel is over, and so
-    // what says the file is worth laying out again at the size the picture settled on (see
-    // `pin_zoom_step`).
-    if (toward - next).abs() < PIN_ZOOM_SETTLED_PIXELS && velocity.abs() < PIN_ZOOM_SETTLED_SPEED {
-        return (toward, 0.0);
-    }
-
-    // And a frame that crosses the size it is going to *is* the frame that arrives at it: a spring
-    // given a moving target — a hand turning the wheel back while the last notch is still travelling —
-    // can carry past it, and a picture that grew past the size it was asked for and came back would be
-    // a picture that bounced.
-    if (toward - next) * (toward - drawn) < 0.0 {
-        return (toward, 0.0);
-    }
-
-    (next, velocity)
+    1.0 - PIN_ZOOM_RELEASE_LEFT.powf(dt / PIN_ZOOM_RELEASE_SECONDS)
 }
 
 /// Carry a travel one frame further on: where the picture has got to by the time `elapsed` has passed,
 /// and the box that comes with it — or nothing at all for a picture already at the size the wheel asked
 /// for.
+///
+/// The frame is the wheel's ask *released* and not the ask itself, which is the whole of what a notch is
+/// worth to an eye: a step landed whole is a jump, and a hand that has stopped turning is a picture that
+/// goes on moving for as long as the rest of the ask takes to carry out (see `pin_zoom_release`).
 pub(super) fn pin_zoom_step(
     input: &PinZoomInputs,
     elapsed: f32,
@@ -505,17 +499,9 @@ pub(super) fn pin_zoom_step(
         return None;
     }
 
-    let (drawn, velocity) = pin_zoom_spring(
-        input.zoom.drawn.0,
-        input.zoom.toward,
-        input.zoom.velocity,
-        elapsed,
-    );
+    let drawn = pin_zoom_release(input.zoom.drawn.0, input.zoom.toward, elapsed);
 
-    let mut plan = pin_zoom_to(input, drawn, displays);
-    plan.zoom.velocity = velocity;
-
-    Some(plan)
+    Some(pin_zoom_to(input, drawn, displays))
 }
 
 /// The view of a pinned picture the wheel is the owner of, or nothing at all where it is not this pin's
@@ -550,7 +536,7 @@ fn pin_zoom_inputs() -> Option<PinZoomInputs> {
 }
 
 /// Whether a pinned picture's travel is still going, which is what the loop keeps the frame cadence
-/// for: a spring takes its frames at the frame cadence or it is not a spring (see
+/// for: a travel takes its frames at the frame cadence or it is a jump (see
 /// `wait_before_the_next_tick`).
 ///
 /// What it asks is the same question `pin_zoom_inputs` asks and nothing else, so that a travel the loop
@@ -625,7 +611,7 @@ pub(super) fn aim_pin_zoom(notches: f32) {
 /// Carry a pinned picture's travel one frame further on and draw it where it has got to.
 ///
 /// It is the loop's road and not the window procedure's, because the clock a travel is measured by is
-/// the loop's: a spring is written in seconds, and the loop is the one thing here that knows how long
+/// the loop's: a release is written in seconds, and the loop is the one thing here that knows how long
 /// its own last tick was (see `PIN_ZOOM_LONGEST_FRAME`).
 ///
 /// The frame, its place and the window's size go to `UpdateLayeredWindow` in one call, exactly as the

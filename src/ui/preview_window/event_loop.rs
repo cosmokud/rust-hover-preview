@@ -258,7 +258,7 @@ pub fn run_preview_window() {
         // `pin_zoom_oversize_box`).
         let mut zoom_sharpened: Option<ScreenRegion> = None;
         // When the last frame of a pinned picture's zoom was taken, which is the clock the travel is
-        // measured against: a spring is written in seconds, and the loop is the one thing here that
+        // measured against: a release is written in seconds, and the loop is the one thing here that
         // knows how long its own last tick was (see `step_pin_zoom`).
         let mut last_zoom_frame = Instant::now();
         // A walk a pin's own caption button stepped, held for as long as the walk has files
