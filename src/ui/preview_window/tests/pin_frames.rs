@@ -155,6 +155,66 @@ fn a_stretched_band_is_the_frame_at_the_size_it_is_drawn_at() {
     }
 }
 
+/// A picture drawn larger than the window it is in is the size it is *drawn* at, and not the size of
+/// the part of it the window has room for.
+///
+/// That is the whole of what a zoom past the fit-to-screen cap is: the window stops and the picture
+/// goes on growing inside it, so what a repaint is handed is a frame larger than its band in one or
+/// both directions. A road that stretched the frame into the rows still on screen would be a picture
+/// squashed by however much of it had been carried off — and a picture that changes shape as the
+/// hand carries it is the one thing a zoom may never be.
+///
+/// It is the road GDI is asked for and not the sampler's, because it is the road an *opaque* frame
+/// takes and therefore the road every photograph and every screenshot a zoom is tried on takes (see
+/// `stretch_into_band`).
+#[test]
+fn a_frame_bigger_than_its_band_is_drawn_at_the_size_it_is_drawn_at() {
+    // Four rows, the last of them white and the rest black. Drawn eight times as tall as the band
+    // and centred on it, the band is shown the source's *middle* two rows, which are black; a frame
+    // stretched into the rows the band has room for would be shown the source's last row instead,
+    // which is white.
+    let (source_width, source_height) = (2u32, 4u32);
+    let mut media = Vec::new();
+    for row in 0..source_height {
+        let value = if row == source_height - 1 { 255u8 } else { 0 };
+        for _ in 0..source_width {
+            media.extend_from_slice(&[value, value, value, 255]);
+        }
+    }
+
+    let (width, height) = (2u32, 8u32);
+    let surface = DibSurface::create(width, height).expect("a surface to stretch into");
+    let out =
+        unsafe { std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize) };
+
+    // A band the whole of the surface, which is what a picture's band is: a pin whose chrome is
+    // drawn over its media is media the whole of its window down (see `pinned_band_rows`).
+    assert!(
+        stretch_into_band(
+            &media,
+            (source_width, source_height),
+            &mut BandTarget {
+                out,
+                dc: surface.dc,
+                width,
+                origin_y: 0,
+                height,
+                frame: (0, (height as i32 - 32) / 2, source_width as i32, 32),
+            },
+        ),
+        "an opaque frame is one GDI stretches"
+    );
+
+    for (row, line) in out.chunks(width as usize * 4).enumerate() {
+        for pixel in line.as_chunks::<4>().0 {
+            assert!(
+                pixel[0] < 16,
+                "row {row} of the band is the middle of the picture and not the end of it: {pixel:?}"
+            );
+        }
+    }
+}
+
 /// A page that is laid out to its box — a document, a listing — is resized one dimension at
 /// a time: a wider window is a longer line, and there is no shape of the file's to keep
 /// because the box the text is poured into *is* the layout.

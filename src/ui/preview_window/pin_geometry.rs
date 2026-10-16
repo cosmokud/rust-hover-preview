@@ -664,8 +664,8 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             let pin = pinned.pin_mut()?;
             let zoom = pin.zoom?;
             pin.zoom = Some(PinZoom {
-                drawn: zoom.drawn,
                 pan: carried,
+                ..zoom
             });
             // Where the pointer has been carried out to, so that the next ask for a pointer that has
             // not moved is recognised as the same question (see the early return above).

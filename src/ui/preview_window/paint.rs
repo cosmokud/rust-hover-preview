@@ -214,8 +214,20 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // zoomed it into a window that stopped growing, in which case it lands on a box larger than the
     // band and is carried around inside it — and a box outside the band is left to GDI to clip, since
     // what makes it whole is the placement and not the size (see `PinZoom::picture_box`).
+    //
+    // What `picture_box` answers is a *rectangle* — a left, a top and the two edges the picture runs
+    // to — and what a band is filled from is a left, a top and the two *extents* it covers, so the one
+    // is turned into the other here. Handing an edge over as an extent is a picture drawn at the
+    // window's own size plus the size it overhangs by over two, which is a picture that shrinks as it
+    // is zoomed in and is carried the wrong way as it is panned: the whole of what a zoom past the cap
+    // must not be.
     let frame = match paint.zoom {
-        Some(zoom) => zoom.picture_box((band_width as i32, band_height as i32)),
+        Some(zoom) => {
+            let (left, top, right, bottom) =
+                zoom.picture_box((band_width as i32, band_height as i32));
+
+            (left, top, right - left, bottom - top)
+        }
         None => (0, 0, band_width as i32, band_height as i32),
     };
 
@@ -683,14 +695,19 @@ pub(super) fn stretch_into_band(
         (target.width, target.height, target.origin_y, target.dc);
     let out_row_bytes = out_width as usize * 4;
 
-    // The rows the picture lands on, which are its frame's own and never the rows past the band the
-    // surface was given: a picture drawn larger than its window arrives here with a frame that is
-    // bigger than the band in one or both directions, and GDI is left to clip whatever of it falls
-    // outside the surface (see `BandTarget::frame`).
+    // What GDI is asked for is the *whole* of the picture's frame, wherever it lands, and never the
+    // part of it the band has room for: the frame's height is the number the source is scaled by, so
+    // a destination cut to the rows still on screen is the source stretched into those rows instead
+    // — a picture squashed by however much of it has been carried off, which is the whole of what a
+    // zoom past the cap must not be (see `BandTarget::frame`).
+    //
+    // Nothing is lost by asking for all of it: a frame bigger than its window reaches here only for
+    // a kind whose chrome is drawn *over* its media, and such a pin's band is the whole of its
+    // window — so the rows a picture overhangs by are rows the surface has not got, and GDI clips
+    // them away exactly as it clips the columns of a picture carried off the side.
     let frame = target.frame;
     let top = origin_y as i32 + frame.1;
-    let rows = frame.3.min(band_height as i32 - frame.1).max(0);
-    if rows == 0 || out_row_bytes == 0 || frame.2 <= 0 {
+    if frame.2 <= 0 || frame.3 <= 0 || out_row_bytes == 0 {
         return false;
     }
 
@@ -723,7 +740,7 @@ pub(super) fn stretch_into_band(
                 frame.0,
                 top,
                 frame.2,
-                rows,
+                frame.3,
                 source_surface.dc,
                 0,
                 0,
@@ -749,10 +766,19 @@ pub(super) fn stretch_into_band(
         // frame carried wholly off one side is a frame with no columns in the band at all: a sum that
         // came out negative would be a range's own end read as an enormous unsigned one, which is the
         // whole of the band sealed opaque with nothing drawn on it.
+        //
+        // And the rows are cut to the band, for the same reason and one more: the frame is what the
+        // picture is *drawn* at and not the band, so a picture carried a long way off is a frame whose
+        // rows are mostly not on screen at all, and walking over the whole of one to seal it would be
+        // a paint that takes as long as the zoom is deep.
         let first = frame.0.clamp(0, out_width as i32) as usize;
         let last = (frame.0 + frame.2).clamp(0, out_width as i32) as usize;
+        let first_row = top.max(origin_y as i32).max(0);
+        let last_row = (top + frame.3)
+            .min(origin_y as i32 + band_height as i32)
+            .max(first_row);
         let out = &mut *target.out;
-        for row in top.max(0) as usize..(top + rows).max(0) as usize {
+        for row in first_row as usize..last_row as usize {
             let start = row * out_row_bytes;
             let Some(destination) = out.get_mut(start..start + out_row_bytes) else {
                 break;
