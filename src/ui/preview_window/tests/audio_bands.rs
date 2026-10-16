@@ -1,5 +1,40 @@
 use super::*;
 
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+
+/// Opens a real capture of this process's own sound, which no ordinary test run may do: it takes a
+/// stream on the machine's audio service, and what it answers is a fact about the Windows it is run
+/// on as much as about this code.
+///
+/// It is here because everything *else* about the meter is arithmetic this file can check on its
+/// own, while the conversation with the audio service is not: the activation of a process-loopback
+/// stream, the format the engine is asked to convert to, and the reading of the packets it hands
+/// back are the half of `audio_meter` that no test with a made-up window can reach, and they are the
+/// half where a mistake is a bubble that never draws a bar at all. Run by hand where there is an
+/// audio device: `cargo test a_real_capture -- --ignored --nocapture`, and what it prints is what
+/// the capture answered.
+#[test]
+#[ignore = "opens a real audio stream, which a test run must never do"]
+fn a_real_capture_answers_with_bands_and_not_a_refusal() {
+    // Safety: the apartment is the thread's own and the call is the one that takes it; the answer
+    // is let go rather than matched, because a thread that already has one is answered the same way
+    // it would be by taking one (see `office_render::worker`).
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    }
+
+    let bands = audio_meter::output_bands();
+    println!("this process's own sound was read as: {bands:?}");
+
+    let bands = bands.expect("this Windows would not let this app's own sound be captured");
+    for (band, level) in bands.iter().enumerate() {
+        assert!(
+            level.is_finite() && (0.0..=1.0).contains(level),
+            "the {band} band of a window of real samples read as {level}"
+        );
+    }
+}
+
 /// A full-scale sine at `hz`, as the samples a capture window is read as.
 ///
 /// It is the one signal whose answer can be worked out by hand — a tone is in the band that

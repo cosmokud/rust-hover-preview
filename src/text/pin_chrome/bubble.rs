@@ -280,16 +280,28 @@ pub(crate) enum BubbleMark {
 impl BubbleMark {
     /// Whether this mark is a playback one — which is the one family of marks drawn *over* a
     /// picture rather than instead of one: a bubble standing for a film or a sound has something
-    /// of its own behind the glyph (a frame, or the histogram of the level on screen) and the
-    /// glyph says what the file is doing on top of it, where a page and a picture have nothing
-    /// inside the circle but themselves (see `paint_bubble`).
+    /// of its own behind the glyph (a frame, or the bars of the sound on screen) and the glyph says
+    /// what the file is doing on top of it, where a page and a picture have nothing inside the
+    /// circle but themselves (see `paint_bubble`).
     pub(crate) fn is_playback(self) -> bool {
         matches!(self, Self::Play | Self::Pause)
     }
 }
 
+/// How many bars a bubble carries, and so how many bands the meter reads.
+///
+/// Seven, which is what an equalizer's own row has and what a face forty-four pixels across can
+/// hold: seven bars of two pixels with a gap of two between them is the face's whole width, and
+/// four of them with a face that is narrower than that is a row that no longer reads as bars.
+pub(crate) const BUBBLE_BARS: usize = 7;
+
 /// What a bubble draws inside its ring where the pin it stands for has something to show there:
-/// the picture the file is, or the level the sound on screen is being heard at.
+/// the picture the file is, where the file is a picture.
+///
+/// The bars are not here, and the difference is what the two are: a picture is part of the file
+/// the bubble stands for, while the bars are what this app's own sound is doing at the moment it
+/// is looked at — drawn over the picture of a film that is playing with its sound on, and drawn
+/// over the face alone where there is no picture behind them (see `paint_bubble`).
 ///
 /// The picture is borrowed rather than owned because the picture *is* — what a bubble shows of a
 /// film already decoded is that frame's own bytes, and a bubble that copied them would be a second
@@ -301,16 +313,14 @@ pub(crate) enum BubbleArt<'a> {
         width: u32,
         height: u32,
     },
-    /// The live level of the sound on screen (0.0..=1.0) and the animation phase in radians.
-    Audio { level: f32, phase: f32 },
     /// No art: the face alone, with the mark on it.
     None,
 }
 
 /// Paint the round bubble a collapsed pin becomes: a face of the theme's own color, a ring around
-/// it, the picture that was pinned inside it where there is one — or, for a sound, the row of bars
-/// the level on screen is drawn as — and a soft shadow under it so that it reads as floating over
-/// whatever is behind it.
+/// it, the picture that was pinned inside it where there is one, the row of bars this app's own
+/// sound is drawn as where there is anything to draw — and a soft shadow under it so that it reads
+/// as floating over whatever is behind it.
 ///
 /// It is written straight into the buffer rather than through a surface: a bubble is a circle
 /// and a picture, and neither of the two needs a device context. What the buffer is, is the
@@ -321,6 +331,7 @@ pub(crate) fn paint_bubble(
     height: u32,
     palette: &ChromePalette,
     art: BubbleArt<'_>,
+    bars: [f32; BUBBLE_BARS],
     mark: BubbleMark,
 ) {
     let width = width as i32;
@@ -425,18 +436,19 @@ pub(crate) fn paint_bubble(
         }
     }
 
-    // The bars the level is drawn as, laid down before the glyph because the glyph goes over
-    // them: what the mark of a playing sound says is what the *sound* is doing, and a row of bars
-    // drawn through a play triangle is neither a triangle nor a meter (see `draw_histogram`).
-    if let BubbleArt::Audio { level, phase } = &art {
+    // The bars, laid down before the glyph because the glyph goes over them — and over the picture
+    // as well, because the bars are not part of the file: the soundtrack of a film that is playing
+    // is drawn across its own frame. They are the theme's own ink and not the ring's, which over a
+    // picture is the picture's own average colour: bars in the colour they were averaged from are
+    // bars drawn across the frame they came from and cannot be seen (see `draw_histogram`).
+    if bars.iter().any(|bar| *bar > 0.0) {
         draw_histogram(
             buffer,
             width,
             center,
             radius - ring_thickness,
-            ring,
-            *level,
-            *phase,
+            palette.accent,
+            bars,
         );
     }
 
@@ -585,19 +597,18 @@ pub(super) fn average_color(pixels: &[u8]) -> Option<[u8; 3]> {
     })
 }
 
-/// A symmetrical row of bars across the bubble, driven by one loudness number and a phase.
+/// A row of bars across the bubble, one per band of the sound on screen, the lowest band on the
+/// left.
 ///
-/// The sound on screen is a sound and not a spectrum: what a bubble over one is asked is *is it
-/// making a noise, and how much*, which is one number — the system's own output peak, read as a
-/// call rather than as a transform (see `audio_meter`). A frequency analysis would be a window of
-/// samples per repaint, on the thread that draws the bubble, for a shape that at forty-four pixels
-/// across reads the same either way.
+/// The row *is* the meter: a band's own level is the bar that stands for it, and the order is the
+/// whole of what a bubble forty-four pixels across can say about frequency — a low note at one end
+/// and a high one at the other, the way a player's own spectrum reads, with no room in the face for
+/// a number (see `audio_meter::band_levels`).
 ///
-/// A row of bars rather than one, and shaped rather than equal, because that is what a meter is:
-/// one bar says how loud and stops there, where a row says *something is playing* — which is the
+/// A row of bars rather than one, because that is what a meter is: one bar says how loud and stops
+/// there, where a row says *something is playing, and this is what it sounds like* — which is the
 /// whole of what a bubble standing for a sound has to say, the card's own clock being the other
-/// half of it and off the screen by then. The shapes are one another delayed by a fixed step of
-/// the phase, so the row reads as a wave travelling along it rather than as a block of level.
+/// half of it and off the screen by then.
 ///
 /// **Every pixel written asks the circle**, and the asking is per pixel rather than taken for
 /// granted from the bars: the row is as wide as the face is, and the face narrows at its own ends,
@@ -609,48 +620,63 @@ fn draw_histogram(
     center: (f32, f32),
     inner: f32,
     color: [u8; 3],
-    level: f32,
-    phase: f32,
+    bars: [f32; BUBBLE_BARS],
 ) {
-    const BARS: usize = 7;
-
-    let level = level.clamp(0.0, 1.0);
-    if level <= 0.0 {
-        return;
-    }
-
     // The bar and the gap are the same width, which is what makes the row read as bars rather
     // than as a filled band at a glance: the width is a share of the face, so the row is the same
     // fraction of every bubble it is drawn in.
-    let bar_width = (inner * 2.0 / (BARS as f32 * 2.0)).max(2.0);
+    let bar_width = (inner * 2.0 / (BUBBLE_BARS as f32 * 2.0)).max(2.0);
     let gap = bar_width;
-    let total = BARS as f32 * bar_width + (BARS - 1) as f32 * gap;
+    let total = BUBBLE_BARS as f32 * bar_width + (BUBBLE_BARS - 1) as f32 * gap;
     let mut left = center.0 - total / 2.0;
 
-    for bar in 0..BARS {
-        let shape = 0.35 + 0.65 * (0.5 + 0.5 * (phase + bar as f32 * 0.9).sin());
-        // How much of the face a bar at full level reaches — the number of vertical steps the level
-        // is read out in, since a bar's height is rounded to whole rows of pixels. A taller bar puts
-        // the same small change in the mixer's peak across more rows, which is what makes a quiet
-        // change show; the reach stops just short of the ring so a bar at full level does not meet it.
-        let half = inner * 0.9 * level * shape;
-        let top = (center.1 - half).round() as i32;
-        let bottom = (center.1 + half).round() as i32;
+    for level in bars {
+        let level = level.clamp(0.0, 1.0);
 
-        // A bar is at least one row tall whatever the level rounds to: a bar that drew nothing
-        // would be a gap in the row, and a gap in the row is a bar that is not there.
-        for x in (left.round() as i32)..((left + bar_width).round() as i32) {
-            for y in top..bottom.max(top + 1) {
-                let dx = x as f32 + 0.5 - center.0;
-                let dy = y as f32 + 0.5 - center.1;
-                if (dx * dx + dy * dy).sqrt() <= inner {
-                    put(buffer, width, x, y, color, 1.0);
+        // A band with nothing in it is a gap in the row rather than a bar of no height: a bar at
+        // nothing would say that there is something here to be quiet, and there is not.
+        if level > 0.0 {
+            // How much of the face a bar at full level reaches — the number of vertical steps the
+            // level is read out in, since a bar's height is rounded to whole rows of pixels. A
+            // taller bar puts the same small change in a band across more rows, which is what makes
+            // a quiet change show; the reach stops just short of the ring so a bar at full level
+            // does not meet it.
+            let half = inner * 0.9 * level;
+            let top = (center.1 - half).round() as i32;
+            let bottom = (center.1 + half).round() as i32;
+
+            // A bar that is drawn at all is at least one row tall whatever the level rounds to: a
+            // band that is doing anything at all is a pixel of ink and not a gap.
+            for x in (left.round() as i32)..((left + bar_width).round() as i32) {
+                for y in top..bottom.max(top + 1) {
+                    let dx = x as f32 + 0.5 - center.0;
+                    let dy = y as f32 + 0.5 - center.1;
+                    if (dx * dx + dy * dy).sqrt() <= inner {
+                        put(buffer, width, x, y, color, 1.0);
+                    }
                 }
             }
         }
 
         left += bar_width + gap;
     }
+}
+
+/// The row of bars a mixer's peak is drawn as, for the machine whose bands will not be read.
+///
+/// Seven bars of one level, each delayed a fixed step of the phase, which is what the row was
+/// before the bands arrived: a wave travelling along it is what a single number can honestly be
+/// drawn as, and it is what a bubble on a Windows without process loopback keeps — the row a
+/// machine that cannot have the bands has always had, rather than a row of bars at nothing (see
+/// `audio_meter` and `bubble_art`).
+pub(crate) fn peak_bars(level: f32, phase: f32) -> [f32; BUBBLE_BARS] {
+    let mut bars = [0.0; BUBBLE_BARS];
+
+    for (index, bar) in bars.iter_mut().enumerate() {
+        *bar = level * (0.35 + 0.65 * (0.5 + 0.5 * (phase + index as f32 * 0.9).sin()));
+    }
+
+    bars
 }
 
 /// How opaque the playback mark is laid down. The triangle and the two bars say what the file on
