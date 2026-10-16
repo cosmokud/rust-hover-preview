@@ -543,6 +543,63 @@ fn a_travel_past_the_cap_leaves_the_window_where_it_is() {
     );
 }
 
+/// A travel past the cap zooms about the point the wheel read and about nothing else: the point of the
+/// picture under it at the first frame is the point of the picture under it at the last, however many
+/// frames the travel took.
+///
+/// It is the property the whole of the pan arithmetic exists for, and it is the one a travel is most
+/// likely to lose: each frame re-anchors the picture from where the last one left it, so a frame that
+/// placed the picture by anything other than the same rule would walk the point under the hand away from
+/// it a little at a time — which is a picture that creeps sideways as it is zoomed.
+#[test]
+fn a_travel_past_the_cap_keeps_the_point_of_the_picture_under_its_anchor() {
+    // An anchor well off the picture's own middle, so that the picture's share of it is a number a frame
+    // that placed it wrongly would move: an anchor at the middle is one a picture can be zoomed about
+    // without placing anything at all.
+    let anchor = (900, 700);
+    let cap = at_the_cap(anchor);
+    let toward = cap.zoom.drawn.0 * PIN_ZOOM_PER_NOTCH.powi(6);
+    let asking = |zoom| PinZoomInputs {
+        content: cap.content,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some(anchor),
+    };
+
+    // Where in the picture the point under the anchor is, as a share of the picture's width: the whole
+    // of what "anchored" means is that this number does not move.
+    let under_the_anchor = |zoom: &PinZoom| {
+        let centre = (cap.content.0 + cap.content.2) / 2 + zoom.pan.0.round() as i32;
+
+        (anchor.0 - centre) as f32 / zoom.drawn.0
+    };
+
+    let mut zoom = PinZoom {
+        toward,
+        ..cap.zoom
+    };
+    let before = under_the_anchor(&zoom);
+    let mut frames = 0;
+
+    while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
+        zoom = plan.zoom;
+        frames += 1;
+        assert!(
+            (under_the_anchor(&zoom) - before).abs() < 0.005,
+            "frame {frames} moved the picture under the anchor: {} against {before}",
+            under_the_anchor(&zoom)
+        );
+        assert!(frames < 120, "a travel of two seconds is not a travel");
+    }
+
+    assert!(
+        zoom.drawn.0 > cap.zoom.drawn.0 * 1.5,
+        "and the picture did travel: {} of {toward}",
+        zoom.drawn.0
+    );
+}
+
 /// A wheel notch does not move the picture at all: what it writes down is where the picture is *going*,
 /// and the frames that take it there are the loop's.
 ///
