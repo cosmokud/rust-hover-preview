@@ -167,12 +167,6 @@ impl PinZoom {
         self.drawn.1 / self.drawn.0
     }
 
-    /// How many windows wide the picture is drawn: one while it is the window's own size, and more
-    /// than one once the window has been taken as far as it may go.
-    pub(super) fn share_of(&self, content: ScreenRegion) -> f32 {
-        self.drawn.0 / region_size(content).0 as f32
-    }
-
     /// Where the picture lands inside its window: the box in the window's own coordinates, which is
     /// the whole of what a repaint and a crop both need.
     ///
@@ -369,58 +363,53 @@ pub(super) fn pin_zoom_to(
     };
     let box_centre = ((placed.0 + placed.2) / 2, (placed.1 + placed.3) / 2);
 
-    // And where the picture sits inside it. A picture the window's own size fills it and has nowhere
-    // to sit, whatever it was carrying before a zoom out brought it back to that size; one drawn
-    // larger is anchored on the pointer, which is what lets a hand zoom into a corner it has pointed
-    // at.
+    // And where the picture sits inside it. A picture the window's own size — or one a hand has
+    // shrunk under the window's floor, which is smaller than it — fills it and has nowhere to sit,
+    // whatever it was carrying before a zoom out brought it back to that size; one drawn larger is
+    // anchored on the pointer, which is what lets a hand zoom into a corner it has pointed at. It is
+    // the question `picture_box` asks, in the same whole pixels, because the two are one rule: what a
+    // pan may move is exactly what a box has room for (see `PinZoom::picture_box`).
     //
-    // The anchor is the point of the picture under the pointer staying under the pointer, and it is
-    // measured in the window's own shares rather than in pixels — which is the whole of why the
-    // overhang is used up before any of the window is: a notch that took the window out to the cap in
-    // the same breath as it took the picture past it moves the picture by exactly as much of the
-    // overhang as the window left room for, and never by more, so the picture cannot be pulled off a
-    // window it was covering a moment ago.
-    let share = input.zoom.share_of(content);
-    let pan = match input.pointer.filter(|_| drawn.0 > size.0 as f32) {
+    // The anchor is the point of the picture under the pointer staying under the pointer: its own
+    // offset from the picture's middle is carried out by however much the picture grew, and the
+    // picture's middle is then put wherever the window's own middle leaves it. Nothing bounds that
+    // placement, and nothing has to while the pointer is over the *picture*: an offset inside the
+    // picture is at most half of it, so the middle moves by at most half of what the picture grew by
+    // — and that is at most what the picture has outgrown the window by, since the window grows to
+    // meet the picture and never past it. What is left over is the pointer over the backdrop, which
+    // is a hand that has already carried the picture off its window: the drag is free to place it
+    // there, and the wheel now follows it rather than undoing it.
+    //
+    // The bound this replaces was there for the one notch that takes the window out to the cap in the
+    // same breath as the picture past it, where the whole of the pointer's offset would have pulled
+    // the picture off the far side of a window it was covering. That notch grows the window by a tenth
+    // at the very most, since the window grows with the picture a frame at a time (see `pin_zoom_step`),
+    // and the rule above covers it by the same arithmetic as every other notch.
+    let (drawn_width, drawn_height) = drawn_pixels(drawn);
+    let pan = match input
+        .pointer
+        .filter(|_| drawn_width > size.0 || drawn_height > size.1)
+    {
         Some(point) => {
-            let kept = (drawn.0 / size.0 as f32) / share;
+            let grown = drawn.0 / input.zoom.drawn.0;
             let (dx, dy) = (
-                (point.0 - drawn_centre.0) as f32,
-                (point.1 - drawn_centre.1) as f32,
+                (drawn_centre.0 - point.0) as f32,
+                (drawn_centre.1 - point.1) as f32,
             );
 
             (
-                dx * (1.0 - kept) + (drawn_centre.0 - box_centre.0) as f32,
-                dy * (1.0 - kept) + (drawn_centre.1 - box_centre.1) as f32,
+                (point.0 - box_centre.0) as f32 + dx * grown,
+                (point.1 - box_centre.1) as f32 + dy * grown,
             )
         }
         None => (0.0, 0.0),
     };
 
-    // And held to as much of the picture as the window has room for, which a hand inside the window
-    // can never ask for more of but a picture the hand has already carried off can: a zoom *places* a
-    // picture in its window, and where it may be placed is a box that is at most the whole of the
-    // overhang to one side. Carrying one further off than that is the drag's own business, so a
-    // picture a hand has put out of reach is one the next notch brings back into it.
-    //
-    // The overhang is the whole pixels the picture and the window are drawn at and the same halving
-    // `picture_box` places a carried picture by, so that the two cannot disagree by the half pixel a
-    // rounded pair of floats leaves behind — which is the difference between a picture that covers its
-    // window and one with a hairline of backdrop down one side of it.
-    let (drawn_width, drawn_height) = drawn_pixels(drawn);
-    let overhang = (
-        ((drawn_width - size.0).max(0) / 2) as f32,
-        ((drawn_height - size.1).max(0) / 2) as f32,
-    );
-
     PinZoomPlan {
         content: placed,
         zoom: PinZoom {
             drawn,
-            pan: (
-                pan.0.clamp(-overhang.0, overhang.0),
-                pan.1.clamp(-overhang.1, overhang.1),
-            ),
+            pan,
             // What the travel is aimed at, how fast it is going and what it is anchored on are not
             // this function's business and are carried through it: where a picture *lands* is the whole
             // of what is decided here, and a caller that is walking a size is the caller that knows

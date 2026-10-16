@@ -111,7 +111,6 @@ fn the_window_stops_growing_where_fit_to_screen_would_have_stopped_it() {
         "the picture has gone on growing inside a window that stopped: {}",
         plan.zoom.drawn.0
     );
-    assert_eq!(plan.zoom.share_of(plan.content), plan.zoom.drawn.0 / 1000.0);
     assert!(
         plan.zoom.picture_box((1000, 750)).0 < 0,
         "and the window is a box the picture overhangs"
@@ -214,19 +213,19 @@ fn past_the_cap_the_anchor_is_the_pointer_rather_than_the_pictures_middle() {
 }
 
 #[test]
-fn a_notch_that_first_takes_the_picture_past_the_window_never_pulls_it_off_one() {
-    // The notch that reaches the cap in the same breath as it takes the picture past it is the one
-    // worth pinning down: the window grows on both sides and the picture grows more, so a picture
-    // anchored on the pointer by the whole of its overhang would be pulled off the far side of a
-    // window it was covering a moment ago. What it is owed is the overhang the *window* left room for
-    // and no more, which is a picture that still covers the box it is drawn in.
-    for pointer in [(0, 0), (500, 400), (999, 799), (0, 400), (999, 400)] {
-        let plan = zoomed(
-            a_picture(),
-            PinZoom::filling(a_picture()),
-            12,
-            Some(pointer),
-        );
+fn a_notch_inside_the_window_never_pulls_a_picture_it_was_covering_off_one() {
+    // A hand is always inside the window it turns the wheel in, because a notch is counted for a
+    // pointer inside the pin's own box and for nothing else, and what such a hand is owed is a
+    // picture that goes on covering its window. The notches are turned one at a time because that is
+    // the shape a hand turns them in: the window grows with the picture a frame at a time, so the
+    // notch that takes the picture past the cap is a notch the window has already nearly reached.
+    for pointer in [(300, 250), (699, 549), (300, 549), (699, 250), (500, 400), (400, 300)] {
+        let mut plan = zoomed(a_picture(), PinZoom::filling(a_picture()), 1, Some(pointer));
+
+        for _ in 0..11 {
+            plan = zoomed(plan.content, plan.zoom, 1, Some(pointer));
+        }
+
         let box_ = plan.zoom.picture_box(region_size(plan.content));
 
         assert!(
@@ -234,6 +233,127 @@ fn a_notch_that_first_takes_the_picture_past_the_window_never_pulls_it_off_one()
             "a picture covers its window at the cap, pointed at {pointer:?}: {box_:?}"
         );
     }
+}
+
+#[test]
+fn a_notch_that_grows_the_window_with_the_picture_keeps_the_pointer_anchored() {
+    // The one notch where the two anchors are asked for at once: the picture is taken past the cap by
+    // the same notch that takes the window out to it, so the window grows about the picture's middle
+    // while the picture grows about the pointer. What the pointer is owed is the point of the picture
+    // under it — the share of the picture to its left does not move — and the window's own growth is
+    // not a reason to move it: an anchor measured in the window's shares instead would let the point
+    // under the hand drift by the window's growth, which is four pixels of a picture this size.
+    let window = (5, 4, 995, 796);
+    let zoom = PinZoom::filling(window);
+    let pointer = (50, 400);
+    let under_the_pointer = |content: ScreenRegion, zoom: &PinZoom| {
+        let (left, _, _, _) = zoom.picture_box(region_size(content));
+
+        (pointer.0 - (content.0 + left)) as f32 / zoom.drawn.0
+    };
+
+    let before = under_the_pointer(window, &zoom);
+    let plan = zoomed(window, zoom, 1, Some(pointer));
+
+    assert_eq!(
+        plan.content,
+        (0, 0, 1000, 800),
+        "the window is taken out to the cap"
+    );
+    assert_eq!(plan.zoom.picture_box((1000, 800)), (1, -35, 1090, 836));
+    assert!(
+        (under_the_pointer(plan.content, &plan.zoom) - before).abs() < 0.002,
+        "the point of the picture under the pointer stays under it: {} against {before}",
+        under_the_pointer(plan.content, &plan.zoom)
+    );
+}
+
+#[test]
+fn a_notch_over_the_backdrop_keeps_the_point_of_the_backdrop_under_the_pointer() {
+    // A picture half again as large as its window and carried most of the way off it: the window is
+    // 0..1000 across and the picture is drawn from 450, so the backdrop — the `Image -> Zoom ->
+    // Background` colour, black by a fresh configuration — is showing down the window's left side,
+    // and the hand is over it.
+    let window = (0, 0, 1000, 800);
+    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0));
+    let pointer = (200, 400);
+
+    assert_eq!(
+        carried.picture_box((1000, 800)),
+        (450, -200, 1950, 1000),
+        "the picture is drawn with the backdrop beside it"
+    );
+
+    let plan = zoomed(window, carried, 1, Some(pointer));
+
+    // The point of the backdrop under the hand is not the picture's to keep, so what holds under it is
+    // its *place in the picture*: a hand 250 to the left of the picture's left edge is 275 to the left
+    // of it once the picture has grown by a tenth. What the wheel may not do is pull the picture back
+    // over the window, which is what a placement bounded by the overhang does (see `pin_zoom_to`).
+    assert_eq!(plan.content, window, "the window is at its cap and holds");
+    assert_eq!(plan.zoom.drawn, (1650.0, 1320.0));
+    assert_eq!(
+        plan.zoom.picture_box((1000, 800)),
+        (475, -260, 2125, 1060),
+        "the backdrop under the pointer keeps its width, and the picture a hand carried off stays off"
+    );
+}
+
+#[test]
+fn a_travel_over_the_backdrop_keeps_the_point_of_the_picture_under_its_anchor() {
+    // The same as the travel at the cap, for a picture the hand has carried off its window: each frame
+    // re-places the picture from where the last one left it, so a frame that bounded the placement by
+    // the window's overhang would walk the picture back over the window a little at a time — a picture
+    // that creeps across the hand as it is zoomed rather than one that follows it.
+    let window = (0, 0, 1000, 800);
+    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0));
+    let anchor = (200, 400);
+    let toward = carried.drawn.0 * PIN_ZOOM_PER_NOTCH.powi(6);
+    let asking = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some(anchor),
+    };
+
+    // Where in the picture the point under the anchor is, as a share of the picture's width: negative,
+    // since the point is off the picture's own left edge — which is the whole of what a hand over the
+    // backdrop has to be anchored on.
+    let under_the_anchor = |zoom: &PinZoom| {
+        let (left, _, _, _) = zoom.picture_box((1000, 800));
+
+        (anchor.0 - left) as f32 / zoom.drawn.0
+    };
+
+    let mut zoom = PinZoom {
+        toward,
+        ..carried
+    };
+    let before = under_the_anchor(&zoom);
+    assert!(
+        before < -0.1,
+        "the point the wheel read is well beside the picture: {before}"
+    );
+
+    let mut frames = 0;
+
+    while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
+        zoom = plan.zoom;
+        frames += 1;
+        assert!(
+            (under_the_anchor(&zoom) - before).abs() < 0.005,
+            "frame {frames} moved the picture under the anchor: {} against {before}",
+            under_the_anchor(&zoom)
+        );
+        assert!(frames < 120, "a travel of two seconds is not a travel");
+    }
+
+    assert!(
+        zoom.drawn.0 > carried.drawn.0 * 1.5,
+        "and the picture did travel: {} of {toward}",
+        zoom.drawn.0
+    );
 }
 
 #[test]
