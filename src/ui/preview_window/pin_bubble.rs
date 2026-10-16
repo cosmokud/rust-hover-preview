@@ -31,6 +31,11 @@ pub(crate) static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
 pub(super) struct BubbleFrame {
     pub(super) pixels: Vec<u8>,
     pub(super) side: u32,
+    /// The film the frame was read out of, because a still of *another* film is the wrong colour
+    /// around the ring and the wrong frame to fall back to: a file the walk landed on behind a
+    /// bubble asks for a still of its own rather than keeping the one before it (see
+    /// `grab_bubble_frame` and `bubble_film::keep_the_film_in_the_bubble`).
+    pub(super) path: PathBuf,
 }
 
 /// The frame taken for the bubble a collapsed film left, if it has landed yet.
@@ -552,7 +557,7 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
             // showing, on a thread of its own, and the bubble goes up on the theme's face until it
             // lands (see `grab_bubble_frame`). A seated film keeps it too — as the colour its ring
             // is drawn in, and as the still that stands wherever the seat is not.
-            grab_bubble_frame(anchor);
+            grab_bubble_frame(bubble_box(anchor));
         }
     }
 }
@@ -575,7 +580,11 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
 /// **The pin's lock is not held across the spawn and neither is the media's.** Everything the grab
 /// needs — the kind, the file, the second the bar is showing and the size the bubble was made — is
 /// read here, one ask at a time, and what the thread is handed is the answers rather than the pin.
-fn grab_bubble_frame(anchor: ScreenRegion) {
+///
+/// It is asked for more than once in a collapse's life, and the second question it answers is
+/// whether the still in hand is still the film's: a file the walk landed on behind a bubble is a
+/// still of the film before it (see `bubble_film::keep_the_film_in_the_bubble`).
+pub(super) fn grab_bubble_frame(box_: ScreenRegion) {
     // A frame from the last collapse is a frame of another file: the slot is emptied here rather
     // than when the frame lands, so a grab that never answers leaves a bubble with nothing in it
     // rather than one showing the film before this one.
@@ -593,17 +602,57 @@ fn grab_bubble_frame(anchor: ScreenRegion) {
     };
 
     let at = pinned_playhead().unwrap_or(0.0);
-    let side = logical_px(dpi_at(anchor.0, anchor.1), PIN_BUBBLE_PIXELS).max(16) as u32;
+    let side = logical_px(dpi_at(box_.0, box_.1), PIN_BUBBLE_PIXELS).max(16) as u32;
+
+    // **The suite starts no process at all**, and a grab is a process: what a test build answers is
+    // the ask — the film, the second and the side — and the frame is left exactly as it stands (see
+    // `mpv_ipc::deliver`, where the same rule is kept for the pipe).
+    #[cfg(test)]
+    if let Ok(mut noted) = NOTED_GRABS.lock() {
+        noted.push((path, at, side));
+        return;
+    }
 
     std::thread::spawn(move || {
         if let Some(pixels) = grab_video_frame(&path, at, side) {
             if let Ok(mut frame) = BUBBLE_FRAME.lock() {
-                *frame = Some(BubbleFrame { pixels, side });
+                *frame = Some(BubbleFrame { pixels, side, path });
             }
         }
 
         BUBBLE_FRAME_READY.store(true, Ordering::Release);
     });
+}
+
+/// The films a still has been asked for, with the second and the side it was asked at, for a test
+/// build (see `grab_bubble_frame`).
+#[cfg(test)]
+static NOTED_GRABS: Mutex<Vec<(PathBuf, f64, u32)>> = Mutex::new(Vec::new());
+
+/// The grabs noted so far (see `NOTED_GRABS`).
+#[cfg(test)]
+pub(super) fn take_noted_grabs() -> Vec<(PathBuf, f64, u32)> {
+    NOTED_GRABS
+        .lock()
+        .map(|mut noted| std::mem::take(&mut *noted))
+        .unwrap_or_default()
+}
+
+/// Whether the still in hand is one of the film the pin is showing now.
+///
+/// The two are read one after the other and never across each other: the frame is the bubble's own
+/// slot and the film is the pin's, and neither lock is taken while the other is held (see
+/// `pinned_media_owner` for the rule this keeps).
+pub(super) fn the_still_in_hand_is_of_the_pinned_film() -> bool {
+    let still = BUBBLE_FRAME
+        .lock()
+        .ok()
+        .and_then(|frame| frame.as_ref().map(|frame| frame.path.clone()));
+    let Some(still) = still else {
+        return false;
+    };
+
+    pinned_media_owner().is_some_and(|(path, _)| path == still)
 }
 
 /// One frame of a film FFmpeg's player is drawing, taken for the bubble the pin collapses into.
@@ -1204,6 +1253,41 @@ pub(super) fn bubble_box(anchor: ScreenRegion) -> ScreenRegion {
     (clamped.0, clamped.1, clamped.0 + side, clamped.1 + side)
 }
 
+/// The box the bubble's own window is standing in, where one is up: the square the circle is
+/// painted in, and the square a film standing in the bubble is put in.
+///
+/// It is read off the window rather than remembered, because a bubble the hand has carried is a
+/// bubble standing somewhere else — and the film has to be carried with it (see `bubble_film`).
+/// **The circle's own side and not the window's height**, because the window grows downwards while
+/// its menu is up (see `open_bubble_menu`).
+pub(super) fn bubble_box_on_screen() -> Option<ScreenRegion> {
+    let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    if hwnd == 0 {
+        return None;
+    }
+
+    bubble_box_of(HWND(hwnd as *mut _))
+}
+
+/// The box the circle of `hwnd` is standing in (see `bubble_box_on_screen`).
+fn bubble_box_of(hwnd: HWND) -> Option<ScreenRegion> {
+    let (x, y, ..) = window_origin(hwnd)?;
+    let side = logical_px(dpi_at(x, y), PIN_BUBBLE_PIXELS).max(16);
+    Some((x, y, x + side, y + side))
+}
+
+/// Put the film the pin is showing back into the bubble a hand has just let go of: a seat at the
+/// box the circle is standing in now, which is where the drag left it (see `bubble_film` and the
+/// press and release it belongs to in `pin_bubble_proc`).
+///
+/// A film that is already seated, and one no bubble can hold at all, are both answered here without a
+/// window call: the keep is the same road the tick takes (see `bubble_film::keep_the_film_in_the_bubble`).
+fn put_the_film_back_in_the_bubble(hwnd: HWND) {
+    if let Some(box_) = bubble_box_of(hwnd) {
+        bubble_film::keep_the_film_in_the_bubble(box_);
+    }
+}
+
 /// The bubble's window, created once for the run: a layered popup that never takes focus and is
 /// never in the taskbar, exactly as the preview window itself is.
 pub(super) unsafe fn pin_bubble_window() -> Option<HWND> {
@@ -1658,6 +1742,13 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
             }
             PIN_BUBBLE_MOVED.store(false, Ordering::Release);
             let _ = SetCapture(hwnd);
+
+            // And the film comes out of the bubble for as long as a hand has it: a film's window
+            // cannot follow a carried circle without a placement of somebody else's window on every
+            // move the pointer makes, so the bubble goes back to its own still while it is in flight
+            // and the film is put back in the box the hand leaves the bubble at (see `bubble_film`).
+            bubble_film::unseat_film_window();
+
             // And the drag is carried here rather than left to the preview loop's next tick: what
             // has hold of the bubble is the pointer, and the pointer does not wait for a tick of
             // anything (see `carry_bubble_drag`).
@@ -1690,6 +1781,9 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
 
             if dragging {
                 let _ = ReleaseCapture();
+                // The hand has let go, wherever it left the bubble: the film goes back into the
+                // circle, which is standing where the drag left it (see `bubble_film`).
+                put_the_film_back_in_the_bubble(hwnd);
                 let was_focused = BUBBLE_PRESS_FOCUSED.swap(false, Ordering::AcqRel);
                 if bubble_click_restores(was_focused, PIN_BUBBLE_MOVED.load(Ordering::Acquire)) {
                     // A press that did not move is a click, and a click on a bubble the hand is
@@ -1707,6 +1801,7 @@ pub(super) unsafe extern "system" fn pin_bubble_proc(
             // pointer goes with it, or it would stand past the hand that left it.
             drop_bubble_drag();
             close_bubble_menu(hwnd);
+            put_the_film_back_in_the_bubble(hwnd);
             LRESULT(0)
         }
         WM_RBUTTONUP => {
