@@ -923,8 +923,10 @@ fn a_pin_with_no_bound_is_fitted_into_the_room_the_display_has() {
     assert_eq!(pin_swap_room(banded, bounds, 96), (0, 30, 1920, 1050));
 }
 
-/// A box change that the pin's own frame already covers owes it no decode, and the kinds whose
-/// frame is a layout rather than a picture are owed one whatever the frame's size is.
+/// A box change that the pin's own frame already covers owes it no decode, and the kinds a box lays
+/// out again rather than scales are owed one whatever the frame's size is. A page is the first of
+/// those as much as a picture is: what the box decides about a PDF, a slide or a book's page is how
+/// many pixels the page is drawn at, not what is on it.
 ///
 /// This is the rule the window a user drags small and opens again lives or dies by. The band is the
 /// pin's own box and the frame in the media is stretched into it, so a frame decoded for a bigger
@@ -934,8 +936,8 @@ fn a_pin_with_no_bound_is_fitted_into_the_room_the_display_has() {
 /// however many hovers have gone through the cache since (see `box_is_covered`).
 ///
 /// A page of text is the other side of it, and the side that keeps the rule honest: text is drawn at
-/// a fixed size, so half the box is half the lines rather than the same page smaller, and a smaller
-/// frame of it would be a *sheared* page rather than a soft one.
+/// a fixed size, so half the box is half the lines rather than the same page smaller, and a frame of
+/// it stretched into a box it was not laid out for is a different pageful rather than a soft one.
 #[test]
 fn a_box_the_frames_pixels_already_cover_owes_the_pin_no_decode() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -979,25 +981,38 @@ fn a_box_the_frames_pixels_already_cover_owes_the_pin_no_decode() {
              the size of its frame says nothing about the file arriving"
     );
 
-    // The three raster kinds this app draws the same way are covered alike; a page of text is not.
+    // Every raster kind this app draws is covered alike, and a page is one of them: the two differ
+    // in what rasterized them and in nothing a box change asks.
     for kind in [
         MediaType::Dds,
         MediaType::Design,
         MediaType::Magick,
         MediaType::StaticImage,
+        MediaType::Pdf,
+        MediaType::Office,
+        MediaType::Libre,
+        MediaType::Calibre,
+        MediaType::Comic,
     ] {
         held(kind, 1600, 1200);
         assert!(
             !owed(&path, (100, 100, 500, 400), PinRelayoutRoad::BoxChange),
-            "{kind:?} is a picture at a size, so a smaller box of it is the frame it already has"
+            "{kind:?} is the file rasterized at a box, so a smaller box of it is the frame it \
+             already has"
         );
     }
-    held(MediaType::Text, 1600, 1200);
-    assert!(
-        owed(&path, (100, 100, 500, 400), PinRelayoutRoad::BoxChange),
-        "a page of text at half the box is half the lines rather than the same page smaller, so its \
-             frame is laid out again at the box it is now shown in"
-    );
+
+    // And the kinds a box lays out again rather than scales are owed one whatever the frame's size
+    // is: half the box is half the lines at the same size, and that smaller pageful is what a frame
+    // of such a kind would have been drawn as.
+    for kind in [MediaType::Text, MediaType::Archive, MediaType::Peazip] {
+        held(kind, 1600, 1200);
+        assert!(
+            owed(&path, (100, 100, 500, 400), PinRelayoutRoad::BoxChange),
+            "{kind:?} is laid out at the box rather than scaled into it, so its frame is drawn \
+             again at the box it is now shown in"
+        );
+    }
 
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous;

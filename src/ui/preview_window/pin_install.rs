@@ -1391,10 +1391,15 @@ pub(super) fn relayout_pinned_media(
 /// left a thumbnail of it under a window the size of the display until a full decode of the file
 /// landed — the one road on which a frame smaller than its box is not merely cheaper to avoid.
 ///
-/// The kinds are the ones whose frame is the picture at a size rather than a layout of it. A page of
-/// text in half the box is half the lines, a listing is another page of rows, and a page an engine
-/// drew is drawn again so that its own text is rendered at the size it is shown at: none of the
-/// three is the same picture smaller, and each is answered below as it always was.
+/// The kinds are the ones a box gives another *size* rather than another page. A picture is one, and
+/// so is a page: a PDF, the page Office, the render engine or Calibre drew, and a plate out of a
+/// comic are each a page rasterized at the box it is shown in, and what that box decides is how many
+/// pixels the page is drawn at rather than what is on it — so the pixels a bigger frame already
+/// holds are every one the smaller box would have been given. What is left out is the three kinds a
+/// box lays out again rather than scales: a page of text in half the box is half the lines at the
+/// same size, a listing is another page of rows, and a sound's card is another card, so a frame of
+/// one stretched into a box it was not laid out for is a different pageful rather than the same one
+/// smaller — and each is answered below as it always was.
 ///
 /// A *take-up* is never covered, whatever the frame says: the media on screen is the file the pin is
 /// leaving, and the size of its frame says nothing about the file arriving (see `PinRelayoutRoad`).
@@ -1408,7 +1413,15 @@ fn box_is_covered(
     matches!(road, PinRelayoutRoad::BoxChange)
         && matches!(
             kind,
-            MediaType::StaticImage | MediaType::Dds | MediaType::Design | MediaType::Magick
+            MediaType::StaticImage
+                | MediaType::Dds
+                | MediaType::Design
+                | MediaType::Magick
+                | MediaType::Pdf
+                | MediaType::Office
+                | MediaType::Libre
+                | MediaType::Calibre
+                | MediaType::Comic
         )
         && held.is_some_and(|(held_width, held_height)| {
             held_width >= width && held_height >= height
