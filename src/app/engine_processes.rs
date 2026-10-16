@@ -30,6 +30,8 @@
 //! a live parent means the browser belongs to an app that is running, which is not
 //! ours to end.
 
+#[cfg(test)]
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -384,11 +386,20 @@ fn recorded_pids(image: Option<&str>, kind: Option<Kind>) -> Vec<u32> {
 /// The folder the run files live in.
 ///
 /// `RHP_ENGINE_STATE` names a folder for one run, the way `RHP_WEBVIEW_PROFILE` names
-/// a profile, and it is there for the same reason: a test must be able to reap what
-/// it wrote without being confused with the records of the app somebody is actually
-/// running. A test build that names nothing falls back to a folder of the tests' own,
+/// a profile, and it is there for the same reason: a run must be able to reap what it
+/// wrote without being confused with the records of the app somebody is actually
+/// running. A *test* names its folder on its own thread instead, because the
+/// environment is one value for the whole process (see `StateFolderOfItsOwn`), and a
+/// test build that names nothing at all falls back to a folder of the tests' own,
 /// never the machine's — the folder a run of the app is reaping from.
 fn state_folder() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(folder) = TEST_FOLDER.with(|held| held.borrow().clone()) {
+            return Some(folder);
+        }
+    }
+
     if let Some(folder) = std::env::var_os("RHP_ENGINE_STATE") {
         return Some(PathBuf::from(folder));
     }
@@ -414,6 +425,52 @@ fn test_folder() -> PathBuf {
     std::env::temp_dir()
         .join("rust-hover-preview-tests")
         .join("engines")
+}
+
+/// The run-files folder a test has stood in, in place for as long as the guard lives.
+///
+/// **It is the thread's rather than the process's, and that is the whole of what it is for.** A
+/// test that asks whether the folder holds a file — and one does, because the file's absence is
+/// what proves a record was not written (see `a_record_is_written_once_and_a_forget_is_not_a_write`)
+/// — is asking about a folder no other test may write into. Names for this folder lived in the
+/// environment, which is one value for every thread in the process: a test running beside this one
+/// that records a player of its own (the preview window's swap tests do, through
+/// `note_player_started`) wrote a line into the folder whose file was just proved absent, and the
+/// absence went with it — a flake, in a file nothing about the test's own subject had changed. A
+/// folder kept on the test's own thread is not reachable from another test's, so the answer is the
+/// test's own again.
+///
+/// The configuration's folder of its own is process-wide with a turn against it, and it can be,
+/// because the only tests that read that one are the tests that take the turn (see
+/// `ConfigFolderOfItsOwn`).
+#[cfg(test)]
+struct StateFolderOfItsOwn {
+    /// What was standing on this thread before, put back as the guard goes.
+    previous: Option<PathBuf>,
+}
+
+#[cfg(test)]
+impl StateFolderOfItsOwn {
+    /// Stand `folder` in as the folder this thread's run files live in.
+    fn stood_at(folder: PathBuf) -> Self {
+        let previous = TEST_FOLDER.with(|held| held.replace(Some(folder)));
+
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for StateFolderOfItsOwn {
+    fn drop(&mut self) {
+        TEST_FOLDER.with(|held| *held.borrow_mut() = self.previous.take());
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The folder `state_folder` answers a thread whose test has stood one in, and nothing on a
+    /// thread that has not (see `StateFolderOfItsOwn`).
+    static TEST_FOLDER: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
 /// This run's file, named by its own process id.
@@ -865,10 +922,10 @@ mod tests {
     /// is gone left behind is ended, and what a run that is still alive is holding is
     /// not touched — another session of the same user is another run.
     ///
-    /// One test rather than two, because the folder it reaps from is named in the
-    /// environment, and two tests setting that at once are two tests reading each
-    /// other's files. It holds the stand-ins' lock for the same reason, and because the
-    /// processes it reaps are the stand-ins every other engine's test is using.
+    /// One test rather than two, because the two halves are one walk of one folder. It holds the
+    /// stand-ins' lock because the processes it reaps are the stand-ins every other engine's test
+    /// is using, and the folder it reaps from is the thread's own rather than the environment's for
+    /// the reason `StateFolderOfItsOwn` gives.
     #[test]
     fn reaps_a_run_that_is_gone_and_leaves_a_live_one_alone() {
         let _stand_in = STAND_IN
@@ -880,7 +937,7 @@ mod tests {
             .join(std::process::id().to_string());
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).expect("a test folder");
-        std::env::set_var("RHP_ENGINE_STATE", &folder);
+        let _folder = StateFolderOfItsOwn::stood_at(folder.clone());
 
         let mut abandoned = stand_in();
         let mut held = stand_in();
@@ -930,7 +987,6 @@ mod tests {
         let _ = held.wait();
         let _ = abandoned.wait();
         let _ = std::fs::remove_dir_all(&folder);
-        std::env::remove_var("RHP_ENGINE_STATE");
     }
 
     /// What a run writes down is what it has started, and what it writes is written when
@@ -951,7 +1007,7 @@ mod tests {
             .join("rust-hover-preview-engine-record-tests")
             .join(std::process::id().to_string());
         let _ = std::fs::remove_dir_all(&folder);
-        std::env::set_var("RHP_ENGINE_STATE", &folder);
+        let _folder = StateFolderOfItsOwn::stood_at(folder.clone());
 
         let mut engine = stand_in();
         let pid = engine.id();
@@ -1006,22 +1062,73 @@ mod tests {
         let _ = second.kill();
         let _ = second.wait();
         let _ = std::fs::remove_dir_all(&folder);
-        std::env::remove_var("RHP_ENGINE_STATE");
+    }
+
+    /// The folder a test stands in is its own thread's, and that is what makes the assertion above
+    /// answerable: another test running beside this one records players of its own, and every one
+    /// of those records would otherwise be written into the folder this test is asking about — a
+    /// file it has just proved absent, put back under it.
+    ///
+    /// Nothing here stands a real process in, so the stand-ins' lock is not taken: what the two
+    /// records name is a pair of ids no process holds, which is the shape a test build's noted
+    /// players already have (see `spawn_player`).
+    #[test]
+    fn a_record_from_beside_a_test_does_not_reach_the_folder_it_stood_in() {
+        let folder = std::env::temp_dir()
+            .join("rust-hover-preview-engine-record-tests")
+            .join(format!("{}-guard", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let _folder = StateFolderOfItsOwn::stood_at(folder.clone());
+
+        // A record this thread makes is this folder's, which is what says the folder is standing.
+        let mine = 0x7fff_ff01;
+        record("ping.exe", mine);
+        let file = folder.join(format!("{}.state", std::process::id()));
+        let written =
+            std::fs::read_to_string(&file).expect("the file this test's own record wrote");
+        assert!(
+            written.contains(&format!("engine ping.exe {mine} ")),
+            "the record this test made is in the folder it stood in: {written}"
+        );
+
+        // And one made beside it is not: it goes to the folder a test build uses when no folder is
+        // stood in at all, because nothing a thread holds is visible from another thread.
+        let theirs = 0x7fff_ff02;
+        std::thread::spawn(move || record("beside.exe", theirs))
+            .join()
+            .expect("the thread beside this one");
+
+        let written =
+            std::fs::read_to_string(&file).expect("the file this test's own record wrote");
+        assert!(
+            !written.contains("beside.exe"),
+            "a record from beside this test does not reach the folder it stood in: {written}"
+        );
+
+        // The record beside it was written somewhere — a test's records are not simply dropped —
+        // and where it went is the folder every other test build record goes to.
+        let beside = test_folder().join(format!("{}.state", std::process::id()));
+        let written =
+            std::fs::read_to_string(&beside).expect("the file the record beside this test wrote");
+        assert!(
+            written.contains("beside.exe"),
+            "the record made beside this test is written where a test's records go: {written}"
+        );
+
+        forget(mine);
+        forget(theirs);
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     /// The folder a test build falls back to is one of the tests' own, never the
     /// machine's: the folder a run of the app somebody is actually running is reaping
     /// from, which a test must not write into.
     ///
-    /// Holds the stand-ins' lock for the reason the two tests above do: those two name
-    /// the folder in the environment, and this test reads the fallback for a run that
-    /// names nothing.
+    /// No stand-ins' lock is taken here: what it reads is the fallback for a run that names nothing,
+    /// and no test names a folder in the environment any more — a folder stood in for a test is its
+    /// own thread's (see `StateFolderOfItsOwn`).
     #[test]
     fn a_tests_own_engine_state_folder_is_never_the_machines() {
-        let _stand_in = STAND_IN
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
         let folder = state_folder().expect("a state folder of the test's own");
 
         let machine = directories::BaseDirs::new()
