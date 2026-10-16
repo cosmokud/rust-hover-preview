@@ -20,6 +20,10 @@ use super::*;
 /// Out is this step divided rather than a step of its own, so a notch in and a notch out leave the
 /// picture exactly where it was — which is the whole of what "zoom in and zoom out" has to mean if a
 /// hand is to come back from either end without counting notches.
+///
+/// It is the step of a *whole* notch, and a wheel may report less than one: the count a notch is
+/// turned into is fractional, and what the part of a notch is worth is this step taken by a fractional
+/// exponent (see `notch_step`).
 pub(super) const PIN_ZOOM_PER_NOTCH: f32 = 1.10;
 
 /// How fast a zoom travels to the size the wheel asked for: the rate of the spring the picture's
@@ -216,8 +220,10 @@ pub(super) struct PinZoomInputs {
 /// Take a pinned picture one wheel's worth further in or out, or nothing where the notch asks for
 /// nothing: the box the window ends up with and how the picture is drawn inside it.
 ///
-/// `notches` is in wheel units turned into notches and is signed, up being positive — a positive
-/// notch zooms in. More than one notch at once is the same gesture taken further: the step is the one
+/// `notches` is the wheel's own turn in notches and is signed, up being positive — a positive notch
+/// zooms in — and fractional, because a wheel may report a fraction of a notch at a time and a count
+/// rounded to whole ones is a count that throws most of a high-resolution wheel's travel away (see
+/// `notch_step`). More than one notch at once is the same gesture taken further: the step is the one
 /// notch multiplied out, so a fast wheel and a slow one land on the same sizes.
 ///
 /// The cap, the floor and the share between the picture and its window are all here and nothing of
@@ -231,10 +237,10 @@ pub(super) struct PinZoomInputs {
 /// follows over the frames of the travel (see `pin_zoom_toward` and `pin_zoom_step`).
 pub(super) fn pin_zoom_after(
     input: &PinZoomInputs,
-    notches: i32,
+    notches: f32,
     displays: &dyn Displays,
 ) -> Option<PinZoomPlan> {
-    if notches == 0 {
+    if notches == 0.0 {
         return None;
     }
 
@@ -257,11 +263,32 @@ pub(super) fn pin_zoom_after(
 /// while the last one is still travelling would otherwise be counted from the size the picture
 /// happened to be passing, and two hands turning the same number of notches would come out at two
 /// different sizes (see `pin_zoom_step`).
-pub(super) fn pin_zoom_toward(input: &PinZoomInputs, notches: i32) -> f32 {
-    let step = PIN_ZOOM_PER_NOTCH.powi(notches);
+pub(super) fn pin_zoom_toward(input: &PinZoomInputs, notches: f32) -> f32 {
+    let step = notch_step(notches);
     let floor = pin_zoom_floor(input, input.zoom.toward);
 
     (input.zoom.toward * step).max(floor).min(PIN_ZOOM_CEILING)
+}
+
+/// What a wheel's own turn is worth as a factor: the step of a notch taken as many times as the wheel
+/// was turned.
+///
+/// A whole notch is the exact power — which is what makes a notch in and a notch out leave the picture
+/// where it was — and the part of a notch a high-resolution wheel sends is the same step taken by a
+/// fractional exponent, because a wheel that reports less than a notch per message is a wheel whose
+/// every unit is worth the same share of a notch. A count rounded to whole notches would throw two of
+/// every three of a 40-unit wheel's messages away and turn the third into a whole notch, which is a
+/// zoom that moves in lurches of a tenth of a picture rather than in the thirds it was asked for.
+fn notch_step(notches: f32) -> f32 {
+    let whole = notches.trunc();
+    let part = notches - whole;
+
+    PIN_ZOOM_PER_NOTCH.powi(whole as i32)
+        * if part == 0.0 {
+            1.0
+        } else {
+            PIN_ZOOM_PER_NOTCH.powf(part)
+        }
 }
 
 /// The narrowest a zoom may leave a picture: the display's own room at a hundredth of itself, in
@@ -562,7 +589,7 @@ pub(super) fn pin_zoom_oversize_box() -> Option<ScreenRegion> {
 /// written under one lock — and it is what lets a hand turning the wheel twice as fast come out twice as
 /// far in, since a notch taken mid-travel moves the size the last one was already going to rather than
 /// the size the picture happens to be passing (see `pin_zoom_toward`).
-pub(super) fn aim_pin_zoom(notches: i32) {
+pub(super) fn aim_pin_zoom(notches: f32) {
     let Some(input) = pin_zoom_inputs() else {
         return;
     };

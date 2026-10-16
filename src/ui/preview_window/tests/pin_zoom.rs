@@ -18,7 +18,7 @@ fn display() -> RecordedDisplays {
 fn zoomed(
     content: ScreenRegion,
     zoom: PinZoom,
-    notches: i32,
+    notches: f32,
     pointer: Option<(i32, i32)>,
 ) -> PinZoomPlan {
     pin_zoom_after(
@@ -44,12 +44,12 @@ fn a_picture() -> ScreenRegion {
 
 /// The same picture taken all the way to the cap, one notch at a time with the pointer held still.
 fn at_the_cap(pointer: (i32, i32)) -> PinZoomPlan {
-    let mut plan = zoomed(a_picture(), PinZoom::filling(a_picture()), 1, None);
+    let mut plan = zoomed(a_picture(), PinZoom::filling(a_picture()), 1.0, None);
     let mut content = plan.content;
     let mut zoom = plan.zoom;
 
     for _ in 0..40 {
-        plan = zoomed(content, zoom, 1, Some(pointer));
+        plan = zoomed(content, zoom, 1.0, Some(pointer));
         content = plan.content;
         zoom = plan.zoom;
     }
@@ -64,7 +64,7 @@ fn one_notch_up_grows_the_window_about_the_pictures_own_middle() {
     // 15 down. That is the whole of the anchor before the window reaches its cap, and it is what
     // keeps a picture in the place the hand was looking at rather than walking it off the screen in
     // one direction.
-    let plan = zoomed(a_picture(), PinZoom::filling(a_picture()), 1, None);
+    let plan = zoomed(a_picture(), PinZoom::filling(a_picture()), 1.0, None);
     assert_eq!(plan.content, (280, 235, 720, 565));
     assert_eq!(plan.zoom.drawn, (440.0, 330.0));
     assert_eq!(plan.zoom.pan, (0.0, 0.0));
@@ -76,7 +76,7 @@ fn one_notch_up_grows_the_window_about_the_pictures_own_middle() {
 
     // Three notches in one gesture are the same step taken further rather than three boxes: a wheel
     // turned fast lands on the same size a wheel turned slowly would have arrived at.
-    let three = zoomed(a_picture(), PinZoom::filling(a_picture()), 3, None);
+    let three = zoomed(a_picture(), PinZoom::filling(a_picture()), 3.0, None);
     let step = PIN_ZOOM_PER_NOTCH.powi(3);
     assert_eq!(
         three.content.2 - three.content.0,
@@ -92,8 +92,8 @@ fn one_notch_up_grows_the_window_about_the_pictures_own_middle() {
 fn one_notch_down_shrinks_it_by_exactly_what_a_notch_up_grew_it_by() {
     // Out is in divided rather than a step of its own, which is the whole of what lets a hand come
     // back from either end without counting: the same notch back lands on the box it started from.
-    let grown = zoomed(a_picture(), PinZoom::filling(a_picture()), 1, None);
-    let back = zoomed(grown.content, grown.zoom, -1, None);
+    let grown = zoomed(a_picture(), PinZoom::filling(a_picture()), 1.0, None);
+    let back = zoomed(grown.content, grown.zoom, -1.0, None);
 
     assert_eq!(back.content, a_picture());
     assert_eq!(back.zoom.drawn, (400.0, 300.0));
@@ -129,7 +129,7 @@ fn a_picture_beyond_a_fit_is_given_a_cap_of_its_own_size_rather_than_being_shrun
     // answered by shrinking it. What it is instead is the first notch of a picture already inside its
     // window: the box holds still and the picture grows within it.
     let huge = (0, 0, 2000, 1500);
-    let plan = zoomed(huge, PinZoom::filling(huge), 1, Some((500, 400)));
+    let plan = zoomed(huge, PinZoom::filling(huge), 1.0, Some((500, 400)));
 
     assert_eq!(
         (
@@ -143,7 +143,7 @@ fn a_picture_beyond_a_fit_is_given_a_cap_of_its_own_size_rather_than_being_shrun
 
     // And a notch the other way takes the same window down rather than leaving it at the size it came
     // up at, so a photograph that arrived too large can be brought back to a fit.
-    let out = zoomed(huge, PinZoom::filling(huge), -1, None);
+    let out = zoomed(huge, PinZoom::filling(huge), -1.0, None);
     assert_eq!(
         (out.content.2 - out.content.0, out.content.3 - out.content.1),
         (1818, 1364)
@@ -162,7 +162,7 @@ fn zooming_out_stops_when_the_picture_is_a_hundredth_of_the_screen() {
     let mut zoom = PinZoom::filling(a_picture());
 
     for _ in 0..200 {
-        let plan = zoomed(content, zoom, -1, None);
+        let plan = zoomed(content, zoom, -1.0, None);
         content = plan.content;
         zoom = plan.zoom;
     }
@@ -193,7 +193,7 @@ fn past_the_cap_the_anchor_is_the_pointer_rather_than_the_pictures_middle() {
     let window = (0, 0, 1000, 800);
     let zoom = PinZoom::filling(window);
     let pointer = (250, 400);
-    let plan = zoomed(window, zoom, 1, Some(pointer));
+    let plan = zoomed(window, zoom, 1.0, Some(pointer));
 
     assert_eq!(plan.content, window, "the window is at its cap and holds");
     assert_eq!(plan.zoom.drawn.0, 1100.0);
@@ -213,7 +213,7 @@ fn past_the_cap_the_anchor_is_the_pointer_rather_than_the_pictures_middle() {
 
     // And a hand at the very middle of the window is the case the two anchors agree on, which is why
     // a zoom into the middle of a picture looks the same either side of the cap.
-    let middle = zoomed(window, zoom, 1, Some((500, 400)));
+    let middle = zoomed(window, zoom, 1.0, Some((500, 400)));
     assert_eq!(middle.zoom.pan, (0.0, 0.0));
 }
 
@@ -225,10 +225,10 @@ fn a_notch_inside_the_window_never_pulls_a_picture_it_was_covering_off_one() {
     // the shape a hand turns them in: the window grows with the picture a frame at a time, so the
     // notch that takes the picture past the cap is a notch the window has already nearly reached.
     for pointer in [(300, 250), (699, 549), (300, 549), (699, 250), (500, 400), (400, 300)] {
-        let mut plan = zoomed(a_picture(), PinZoom::filling(a_picture()), 1, Some(pointer));
+        let mut plan = zoomed(a_picture(), PinZoom::filling(a_picture()), 1.0, Some(pointer));
 
         for _ in 0..11 {
-            plan = zoomed(plan.content, plan.zoom, 1, Some(pointer));
+            plan = zoomed(plan.content, plan.zoom, 1.0, Some(pointer));
         }
 
         let box_ = plan.zoom.picture_box(region_size(plan.content));
@@ -258,7 +258,7 @@ fn a_notch_that_grows_the_window_with_the_picture_keeps_the_pointer_anchored() {
     };
 
     let before = under_the_pointer(window, &zoom);
-    let plan = zoomed(window, zoom, 1, Some(pointer));
+    let plan = zoomed(window, zoom, 1.0, Some(pointer));
 
     assert_eq!(
         plan.content,
@@ -289,7 +289,7 @@ fn a_notch_over_the_backdrop_keeps_the_point_of_the_backdrop_under_the_pointer()
         "the picture is drawn with the backdrop beside it"
     );
 
-    let plan = zoomed(window, carried, 1, Some(pointer));
+    let plan = zoomed(window, carried, 1.0, Some(pointer));
 
     // The point of the backdrop under the hand is not the picture's to keep, so what holds under it is
     // its *place in the picture*: a hand 250 to the left of the picture's left edge is 275 to the left
@@ -370,7 +370,7 @@ fn zooming_back_out_of_the_window_consumes_the_overhang_before_it_shrinks_it() {
     let window = (0, 0, 1000, 800);
     let inside = PinZoom::still((1500.0, 1200.0), (-80.0, 40.0));
 
-    let first = zoomed(window, inside, -1, Some((300, 300)));
+    let first = zoomed(window, inside, -1.0, Some((300, 300)));
     assert_eq!(first.content, window, "the overhang is spent first");
     assert!(first.zoom.drawn.0 > 1000.0 && first.zoom.drawn.0 < 1500.0);
     assert_ne!(
@@ -383,7 +383,7 @@ fn zooming_back_out_of_the_window_consumes_the_overhang_before_it_shrinks_it() {
     let mut shrunk = false;
 
     for _ in 0..40 {
-        let plan = zoomed(content, zoom, -1, Some((300, 300)));
+        let plan = zoomed(content, zoom, -1.0, Some((300, 300)));
         shrunk |= plan.content != window;
         content = plan.content;
         zoom = plan.zoom;
@@ -410,7 +410,7 @@ fn a_notch_of_zero_is_no_plan_at_all() {
             room: bounds(),
             pointer: None,
         },
-        0,
+        0.0,
         &display(),
     )
     .is_none());
@@ -515,14 +515,14 @@ fn a_wheel_that_asks_for_more_notches_than_any_hand_can_turn_is_answered_with_a_
     // limit" still owes is a number the placement can add to, and it is asked here at both ends —
     // the ceiling and the floor are the only two counts this function is not free on.
     let window = (0, 0, 1000, 800);
-    let huge = zoomed(window, PinZoom::filling(window), i32::MAX, Some((500, 400)));
+    let huge = zoomed(window, PinZoom::filling(window), i32::MAX as f32, Some((500, 400)));
     assert_eq!(huge.zoom.drawn.0, PIN_ZOOM_CEILING);
     assert!(
         huge.zoom.picture_box((1000, 800)).2 < i32::MAX,
         "and the box it lands in is a rectangle with room either side of it"
     );
 
-    let tiny = zoomed(window, PinZoom::filling(window), i32::MIN, None);
+    let tiny = zoomed(window, PinZoom::filling(window), i32::MIN as f32, None);
     let (width, height) = region_size(tiny.content);
     assert!(
         width >= 10 && height >= 8,
@@ -592,6 +592,50 @@ fn a_wheel_notch_over_a_pin_is_counted_for_the_pin_and_wakes_the_loop_that_reads
     stand_pin(previous);
 }
 
+/// A wheel that reports less than a notch per message is counted by the unit rather than by the notch:
+/// a high-resolution wheel — and the smoothing driver a plain one can be given — sends a fraction of a
+/// notch at a time, and a count rounded to whole notches throws two of every three of those away and
+/// turns the third into a whole notch, which is a zoom that moves in lurches of a tenth of a picture
+/// rather than in the thirds it was asked for.
+///
+/// The three thirds are asked of the size the wheel has already asked for rather than of the size the
+/// picture has reached, which is the same rule a whole notch is counted by: two hands turning the same
+/// amount come out at the same size whatever the frames between them (see `pin_zoom_toward`).
+#[test]
+fn a_wheel_that_reports_less_than_a_notch_at_a_time_is_counted_by_the_unit() {
+    let window = (0, 0, 1000, 800);
+    let settled = PinZoom::filling(window);
+    let asked = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: None,
+    };
+
+    // A wheel of 40 units against the 120 of a notch, sent as three messages.
+    let mut zoom = settled;
+    for _ in 0..3 {
+        zoom = PinZoom {
+            toward: pin_zoom_toward(&asked(zoom), 40.0 / 120.0),
+            ..zoom
+        };
+    }
+
+    assert!(
+        (zoom.toward - pin_zoom_toward(&asked(settled), 1.0)).abs() < 0.01,
+        "three thirds of a notch are a notch: {} of {}",
+        zoom.toward,
+        pin_zoom_toward(&asked(settled), 1.0)
+    );
+    assert!(
+        zoom.toward > settled.toward * 1.05,
+        "and none of the three was thrown away: {} of {}",
+        zoom.toward,
+        settled.toward
+    );
+}
+
 /// A zoom is a *travel* and not a jump, and the whole of what makes it one is that it closes on the size
 /// the wheel asked for: every frame brings the picture nearer to it, no frame takes it past it, and the
 /// frames stop once it is there.
@@ -654,7 +698,7 @@ fn a_notch_taken_mid_travel_is_counted_from_the_size_the_wheel_asked_for() {
         pointer: None,
     };
 
-    let first = pin_zoom_toward(&asked(settled), 1);
+    let first = pin_zoom_toward(&asked(settled), 1.0);
 
     // The picture part of the way to the size it was asked for, which is the state a second notch
     // arrives in whenever a hand turns the wheel faster than the picture can follow.
@@ -664,7 +708,7 @@ fn a_notch_taken_mid_travel_is_counted_from_the_size_the_wheel_asked_for() {
         ..settled
     };
 
-    let second = pin_zoom_toward(&asked(mid), 1);
+    let second = pin_zoom_toward(&asked(mid), 1.0);
     assert!(
         (second - first * PIN_ZOOM_PER_NOTCH).abs() < 0.01,
         "the second notch is counted from what the first one asked for: {second} against {first}"
@@ -677,7 +721,7 @@ fn a_notch_taken_mid_travel_is_counted_from_the_size_the_wheel_asked_for() {
     // And two notches together are the one step they would have been: a fast wheel and a slow one come
     // out at the same size.
     assert!(
-        (second - pin_zoom_toward(&asked(settled), 2)).abs() < 0.01,
+        (second - pin_zoom_toward(&asked(settled), 2.0)).abs() < 0.01,
         "two notches are the same size whether they were taken apart or together"
     );
 }
@@ -816,7 +860,7 @@ fn a_notch_aims_the_picture_and_leaves_it_where_it_is() {
         "and a picture the size of its window is not a picture a frame is owed to"
     );
 
-    aim_pin_zoom(1);
+    aim_pin_zoom(1.0);
 
     let zoom = pin_state()
         .and_then(|pinned| pinned.pin().and_then(|pin| pin.zoom))

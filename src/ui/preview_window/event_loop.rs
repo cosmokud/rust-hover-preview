@@ -1946,9 +1946,14 @@ pub fn run_preview_window() {
             // is *going* to rather than the size it is given the instant they are counted, and the
             // travel to it is taken a frame at a time below — a zoom that landed on its size the moment
             // a notch was turned would be a zoom that jumped (see `aim_pin_zoom` and `pin_zoom_step`).
+            //
+            // The count is in the wheel's own units — 120 to a notch — and it is divided as a fraction
+            // rather than truncated to whole notches, because a high-resolution wheel reports less than
+            // a notch per message and a truncated count is most of its travel thrown away (see
+            // `notch_step`).
             let zoom_delta = wheel_input::take_pin_zoom_delta();
-            if zoom_delta / WHEEL_DELTA != 0 {
-                aim_pin_zoom(zoom_delta / WHEEL_DELTA);
+            if zoom_delta != 0 {
+                aim_pin_zoom(zoom_delta as f32 / WHEEL_DELTA as f32);
             }
 
             // And where that travel has got to by now. The clock is read every tick rather than only
