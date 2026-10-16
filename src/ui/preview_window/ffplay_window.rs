@@ -212,7 +212,30 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // moved is placed without a raise (see `ensure_pinned_sibling_box`). A collapsed pin holds off
     // every film alike: its band went with the window, so a raise here is a chrome-less film back
     // over Explorer beside the bubble (see `hide_pinned_windows`).
-    if order == PlayerOrder::Leave || pin_is_collapsed() {
+    //
+    // **And a collapsed pin's film is put *away* rather than merely left unraised, which is the
+    // whole of what a player begun behind a bubble costs without it.** A player is given its file
+    // and a box and nothing else — neither one takes a switch that means "come up off the screen",
+    // and both show the window they made the moment they have one (see `start_video_playback`,
+    // `mpv_args`) — so the film a *walk* lands on behind a bubble stands on the desktop,
+    // chrome-less, at the box the pin's own band had, while the bubble beside it goes on painting
+    // the same film out of frames read from the file: two pictures of one film, one of them a window
+    // nobody asked for.
+    // What hid the film the collapse found was `hide_pinned_windows`, and it is one call at the
+    // collapse rather than a tick — nothing hides a window that arrives afterwards.
+    //
+    // This is the one place that finds such a window as soon as it exists, which is why the hide is
+    // here rather than at the launch: the launch has a process id and no window yet (the player puts
+    // its window up after it has read the file's header), and the monitor thread walks the player's
+    // process on the five-to-a-hundred-millisecond cadence it already keeps — so the newly begun
+    // film is off the screen within a pass of the monitor, and stays off it for as long as the pin
+    // is a bubble, however often the player shows its own window again.
+    if pin_is_collapsed() {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+        return true;
+    }
+
+    if order == PlayerOrder::Leave {
         return true;
     }
 
