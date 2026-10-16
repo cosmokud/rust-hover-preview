@@ -51,10 +51,11 @@ fn a_band_tall_enough_to_split_is_scaled_row_for_row_where_the_band_is() {
     );
 
     for row in 0..height as usize {
-        let wanted = (origin_y as usize..origin_y as usize + band_height as usize).contains(&row);
+        let in_the_band =
+            (origin_y as usize..origin_y as usize + band_height as usize).contains(&row);
         let line = &out[row * width as usize * 4..(row + 1) * width as usize * 4];
 
-        if !wanted {
+        if !in_the_band {
             assert_eq!(
                 line,
                 vec![0u8; width as usize * 4],
@@ -234,8 +235,8 @@ fn an_opaque_frame_of_another_size_fills_the_band_it_is_drawn_in() {
 /// squashed by however much of it had been carried off — and a picture that changes shape as the
 /// hand carries it is the one thing a zoom may never be.
 ///
-/// It is the road an opaque frame takes, which is every photograph and every screenshot a zoom is
-/// tried on (see `compose_media_into_band`).
+/// It is the shape every photograph and every screenshot a zoom is tried on takes: an opaque frame
+/// drawn larger than the window it is in (see `compose_media_into_band`).
 #[test]
 fn a_frame_bigger_than_its_band_is_drawn_at_the_size_it_is_drawn_at() {
     // Four rows, the last of them white and the rest black. Drawn eight times as tall as the band
