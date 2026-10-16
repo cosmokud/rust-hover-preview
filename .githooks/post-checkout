@@ -6,7 +6,19 @@
 # uses the usual per-checkout target/, which is what other machines and CI get.
 #
 # post-checkout is the hook `git worktree add` runs, so a new worktree shares the
-# directory with no manual step.
+# directory with no manual step — but it does not share the *directory itself*: cargo's
+# artifact and fingerprint names carry no part of a checkout's path, so two checkouts of
+# this package writing one target dir write the same files. Whichever builds last owns
+# them, and a build can be called fresh against the other checkout's recorded inputs and
+# do *nothing at all* — leaving a binary of another tree's, with a timestamp that says
+# this one built it. Every worktree therefore builds in a directory of its own under the
+# shared one, named after the worktree (`.git/worktrees/<name>`, git's own name for it),
+# and the shared directory itself stays the main checkout's. What keeps that as fast as
+# sharing one is `seed-target-dir`: the new directory is brought up as the shared one's
+# dependencies, hard-linked, so nothing is compiled twice and nothing of this package is
+# shared.
+#
+# A worktree that already has its directory keeps it exactly as it is.
 
 set -eu
 
@@ -17,5 +29,37 @@ target=$(git config --get rhp.targetDir) || exit 0
 target=$(printf '%s' "$target" | tr '\\' '/')
 
 root=$(git rev-parse --show-toplevel) || exit 0
+
+# The main checkout is the one whose git dir *is* the common dir; a linked worktree's is
+# its own, under `<common>/worktrees/<name>`. An older git answers the common dir relative
+# to the checkout, which for the main one is the main one either way, so falling back to
+# the git dir itself leaves that checkout with the shared directory as it has always had.
+gitdir=$(git rev-parse --absolute-git-dir) || exit 0
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common=$gitdir
+
+shared=$target
+if [ "$gitdir" != "$common" ]; then
+    # Named after the checkout, which is what a person looks for under the shared directory
+    # — and, where two checkouts of this repository are named the same, after git's own name
+    # for the worktree, which cannot be. A worktree whose name is already given that way
+    # keeps its directory: this decides a name for a directory that has none, it never
+    # renames one.
+    leaf=$(basename "$root")
+    same=$(git worktree list --porcelain | sed -n 's/^worktree //p' \
+        | while IFS= read -r other; do basename "$other"; done \
+        | grep -c -x -F "$leaf") || true
+
+    if [ "${same:-0}" -le 1 ]; then
+        target="$shared/$leaf"
+    else
+        target="$shared/$(basename "$gitdir")"
+    fi
+
+    # Asked of the script beside this hook rather than of the checkout: this hook is also
+    # run by hand, in a worktree whose tree may not hold the script yet.
+    here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    sh "$here/seed-target-dir" "$shared" "$target" || true
+fi
+
 mkdir -p "$root/.cargo"
 printf '# Written by .githooks/post-checkout. Machine-local, never committed.\n[build]\ntarget-dir = "%s"\n' "$target" > "$root/.cargo/target-dir.local.toml"
