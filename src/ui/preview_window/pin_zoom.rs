@@ -279,12 +279,10 @@ fn notch_step(notches: f32) -> f32 {
     let whole = notches.trunc();
     let part = notches - whole;
 
-    PIN_ZOOM_PER_NOTCH.powi(whole as i32)
-        * if part == 0.0 {
-            1.0
-        } else {
-            PIN_ZOOM_PER_NOTCH.powf(part)
-        }
+    // A whole notch is the exact power, and a turn with no part to it is the whole of what a wheel of
+    // detents ever sends: the fractional step is the same factor and is exactly one where the part is
+    // nothing, so the two are one expression rather than a branch either side of it.
+    PIN_ZOOM_PER_NOTCH.powi(whole as i32) * PIN_ZOOM_PER_NOTCH.powf(part)
 }
 
 /// The narrowest a zoom may leave a picture: the display's own room at a hundredth of itself, in

@@ -73,7 +73,11 @@ pub fn request_stop() {
 /// The hook's own procedure, `pub(crate)` so that a test can hand it a wheel message the way the
 /// system does — three numbers and a struct — since what it decides is which of the three owners a
 /// notch belongs to, and whether the loop that reads the count is woken for it.
-pub(crate) unsafe extern "system" fn wheel_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+pub(crate) unsafe extern "system" fn wheel_hook_proc(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     // Keep this callback cheap: every wheel message on the desktop waits for it
     // to return, so it reads one rectangle without blocking and otherwise touches
     // a single atomic.
