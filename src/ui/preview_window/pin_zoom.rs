@@ -298,9 +298,9 @@ fn pin_zoom_floor(input: &PinZoomInputs, already: f32) -> f32 {
 /// Where a pinned picture drawn `drawn_width` across is left: the box its window ends up with, and the
 /// view the picture has inside it.
 ///
-/// `drawn_width` is the size the picture is drawn at *now* — the number a travel walks frame by frame,
-/// and the number a notch lands on the instant it is taken — and it is the whole of what the two stages
-/// of a zoom are decided from.
+/// `drawn_width` is the width the picture is drawn at in the answer — the number a travel walks frame
+/// by frame, and the number the wheel's notches come to when they are taken as landing at once — and it
+/// is the whole of what the two stages of a zoom are decided from.
 pub(super) fn pin_zoom_to(
     input: &PinZoomInputs,
     drawn_width: f32,
@@ -480,7 +480,6 @@ pub(super) fn pin_zoom_spring(drawn: f32, toward: f32, velocity: f32, elapsed: f
 /// Carry a travel one frame further on: where the picture has got to by the time `elapsed` has passed,
 /// and the box that comes with it — or nothing at all for a picture already at the size the wheel asked
 /// for.
-///
 pub(super) fn pin_zoom_step(
     input: &PinZoomInputs,
     elapsed: f32,
@@ -503,19 +502,23 @@ pub(super) fn pin_zoom_step(
     Some(plan)
 }
 
-/// Everything a notch is decided from, read out of the pin in one look — or nothing at all where the
-/// wheel is not this pin's to take.
+/// The view of a pinned picture the wheel is the owner of, or nothing at all where it is not this pin's
+/// to take.
 ///
-/// The four refusals are one question — is there a picture here for the wheel to zoom — asked of the
-/// four things that can say there is not: no pin, a pin whose media is a kind the wheel does not zoom,
-/// a pin put away as a bubble, and a pin whose box is under a hand already. The last is a *drag* and not
-/// a zoom: a wheel notch landing in the middle of one would be two answers to the same question.
+/// Three of the four refusals are here and the fourth is the pin's existence itself: a pin whose media
+/// is a kind the wheel does not zoom has no view, a pin put away as a bubble has no window on the screen
+/// to point at or to draw, and a pin whose box is under a hand already is a *drag* rather than a zoom — a
+/// wheel notch landing in the middle of one would be two answers to the same question.
+fn pin_zoom_view(pin: &PinnedPreview) -> Option<PinZoom> {
+    pin.zoom.filter(|_| !pin.collapsed && pin.dragging.is_none())
+}
+
+/// Everything a notch is decided from, read out of the pin in one look — or nothing at all where the
+/// wheel is not this pin's to take (see `pin_zoom_view`).
 fn pin_zoom_inputs() -> Option<PinZoomInputs> {
     let pinned = pin_state()?;
     let pin = pinned.pin()?;
-    let zoom = pin
-        .zoom
-        .filter(|_| !pin.collapsed && pin.dragging.is_none())?;
+    let zoom = pin_zoom_view(pin)?;
     let window = pin.window_box();
 
     Some(PinZoomInputs {
@@ -534,12 +537,15 @@ fn pin_zoom_inputs() -> Option<PinZoomInputs> {
 /// for: a spring takes its frames at the frame cadence or it is not a spring (see
 /// `wait_before_the_next_tick`).
 ///
-/// What it asks is `pin_zoom_inputs` and not the pin alone, so that a travel the loop could not take
-/// a frame of is not a travel it keeps the cadence for: a pin with a drag under its hand is a pin the
-/// wheel has given over to the hand (see `PinZoom::toward`), and a loop waking sixty times a second
-/// for one is a loop waking for nothing.
+/// What it asks is the same question `pin_zoom_inputs` asks and nothing else, so that a travel the loop
+/// could not take a frame of is not a travel it keeps the cadence for: a pin with a drag under its hand
+/// is a pin the wheel has given over to the hand, and a loop waking sixty times a second for one is a
+/// loop waking for nothing. The room the display has is deliberately not read for it, since a travel
+/// being in flight is not a question about the desk.
 pub(super) fn pin_zoom_in_flight() -> bool {
-    pin_zoom_inputs().is_some_and(|input| input.zoom.travelling())
+    pin_state()
+        .and_then(|pinned| pinned.pin().and_then(pin_zoom_view))
+        .is_some_and(|zoom| zoom.travelling())
 }
 
 /// The box a pinned picture is drawn in when it is *larger than its window* — or nothing where there
@@ -600,8 +606,7 @@ pub(super) fn aim_pin_zoom(notches: i32) {
     });
 }
 
-/// Carry a pinned picture's travel one frame further on and draw it where it has got to, answering
-/// whether this is the frame it *arrived* at the size the wheel asked for.
+/// Carry a pinned picture's travel one frame further on and draw it where it has got to.
 ///
 /// It is the loop's road and not the window procedure's, because the clock a travel is measured by is
 /// the loop's: a spring is written in seconds, and the loop is the one thing here that knows how long
@@ -612,18 +617,18 @@ pub(super) fn aim_pin_zoom(notches: i32) {
 /// holds the old box and the window the new one, which an eye reads as the picture jumping (see
 /// `apply_pin_drag`).
 ///
-/// The answer is the moment worth knowing about, and the caller is the one that knows it: a picture
-/// that has just stopped is a picture whose file is worth laying out again at the size it settled on,
-/// and asking for that on every frame of a travel would be a decode per frame (see `pin_zoom_drawn_box`).
-pub(super) unsafe fn step_pin_zoom(hwnd: HWND, elapsed: f32) -> bool {
+/// Nothing is answered about whether the travel has ended: what a caller does with a size a picture has
+/// settled at — laying the file out again for it — is asked of the size itself and not of the moment it
+/// stopped, so that a travel ended by a hand taking the picture is owed the same frame as one that ran
+/// its course (see `pin_zoom_oversize_box`).
+pub(super) unsafe fn step_pin_zoom(hwnd: HWND, elapsed: f32) {
     let Some(input) = pin_zoom_inputs() else {
-        return false;
+        return;
     };
 
     let Some(plan) = pin_zoom_step(&input, elapsed, &DESKTOPS) else {
-        return false;
+        return;
     };
-    let arrived = !plan.zoom.travelling();
 
     let written = pin_state()
         .and_then(|mut pinned| {
@@ -645,8 +650,6 @@ pub(super) unsafe fn step_pin_zoom(hwnd: HWND, elapsed: f32) -> bool {
     if written {
         render_pinned_preview_at(hwnd, plan.content.0, plan.content.1);
     }
-
-    written && arrived
 }
 
 /// Put a pinned picture back to filling its window, for the kinds the wheel zooms and nothing at all
