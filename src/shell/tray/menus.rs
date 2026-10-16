@@ -94,8 +94,8 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, DestroyMenu, GetCursorPos,
-    SetForegroundWindow, TrackPopupMenu, HMENU, MF_BYCOMMAND, MF_CHECKED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    SetForegroundWindow, TrackPopupMenu, HMENU, MF_BYCOMMAND, MF_CHECKED, MF_ENABLED, MF_GRAYED,
+    MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
 };
 
 pub(super) unsafe fn show_context_menu(hwnd: HWND) {
@@ -1497,11 +1497,17 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
 
     append_tick_menu(performance_menu, w!("Explorer Poll"), ID_TRAY_TICK_BASE, tick_ms);
 
-    // Whether a video is decoded on the graphics card, one row of this
-    // submenu rather than a submenu of its own: the question is which
-    // parts of the app decode anything, and there is one part to name
-    // today, so the row says what it is about in its own label (see
-    // `video_hw_accel_device`).
+    // Whether a video is decoded on the graphics card, one row of this submenu rather than a
+    // submenu of its own: the question is which parts of the app decode anything, and there is one
+    // player left that can answer it — mpv, whose own safe list and software fallback do the work
+    // (see `video_hw_accel_wanted`) — so the row names it in its own label.
+    //
+    // **A machine with no `mpv.exe` is shown the switch as what it is there: nothing to switch.**
+    // Its own check is read only where there is a player for it to act on, so a `config.ini` that
+    // says on — every one written before this — is shown as the off it means here rather than as a
+    // check the app would act on anyway (see `codecs::mpv_available`, which the engine rows are
+    // greyed on too).
+    let mpv_installed = VideoEngine::Mpv.installed();
     let video_hw_accel = CONFIG
         .lock()
         .map(|c| c.video_hw_accel)
@@ -1510,13 +1516,14 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let _ = AppendMenuW(
         performance_menu,
         MF_STRING
-            | if video_hw_accel {
+            | if video_hw_accel && mpv_installed {
                 MF_CHECKED
             } else {
                 MF_UNCHECKED
-            },
+            }
+            | if mpv_installed { MF_ENABLED } else { MF_GRAYED },
         ID_TRAY_VIDEO_HW_ACCEL as usize,
-        w!("Hardware Acceleration (Video)"),
+        w!("Hardware Acceleration (MPV Only)"),
     );
 
     let _ = AppendMenuW(

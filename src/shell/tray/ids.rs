@@ -582,9 +582,10 @@ pub(super) const ID_TRAY_AFK_TIMER_BASE: u16 = 1505;
 /// order those submenus are listed: `Microsoft Office TTL`, then `LibreOffice TTL`, then
 /// `WebView2 TTL`.
 pub(super) const ID_TRAY_ENGINE_PERSISTENT_BASE: u16 = 1512;
-/// The `Performance → Hardware Acceleration` submenu's one row: whether a video is decoded on
-/// the graphics card. It sits in the slack past the three `Persistent` toggles, which end at
-/// 1515, so a click on it is never read as a toggle belonging to an engine's TTL submenu.
+/// The `Performance → Hardware Acceleration` row: whether a video is decoded on the graphics
+/// card, which is a question only mpv is asked. It sits in the slack past the three `Persistent`
+/// toggles, which end at 1515, so a click on it is never read as a toggle belonging to an
+/// engine's TTL submenu.
 pub(super) const ID_TRAY_VIDEO_HW_ACCEL: u16 = 1516;
 /// The `Audio` submenu under `Scaling`: one command per share of the display a
 /// sound's card is laid out over, in the order it lists them. It sits in

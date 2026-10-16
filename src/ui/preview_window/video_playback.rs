@@ -305,17 +305,12 @@ pub(super) fn start_video_playback(
     // Use ffplay for video playback - borderless, positioned at preview location
     let mut cmd = engine_processes::hidden_command("ffplay");
 
-    // Whether the film is decoded on the graphics card rather than on a core, which is the
-    // `Video` toggle under `Performance → Hardware Acceleration` in the tray.
-    //
-    // It is read here rather than at the top of the function because this is where a player is
-    // actually begun, and a setting that is read at a hover's beginning is read for the *next*
-    // hover: a film already playing was launched with the answer that was on then, and it is kept
-    // playing with it rather than being relaunched under the user's feet (see
-    // `video_hw_accel_device`).
-    if let Some(device) = video_hw_accel_device() {
-        cmd.args(["-hwaccel", device]);
-    }
+    // **And no `-hwaccel`, which is not an oversight.** It names a *device* rather than asking
+    // for a decoder, and ffplay brings its Vulkan renderer up the moment the flag is present:
+    // measured on this machine, every candidate device dies of an access violation in the graphics
+    // driver with no picture at all, where the same launch without the flag plays through in
+    // software. So hardware decode is mpv's switch alone and FFmpeg's player decodes on a core
+    // (see `video_hw_accel_wanted`).
 
     // If volume is 0, disable audio completely for better performance
     if volume == 0 {

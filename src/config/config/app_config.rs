@@ -561,12 +561,13 @@ pub struct AppConfig {
     /// with no preview instead of with memory the app may not get.
     pub decode_budget_gb: f32,
     /// Whether a video is decoded on the graphics card rather than on a core, which is the
-    /// `Video` toggle under `Performance → Hardware Acceleration` in the tray.
+    /// `Video` row under `Performance → Hardware Acceleration` in the tray.
     ///
-    /// It is a setting about *this build's* FFmpeg rather than about a kind of file, which is
-    /// why it is asked of the player that is launched and not of the route: a file this app
-    /// hands to FFmpeg is decoded by whatever FFmpeg is on the machine, and whether that is a
-    /// card or a core is the only thing this names (see `video_hw_accel_device`).
+    /// **It is mpv's switch and nobody else's**, which is what its own row says: what it reaches is
+    /// mpv's `--hwdec`, whose safe list and software fallback are the player's own, and it is read
+    /// where that player is launched rather than where the route is chosen. FFmpeg's player is never
+    /// given a device, and a machine with no mpv reads this as off whatever the file holds (see
+    /// `video_hw_accel_wanted`).
     pub video_hw_accel: bool,
     /// The curve a picture whose samples are light is brought into eight bits with — an
     /// EXR, a Radiance HDR, a float texture — as `hdr_tone_map` names it.
