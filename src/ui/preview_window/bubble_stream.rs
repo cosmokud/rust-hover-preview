@@ -301,12 +301,11 @@ fn start(wanted: Wanted) -> Stream {
 
     #[cfg(not(test))]
     {
-        // The device the film is already being decoded on, where the machine has one: the child is a
-        // second decode of the same film, and a card can do it twice as easily as a core can do it
-        // once. shortcut: a build that refuses the device for a pipe output cannot be told apart from
-        // one that cannot open the file, so both leave the bubble on its still.
-        let device = video_hw_accel_device();
-        let args = stream_args(&wanted.key.path, wanted.at, wanted.key.side, device);
+        // No `-hwaccel` on this child either: the flag is the same one that kills ffplay's own
+        // renderer, and a second decode of a film on a core costs the bubble a frame rate nobody
+        // looks at (see `video_hw_accel_wanted`). A pipe this cannot open is a bubble left on its
+        // still, which is the picture the bubble always has.
+        let args = stream_args(&wanted.key.path, wanted.at, wanted.key.side);
 
         let spawned = engine_processes::hidden_command("ffmpeg")
             .args(&args)
@@ -350,12 +349,8 @@ fn start(wanted: Wanted) -> Stream {
 /// The scale and the crop are the same pair every other bubble's picture is cut to (see
 /// `grab_video_frame`): the square the circle is inscribed in, filled rather than letterboxed, so
 /// that a bubble shows the middle of the film rather than a stripe across the middle of the circle.
-fn stream_args(path: &Path, at: f64, side: u32, device: Option<&str>) -> Vec<String> {
+fn stream_args(path: &Path, at: f64, side: u32) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
-    if let Some(device) = device {
-        args.push("-hwaccel".to_string());
-        args.push(device.to_string());
-    }
 
     args.extend(
         [
@@ -530,14 +525,13 @@ mod tests {
     use super::*;
 
     /// The command a stream is begun with: the film from the second the player is at, at the rate a
-    /// bubble is looked at, cut to the bubble's own square — and the device the film is already
-    /// decoded on where the machine has one.
+    /// bubble is looked at, cut to the bubble's own square.
     #[test]
     fn the_command_reads_the_film_from_the_second_the_player_is_at_cut_to_the_bubbles_square() {
         let film = PathBuf::from("a-film-a-bubble-shows-playing.mkv");
 
         assert_eq!(
-            stream_args(&film, 92.5, 44, None),
+            stream_args(&film, 92.5, 44),
             [
                 "-ss",
                 "92.500",
@@ -561,19 +555,6 @@ mod tests {
             .collect::<Vec<String>>(),
             "the command is the one the spec settles on, and every part of it is what makes a \
              second decode of a film cheap enough to sit behind a bubble"
-        );
-
-        // And the device first, where the machine has one: the child is a second decode of the film
-        // the player is already decoding, and a card can do that twice as easily as a core can do it
-        // once (see `video_hw_accel_device`).
-        let with_device = stream_args(&film, 0.0, 88, Some("d3d11va"));
-        assert_eq!(
-            with_device[..2],
-            ["-hwaccel".to_string(), "d3d11va".to_string()]
-        );
-        assert_eq!(
-            with_device.len(),
-            stream_args(&film, 0.0, 88, None).len() + 2
         );
     }
 

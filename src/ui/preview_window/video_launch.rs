@@ -12,9 +12,13 @@
 //!   begun at a second is not given a loop at all, and the rewind is this app's own (see
 //!   `loop_is_ours` and `rewind_due`).
 //!
-//! - Hardware acceleration. `-hwaccel` names a *device*, not a decoder, and FFmpeg falls back to
-//!   its own software decoding by itself when the device cannot take a stream — so the setting is
-//!   one name rather than a capability probe (see `hw_accel_device`).
+//! - Hardware acceleration, which is deliberately *not* among these arguments. `-hwaccel` names a
+//!   *device* rather than asking for a decoder, and ffplay brings up its Vulkan renderer the moment
+//!   the flag is present: measured here on FFmpeg 9.0.2, `dxva2`, `d3d11va`, `qsv` and `cuda` each
+//!   die of an access violation in the graphics driver with no picture at all, while the same
+//!   command without the flag plays the file through in software. So the switch is mpv's alone,
+//!   where the safe list and the software fallback are the player's own (see
+//!   `video_hw_accel_wanted`).
 //!
 //! - Subtitles. `-sst` is inert on this build: the subtitle stream is demuxed, no subtitle filter
 //!   is put in the graph, and nothing is drawn. The route that works is `-vf subtitles=<file>`, which
@@ -34,23 +38,7 @@
 //! external sidecar came up in 303ms against 300ms for the same file with no filter at all, and a
 //! 2160p HEVC MKV with its own embedded track came up in 346ms against 342ms — noise, at both sizes,
 //! and the same for the bare spelling as for the `filename=` one, which are byte-identical frames.
-//! Subtitles are a per-frame cost, not a per-start one. The thing that *is* on the way to a first
-//! window is `-hwaccel`, measured at +330ms on its own — and, on a machine whose probe finds a
-//! device that survives, fatal beside this filter: `-hwaccel dxva2` hands the graph `dxva2_vld`
-//! frames, `subtitles` is software-only, and the graph fails to build with `Impossible to convert
-//! between the formats supported by the filter 'Parsed_setsar_0' and the filter 'auto_scale_0'`.
-//! The player then exits without ever putting a window up, which is a spinner to `VIDEO_START_WAIT_SECS`
-//! and no picture at all — and which `-loglevel quiet` over a null stderr says nothing about (see
-//! `HWACCEL_DEVICES`, and the note on `video_playback::start_video_playback`).
-//!
-//! **That silence is the open item — propose-only, pending and not accepted.** The failure is
-//! unobservable where it happens: the launch is `-loglevel quiet` over a null stderr (the launch
-//! at `video_playback::start_video_playback`, a file another branch owns), so a dxva2 machine
-//! reads the fault as a spinner that times out and a frame that never comes, with nothing
-//! written to say why. The proposal, for whoever owns that launch: let the graph failure be
-//! heard — the player's stderr read through the window wait, or a device refused before the
-//! film is launched that cannot share a graph with `subtitles` at all — which is why it is
-//! written down here rather than fixed: the launch itself is that file's to make.
+//! Subtitles are a per-frame cost, not a per-start one.
 //!
 //! - The loop's rewind. FFmpeg's player has no key that goes to the beginning of a file, so a loop
 //!   this app gives cannot be given by posting one (see `rewind_launch`).
@@ -58,47 +46,6 @@
 use super::media_types::DerivedSubtitles;
 use super::subtitles_wanted;
 use std::path::{Path, PathBuf};
-
-/// The devices worth asking a video to decode on, in the order they are worth asking.
-///
-/// Ordered by what was measured on this machine rather than by what is fashionable, and every one
-/// of them was measured *on FFmpeg's player* rather than on `ffmpeg`, which is the distinction that
-/// matters and the one that is easy to get wrong: `ffmpeg` will happily decode through
-/// `-hwaccel d3d11va` and say `src: d3d11`, while `ffplay` cannot. `ffplay` takes `-hwaccel` only
-/// alongside its Vulkan renderer, which it switches on by itself and quietly when the option is
-/// present — so the flag meant to save a core is also the flag that changes how every frame reaches
-/// the screen, and on a machine whose Vulkan cannot do what this build asks of it that is an
-/// access violation rather than a slower film.
-///
-/// Measured on FFmpeg 9.0.2 here, playing a 2560x1440 HEVC file, with everything else the app
-/// passes:
-/// - no `-hwaccel` — plays the file through, software decoded, and is the answer that works.
-/// - `-hwaccel d3d11va` — dies of an access violation after four frames.
-/// - `-hwaccel auto` — draws no frames at all, having silently brought up the renderer for nothing.
-/// - `-hwaccel cuda` — draws no frames at all; there is no NVIDIA device to derive.
-/// - `-hwaccel dxva2` — the only name that reaches the picture, and not reliably: it survives on a
-///   plain launch and dies of the same access violation on the same file with the seek written after
-///   the input, which is the shape this app uses.
-///
-/// `dxva2` is first because it is both the one that worked and the one present on every Windows
-/// machine with a GPU driver at all; the rest are there for machines where it is not enough, and
-/// cost nothing on a machine that never reaches them. A name FFmpeg does not know is refused before
-/// it decodes a frame, so an unknown one in this list costs a probe and nothing else.
-pub const HWACCEL_DEVICES: [&str; 4] = ["dxva2", "d3d11va", "qsv", "cuda"];
-
-/// The devices a video is to be asked for, given what the setting says — and none at all for a
-/// setting that is off.
-///
-/// An empty list is a whole answer rather than a flag on the argument: `-hwaccel` is either there or
-/// it is not, and the walk that turns this list into one name is what decides whether anything is
-/// named (see `preview_window::probe_hwaccel_device`).
-pub fn hw_accel_candidates(enabled: bool) -> &'static [&'static str] {
-    if enabled {
-        &HWACCEL_DEVICES
-    } else {
-        &[]
-    }
-}
 
 /// The one binding an mpv video is given, which is the key this app already pauses a film with.
 ///
@@ -228,9 +175,9 @@ pub(super) fn mpv_args(
     args.push(format!("--geometry={width}x{height}+{x}+{y}"));
     args.push("--gpu-api=d3d11".to_string());
 
-    // mpv decodes on the card by its own safe list with its own fallback, so the switch is the
-    // whole of the answer here: the device the ffplay route has to measure is not a question mpv
-    // is asked (see `video_hw_accel_wanted`).
+    // mpv decodes on the card by its own safe list with its own software fallback, so the switch
+    // is the whole of the answer here: there is no device for this side to measure and none to
+    // name (see `video_hw_accel_wanted`, which is mpv's switch alone).
     args.push(if hw_accel {
         "--hwdec=auto".to_string()
     } else {
@@ -674,48 +621,6 @@ mod tests {
     /// one flag the mpv route has that FFmpeg's player has never been given.
     const IPC: &str = "test-pipe";
     const IPC_ARG: &str = r"--input-ipc-server=\\.\pipe\test-pipe";
-
-    /// A setting that is on asks for the devices worth trying, and one that is off asks for none.
-    #[test]
-    fn hardware_acceleration_asks_for_the_devices_worth_trying_and_only_when_it_is_on() {
-        assert_eq!(
-            hw_accel_candidates(true),
-            &HWACCEL_DEVICES,
-            "a setting that is on has to have somewhere to start: the device is measured rather \
-             than assumed, so this is a list to walk rather than one name to pass"
-        );
-        assert!(
-            hw_accel_candidates(false).is_empty(),
-            "a setting that is off must ask for no device at all, because `-hwaccel` is either \
-             there or it is not"
-        );
-    }
-
-    /// The list is ordered by what was measured to work, and `auto` is not on it.
-    ///
-    /// `auto` is the trap the ordering exists to avoid: measured, it silently brings up FFmpeg's
-    /// Vulkan renderer and draws no frames at all, having decoded nothing. A name that is *fatal*
-    /// is worse and is much harder to see, which is why the list is walked against a probe rather
-    /// than taken on faith — `d3d11va` dies of an access violation after four frames on the
-    /// machine this was written on.
-    #[test]
-    fn the_devices_are_ordered_by_what_worked_and_never_include_auto() {
-        assert_eq!(
-            HWACCEL_DEVICES[0], "dxva2",
-            "the name that reached a picture goes first, and it is also the one every Windows \
-             machine with a GPU driver has"
-        );
-        assert!(
-            !HWACCEL_DEVICES.contains(&"auto"),
-            "`-hwaccel auto` silently brings up the Vulkan renderer and draws nothing: the trap \
-             this ordering exists to avoid"
-        );
-        assert!(
-            HWACCEL_DEVICES.contains(&"d3d11va"),
-            "d3d11va stays in the list for the machines where it works, behind the names that are \
-             cheaper to be wrong about"
-        );
-    }
 
     /// A Windows path survives the filter that reads it, which is a statement about the escaping
     /// rather than about the filter: the drive letter is a colon, and the filter's own separator is

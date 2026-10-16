@@ -310,7 +310,6 @@ pub(crate) use subtitle_files::keep_extraction_for;
 pub(crate) use subtitle_files::trim_now as trim_subtitle_cache;
 pub(crate) use tick::preview_stall_ms;
 pub(crate) use tick::PREVIEW_SENDER;
-pub(crate) use video_hw::forget_video_hw_accel_answer;
 // What the tray's `Engine -> Select Engine -> Video` submenu reads: what the choice moving costs
 // the probe cache (see `set_video_engine`). Which engines this machine has is
 // `VideoEngine::installed`, asked of the setting itself.
