@@ -52,7 +52,10 @@ struct Wanted {
 /// A stream that is running: the child, the key it was begun for, and the newest frame it has
 /// landed.
 struct Running {
-    child: Child,
+    /// The decode writing the frames, or nothing for a stream a test build has stood in: the suite
+    /// starts no process, and what a test needs is a stream whose frames are coming (see
+    /// `stand_a_running_stream`).
+    child: Option<Child>,
     key: StreamKey,
     /// The newest frame, written by the reader thread and read by the bubble's paint.
     ///
@@ -64,12 +67,15 @@ struct Running {
 
 /// The stream as it stands.
 enum Stream {
-    /// A stream whose frames are coming. A test build never has one — every stream it is asked for is
-    /// answered with the ask and a refusal (see `start`) — so the variant is allowed to stand unbuilt
-    /// there rather than being folded away with `cfg`, which would take the branches that read one
-    /// out of the build the suite runs on.
-    #[cfg_attr(test, allow(dead_code))]
+    /// A stream whose frames are coming.
     Running(Running),
+    /// A stream whose film has *stopped*, and the frame it stopped on: the picture the bubble was
+    /// painting a moment ago, held so that a paused bubble shows the second the film was paused at
+    /// rather than the still the collapse grabbed (see `settle` and `latest_frame`).
+    Held {
+        key: StreamKey,
+        latest: Option<Vec<u8>>,
+    },
     /// A stream that was asked for and did not come: the key it was refused for, so that it is asked
     /// for once and not once a tick (see the module documentation).
     Refused(StreamKey),
@@ -79,11 +85,13 @@ enum Stream {
 static STREAM: Lazy<Mutex<Option<Stream>>> = Lazy::new(|| Mutex::new(None));
 
 /// The newest frame read out of the film, and the side it was cut to, or nothing while the bubble
-/// has no live picture: what the paint asks, and what it answers with the still when there is none.
+/// has no such picture: what the paint asks, and what it answers with the still when there is none.
 ///
-/// A frame nothing has replaced is not a live picture: a stream whose child has gone leaves nothing
-/// here rather than its last frame, or a bubble would show a film standing still as though it were
-/// playing (see `end` and `read_frames`).
+/// **The frame a film *stopped* on is this bubble's picture, and a frame nothing has replaced is
+/// not.** A stream whose child has gone leaves nothing here rather than its last frame, or a bubble
+/// would show a film that ran out as though it were still playing (see `end` and `read_frames`) —
+/// while a stream whose film was *paused* holds the frame it stopped on, which is where the picture
+/// is rather than what the collapse grabbed (see `Stream::Held`).
 pub(super) fn latest_frame() -> Option<(Vec<u8>, u32)> {
     // A frame stood in for the one a real child would have written, for the tests that are about what
     // a bubble paints rather than about the reading of it (see `stand_live_frame`).
@@ -93,12 +101,14 @@ pub(super) fn latest_frame() -> Option<(Vec<u8>, u32)> {
     }
 
     let stream = STREAM.lock().ok()?;
-    let Stream::Running(running) = stream.as_ref()? else {
-        return None;
-    };
-
-    let frame = running.latest.lock().ok()?.clone()?;
-    Some((frame, running.key.side))
+    match stream.as_ref()? {
+        Stream::Running(running) => {
+            let frame = running.latest.lock().ok()?.clone()?;
+            Some((frame, running.key.side))
+        }
+        Stream::Held { key, latest } => latest.clone().map(|frame| (frame, key.side)),
+        Stream::Refused(_) => None,
+    }
 }
 
 /// Make the stream the one the bubble needs, which is the whole of what a tick has to do about it.
@@ -111,6 +121,15 @@ pub(super) fn latest_frame() -> Option<(Vec<u8>, u32)> {
 /// `run_preview_window`).
 pub(super) fn settle(playing: bool, box_: Option<ScreenRegion>) {
     let wanted = box_.filter(|_| playing).and_then(wanted_stream);
+
+    // **A film that has *stopped* is a frame of its own**, and that is what separates the two ways a
+    // stream ends: a film the user paused — or one the player has stopped at its own end — is where
+    // the picture is, and the frame it stopped on is the one the bubble was painting a moment ago;
+    // a bubble showing the still instead would be showing the second the pin was collapsed at, which
+    // for a film watched for half an hour is half an hour behind the key the user pressed (see
+    // `Stream::Held`). A stream that is ending for any other reason — the film swapped under the
+    // bubble, the bubble gone, the player's window closed — keeps nothing.
+    let keep_a_stopped_films_frame = !playing && box_.is_some();
 
     let Ok(mut stream) = STREAM.lock() else {
         return;
@@ -134,14 +153,35 @@ pub(super) fn settle(playing: bool, box_: Option<ScreenRegion>) {
             end(running);
             return refuse(key);
         }
+        (Some(Stream::Held { key, .. }), Some(wanted)) if key == wanted.key => {
+            // A film going on again at the same point of the same player's run: the frame that has
+            // stopped is dropped rather than handed on, because a picture that has stopped is not a
+            // picture that is moving, and the read begins again below.
+        }
         (Some(Stream::Refused(key)), Some(wanted)) if key == wanted.key => {
             return hold(Stream::Refused(key));
         }
         (held, _) => {
-            // Everything else is over: a child that is still there is ended, and the frames it had
-            // landed are dropped so that the bubble paints its still again.
-            if let Some(Stream::Running(running)) = held {
+            // Everything else is over: a child that is still there is ended. Its newest frame is
+            // kept as the bubble's picture where the film has *stopped* on it — a child of this
+            // app's own that the pause above is about to end, of the film the pin is showing now —
+            // and dropped where it has not (see the note over `keep_a_stopped_films_frame`).
+            if let Some(Stream::Running(mut running)) = held {
+                let stopped = keep_a_stopped_films_frame
+                    && alive(&mut running)
+                    && the_film_the_pin_shows_is(&running.key.path);
+                let stopped_on = stopped
+                    .then(|| running.latest.lock().ok().and_then(|mut slot| slot.take()))
+                    .flatten();
+                let key = running.key.clone();
                 end(running);
+
+                if let Some(frame) = stopped_on {
+                    return hold(Stream::Held {
+                        key,
+                        latest: Some(frame),
+                    });
+                }
             }
         }
     }
@@ -189,10 +229,26 @@ fn wanted_stream(box_: ScreenRegion) -> Option<Wanted> {
     })
 }
 
-/// Whether a stream's child is still running: what tells a stream that is a picture from one whose
-/// decodes have stopped coming.
+/// Whether a stream's decodes are still coming: what tells a stream that is a picture from one
+/// whose decodes have stopped.
+///
+/// A stream a test build has stood in has no child behind it and is one whose frames are coming
+/// (see `Running::child`).
 fn alive(running: &mut Running) -> bool {
-    matches!(running.child.try_wait(), Ok(None))
+    match running.child.as_mut() {
+        Some(child) => matches!(child.try_wait(), Ok(None)),
+        None => true,
+    }
+}
+
+/// Whether the film a stream was reading is the film the pin is showing *now*: what says a frame
+/// read beside a player may stand as this bubble's picture at all.
+///
+/// It is asked of the *file*, because the file is what changes under a bubble: a walk landing on
+/// another film behind a collapsed pin is a bubble that must not be left showing a frame of the one
+/// before it (see `settle`).
+fn the_film_the_pin_shows_is(path: &Path) -> bool {
+    pinned_media_owner().is_some_and(|(pinned, _)| pinned.as_path() == path)
 }
 
 /// Begin a stream, and answer what is running — which is a refusal where the command did not start
@@ -241,7 +297,7 @@ fn start(wanted: Wanted) -> Stream {
         std::thread::spawn(move || read_frames(stdout, side, reader));
 
         Stream::Running(Running {
-            child,
+            child: Some(child),
             key: wanted.key,
             latest,
         })
@@ -336,8 +392,10 @@ fn read_frames(stdout: ChildStdout, side: u32, latest: Arc<Mutex<Option<Vec<u8>>
 /// End a stream: the child is killed and waited for, because a handle dropped is not a process
 /// ended, and the frames it had landed are dropped with it (see `latest_frame`).
 fn end(mut running: Running) {
-    let _ = running.child.kill();
-    let _ = running.child.wait();
+    if let Some(mut child) = running.child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 
     if let Ok(mut slot) = running.latest.lock() {
         *slot = None;
@@ -385,6 +443,31 @@ pub(super) fn stand_no_stream() {
     }
     take_noted_streams();
     stand_live_frame(None);
+}
+
+/// Stand a stream in as one whose frames are coming, with one of them landed: what a test needs to
+/// ask what a bubble does when a stream *stops*, since a test build starts no process and so never
+/// has one of its own (see `start`).
+///
+/// The key is the caller's, and it is the whole of what makes the stood-in stream the film a tick
+/// is looking for: `started` is the instant the pin's own transport was begun at, so a test can
+/// stand in the very stream a tick would have wanted (see `StreamKey`).
+#[cfg(test)]
+pub(super) fn stand_a_running_stream(path: PathBuf, started: Instant, side: u32, frame: Vec<u8>) {
+    if let Ok(mut slot) = STREAM.lock() {
+        if let Some(Stream::Running(running)) = slot.take() {
+            end(running);
+        }
+        *slot = Some(Stream::Running(Running {
+            child: None,
+            key: StreamKey {
+                path,
+                started,
+                side,
+            },
+            latest: Arc::new(Mutex::new(Some(frame))),
+        }));
+    }
 }
 
 /// Stand frames in for the ones a real child would have written, for the tests that are about what a
@@ -561,6 +644,122 @@ mod tests {
         assert!(
             take_noted_streams().is_empty(),
             "a still is not read beside anything"
+        );
+
+        stand_no_stream();
+        stand_pin(previous_pin);
+        stand_video_engine_in(None);
+        stand_mpv_in(None);
+        stand_ffplay_in(None);
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = previous_media;
+        }
+    }
+
+    /// **A film that has stopped keeps the frame it stopped on.** The picture a paused bubble shows
+    /// is the one it was painting a moment ago, not the still the collapse grabbed: a film watched
+    /// for half an hour and then paused is half an hour past the frame that still was taken from, and
+    /// what a hand that pressed the key is looking at is where the film stopped (see `Stream::Held`).
+    ///
+    /// The three ways out of that rule are here beside it, because each of them is a way for the
+    /// answer to be nothing: a film that is *playing* again is read again rather than left standing
+    /// at the frame it stopped on, another film under the bubble is not left showing this one's
+    /// frame, and a bubble that is not on screen is owed no picture at all.
+    #[test]
+    fn a_film_paused_while_collapsed_is_left_on_the_frame_it_stopped_on() {
+        let _one = PIN_TESTS_ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let previous_pin = take_pin_for_a_test();
+        stand_no_stream();
+        stand_ffplay_in(Some(true));
+        stand_mpv_in(Some(false));
+        stand_video_engine_in(Some((VideoEngine::Ffmpeg, true)));
+
+        let film = PathBuf::from("a-film-a-bubble-shows-playing.mkv");
+        let mut pin = PinnedPreview {
+            bound: Some(64),
+            content: (100, 100, 164, 164),
+            chrome: PinChrome::always(),
+            ..PinnedPreview::for_test()
+        };
+        pin.path = film.clone();
+        pin.transport.begun(30.0, true, false);
+        stand_pin(Some(pin));
+
+        let mut media = create_loading_media(320, 240);
+        media.media_type = MediaType::Video;
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(media);
+        }
+
+        // The stream this tick *would* want, stood in with a frame that has just landed: the instant
+        // the pin's own player was begun at is what makes these two the same stream (see
+        // `stand_a_running_stream`).
+        let box_ = (300, 300, 364, 364);
+        let side = bubble_side(box_);
+        let started = pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.transport.started))
+            .flatten()
+            .expect("the pin's player was begun")
+            .0;
+        let frame = vec![0x5a; side as usize * side as usize * 4];
+        stand_a_running_stream(film.clone(), started, side, frame.clone());
+
+        // While the film is playing the stream is the one wanted, and a stream that is already there
+        // is not begun again.
+        settle(true, Some(box_));
+        assert_eq!(latest_frame(), Some((frame.clone(), side)));
+        assert!(
+            take_noted_streams().is_empty(),
+            "a stream that is already the one wanted is left exactly as it is"
+        );
+
+        // And the pause, which is what this test is: the bubble is still standing where it was, and
+        // the film is not playing — so the frame it stopped on is what the bubble shows.
+        settle(false, Some(box_));
+        assert_eq!(
+            latest_frame(),
+            Some((frame.clone(), side)),
+            "a paused film's bubble shows the frame the film was at, not the still the collapse \
+             grabbed half an hour before it"
+        );
+
+        // The film going on again: a decode begun again rather than the frame left standing, because
+        // a picture that has stopped is not a picture that is moving.
+        settle(true, Some(box_));
+        assert_eq!(
+            take_noted_streams().len(),
+            1,
+            "a paused film let go of is read again, from the second it is let go at"
+        );
+        assert!(
+            latest_frame().is_none(),
+            "and the held frame goes with the pause: what is playing is a stream, not a still"
+        );
+
+        // Another film under the bubble is not shown this one's frame, which is the rule a walk
+        // landing on a file behind a collapsed pin is answered by.
+        stand_a_running_stream(
+            PathBuf::from("another-film.mkv"),
+            started,
+            side,
+            frame.clone(),
+        );
+        settle(false, Some(box_));
+        assert!(
+            latest_frame().is_none(),
+            "a frame read beside another film is not this bubble's picture"
+        );
+
+        // And a bubble that is not on screen — one put away into the taskbar — is owed no picture at
+        // all, so nothing is kept for it.
+        stand_a_running_stream(film, started, side, frame);
+        settle(false, None);
+        assert!(
+            latest_frame().is_none(),
+            "a circle nobody is looking at keeps no frame"
         );
 
         stand_no_stream();
