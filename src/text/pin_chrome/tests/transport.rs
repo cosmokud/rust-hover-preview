@@ -421,3 +421,135 @@ fn a_bar_with_no_controls_has_none_to_press() {
         Some(TransportPart::Play)
     );
 }
+
+/// The play mark and the two step marks are the marks a bar draws with an edge that runs across
+/// the pixel grid: the pixels their slanted edges cross are some of the ink and some of what is
+/// behind it, and a painter that gives each of them the one or the other is a staircase — which
+/// is the one thing a triangle nine pixels across is good at showing (see `draw_play_glyph` and
+/// `draw_track_step`).
+#[test]
+fn the_marks_with_a_slanted_edge_carry_a_share_of_the_ink() {
+    const W: i32 = 32;
+    const H: i32 = 24;
+    // The ink is black and the button under it is white, so the byte a pixel keeps says which
+    // share of the mark is in it: 0 is all of it, 255 is none of it, and a share is neither.
+    let ink = [0u8, 0, 0];
+
+    let mut play = vec![255u8; (W * H * 4) as usize];
+    draw_play_glyph(&mut play, W, 16, 12, 9, ink);
+    let mut on = vec![255u8; (W * H * 4) as usize];
+    draw_track_step(&mut on, W, 16, 12, 14, ink, true);
+    let mut back = vec![255u8; (W * H * 4) as usize];
+    draw_track_step(&mut back, W, 16, 12, 14, ink, false);
+
+    for (name, buffer) in [("play", play), ("the on step", on), ("the back step", back)] {
+        let partial = buffer
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[0] > 0 && pixel[0] < 255)
+            .count();
+
+        assert!(
+            partial > 10,
+            "{name} carries part of the ink in {partial} pixels only: a pixel an edge crosses \
+             holds the area of the mark that is in it"
+        );
+    }
+}
+
+/// The four marks a bar's own button and a card's row carry — a play, a pause, a step each way —
+/// at both scales, on the bar's own colour: the design under review.
+///
+/// A row of marks is judged as a row: the play mark is read against the pause mark it alternates
+/// with and against the two steps beside it, and those three are the ones with an edge that runs
+/// across the pixel grid (see `draw_play_glyph`, `draw_track_step`). One of them drawn a whole
+/// column at a time, or drawn a size that is not its own, is what a row shows and a test on the
+/// ink of one mark at a time cannot.
+#[test]
+fn draws_the_marks_of_a_bar() {
+    let dir = scratch("transport-marks");
+    // The strip's own colour and ink, as a dark theme's are: the marks are the theme's foreground
+    // on the strip the bar paints (`paint_transport`).
+    let background = [24u8, 26, 32];
+    let ink = [240u8, 240, 240];
+
+    for (dpi, tag) in [(96u32, "96dpi"), (192u32, "192dpi")] {
+        let scale = dpi as f32 / 96.0;
+        // The room the bar gives a button, which is the size the marks are measured in: a mark
+        // drawn at a size of its own would be a mark that moves beside the ones here. The strip is
+        // the one the bar is given at this scale, so that the marks hold the room they hold on the
+        // bar rather than all of it.
+        let side = {
+            let layout = transport_layout(
+                text_paint::scaled(600, scale),
+                text_paint::scaled(30, scale),
+                dpi,
+                true,
+            );
+            layout.play.bottom - layout.play.top
+        };
+
+        let marks = ["play", "pause", "back", "on"];
+        let width = side * marks.len() as i32;
+        let mut strip = vec![0u8; (width * side * 4) as usize];
+        for pixel in strip.as_chunks_mut::<4>().0 {
+            pixel[0] = background[2];
+            pixel[1] = background[1];
+            pixel[2] = background[0];
+            pixel[3] = 255;
+        }
+
+        for (cell, mark) in marks.into_iter().enumerate() {
+            let center = cell as i32 * side + side / 2;
+            let middle = side / 2;
+            match mark {
+                "play" => draw_play_glyph(
+                    &mut strip,
+                    width,
+                    center,
+                    middle,
+                    size_in(scale, side, 9),
+                    ink,
+                ),
+                "pause" => draw_pause_glyph(
+                    &mut strip,
+                    width,
+                    center,
+                    middle,
+                    size_in(scale, side, 9),
+                    ink,
+                ),
+                "back" => draw_track_step(
+                    &mut strip,
+                    width,
+                    center,
+                    middle,
+                    size_in(scale, side, 12),
+                    ink,
+                    false,
+                ),
+                _ => draw_track_step(
+                    &mut strip,
+                    width,
+                    center,
+                    middle,
+                    size_in(scale, side, 12),
+                    ink,
+                    true,
+                ),
+            }
+        }
+
+        let path = dir.join(format!("marks-{tag}.png"));
+        write_png(path.clone(), &strip, width as u32, side as u32);
+        println!("{}", path.display());
+
+        if dpi == 96 {
+            let (large, wide, tall) = zoom(&strip, width as u32, side as u32, 4);
+            let path = dir.join(format!("marks-{tag}-x4.png"));
+            write_png(path.clone(), &large, wide, tall);
+            println!("{}", path.display());
+        }
+    }
+}

@@ -14,8 +14,8 @@
 //! (`paint_failure_mark`).
 
 use super::primitives::{
-    caption_style, draw_cross, fill_box, fill_disc, fill_round_rect, put, stroke_round_rect,
-    surface_pixels, ChromePalette,
+    caption_style, draw_cross, fill_box, fill_disc, fill_round_rect, fill_triangle, put,
+    stroke_round_rect, surface_pixels, ChromePalette,
 };
 use crate::text::text_paint::{self, DibSurface};
 use windows::Win32::Foundation::RECT;
@@ -363,61 +363,65 @@ pub(crate) fn paint_bubble(
         }
     }
 
+    let inner = radius - ring_thickness;
+
     for y in 0..height {
         for x in 0..width {
             let dx = x as f32 + 0.5 - center.0;
             let dy = y as f32 + 0.5 - center.1;
             let distance = (dx * dx + dy * dy).sqrt();
+
+            // The circle is asked twice - how much of this pixel the bubble covers at all, and
+            // how much of it the face inside the ring covers - and the ring is what is left
+            // between the two answers, the way a panel's outline is one rounded rectangle taken
+            // off a smaller one (`stroke_round_rect`). Each answer is a ramp a pixel wide and not
+            // a step, which is the whole of the difference between a curve and a staircase.
             let coverage = (radius - distance + 0.5).clamp(0.0, 1.0);
             if coverage <= 0.0 {
                 continue;
             }
+            let face_coverage = (inner - distance + 0.5).clamp(0.0, 1.0);
 
             // The picture inside the bubble, clipped to the circle the ring leaves: what a
-            // pinned preview looks like from outside the window it collapsed out of.
-            let inner = radius - ring_thickness;
+            // pinned preview looks like from outside the window it collapsed out of. The point
+            // asked for is the face's own square, which is what that circle holds of the picture.
             let sample = match &art {
                 BubbleArt::Picture {
                     pixels,
                     width: picture_width,
                     height: picture_height,
-                } if distance <= inner && *picture_width > 0 && *picture_height > 0 => {
+                } if face_coverage > 0.0 => {
                     let u = ((x as f32 + 0.5 - center.0) / (inner * 2.0) + 0.5).clamp(0.0, 0.999);
                     let v = ((y as f32 + 0.5 - center.1) / (inner * 2.0) + 0.5).clamp(0.0, 0.999);
-                    let sx = (u * *picture_width as f32) as u32;
-                    let sy = (v * *picture_height as f32) as u32;
-                    let index = (sy as usize * *picture_width as usize + sx as usize) * 4;
-
-                    // A pixel the picture does not cover is not a pixel of the picture: what is
-                    // behind the bubble is the desktop, so a hole in the frame has to be the face
-                    // rather than a hole in the circle, and the face is what the fall-through
-                    // below writes.
-                    pixels
-                        .get(index..index + 4)
-                        .filter(|pixel| pixel[3] != 0)
-                        .map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+                    sample_picture(pixels, *picture_width, *picture_height, u, v)
                 }
                 _ => None,
             };
 
-            if let Some(sample) = sample {
-                put(
-                    buffer,
-                    width,
-                    x,
-                    y,
-                    [sample[0], sample[1], sample[2]],
-                    coverage * (sample[3] as f32 / 255.0),
-                );
-                continue;
-            }
-
-            // The ring, and the face inside it where no picture stands in for one.
-            if distance > inner {
-                put(buffer, width, x, y, ring, coverage);
+            // What the pixel is made of: the face where the bubble carries no picture, the
+            // picture where it carries one, and the ring in the share of the pixel the face does
+            // not cover. The three are mixed into one colour before it is written rather than
+            // drawn over one another: two partial coverages written one after the other are a
+            // pixel that covers less than their sum, and the desktop shows through the seam
+            // between a ring and the face inside it.
+            let inside = sample.map_or(palette.background, |sample| {
+                [sample[0], sample[1], sample[2]]
+            });
+            let share = face_coverage / coverage;
+            let colour = if share >= 1.0 {
+                inside
             } else {
-                put(buffer, width, x, y, palette.background, coverage);
-            }
+                text_paint::blend(ring, inside, share)
+            };
+
+            put(
+                buffer,
+                width,
+                x,
+                y,
+                colour,
+                coverage * sample.map_or(1.0, |sample| sample[3] as f32 / 255.0),
+            );
         }
     }
 
@@ -469,6 +473,69 @@ pub(crate) fn paint_bubble(
             mark,
         );
     }
+}
+
+/// The pixel of a picture that a pixel of a bubble shows: the point asked for, read out of the
+/// four pixels of the picture it falls among.
+///
+/// Bilinear rather than nearest, and that is the whole of it: the square of picture a bubble is
+/// given is a little wider than the round face it is put in, so nearly every pixel of the face
+/// asks for a point *between* four pixels of the picture — and the one nearest that point is what
+/// makes a picture look aliased the moment it is shown at a size that is not its own. A picture
+/// of a pixel-wide pattern sampled that way is static; averaged this way it is a picture.
+///
+/// **The four are averaged in the picture's own premultiplication and not after it.** A pixel
+/// beside a hole in a cut-out picture carries no colour of its own — usually a black — and a plain
+/// average of the four would pull the edge of the cut towards that black. Each is counted for what
+/// it covers, which is the same rule `average_color` skips a transparent pixel by.
+///
+/// A point with no picture on it at all answers nothing, which the caller reads as *no picture
+/// here* and answers with the face: what is behind the bubble is the desktop, so a hole in the
+/// frame has to be the face rather than a hole in the circle.
+fn sample_picture(pixels: &[u8], width: u32, height: u32, u: f32, v: f32) -> Option<[u8; 4]> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    // The point in the picture's own pixels, a pixel of the picture being asked for by its middle
+    // the way a pixel of the bubble is (see `paint_bubble`).
+    let x = (u * width as f32 - 0.5).max(0.0);
+    let y = (v * height as f32 - 0.5).max(0.0);
+    let across = x - x.floor();
+    let down = y - y.floor();
+    let left = x.floor() as u32;
+    let top = y.floor() as u32;
+    let right = (left + 1).min(width - 1);
+    let bottom = (top + 1).min(height - 1);
+
+    let mut share = 0.0;
+    let mut sum = [0.0f32; 3];
+    for (column, row, corner) in [
+        (left, top, (1.0 - across) * (1.0 - down)),
+        (right, top, across * (1.0 - down)),
+        (left, bottom, (1.0 - across) * down),
+        (right, bottom, across * down),
+    ] {
+        let index = (row as usize * width as usize + column as usize) * 4;
+        let Some(pixel) = pixels.get(index..index + 4) else {
+            continue;
+        };
+
+        let coverage = pixel[3] as f32 / 255.0 * corner;
+        sum[0] += pixel[2] as f32 * coverage;
+        sum[1] += pixel[1] as f32 * coverage;
+        sum[2] += pixel[0] as f32 * coverage;
+        share += coverage;
+    }
+
+    (share > 0.0).then(|| {
+        [
+            (sum[0] / share).round() as u8,
+            (sum[1] / share).round() as u8,
+            (sum[2] / share).round() as u8,
+            (share.min(1.0) * 255.0).round() as u8,
+        ]
+    })
 }
 
 /// The mean colour of a picture, sampled rather than walked whole.
@@ -603,35 +670,21 @@ fn paint_mark(
     let size = (inner * 0.62).max(4.0);
     match mark {
         BubbleMark::Play => {
-            // A triangle pointing right, drawn as a scan of half-widths: the widest at the
-            // left edge, narrowing to the point.
-            let left = center.0 - size * 0.32;
-            let right = center.0 + size * 0.52;
-            let half = size * 0.5;
-            let steps = (right - left).max(1.0) as i32;
-            for step in 0..=steps {
-                let x = left + step as f32;
-                let share = 1.0 - (step as f32 / steps as f32);
-                let bar = half * share;
-                for y in 0..=(bar.ceil() as i32) {
-                    put(
-                        buffer,
-                        width,
-                        x as i32,
-                        (center.1 - y as f32) as i32,
-                        foreground,
-                        MARK_OPACITY,
-                    );
-                    put(
-                        buffer,
-                        width,
-                        x as i32,
-                        (center.1 + y as f32) as i32,
-                        foreground,
-                        MARK_OPACITY,
-                    );
-                }
-            }
+            // A triangle pointing right, drawn by its three edges the way a disc is drawn by its
+            // own (see `fill_disc`) rather than scanned column by column: a play mark fifteen
+            // pixels across is nothing but a slanted edge, and a scan of whole columns leaves it
+            // the staircase that a triangle is exactly the shape to show.
+            fill_triangle(
+                buffer,
+                width,
+                [
+                    (center.0 - size * 0.32, center.1 - size * 0.5),
+                    (center.0 - size * 0.32, center.1 + size * 0.5),
+                    (center.0 + size * 0.52, center.1),
+                ],
+                foreground,
+                MARK_OPACITY,
+            );
         }
         BubbleMark::Pause => {
             // Two bars: the same mark a player's own pause button is, and the answer to the same
