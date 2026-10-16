@@ -636,52 +636,6 @@ fn a_wheel_that_reports_less_than_a_notch_at_a_time_is_counted_by_the_unit() {
     );
 }
 
-/// A zoom is a *travel* and not a jump, and the whole of what makes it one is that it closes on the size
-/// the wheel asked for: every frame brings the picture nearer to it, no frame takes it past it, and the
-/// frames stop once it is there.
-///
-/// The frames are asked for at the loop's own cadence, sixteen milliseconds apart, because that is the
-/// cadence a travel is taken at — and what is asserted is the shape of the whole travel rather than any
-/// one frame of it, since that is the difference between this and the two things it is not: a curve of a
-/// fixed length, which cannot take a second notch in the middle of its own travel, and a chase that
-/// closes a fixed share of the distance each frame, which arrives at a rate that depends on how many
-/// frames a second the machine happens to run at.
-#[test]
-fn a_travel_closes_on_the_size_the_wheel_asked_for_and_never_passes_it() {
-    let (from, toward) = (400.0f32, 440.0f32);
-    let (mut drawn, mut velocity) = (from, 0.0f32);
-    let mut frames = 0;
-
-    loop {
-        let (next, next_velocity) = pin_zoom_spring(drawn, toward, velocity, 0.016);
-        assert!(
-            next >= drawn && next <= toward,
-            "frame {frames} took the picture from {drawn} to {next}, and a zoom may only travel the way it was asked to"
-        );
-
-        drawn = next;
-        velocity = next_velocity;
-        frames += 1;
-
-        if drawn == toward {
-            break;
-        }
-        assert!(
-            frames < 120,
-            "a travel of two seconds is not a travel: {drawn} of {toward}"
-        );
-    }
-
-    assert!(
-        frames > 3,
-        "a step is a travel of some frames and not a jump: {frames}"
-    );
-    assert_eq!(
-        velocity, 0.0,
-        "and it arrives at rest rather than at a speed"
-    );
-}
-
 /// A notch taken while the last one is still travelling is counted from the size the wheel *asked for*
 /// and not from the size the picture happens to be passing — which is the whole of what makes a fast
 /// wheel and a slow one land in the same place, and what makes a notch in and a notch out leave the
@@ -726,6 +680,107 @@ fn a_notch_taken_mid_travel_is_counted_from_the_size_the_wheel_asked_for() {
     );
 }
 
+/// A wheel's ask is *released* over the frames that follow the notch rather than landing at once: a
+/// notch landed whole is a jump, and what a hand turning a wheel is looking at is a movement — and one
+/// that goes on after the hand has stopped, which is what is left of the ask when the last notch has
+/// been turned.
+///
+/// What is asserted is the curve in *seconds*: nine tenths of the ask within a tenth of a second, no
+/// frame past the ask, and the same release whatever the frames it was taken in. The last of those is
+/// the whole of what a share of the remainder buys and a share of the ask would not (see
+/// `pin_zoom_release`).
+#[test]
+fn a_wheels_ask_is_released_over_the_frames_that_follow_it() {
+    let (from, toward) = (1000.0f32, 1100.0f32);
+    let of_the_ask = |released: f32| (released - from) / (toward - from);
+
+    // Fourteen frames of seven milliseconds is not yet a tenth of a second's worth of release, and the
+    // frame that crosses it is nine tenths of the ask.
+    let mut released = from;
+    for _ in 0..14 {
+        released = pin_zoom_release(released, toward, 0.007);
+        assert!(
+            released >= from && released <= toward,
+            "a release may only travel the way it was asked to: {released}"
+        );
+    }
+    assert!(
+        of_the_ask(released) < 0.9,
+        "a tenth of a second is where nine tenths of the ask lands, and this is not there yet: {}",
+        of_the_ask(released)
+    );
+
+    released = pin_zoom_release(released, toward, 0.007);
+    assert!(
+        of_the_ask(released) >= 0.9,
+        "and the frame past it is: {}",
+        of_the_ask(released)
+    );
+
+    // The same curve in whatever frames it is taken: two frames of half the length are one frame of the
+    // whole, which is what a machine running at twice the frame rate has to come out at.
+    let once = pin_zoom_release(from, toward, 0.016);
+    let twice = pin_zoom_release(pin_zoom_release(from, toward, 0.008), toward, 0.008);
+    assert!(
+        (once - twice).abs() < 0.001,
+        "a machine that takes its frames twice as often takes the same release: {once} against {twice}"
+    );
+
+    // And the travel is a travel of *some* frames rather than a jump: a frame of the loop's own cadence
+    // brings the picture nearer to the ask, and the frames stop once it is there.
+    let mut frames = 0;
+    let mut released = from;
+    while released != toward {
+        released = pin_zoom_release(released, toward, 0.016);
+        frames += 1;
+        assert!(frames < 120, "a travel of two seconds is not a travel: {released}");
+    }
+    assert!(
+        frames > 3,
+        "a step is a travel of some frames and not a jump: {frames}"
+    );
+
+    // And a release that has all but arrived *has* arrived, or the loop would keep the frame cadence for
+    // a hundredth of a pixel for the rest of the pin's life.
+    assert_eq!(pin_zoom_release(toward - 0.1, toward, 0.007), toward);
+}
+
+/// A frame of a travel is the wheel's ask *released* and not the ask itself: a notch's own tenth of a
+/// picture is carried out over the frames that follow it, which is what leaves the picture still moving
+/// after the hand has stopped (see `pin_zoom_release`).
+#[test]
+fn a_frame_of_a_travel_is_the_wheels_ask_released_and_not_the_ask_itself() {
+    let window = (0, 0, 1000, 800);
+    let settled = PinZoom::filling(window);
+    let toward = settled.drawn.0 * PIN_ZOOM_PER_NOTCH;
+    let asking = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some((500, 400)),
+    };
+
+    let step = pin_zoom_step(
+        &asking(PinZoom {
+            toward,
+            ..settled
+        }),
+        0.007,
+        &display(),
+    )
+    .expect("a picture on its way to a size is a frame to take");
+
+    // A frame of seven milliseconds releases 1 - 0.1^0.07 of what is left of the ask — 14.89 pixels of
+    // this notch's hundred, which is where the picture is drawn.
+    assert!(
+        (step.zoom.drawn.0 - 1014.89).abs() < 0.05,
+        "a frame releases a seventh of what is left of the ask: {} of 1014.89",
+        step.zoom.drawn.0
+    );
+    assert_eq!(step.zoom.toward, toward, "the ask is where the wheel put it");
+}
+
 /// A travel of a picture the window has stopped growing for leaves the window exactly where it is and
 /// carries the picture inside it — which is the whole of what a zoom past the cap is, taken a frame at a
 /// time rather than in one step.
@@ -766,7 +821,7 @@ fn a_travel_past_the_cap_leaves_the_window_where_it_is() {
         step.zoom.drawn.0
     );
     assert_eq!(step.zoom.toward, toward, "aimed where the wheel asked");
-    assert_ne!(step.zoom.velocity, 0.0, "and still moving");
+    assert!(step.zoom.drawn.0 < toward, "and still moving");
 
     assert!(
         pin_zoom_step(&asking(cap.zoom), 0.016, &display()).is_none(),

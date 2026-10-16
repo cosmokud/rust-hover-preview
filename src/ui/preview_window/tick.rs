@@ -455,7 +455,7 @@ pub(super) fn compositor_paced_the_tick(flushed: bool, took: Duration) -> bool {
 /// whichever comes first.
 ///
 /// It is what paces a wheel zoom's travel, and the whole of why it exists is what a *sleep* is not:
-/// a travel is a spring, and a spring's frames are worth taking as often as the display can show
+/// a travel is a movement, and a movement's frames are worth taking as often as the display can show
 /// them. The loop's own wait is `FRAME_WAIT_MS`, which is 62 frames a second even when it comes back
 /// exactly when it is asked to — and it does not: a timeout is rounded up to the system timer's own
 /// tick, which is 15.6 ms unless something in the process asks for it otherwise, so a wait of 16 ms
@@ -464,7 +464,7 @@ pub(super) fn compositor_paced_the_tick(flushed: bool, took: Duration) -> bool {
 ///
 /// Nothing about the *clock* a travel is measured by changes: the frame is still however long the
 /// last tick took, and it is now the display's period rather than a timer's. A tick that took longer
-/// than a frame is clamped by the spring itself (see `PIN_ZOOM_LONGEST_FRAME`), so a compositor that
+/// than a frame is clamped by the release itself (see `PIN_ZOOM_LONGEST_FRAME`), so a compositor that
 /// stalls drops a frame rather than putting a jump in the travel.
 ///
 /// The channel is polled after the flush rather than blocked on, for the reason the same poll is in
