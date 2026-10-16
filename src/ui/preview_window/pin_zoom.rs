@@ -533,24 +533,30 @@ fn pin_zoom_inputs() -> Option<PinZoomInputs> {
 /// Whether a pinned picture's travel is still going, which is what the loop keeps the frame cadence
 /// for: a spring takes its frames at the frame cadence or it is not a spring (see
 /// `wait_before_the_next_tick`).
+///
+/// What it asks is `pin_zoom_inputs` and not the pin alone, so that a travel the loop could not take
+/// a frame of is not a travel it keeps the cadence for: a pin with a drag under its hand is a pin the
+/// wheel has given over to the hand (see `PinZoom::toward`), and a loop waking sixty times a second
+/// for one is a loop waking for nothing.
 pub(super) fn pin_zoom_in_flight() -> bool {
-    pin_state()
-        .and_then(|pinned| pinned.pin().and_then(|pin| pin.zoom))
-        .is_some_and(|zoom| zoom.travelling())
+    pin_zoom_inputs().is_some_and(|input| input.zoom.travelling())
 }
 
-/// The box a pinned picture is drawn in, in whole pixels — or nothing where there is no picture the
-/// wheel zooms.
+/// The box a pinned picture is drawn in when it is *larger than its window* — or nothing where there
+/// is no picture the wheel zooms, and nothing where the picture is the size of its window.
 ///
-/// It is what the loop asks for when a travel has ended: a picture drawn larger than its window is a
-/// frame the window is holding stretched, and the file itself is what it is owed (see
-/// `relayout_pinned_media`).
-pub(super) fn pin_zoom_drawn_box() -> Option<ScreenRegion> {
+/// It is what the loop asks for when the wheel has stopped: a picture drawn larger than its window is
+/// a frame the window is holding scaled up, and the file itself is what it is owed. A picture that
+/// fills its window is the whole of that question already — there is nothing a decode of another size
+/// could add to it — so the box is nothing for one, and the loop asks nothing of the file for every pin
+/// of every picture that has never been zoomed (see `relayout_pinned_media`).
+pub(super) fn pin_zoom_oversize_box() -> Option<ScreenRegion> {
     let pinned = pin_state()?;
     let pin = pinned.pin()?;
-    let (width, height) = pin.zoom?.drawn_size();
+    let (drawn_width, drawn_height) = pin.zoom?.drawn_size();
+    let (width, height) = region_size(pin.content);
 
-    Some((0, 0, width, height))
+    (drawn_width > width || drawn_height > height).then_some((0, 0, drawn_width, drawn_height))
 }
 
 /// Aim a pinned picture at the size a wheel's notches ask for, from the hook's own count.

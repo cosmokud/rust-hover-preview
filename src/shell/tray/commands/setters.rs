@@ -26,7 +26,7 @@ use super::super::ids::{
 };
 use super::super::submenus::{
     afk_timer_secs_at, audio_scale_at, background_at, dds_background_at, document_scale_at,
-    engine_idle_at, end_of_file_at, html_background_at,
+    engine_idle_at, end_of_file_at, html_background_at, zoom_background_at,
 };
 
 use crate::app::dialogs;
@@ -75,6 +75,23 @@ pub(in super::super) fn set_image_background(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.image_background = background;
+        config.save();
+    }
+    refresh_preview();
+}
+
+/// The band beside a picture the wheel has taken past its window, which is filled by a
+/// backdrop of the window's rather than of the file's.
+///
+/// The frame is composited by this app the way a picture's own backdrop is, so the preview
+/// on screen is given its frame again rather than left holding the one it has.
+pub(in super::super) fn set_zoom_background(index: u16) {
+    let Some(background) = zoom_background_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.zoom_background = background;
         config.save();
     }
     refresh_preview();

@@ -215,6 +215,72 @@ fn a_frame_bigger_than_its_band_is_drawn_at_the_size_it_is_drawn_at() {
     }
 }
 
+/// The two backdrops a pinned picture's band can be filled with, stood where a test wants them and put
+/// back when the guard is dropped — the house pattern for a setting a test has to move (see
+/// `PausePreviewSettings`).
+///
+/// Both are stood together because the test's whole claim is that the *right one of the two* is read: a
+/// test that moved one of them would pass with the branch missing entirely.
+struct BandBackdrops {
+    image: TransparentBackground,
+    zoom: TransparentBackground,
+}
+
+impl BandBackdrops {
+    fn stood_at(image: TransparentBackground, zoom: TransparentBackground) -> Self {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = BandBackdrops {
+            image: config.image_background,
+            zoom: config.zoom_background,
+        };
+        config.image_background = image;
+        config.zoom_background = zoom;
+
+        was
+    }
+}
+
+impl Drop for BandBackdrops {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.image_background = self.image;
+            config.zoom_background = self.zoom;
+        }
+    }
+}
+
+/// The band beside a picture the wheel has taken past its window is filled with the tray's own backdrop
+/// for a zoom, and every other picture over the backdrop its own kind asks for.
+///
+/// The two are two different things to look at, and the difference between them is the whole of the
+/// setting: what stands behind a picture nobody has touched is the picture's own business — a
+/// photograph's transparency is the photograph's — while the band a hand has carried the picture off its
+/// window is the window's, the frame around a picture rather than a page behind one (see
+/// `Image → Zoom → Background` in the tray and `pinned_band_backdrop`).
+#[test]
+fn a_zoomed_pictures_band_is_the_zooms_backdrop_and_a_picture_that_fills_its_window_is_not() {
+    let _stood = BandBackdrops::stood_at(
+        TransparentBackground::Checkerboard,
+        TransparentBackground::White,
+    );
+
+    assert_eq!(
+        pinned_band_backdrop(MediaType::StaticImage, true),
+        TransparentBackground::White,
+        "a picture the wheel has taken past its window is drawn over the zoom's own backdrop"
+    );
+    assert_eq!(
+        pinned_band_backdrop(MediaType::StaticImage, false),
+        TransparentBackground::Checkerboard,
+        "and a picture filling its window over the one its own kind asks for, exactly as it always was"
+    );
+    assert_eq!(
+        pinned_band_backdrop(MediaType::Dds, true),
+        TransparentBackground::White,
+        "and the band is the window's whatever kind of picture the window is standing on"
+    );
+}
+
 /// A page that is laid out to its box — a document, a listing — is resized one dimension at
 /// a time: a wider window is a longer line, and there is no shape of the file's to keep
 /// because the box the text is poured into *is* the layout.

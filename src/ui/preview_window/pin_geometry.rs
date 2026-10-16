@@ -665,6 +665,13 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             let zoom = pin.zoom?;
             pin.zoom = Some(PinZoom {
                 pan: carried,
+                // A hand taking the picture is a hand taking over from the wheel: a travel still in
+                // flight ends at the size the picture has reached rather than going on under a hand
+                // that is carrying it, which would be two answers to where the picture is — and the
+                // loop owes the frame of that size for the same reason it owes one to any other size a
+                // picture has settled at (see `pin_zoom_oversize_box`).
+                toward: zoom.drawn.0,
+                velocity: 0.0,
                 ..zoom
             });
             // Where the pointer has been carried out to, so that the next ask for a pointer that has

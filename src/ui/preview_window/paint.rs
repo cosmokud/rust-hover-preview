@@ -263,18 +263,27 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         if let Ok(media) = CURRENT_MEDIA.lock() {
             if let Some(media) = media.as_ref() {
                 if !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video) {
+                    // What the band is filled with: a picture the wheel has taken past its window is
+                    // drawn over the tray's own backdrop for a zoom, and every other picture over the
+                    // backdrop its own kind asks for. The two are two different things to look at —
+                    // what stands behind a picture nobody has touched is the picture's business, and
+                    // what fills the band beside one a hand has carried off is the window's (see
+                    // `pinned_band_backdrop`).
+                    let zoomed = frame != (0, 0, band_width as i32, band_height as i32);
+                    let backdrop = pinned_band_backdrop(media.media_type, zoomed);
+
                     // The rows a zoomed picture has been carried off are the backdrop's rather than
                     // nobody's, and they are filled before the picture goes on top: a layered window
                     // is hit-tested by the shape of its pixels, so a band left transparent where the
                     // picture used to be would be a band a press falls through (see
                     // `fill_band_backdrop`).
-                    if frame != (0, 0, band_width as i32, band_height as i32) {
+                    if zoomed {
                         fill_band_backdrop(
                             out,
                             band_width,
                             band_top.max(0) as u32,
                             band_height,
-                            preview_background(media.media_type),
+                            backdrop,
                         );
                     }
 
@@ -283,7 +292,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                         media.current_width(),
                         media.current_height(),
                         (band_width, band_height),
-                        preview_background(media.media_type),
+                        backdrop,
                         media.current_frame_is_opaque(),
                         BandTarget {
                             out,

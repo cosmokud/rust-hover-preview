@@ -23,7 +23,8 @@ use super::commands::{
     set_pin_mode_audio_seek, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
     set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
     set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
-    set_video_scale, set_video_volume, set_webview_idle, toggle_check_for_updates,
+    set_video_scale, set_video_volume, set_webview_idle, set_zoom_background,
+    toggle_check_for_updates,
     toggle_engine_persistent, toggle_loop, toggle_pin_shuffle, PinShuffle,
     toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_enabled,
     toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
@@ -73,9 +74,9 @@ use super::ids::{
     ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
     ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
     ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SUBTITLES, ID_TRAY_VIDEO_VOLUME_BASE,
-    ID_TRAY_WEBVIEW_IDLE_BASE,
+    ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
     TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND,
-    PIN_END_OF_FILE_CHOICES, VIDEO_ENGINE_CHOICES, WM_TRAYICON,
+    PIN_END_OF_FILE_CHOICES, VIDEO_ENGINE_CHOICES, ZOOM_BACKGROUND_CHOICES, WM_TRAYICON,
 };
 use super::menus::show_context_menu;
 use super::submenus::open_codec_page;
@@ -245,6 +246,16 @@ unsafe extern "system" fn tray_window_proc(
                         .contains(&cmd) =>
                     {
                         set_image_background(cmd - ID_TRAY_IMAGE_BACKGROUND_BASE)
+                    }
+                    // And the band beside a zoomed picture's own backdrop, which is the
+                    // picture's `Zoom → Background` half rather than one of the `Background`
+                    // submenu's: it is three wide, and its range sits in the slack between
+                    // the picture's `Shuffle` row and the theme items.
+                    cmd if (ID_TRAY_ZOOM_BACKGROUND_BASE
+                        ..ID_TRAY_ZOOM_BACKGROUND_BASE + ZOOM_BACKGROUND_CHOICES.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_zoom_background(cmd - ID_TRAY_ZOOM_BACKGROUND_BASE)
                     }
                     cmd if (ID_TRAY_FONT_BACKGROUND_BASE
                         ..ID_TRAY_FONT_BACKGROUND_BASE + BACKGROUND_CHOICES.len() as u16)

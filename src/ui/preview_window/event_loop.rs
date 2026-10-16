@@ -253,6 +253,10 @@ pub fn run_preview_window() {
         // the frame it had — scaled into the new box — until the frame drawn for that box
         // lands, rather than costing a tick as long as the decode (see `PinRelayout`).
         let mut pin_relayout: Option<PinRelayout> = None;
+        // The box a zoomed picture was last laid out again for, so that the file is asked for once per
+        // size the picture settles at rather than on every tick it stands there (see
+        // `pin_zoom_oversize_box`).
+        let mut zoom_sharpened: Option<ScreenRegion> = None;
         // When the last frame of a pinned picture's zoom was taken, which is the clock the travel is
         // measured against: a spring is written in seconds, and the loop is the one thing here that
         // knows how long its own last tick was (see `step_pin_zoom`).
@@ -1952,18 +1956,29 @@ pub fn run_preview_window() {
             // tick before it and not from whenever the last zoom happened to be.
             let zoom_elapsed = last_zoom_frame.elapsed().as_secs_f32();
             last_zoom_frame = Instant::now();
-            if step_pin_zoom(hwnd, zoom_elapsed) {
-                // The picture has just arrived at the size the wheel asked for, so the frame the window
-                // is holding is one decoded at the window's own box being stretched into a bigger one.
-                // The file itself is what it is owed, and it is asked for *here* — at the one moment a
-                // hand has stopped turning — rather than on every frame of the travel, which would be a
-                // decode per frame (see `pin_zoom_drawn_box`).
-                if let (Some((path, dpi)), Some(drawn)) =
-                    (pinned_media_owner(), pin_zoom_drawn_box())
-                {
-                    pin_relayout =
-                        relayout_pinned_media(&path, drawn, dpi, None, PinRelayoutRoad::Zoom);
+            step_pin_zoom(hwnd, zoom_elapsed);
+
+            // And the frame it is owed. A picture the wheel has taken past its window is a frame the
+            // window is holding scaled up, so the file itself is asked for at the size the picture has
+            // settled at — once per size and not on every frame of a travel, which would be a decode
+            // per frame, and only once the wheel has stopped asking, since a decode of a box the hand
+            // is still passing through is one nothing is looking at by the time it lands (see
+            // `pin_zoom_oversize_box`).
+            if pin_zoom_in_flight() {
+                zoom_sharpened = None;
+            } else if let Some(drawn) = pin_zoom_oversize_box() {
+                if zoom_sharpened != Some(drawn) {
+                    if let Some((path, dpi)) = pinned_media_owner() {
+                        zoom_sharpened = Some(drawn);
+                        pin_relayout =
+                            relayout_pinned_media(&path, drawn, dpi, None, PinRelayoutRoad::Zoom);
+                    }
                 }
+            } else {
+                // Nothing is owed a decode: no pin at all, a kind the wheel does not zoom, or a
+                // picture that fills its window — so what was asked for last is not a size this pin is
+                // standing at any more, and the next one that is will be asked for afresh.
+                zoom_sharpened = None;
             }
 
             // Check for our custom messages. Only the newest hover target matters;

@@ -25,7 +25,8 @@ fn engine_idle_is_offered_longest_first() {
 /// order the ids are handed out in, and each id resolves back to the backdrop its item was
 /// listed for — which is what makes a click select what it named. Every half marks the
 /// backdrop its own setting starts at, which is not the same one for every half, and not
-/// every half lists all four: the texture's offers two of them and a page's three.
+/// every half lists all four: the texture's offers two of them, and a page's and the
+/// zoom's three.
 #[test]
 fn every_offered_background_is_one_the_setting_keeps() {
     assert_eq!(
@@ -38,6 +39,18 @@ fn every_offered_background_is_one_the_setting_keeps() {
         ]
     );
 
+    // The zoom's half lists three of the four backdrops — the band beside a picture the
+    // wheel has taken past its window is a backdrop rather than a hole in the desktop — and
+    // the black it starts at is the one it marks.
+    assert_eq!(
+        ZOOM_BACKGROUND_CHOICES.map(|choice| background_label(choice, DEFAULT_ZOOM_BACKGROUND)),
+        [
+            "Black (Default)".to_string(),
+            "White".to_string(),
+            "Checkerboard".to_string(),
+        ]
+    );
+
     // The mark is the setting's own answer: one backdrop per half carries it, and which
     // one it is is read from the constant that half's setting starts at.
     for (choices, default) in [
@@ -47,6 +60,7 @@ fn every_offered_background_is_one_the_setting_keeps() {
         (&BACKGROUND_CHOICES[..], DEFAULT_DESIGN_BACKGROUND),
         (&DDS_BACKGROUND_CHOICES[..], DEFAULT_DDS_BACKGROUND),
         (&HTML_BACKGROUND_CHOICES[..], DEFAULT_HTML_BACKGROUND),
+        (&ZOOM_BACKGROUND_CHOICES[..], DEFAULT_ZOOM_BACKGROUND),
     ] {
         let marked: Vec<TransparentBackground> = choices
             .iter()
@@ -92,6 +106,17 @@ fn every_offered_background_is_one_the_setting_keeps() {
         None,
         "a backdrop a page's half does not offer is not one of its items"
     );
+
+    // And the zoom's half is a range and a table of its own, three backdrops wide.
+    for (index, background) in ZOOM_BACKGROUND_CHOICES.iter().enumerate() {
+        assert_eq!(zoom_background_at(index as u16), Some(*background));
+    }
+
+    assert_eq!(
+        zoom_background_at(ZOOM_BACKGROUND_CHOICES.len() as u16),
+        None,
+        "a backdrop the zoom's half does not offer is not one of its items"
+    );
 }
 
 /// An item of one half of the submenu is never an item of another, whatever it was
@@ -99,10 +124,10 @@ fn every_offered_background_is_one_the_setting_keeps() {
 /// the failure this range was moved for: a backdrop of a specimen and the text
 /// preview's `Full Mode` item were one id, and the backdrop was read first.
 #[test]
-fn the_six_halves_of_the_background_submenu_carry_different_ids() {
+fn the_seven_halves_of_the_background_submenu_carry_different_ids() {
     // Each half is as wide as the choices it offers, which is two for the texture's half,
-    // three for a page's and four for the rest: a range that were wider than the items in
-    // it would take an id from the half beside it.
+    // three for a page's and the zoom's, and four for the rest: a range that were wider than
+    // the items in it would take an id from the half beside it.
     let halves = [
         (
             ID_TRAY_IMAGE_BACKGROUND_BASE,
@@ -128,6 +153,10 @@ fn the_six_halves_of_the_background_submenu_carry_different_ids() {
             ID_TRAY_HTML_BACKGROUND_BASE,
             HTML_BACKGROUND_CHOICES.len() as u16,
         ),
+        (
+            ID_TRAY_ZOOM_BACKGROUND_BASE,
+            ZOOM_BACKGROUND_CHOICES.len() as u16,
+        ),
     ];
 
     for (index, half) in halves.iter().enumerate() {
@@ -149,6 +178,7 @@ fn the_six_halves_of_the_background_submenu_carry_different_ids() {
         ID_TRAY_THEME_LIGHT,
         ID_TRAY_MARKDOWN_RENDERED,
         ID_TRAY_OPEN_CONFIG,
+        ID_TRAY_IMAGE_SHUFFLE,
         ID_TRAY_SCALE_BASE,
         ID_TRAY_VIDEO_SCALE_BASE,
         ID_TRAY_TYPE_IMAGES,
@@ -234,6 +264,10 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
         (
             ID_TRAY_HTML_BACKGROUND_BASE,
             HTML_BACKGROUND_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_ZOOM_BACKGROUND_BASE,
+            ZOOM_BACKGROUND_CHOICES.len() as u16,
         ),
         (ID_TRAY_SCALE_BASE, BITMAP_SCALE_CHOICES.len() as u16),
     ] {
@@ -1043,6 +1077,12 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
         (
             ID_TRAY_TEXT_SCALE_BASE,
             ID_TRAY_TEXT_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        ),
+        // The band beside a zoomed picture's backdrops, three of the four, in the run the
+        // picture kind's own shuffle row and the theme items leave free.
+        (
+            ID_TRAY_ZOOM_BACKGROUND_BASE,
+            ID_TRAY_ZOOM_BACKGROUND_BASE + ZOOM_BACKGROUND_CHOICES.len() as u16,
         ),
         // The ways of keeping a preview off the item it is about.
         (ID_TRAY_AVOID_BASE, ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16),
