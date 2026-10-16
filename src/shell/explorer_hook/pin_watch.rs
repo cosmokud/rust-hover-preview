@@ -58,6 +58,12 @@ pub(super) struct PinUpdateWatch {
     /// the listing — a menu the press just dismissed, read on the tick it was up or on the tick
     /// after it closed (see `press_is_a_listing`).
     pub(super) window: Option<HWND>,
+    /// The box this app's own preview window stood in as the tick before this one read it, or
+    /// nothing on the first tick. It is what tells a window that has been *moved* under a hand
+    /// that has not moved from one that has stood still: a click held for a retry is an answer
+    /// about the window it was made against, and the file under the point after a move is
+    /// whatever the move uncovered (see `PinUpdateWatch::note_pin_box`).
+    pub(super) pin_box: Option<(i32, i32, i32, i32)>,
     /// When the pointer last moved, which is what a hover of what is under it is measured from.
     pub(super) settled_at: Option<Instant>,
     /// Whether the file under a settled pointer has already been resolved for that settle.
@@ -172,6 +178,11 @@ impl PinUpdateWatch {
             self.note_shown(&showing);
         }
 
+        // Where this app's own window stands, taken before anything about the pointer is: a pin
+        // that has moved under a hand that has not moved is not the window the readings below are
+        // measured against, and every one of them is about where the window was (see `note_pin_box`).
+        let pin_moved = self.note_pin_box(preview_window_rect());
+
         let Some(pointer) = read_pointer() else {
             return;
         };
@@ -265,7 +276,13 @@ impl PinUpdateWatch {
                 window_is_gone(previous_window),
                 current_is_chrome,
                 previous_was_chrome,
-            );
+            )
+            // And a press read on the very tick this app's own window moved is not a pick either:
+            // the hand did not move, and what is under the point now is whatever the move uncovered
+            // (see `note_pin_box`). The point is booked above all the same, so the second press of
+            // the pair that moved the window is refused as the gesture it is rather than answered
+            // as a pick of its own.
+            && !pin_moved;
 
         // Whether the press was read at all, before anything is decided about it, and where
         // the pointer was when it was. This is the one reading that says a click was lost
@@ -602,6 +619,38 @@ impl PinUpdateWatch {
         }
     }
 
+    /// Note where this app's own window stands, and answer whether it has moved since the tick
+    /// before: a pin that has moved under a hand that has not moved is not the window this watch's
+    /// readings were taken against, so the click it is holding for a retry — the one reading here
+    /// that asks for anything — goes with the settle and the probe (see `note_shown`, whose rule
+    /// this is, and `the_pin_window_moved`).
+    ///
+    /// The first reading is a baseline rather than a move, the way the first item the keyboard is
+    /// on and the first selection a listing holds are: a pin that has just been taken up is a
+    /// window this watch has not seen before, and the click that put it there is not one a move
+    /// gave up.
+    ///
+    /// What the readings are cleared *to* is `note_shown`'s own state, and this is deliberately not
+    /// that call: a swap forgets the press in hand with the rest of them, while this move is one the
+    /// press itself asked for — the second press of a double-click — and the pair's own booking is
+    /// what refuses that press as the gesture's other half a tick later (see `press_point`).
+    pub(super) fn note_pin_box(&mut self, pin_box: Option<(i32, i32, i32, i32)>) -> bool {
+        let known = self.pin_box.is_some();
+        let moved = known && the_pin_window_moved(self.pin_box, pin_box);
+        self.pin_box = pin_box;
+
+        if moved {
+            // The click is let go of rather than answered: it was made against a window that is
+            // not there now, and what the hand is over is whatever the move uncovered.
+            self.pending = None;
+            self.pointer = None;
+            self.settled_at = None;
+            self.probed = false;
+        }
+
+        moved
+    }
+
     /// Whether a focus that has moved onto another item is a file the user picked with the
     /// keyboard, out of the two facts that tell a key's move from a listing's own: the place the
     /// item was read in is the one this watch is already watching, and a key that walks a listing
@@ -790,6 +839,15 @@ impl PinUpdateWatch {
     /// stale listing answers with (see `PinUpdateWatch::answer_click`) and the second is an answer
     /// (see `PinUpdateWatch::answer_click` again).
     fn offer(&self, path: &Path, showing: &Path) -> bool {
+        // A window that has moved since this tick read it is not the window the point was resolved
+        // against: the lookup walks the shell, and the pin may move while it does. The box is
+        // therefore asked again here, where the offer is made, and not only at the tick's opening —
+        // the double-click that puts the window back in the middle of its screen is the case, and
+        // what the move uncovered is a file the hand never clicked (see `note_pin_box`).
+        if the_pin_window_moved(self.pin_box, preview_window_rect()) {
+            return false;
+        }
+
         if same_path(path, showing) {
             return false;
         }
@@ -919,4 +977,28 @@ impl PinUpdateWatch {
 
         None
     }
+}
+
+/// Whether this app's own window has moved, out of two readings of its box: the rule a click held
+/// for a retry and a press read as the window moves are both answered by.
+///
+/// A pin is a window the user put down, and the app itself moves it as readily as the hand does: a
+/// double-click puts it back in the middle of its screen, a caption button maximizes it, a swap
+/// gives it the box another file comes out at. Every one of those moves it *out from under a hand
+/// that has not moved*, and what the hand is over afterwards is whatever the move uncovered rather
+/// than anything it chose — so the readings that watch was holding are about a window that is not
+/// there any more. It is the rule a swap is already answered by, which forgets the settle and the
+/// probe for having been measured against a window that has since moved (see
+/// `PinUpdateWatch::note_shown`), extended to the click a retry is holding.
+///
+/// The box is handed in rather than read here, because the rule that can only be tested by putting
+/// a window on somebody's screen is a rule that goes untested (see `press_is_outside_the_pin_window`).
+/// A reading that could not be taken is a reading of its own and not an absence of an answer: what
+/// this app's window does between two ticks while a pin is up is stand, so a box that has gone is a
+/// window that is not where it was.
+pub(super) fn the_pin_window_moved(
+    before: Option<(i32, i32, i32, i32)>,
+    now: Option<(i32, i32, i32, i32)>,
+) -> bool {
+    before != now
 }
