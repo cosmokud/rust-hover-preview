@@ -144,6 +144,7 @@ use crate::formats::office_formats;
 use crate::formats::peazip_formats;
 use crate::formats::video_formats;
 use crate::paths::plain_path;
+use crate::readers::aac_stream;
 use crate::readers::audio_seek;
 use crate::readers::audio_track::{self, Player, Probed};
 use crate::readers::comic_preview;
