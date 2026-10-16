@@ -1479,6 +1479,25 @@ pub(super) fn bubble_is_playing() -> bool {
     }
 }
 
+/// Whether the bars a bubble is drawn with are read from sound that is moving.
+///
+/// A sound's own bands move every few milliseconds while it plays. A film's bars are read from the
+/// same capture of this app's own sound, drawn over the film's own frame, and they move the same
+/// way — but only while the film is making any: a film the app plays at a level of nothing is begun
+/// with no audio track at all, so its bars are a row of nothing and there is nothing for the bubble
+/// to paint again for (see `render_pin_bubble` and `BUBBLE_REPAINT`).
+///
+/// The playback is not part of the question: whether a film is playing at all is the caller's own
+/// ask, so that a bubble drawn while a film is held is not one this claims is making sound (see the
+/// bubble repaint in `run_preview_window`).
+pub(super) fn bubble_bars_are_moving() -> bool {
+    match current_media_type() {
+        Some(MediaType::Audio) => true,
+        Some(MediaType::Video) | Some(MediaType::NativeVideo) => pinned_volume_level() > 0,
+        _ => false,
+    }
+}
+
 /// The picture inside the bubble: the frame the pin is holding, shrunk to cover a square and
 /// cropped to the middle of it.
 ///
