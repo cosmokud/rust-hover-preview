@@ -1670,10 +1670,136 @@ fn a_player_the_bubble_parked_is_not_a_pin_that_came_apart() {
         "the player is parked rather than gone: the pin is a bubble standing for it"
     );
 
+    // And the park going is not what makes a pin come apart: a bubble is a picture this app holds
+    // rather than a hole somebody else's window stands in, so a player that has gone leaves the
+    // circle on the frame it has (see `a_film_behind_a_bubble_that_has_gone_leaves_the_bubble_standing`).
     update_pin_bubble_pause(None);
     assert!(
+        pin_media_is_alive(false),
+        "a video whose player is simply gone is still a picture in the circle, so the bubble stands"
+    );
+
+    // What does come apart is the same film as a *window*: there the player's window is the
+    // picture, and a band with nothing in it is a window onto nothing — which is where a bubble
+    // that has been restored is read again.
+    let mut up = take_pin_for_a_test().expect("the pin is up");
+    up.collapsed = false;
+    stand_pin(Some(up));
+    assert!(
         !pin_media_is_alive(false),
-        "and a video whose player is simply gone is what it always was"
+        "a video whose player is gone is a window onto nothing"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// a film behind a bubble that has gone leaves the circle standing on the picture it has, /// rather
+/// than taking the whole pin down with it.
+///
+/// **This is the walk behind a bubble.** A step's file whose player never came up — one the
+/// engine refused, one a swap for another film ended on its way — leaves the pin's own player
+/// gone with nothing in hand to replace it, and a liveness read that took the pin down over it
+/// closed a bubble for a press that was only asking for the next file (see `pin_media_is_alive`).
+/// The exemption is the bubble's and not the pin's: the same film behind a window is a window
+/// onto nothing, which is the answer it always had.
+#[test]
+fn a_film_behind_a_bubble_that_has_gone_leaves_the_bubble_standing() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let mut film = create_loading_media(8, 8);
+    film.media_type = MediaType::NativeVideo;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(film);
+    }
+
+    let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
+    pin.path = PathBuf::from("C:\\folder\\a-film-the-engine-refused.mp4");
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+
+    assert!(
+        pin_media_is_alive(false),
+        "a film behind a bubble with no player running is not a pin that came apart: the circle \
+         shows the frame it has, and a bubble that vanished would take with it the only way back to \
+         the file it was showing"
+    );
+
+    // And the same pin put back up is a window onto that film again, which is where it does come
+    // apart: what was forgiven behind the bubble is the band nobody could see.
+    let mut up = take_pin_for_a_test().expect("the pin is up");
+    up.collapsed = false;
+    stand_pin(Some(up));
+    assert!(
+        !pin_media_is_alive(false),
+        "a film whose player is gone is still a window onto nothing where the window is what is on \
+         screen"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// a swap that takes the standing film down leaves a bubble the film it is showing: the media /// is
+/// the picture inside the circle, and taking it away takes the bubble's face with it.
+///
+/// **A step that cannot be shown is what this is for.** A player that would not start, an engine
+/// that refused the file, a load that never arrives: a windowed pin owes the incoming file its band
+/// and the outgoing frame is not the picture any more, but a bubble has no band — what is on the
+/// screen is a frame out of this very media — so it keeps the film the press was made over until
+/// another one is really installed (see `take_the_pinned_media_down_for_a_swap`).
+#[test]
+fn a_bubble_keeps_the_film_it_is_showing_when_a_swap_takes_the_standing_one_down() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let mut film = create_loading_media(8, 8);
+    film.media_type = MediaType::NativeVideo;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(film);
+    }
+
+    let mut pin = overlay_pin((0, 0, 80, 60), PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+
+    take_the_pinned_media_down_for_a_swap();
+    assert!(
+        CURRENT_MEDIA
+            .lock()
+            .ok()
+            .is_some_and(|media| media.is_some()),
+        "the media a bubble is drawing its picture out of is not taken off the bubble by a swap \
+         that has not happened yet"
+    );
+
+    // And the same take-down on a windowed pin is what it always was: the band the film was in
+    // belongs to the file replacing it.
+    let mut up = take_pin_for_a_test().expect("the pin is up");
+    up.collapsed = false;
+    stand_pin(Some(up));
+
+    take_the_pinned_media_down_for_a_swap();
+    assert!(
+        CURRENT_MEDIA
+            .lock()
+            .ok()
+            .is_some_and(|media| media.is_none()),
+        "a window is a hole for the incoming player's own window, so the outgoing frame goes with \
+         the file it was of"
     );
 
     stand_pin(previous_pin);
