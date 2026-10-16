@@ -59,6 +59,11 @@ windows = { version = "0.58", features = [
     # of this app's own against the SDK headers (see `video_player::video_surface`).
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Dxgi",
+    # `DwmFlush`, which is what paces the frames of a wheel zoom's travel to the display rather
+    # than to a timer: it is the one call that answers "when is the next frame", and there is no
+    # other way to ask — the compositor is the only thing that knows (see
+    # `wait_for_the_compositor`).
+    "Win32_Graphics_Dwm",
     "Foundation",
     "Data_Pdf",
     "Storage_Streams",

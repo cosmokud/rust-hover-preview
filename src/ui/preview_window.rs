@@ -199,12 +199,12 @@ use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
     WAIT_TIMEOUT, WPARAM,
 };
+use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EndPaint, GdiFlush, MonitorFromWindow, SelectObject, SetBrushOrgEx, SetStretchBltMode,
-    StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
-    DIB_RGB_COLORS, HALFTONE, HBITMAP, HDC, HGDIOBJ, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
-    SRCCOPY,
+    EndPaint, GdiFlush, MonitorFromWindow, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
+    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,

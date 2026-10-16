@@ -3932,15 +3932,25 @@ pub fn run_preview_window() {
                 {
                     media_dynamic_hint = true;
                 }
+                // A travel of the wheel's is a picture with something to animate, so it keeps the
+                // frame cadence for as long as it lasts and the loop drops back to its own wait the
+                // tick after it has arrived (see `pin_zoom_in_flight`).
+                let travelling = pin_zoom_in_flight();
                 let wait_ms = wait_before_the_next_tick(
                     false,
-                    // A travel of the wheel's is a picture with something to animate, so it keeps the
-                    // frame cadence for as long as it lasts and the loop drops back to its own wait the
-                    // tick after it has arrived (see `pin_zoom_in_flight`).
-                    media_dynamic_hint || tick_has_wait || pin_zoom_in_flight(),
+                    media_dynamic_hint || tick_has_wait || travelling,
                     pinned(),
                 );
-                carried_preview_msg = wait_preview_channel(&rx, wait_ms);
+                // And a travel is paced by the compositor rather than by that wait, because what its
+                // frames are worth is the display's own period and not a timer's: a sleep of
+                // `FRAME_WAIT_MS` comes back in 27.8 ms — 36 frames a second — where a flush of the
+                // compositor comes back in the 6.94 ms of a 144 Hz display's frame (see
+                // `wait_for_the_compositor`).
+                carried_preview_msg = if travelling {
+                    wait_for_the_compositor(&rx, wait_ms)
+                } else {
+                    wait_preview_channel(&rx, wait_ms)
+                };
             }
         }
 
