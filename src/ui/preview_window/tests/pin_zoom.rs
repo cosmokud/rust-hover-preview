@@ -1,5 +1,10 @@
 use super::*;
 
+// What the wheel hook is handed a message as: the delta in the high word of `mouseData`, the pointer in
+// its own point, and a code that says the message is one to look at.
+use windows::Win32::Foundation::{LPARAM, POINT, WAIT_OBJECT_0, WPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{HC_ACTION, MSLLHOOKSTRUCT, WM_MOUSEWHEEL};
+
 /// The room every one of these zooms is measured in: a display of 1000 by 800 at the origin, which is
 /// what `bounds` is in `tests` — and a picture whose shape the boxes below keep, since a pinned
 /// picture is only ever given boxes of its own shape (`PinFrame::Shaped`).
@@ -523,6 +528,68 @@ fn a_wheel_that_asks_for_more_notches_than_any_hand_can_turn_is_answered_with_a_
         width >= 10 && height >= 8,
         "a notch out that no hand can turn stops at the floor rather than going past it: {width} by {height}"
     );
+}
+
+#[test]
+fn a_wheel_notch_over_a_pin_is_counted_for_the_pin_and_wakes_the_loop_that_reads_it() {
+    // The lock every test that reaches the pin's own state takes, and the pin this one stands for the
+    // hook to find: what the hook asks is the pin's window box, which is process-wide.
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+
+    // The count and the signal are the process's own, so both are cleared here: what is read below has
+    // to be this notch's and not one left behind by a test beside this one.
+    let _ = wheel_input::take_pin_zoom_delta();
+    unsafe {
+        let _ = ResetEvent(preview_channel_event());
+    }
+
+    // A wheel message the way the system hands it over: a low-level hook carries the delta in the high
+    // word of `mouseData` and the pointer in its own point, and the point here is inside the pin's box.
+    let info = MSLLHOOKSTRUCT {
+        pt: POINT {
+            x: content.0 + 10,
+            y: content.1 + 10,
+        },
+        mouseData: (WHEEL_DELTA as u32) << 16,
+        flags: 0,
+        time: 0,
+        dwExtraInfo: 0,
+    };
+
+    unsafe {
+        let _ = wheel_input::wheel_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_MOUSEWHEEL as usize),
+            LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
+        );
+    }
+
+    assert_eq!(
+        wheel_input::take_pin_zoom_delta(),
+        WHEEL_DELTA,
+        "a notch over a pinned picture is the pin's and not Explorer's"
+    );
+
+    // And the loop that reads that count is woken where it is counted: the count is an atomic written
+    // on the hook's own thread, so a loop waiting for a pin would otherwise read it at the end of its
+    // own wait — 62 ms measured, which is four frames of a 144 Hz display and the whole of what makes
+    // a zoom start unevenly (see `wake_for_a_wheel_notch`).
+    unsafe {
+        assert_eq!(
+            WaitForSingleObject(preview_channel_event(), 0),
+            WAIT_OBJECT_0,
+            "and the wait that would have read it is ended by the notch itself"
+        );
+    }
+
+    stand_pin(None);
+    stand_pin(previous);
 }
 
 /// A zoom is a *travel* and not a jump, and the whole of what makes it one is that it closes on the size

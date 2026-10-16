@@ -165,6 +165,26 @@ pub(super) fn preview_channel_event() -> HANDLE {
     HANDLE(*EVENT as *mut core::ffi::c_void)
 }
 
+/// Wake the preview loop where it stands, without a message: what a wheel notch over a pinned picture
+/// asks for.
+///
+/// A notch is counted on the wheel hook's own thread — an atomic written there and nothing else — and
+/// read by the loop on its next tick, so a loop waiting for a pin is a loop that will not see it until
+/// its own wait runs out: `STATIC_PIN_WAIT_MS` rounded up to the system timer's own 15.6 ms tick, which
+/// measured 62.2 ms over forty waits, worst 63.7 — four frames of a 144 Hz display, and the whole of
+/// what makes a zoom start unevenly. The same wait signalled where the notch is counted came back in
+/// 5.4 ms with the signal sent five in.
+///
+/// It is the channel's own event rather than one of its own, so nothing new is waited on: the loop is
+/// already armed on it, and a signal to an event nobody is waiting on is read by the next wait — it is
+/// manual-reset, and reset after the wait rather than at the send (see `wait_preview_channel`).
+pub(crate) fn wake_for_a_wheel_notch() {
+    // Safety: an event created once for the process, signalled: nothing here is dereferenced.
+    unsafe {
+        let _ = SetEvent(preview_channel_event());
+    }
+}
+
 /// Send a message to the preview loop and wake it, so that a wait in progress ends at once.
 pub(super) fn send_preview(message: PreviewMessage) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {

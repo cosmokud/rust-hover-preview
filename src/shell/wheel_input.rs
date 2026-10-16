@@ -70,7 +70,10 @@ pub fn request_stop() {
     super::hook_thread::request_stop(&WHEEL_THREAD_ID)
 }
 
-unsafe extern "system" fn wheel_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+/// The hook's own procedure, `pub(crate)` so that a test can hand it a wheel message the way the
+/// system does — three numbers and a struct — since what it decides is which of the three owners a
+/// notch belongs to, and whether the loop that reads the count is woken for it.
+pub(crate) unsafe extern "system" fn wheel_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // Keep this callback cheap: every wheel message on the desktop waits for it
     // to return, so it reads one rectangle without blocking and otherwise touches
     // a single atomic.
@@ -99,10 +102,17 @@ unsafe extern "system" fn wheel_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
         // And the same answer for a pinned picture, which is a window the keyboard is
         // not in for the same reason: a hover the user pinned is a window nobody has
         // pressed, so Explorer would take the notch and scroll the list under it.
+        //
+        // The loop that reads the count is woken here as well, because the count is an
+        // atomic and nothing else: a notch turned while that loop is in its own wait for a
+        // pin would be read at the end of it — 62 ms, measured, which is four frames of a
+        // 144 Hz display and the whole of what makes a zoom start unevenly (see
+        // `wake_for_a_wheel_notch`).
         if let Some(region) = crate::ui::preview_window::pin_zoom_keep_alive_try() {
             if point_in_region(info.pt, region) {
-                if wparam.0 == WM_MOUSEWHEEL as usize {
+                if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
                     PIN_ZOOM_DELTA.fetch_add(notches, Ordering::AcqRel);
+                    crate::ui::preview_window::wake_for_a_wheel_notch();
                 }
                 return LRESULT(1);
             }
