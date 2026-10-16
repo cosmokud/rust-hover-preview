@@ -14,6 +14,12 @@
 //!
 //! What a raw stream does say exactly is how many frames it holds, and what a frame holds is
 //! exactly 1024 samples of the rate its own header names: the length is the frames times that.
+//! The format keeps two bits in each header for the raw data blocks it carries — a frame of two
+//! blocks being two AAC frames written as one — and they are deliberately *not* counted here,
+//! because neither player this app has plays them: the one whose frames claim two blocks while
+//! their payload holds one (a stream a broken encoder wrote, or a byte of something in the
+//! last two bits) is played by FFmpeg for the single block it decodes, and a stream that really
+//! carries two is one the engine Windows has will not play at all (see [`frame_of`]).
 //! The frames are counted by walking them, each header giving the length of the frame it
 //! begins, which costs one sequential read of the file and nothing else — no decoder, no
 //! process, and no second look at a file that is not a raw stream at all, since a raw stream
@@ -43,10 +49,25 @@ const RATES: [u32; 13] = [
     7_350,
 ];
 
-/// The samples one AAC frame holds, in the units of the rate its header names — and the header's
-/// own two bits for raw data blocks say how many of those the frame carries: one for every
-/// stream but the few that pack several blocks into one frame (see [`frame_of`]).
-const SAMPLES_PER_BLOCK: u64 = 1024;
+/// The samples one AAC frame holds, in the units of the rate its header names.
+///
+/// The two bits a header keeps for the number of raw data blocks behind the frame are not part
+/// of this, and the walk does not read them: a frame of two blocks would be two frames' worth of
+/// samples by the format's own account, and what the players this app has make of one is
+/// neither. FFmpeg says so itself — `More than one AAC RDB per ADTS frame is not implemented` —
+/// and a stream whose headers claim two blocks while their payload holds one is played for the
+/// single block it decodes: 1024 samples a frame, measured. A stream that really carries two is
+/// one the engine Windows has will not play at all (its own probe reads the length as twice
+/// what it is and its player ends on the first tick), so what a card's bar has to agree with —
+/// the sound — is 1024 samples of a frame either way.
+///
+/// shortcut: a stream whose blocks really are there is counted here for the one block this
+/// app's own player gives such a frame, while that player — FFmpeg's — plays a file whose
+/// blocks genuinely carry two for two, which is half a length more than this counts; telling
+/// the two apart takes a decode of the frame. Upgrade where a file of that shape turns up on a
+/// machine that plays it, which is a file no encoder of `.aac` files writes — FFmpeg's own
+/// muxer cannot write one, and the engine Windows has will not play one at all.
+const SAMPLES_PER_FRAME: u64 = 1024;
 
 /// The buffer a file is walked through, which is as much as the longest a frame can be — the
 /// thirteen bits its header gives its own length say no more than this — so that the whole of
@@ -60,11 +81,9 @@ struct Frame {
     /// bytes of CRC a frame with one carries — a length is a length.
     length: usize,
     /// The samples a second the stream is written at, off the header and not off the probe: it
-    /// is the rate a frame's samples are counted in, which is the rate the stream is *coded* at
-    /// and, for a stream with SBR, half of the rate a player hands over beside it.
+    /// is the rate a frame's 1024 samples are counted in, which is the rate the stream is
+    /// *coded* at and, for a stream with SBR, half of the rate a player hands over beside it.
     rate: u32,
-    /// The samples this frame holds.
-    samples: u64,
 }
 
 /// How long the raw AAC stream in `path` plays, where the whole of the file is ADTS frames —
@@ -87,7 +106,6 @@ pub fn duration(path: &Path) -> Option<f64> {
 
     let mut body = Vec::new();
     let mut frames = 0u64;
-    let mut samples = 0u64;
     let mut rate = None;
     // Whether every byte of the file was frames: a byte that had to be stepped over, a frame
     // that ran out before its own length said it would, and a header left half-read are all a
@@ -116,7 +134,7 @@ pub fn duration(path: &Path) -> Option<f64> {
         }
 
         // The frame is read past rather than kept: all the walk wants of a file is how many
-        // frames there are and how much time each of them carries.
+        // frames it holds and how much time a frame is (see [`SAMPLES_PER_FRAME`]).
         body.resize(frame.length - header.len(), 0);
         if !read_or_end(&mut file, &mut body)? {
             whole = false;
@@ -124,7 +142,6 @@ pub fn duration(path: &Path) -> Option<f64> {
         }
 
         frames += 1;
-        samples += frame.samples;
 
         // The end of the file is the end of the walk: nothing at all left to read. A few bytes
         // that cannot make a whole frame are a stream cut off, and a read that fails outright is
@@ -145,7 +162,7 @@ pub fn duration(path: &Path) -> Option<f64> {
     }
 
     let rate = rate?;
-    let seconds = samples as f64 / f64::from(rate);
+    let seconds = frames as f64 * SAMPLES_PER_FRAME as f64 / f64::from(rate);
 
     (whole && frames > 0 && seconds > 0.0).then_some(seconds)
 }
@@ -184,15 +201,11 @@ fn frame_of(header: &[u8; 7]) -> Option<Frame> {
         return None;
     }
 
-    // The last two bits are the frame's raw data blocks, less one: a frame of two blocks holds
-    // two frames' worth of samples, and its own length says so as well.
-    let samples = SAMPLES_PER_BLOCK * (u64::from(header[6] & 0x03) + 1);
+    // The last two bits of the header are the raw data blocks the frame carries less one,
+    // which this side deliberately does not read: neither player here plays a frame of more
+    // than one (see [`SAMPLES_PER_FRAME`]).
 
-    Some(Frame {
-        length,
-        rate,
-        samples,
-    })
+    Some(Frame { length, rate })
 }
 
 /// Read the whole of `into`, answering whether all of it was there: the end of the file is a
@@ -237,10 +250,10 @@ fn skip_id3(file: &mut BufReader<File>) {
 }
 
 /// One ADTS frame laid out where the format says its fields sit: a header of seven bytes, a
-/// payload of nothing in particular, and `blocks` raw data blocks carried in it — a frame of
-/// more than one block being a thing a few streams write and a length counted the same either
-/// way (see [`frame_of`]). What the tests of the walk and of the length a probe is held at are
-/// written from, since both need a file that is exactly what a raw AAC stream is.
+/// payload of nothing in particular, and the `blocks` raw data blocks the header *claims* — a
+/// claim the players here do not honor, which is what a test of the length is written around
+/// (see [`SAMPLES_PER_FRAME`]). What the tests of the walk and of the length a probe is held at
+/// are written from, since both need a file that is exactly what a raw AAC stream is.
 #[cfg(test)]
 pub(crate) fn a_frame_holding(rate_index: u8, payload: usize, blocks: u8) -> Vec<u8> {
     let length = 7 + payload;
@@ -316,13 +329,18 @@ mod tests {
             "four frames of forty-four one are four times 1024 samples of it"
         );
 
-        // And a frame that holds two of the format's blocks holds twice the samples, which is
-        // what its own header's last two bits are for.
-        let past = a_file("blocks.aac", &a_frame_holding(4, 200, 2));
+        // And a frame whose header claims the two raw data blocks a frame of this format can
+        // carry is *still* one frame's worth of samples — 1024 of them — because that is what
+        // the players this app has give it: FFmpeg warns that more than one such block in an
+        // ADTS frame is not implemented and plays the one it decodes, and the engine Windows
+        // has will not play a file of them at all (see `SAMPLES_PER_FRAME`). Counting the two
+        // bits as two frames' worth would draw a card's bar against a length half again as long
+        // as the sound, which is the whole of the fault this walk is here to answer for.
+        let claimed = a_file("two-blocks.aac", &a_frame_holding(4, 200, 2));
         assert_eq!(
-            duration(&past),
-            Some(2.0 * 1024.0 / 44_100.0),
-            "a frame of two blocks is two frames' worth of samples"
+            duration(&claimed),
+            Some(1024.0 / 44_100.0),
+            "a frame that claims two blocks is one frame's worth of samples, as it is played"
         );
     }
 
