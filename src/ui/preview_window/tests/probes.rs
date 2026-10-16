@@ -150,7 +150,7 @@ fn app_hover_probe() {
 /// Put the pointer at a point on the screen, as a hand would: a real `SendInput` move,
 /// because a drag is a sequence of moves delivered to whatever window is under the pointer
 /// and nothing less is one.
-fn send_pointer_to(x: i32, y: i32) {
+pub(super) fn send_pointer_to(x: i32, y: i32) {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
         SM_YVIRTUALSCREEN,

@@ -127,6 +127,13 @@ pub(super) struct PinDrag {
 pub(super) enum PinDragAction {
     Move,
     Resize(PinResize),
+    /// The picture inside the window moving rather than the window: what a press on the media of a
+    /// picture the wheel has taken inside its window begins, and where the pan stood when it began —
+    /// which is what the pointer's own travel is added to, so a drag is measured from where it began
+    /// rather than accumulated move by move (see `PinZoom` and `apply_pin_drag`).
+    Pan {
+        from: (f32, f32),
+    },
 }
 
 /// Which edges of a pinned window a resize is dragging.

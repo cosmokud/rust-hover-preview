@@ -2613,7 +2613,11 @@ fn a_band_the_pin_wins_is_one_part_in_255_and_only_over_the_band() {
         for column in 0..width as usize {
             assert_eq!(
                 surface_pixel(&out, (width, height), row, column),
-                if in_band { &[1, 1, 1, 1] } else { &[0, 0, 0, 0] },
+                if in_band {
+                    &[1, 1, 1, 1]
+                } else {
+                    &[0, 0, 0, 0]
+                },
                 "row {row} column {column}: the band is the least a pixel can be, and every row \
                  outside it is left exactly as the window painted it"
             );

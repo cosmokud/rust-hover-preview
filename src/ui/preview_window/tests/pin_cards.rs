@@ -95,8 +95,7 @@ fn a_remembered_sound(folder: &str) -> PathBuf {
     let folder = std::env::temp_dir().join(folder);
     std::fs::create_dir_all(&folder).expect("a test folder");
     let path = folder.join("song.mp3");
-    std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
-        .expect("a file");
+    std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00").expect("a file");
     audio_track::remember(
         &path,
         audio_track::Probed::Track(audio_track::Track {
@@ -688,16 +687,12 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
     // take-up of a sound takes its options from: the frame's
     // first painting, at the share the card is to be drawn at.
     let hover = audio_card(&path, None, None, 0, None).expect("a card");
-    let (width, height) =
-        audio_preview::measure(&hover, 4096, 2160, 96, current_audio_options())
-            .expect("a measured card");
+    let (width, height) = audio_preview::measure(&hover, 4096, 2160, 96, current_audio_options())
+        .expect("a measured card");
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
         *slot = load_audio_card(&path, width, height, 96);
     }
-    let pin = take_up_pinned_window(
-        &path,
-        (100, 100, 100 + width as i32, 100 + height as i32),
-    );
+    let pin = take_up_pinned_window(&path, (100, 100, 100 + width as i32, 100 + height as i32));
     let anchor = current_audio_scale();
 
     // The configuration moves on to another share.
@@ -745,8 +740,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
     // And the volume popup hangs off the anchor's button box —
     // the panel floating over the very button it was opened from,
     // not over where the moved share's button would have been.
-    let popup =
-        pinned_audio_volume_popup(&pin).expect("a popup over the card's own button");
+    let popup = pinned_audio_volume_popup(&pin).expect("a popup over the card's own button");
     let expected = pin_chrome::volume_popup_from_button(
         RECT {
             top: button.top + top,
@@ -759,10 +753,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
         popup.panel, expected.panel,
         "the popup's panel is hung off the button as the card drew it"
     );
-    assert_eq!(
-        popup.track, expected.track,
-        "and its groove with it"
-    );
+    assert_eq!(popup.track, expected.track, "and its groove with it");
 
     // Then walk: the media slot is given a card freshly loaded at
     // the moved share, and the pin taken up over it is a fresh
@@ -773,10 +764,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
         *slot = load_audio_card(&path, width, height, 96);
     }
-    let walked = take_up_pinned_window(
-        &path,
-        (100, 100, 100 + width as i32, 100 + height as i32),
-    );
+    let walked = take_up_pinned_window(&path, (100, 100, 100 + width as i32, 100 + height as i32));
     let moved = current_audio_scale();
     let walked_button = audio_preview::control_box(
         CardControl::Volume,
@@ -787,8 +775,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
     )
     .expect("a box on a card that carries its controls");
     let (_, walked_height) = walked.window_size();
-    let (walked_top, _) =
-        pinned_band_rows(walked_height, walked.caption, 0, walked.overlay);
+    let (walked_top, _) = pinned_band_rows(walked_height, walked.caption, 0, walked.overlay);
     assert_eq!(
         pin_audio_control_at(
             &walked,
@@ -922,7 +909,12 @@ fn a_pin_taken_up_after_a_change_keeps_the_hovers_size() {
         audio_options_of(anchor),
     )
     .expect("a measured card");
-    let hover_box = (100, 100, 100 + hover_width as i32, 100 + hover_height as i32);
+    let hover_box = (
+        100,
+        100,
+        100 + hover_width as i32,
+        100 + hover_height as i32,
+    );
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
         *slot = load_audio_card(&path, hover_width, hover_height, 96);
     }
@@ -946,7 +938,12 @@ fn a_pin_taken_up_after_a_change_keeps_the_hovers_size() {
         audio_options_of(current_audio_scale()),
     )
     .expect("a measured card");
-    let moved_box = (100, 100, 100 + moved_width as i32, 100 + moved_height as i32);
+    let moved_box = (
+        100,
+        100,
+        100 + moved_width as i32,
+        100 + moved_height as i32,
+    );
     let pin_box = pin.content;
     assert_ne!(
         moved_box, hover_box,
@@ -1011,9 +1008,8 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let anchor = current_audio_scale();
     let hover = audio_card(&path, None, None, 0, None).expect("a card");
-    let (width, height) =
-        audio_preview::measure(&hover, 4096, 2160, 96, audio_options_of(anchor))
-            .expect("a measured card");
+    let (width, height) = audio_preview::measure(&hover, 4096, 2160, 96, audio_options_of(anchor))
+        .expect("a measured card");
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
         *slot = load_audio_card(&path, width, height, 96);
     }
