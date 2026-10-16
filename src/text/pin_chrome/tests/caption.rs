@@ -614,6 +614,12 @@ fn draws_the_caption_glyphs() {
 /// the boxes alone could see. Arms that reach further than the mark is wide are the third
 /// of the same kind: a row of marks that are not one size is a row of things that are not
 /// one kind of thing, and the walk buttons are the two biggest of the six.
+///
+/// The ink is measured by coverage here and not by whole pixels, which is the measure the
+/// glyph dump above uses and the one the assertions are about: the arms are anti-aliased, and
+/// a band a pixel wide down a slope covers no pixel whole — nine tenths of one is the most
+/// there is at this slope — so counting whole pixels would be asking this test for the walk
+/// the arms used to be drawn with rather than for the shape a chevron has.
 #[test]
 fn the_two_walk_buttons_are_chevrons_pointing_opposite_ways() {
     // A box with room for the whole glyph and a row to spare: the arms part half a span
@@ -624,11 +630,12 @@ fn the_two_walk_buttons_are_chevrons_pointing_opposite_ways() {
     let span = 10;
     let ink = [0u8, 0, 0];
 
-    // The rows drawn in one column. The buffer is filled with a colour first, so that a
-    // blank column reads as blank rather than as ink.
+    // The rows carrying ink in one column. The buffer is filled with a colour first, so that
+    // a blank column reads as blank rather than as ink, and a pixel counts as ink where it is
+    // more ink than bar — which is more than half of it, the ink being black and the bar white.
     fn drawn(buffer: &[u8], x: i32) -> Vec<i32> {
         (0..H)
-            .filter(|y| buffer[((*y * W + x) * 4) as usize] == 0)
+            .filter(|y| buffer[((*y * W + x) * 4) as usize] < 128)
             .collect()
     }
 
@@ -760,4 +767,111 @@ fn the_two_steps_of_a_walk_are_mirrors_of_one_another() {
             "{name} ends at its own far one"
         );
     }
+}
+
+/// The close mark is two diagonals, and a diagonal is the one thing a mark drawn a whole column
+/// at a time cannot be: the pixels it crosses are some of the bar and some of the ink, and a
+/// painter that gives each of them the one or the other draws a staircase (see `draw_cross`).
+#[test]
+fn the_close_mark_carries_a_share_of_the_ink_at_its_edges() {
+    let side = 24usize;
+    // A white bar under a dark ink, so that a pixel which is neither is a share of both: at full
+    // coverage the pixel is the ink exactly, and at none of it the bar.
+    let bar = [255u8, 255, 255];
+    let ink = [56u8, 58, 66] as [u8; 3];
+
+    let surface = DibSurface::create(side as u32, side as u32).expect("a surface");
+    let filled = unsafe { std::slice::from_raw_parts_mut(surface.bits(), 4 * side * side) };
+    for pixel in filled.as_chunks_mut::<4>().0 {
+        pixel[0] = bar[2];
+        pixel[1] = bar[1];
+        pixel[2] = bar[0];
+        pixel[3] = 255;
+    }
+
+    paint_glyph(
+        &surface,
+        CaptionButtonBox {
+            kind: CaptionButton::Close,
+            rect: RECT {
+                left: 0,
+                top: 0,
+                right: side as i32,
+                bottom: side as i32,
+            },
+        },
+        false,
+        ink,
+        1.0,
+    );
+
+    // The two colours a pixel of the mark can be, in the buffer's own order, and the byte that
+    // tells them apart: a pixel that is neither is carrying a share of the stroke.
+    let painted = surface.pixels();
+    let partial = painted
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] != ink[2] && pixel[0] != bar[2])
+        .count();
+
+    assert!(
+        partial > 10,
+        "the close mark carries part of the ink in {partial} pixels only: the pixels its \
+         diagonals cross hold the area of the stroke that is in them"
+    );
+}
+
+/// The walk buttons' chevron is two strokes, and a stroke is the one thing a mark drawn a whole
+/// column at a time cannot be: the pixels its arms cross are some of the bar and some of the ink,
+/// and a painter that gives each of them the one or the other draws a staircase (see
+/// `draw_chevron`).
+#[test]
+fn the_chevrons_arms_carry_a_share_of_the_ink() {
+    let side = 24usize;
+    // A white bar under a dark ink, so that a pixel which is neither is a share of both: at full
+    // coverage the pixel is the ink exactly, and at none of it the bar.
+    let bar = [255u8, 255, 255];
+    let ink = [56u8, 58, 66];
+
+    let surface = DibSurface::create(side as u32, side as u32).expect("a surface");
+    let filled = unsafe { std::slice::from_raw_parts_mut(surface.bits(), 4 * side * side) };
+    for pixel in filled.as_chunks_mut::<4>().0 {
+        pixel[0] = bar[2];
+        pixel[1] = bar[1];
+        pixel[2] = bar[0];
+        pixel[3] = 255;
+    }
+
+    paint_glyph(
+        &surface,
+        CaptionButtonBox {
+            kind: CaptionButton::Next,
+            rect: RECT {
+                left: 0,
+                top: 0,
+                right: side as i32,
+                bottom: side as i32,
+            },
+        },
+        false,
+        ink,
+        1.0,
+    );
+
+    // The two colours a pixel of the mark can be, in the buffer's own order, and the byte that
+    // tells them apart: a pixel that is neither is carrying a share of the arms.
+    let painted = surface.pixels();
+    let partial = painted
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] != ink[2] && pixel[0] != bar[2])
+        .count();
+
+    assert!(
+        partial > 10,
+        "the walk buttons' chevron carries part of the ink in {partial} pixels only: the pixels \
+         its arms cross hold the area of the stroke that is in them"
+    );
 }

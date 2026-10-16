@@ -12,7 +12,7 @@
 //! numbers for one control this app has once is a button that moves between two windows.
 
 use super::primitives::{
-    fill_box, fill_disc, fill_polygon, fill_round_rect, paint_time, put, stroke_arc,
+    fill_box, fill_disc, fill_polygon, fill_round_rect, fill_triangle, paint_time, put, stroke_arc,
     stroke_round_rect, stroke_segment, surface_pixels, ChromePalette, GLYPH_STROKE_PIXELS,
 };
 use crate::text::text_paint::{self, DibSurface};
@@ -460,7 +460,7 @@ pub(crate) fn paint_transport(
 /// The two bars a play/pause button shows while the thing behind it is playing, which is the
 /// whole of what "pause" is drawn as: two uprights side by side, held apart far enough that they
 /// do not read as one mark.
-fn draw_pause_glyph(
+pub(super) fn draw_pause_glyph(
     buffer: &mut [u8],
     width: i32,
     center_x: i32,
@@ -486,9 +486,8 @@ fn draw_pause_glyph(
     }
 }
 
-/// The triangle a play/pause button shows while the thing behind it is stopped, drawn as a scan
-/// of half-widths, widest at its left edge.
-fn draw_play_glyph(
+/// The triangle a play/pause button shows while the thing behind it is stopped.
+pub(super) fn draw_play_glyph(
     buffer: &mut [u8],
     width: i32,
     center_x: i32,
@@ -496,16 +495,23 @@ fn draw_play_glyph(
     size: i32,
     ink: [u8; 3],
 ) {
-    let left = center_x - size / 3;
-    let half = size / 2;
-    for step in 0..=size {
-        let x = left + step;
-        let share = 1.0 - (step as f32 / size as f32);
-        for y in 0..=(half as f32 * share) as i32 {
-            put(buffer, width, x, center_y - y, ink, 1.0);
-            put(buffer, width, x, center_y + y, ink, 1.0);
-        }
-    }
+    // A triangle pointing right: its base down the left edge, over every row the mark is tall, and
+    // its point a column past the last one it is drawn in — the mark's own size, drawn as the slope
+    // from the base to the point rather than as the flight of steps a walk of whole columns makes
+    // of it (see `fill_triangle`).
+    let base = (center_x - size / 3) as f32;
+    let half = (size / 2) as f32;
+    fill_triangle(
+        buffer,
+        width,
+        [
+            (base, center_y as f32 - half),
+            (base, center_y as f32 + half + 1.0),
+            (base + size as f32 + 1.0, center_y as f32 + 0.5),
+        ],
+        ink,
+        1.0,
+    );
 }
 
 /// One step of a walk through files, as a transport draws it: a bar against the side the step
@@ -553,26 +559,34 @@ pub(super) fn draw_track_step(
         1.0,
     );
 
-    // The triangle, walked as a scan of half-widths in the direction the step goes: widest at the
-    // far edge and closing to nothing at the bar, which is what a triangle is.
-    //
-    // The far edge is the last *column* of the mark rather than its first, on both sides: the mark
-    // is a whole number of columns wide, so the two ends it has are a pixel either side of the
-    // centreline rather than at it. Measuring the far edge from the centre instead is what makes
-    // the back one a column wider than the on one and its triangle sit across its own bar.
+    // The triangle, drawn by the three lines that make it rather than walked as a scan of
+    // half-widths: what a scan cannot draw is a slanted edge, and this mark is nothing else (see
+    // `fill_triangle`). The far edge is the last *column* of the mark on both sides, for the reason
+    // the mark's own width is counted in columns: the two ends it has are a pixel either side of the
+    // centreline rather than at it, and a triangle measured from the centre instead comes out a
+    // column too wide on one of the two. The base is the edge the far end of the mark is, and the
+    // point is a column past it.
     let far = if forward {
         center_x - half
     } else {
         center_x + half - 1
     };
-    for step in 0..=head {
-        let x = if forward { far + step } else { far - step };
-        let share = 1.0 - (step as f32 / head as f32);
-        for y in 0..=(half as f32 * share).round() as i32 {
-            put(buffer, width, x, center_y - y, color, 1.0);
-            put(buffer, width, x, center_y + y, color, 1.0);
-        }
-    }
+    let (base, point) = if forward {
+        (far as f32, (far + head + 1) as f32)
+    } else {
+        ((far + 1) as f32, (far - head) as f32)
+    };
+    fill_triangle(
+        buffer,
+        width,
+        [
+            (base, center_y as f32 - half as f32),
+            (base, center_y as f32 + half as f32 + 1.0),
+            (point, center_y as f32 + 0.5),
+        ],
+        color,
+        1.0,
+    );
 }
 
 fn paint_play_button(
@@ -761,11 +775,12 @@ pub(crate) enum ControlGlyph {
 /// card does not have — and a wash drawn here as well would be the same button lit twice at two
 /// colours.
 ///
-/// Everything here is written premultiplied (see the module documentation), which a page cannot
-/// see: `DibSurface::pixels` forces the alpha byte of every pixel it hands back to 255, so a
-/// mark written at full coverage reads the same either way. Every glyph below is therefore drawn
-/// at coverage 1.0 only — a mark at partial coverage would be composited twice over the page's
-/// own opaque pixel and come out darker than the same mark on a strip.
+/// Everything here is written premultiplied (see the module documentation), against a page that has
+/// been filled with the card's own colour first and is read back opaque: `DibSurface::pixels`
+/// forces the alpha byte of every pixel it hands back to 255 before the card is shown, which is the
+/// byte a pixel that is a blend of two opaque colours already carries. So a glyph whose edge runs
+/// across the pixel grid is drawn in the shares of it the shape covers — the way the two window
+/// buttons beside it are (`paint_window_button`) — rather than walked in whole columns.
 pub(crate) fn paint_card_control(
     surface: &DibSurface,
     rect: RECT,
@@ -837,7 +852,7 @@ pub(crate) fn paint_card_control(
 /// The size a mark of `nominal` pixels is drawn at inside a box of `side` pixels, never larger
 /// than the box and never smaller than the floor every mark in this file shares: a mark smaller
 /// than that is a speck, and a mark larger than its button is a mark on the card beside it.
-fn size_in(scale: f32, side: i32, nominal: i32) -> i32 {
+pub(super) fn size_in(scale: f32, side: i32, nominal: i32) -> i32 {
     text_paint::scaled(nominal, scale).clamp(6, side)
 }
 

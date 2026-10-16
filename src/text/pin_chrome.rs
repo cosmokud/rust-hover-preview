@@ -58,8 +58,9 @@ use caption::{fit_title, longest_prefix_that_fits, paint_glyph, CaptionButtonBox
 use primitives::{caption_style, clock_text, draw_chevron, measure_text, GLYPH_PIXELS};
 #[cfg(test)]
 use transport::{
-    draw_track_step, transport_layout, volume_thumb_row, VOLUME_COLLAR_PIXELS, VOLUME_PANEL_GAP,
-    VOLUME_PANEL_WIDTH, VOLUME_THUMB_RADIUS,
+    draw_pause_glyph, draw_play_glyph, draw_track_step, size_in, transport_layout,
+    volume_thumb_row, VOLUME_COLLAR_PIXELS, VOLUME_PANEL_GAP, VOLUME_PANEL_WIDTH,
+    VOLUME_THUMB_RADIUS,
 };
 #[cfg(test)]
 use windows::Win32::Foundation::RECT;
