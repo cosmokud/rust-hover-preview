@@ -45,13 +45,16 @@ pub(super) struct BubbleFrame {
 /// drawing somewhere else — and a pin put back up has no bubble for it to be shown in.
 pub(super) static BUBBLE_FRAME: Lazy<Mutex<Option<BubbleFrame>>> = Lazy::new(|| Mutex::new(None));
 
-/// Whether a frame has landed in the slot above since the bubble was last painted.
+/// Whether a frame has landed in the slot above since the bubble was last painted, **or a frame has
+/// been read out of a film beside its player** (see `bubble_stream`).
 ///
 /// The grab is a process on a thread of its own, so the paint that put the bubble up cannot be the
 /// one that shows what the grab found: this is the note it leaves, and the loop's next tick reads
 /// it and paints the bubble again (see the bubble repaint in `run_preview_window`). It is raised
 /// whether or not a frame came back — a file with no frame to give is a bubble that stays as it
-/// was, and a flag left standing for a grab that answered nothing is a repaint every tick.
+/// was, and a flag left standing for a grab that answered nothing is a repaint every tick. The same
+/// note is what a live frame leaves, and for the same reason: nothing else about a bubble over a
+/// film at a level of nothing moves (see `bubble_bars_are_moving`).
 pub(super) static BUBBLE_FRAME_READY: AtomicBool = AtomicBool::new(false);
 
 /// How fast the wave in the bars a mixer's peak is drawn as travels, in radians a second.
@@ -602,7 +605,7 @@ pub(super) fn grab_bubble_frame(box_: ScreenRegion) {
     };
 
     let at = pinned_playhead().unwrap_or(0.0);
-    let side = logical_px(dpi_at(box_.0, box_.1), PIN_BUBBLE_PIXELS).max(16) as u32;
+    let side = bubble_side(box_);
 
     // **The suite starts no process at all**, and a grab is a process: what a test build answers is
     // the ask — the film, the second and the side — and the frame is left exactly as it stands (see
@@ -1253,20 +1256,40 @@ pub(super) fn bubble_box(anchor: ScreenRegion) -> ScreenRegion {
     (clamped.0, clamped.1, clamped.0 + side, clamped.1 + side)
 }
 
-/// The box the bubble's own window is standing in, where one is up: the square the circle is
+/// The side a bubble is drawn at on the display `box_` stands on: the circle's own, whatever the
+/// square it is painted in.
+///
+/// It is one function because two things are made at that size — the still a bubble is ringed in and
+/// falls back to, and the frames a film's player is decoded beside (see `grab_bubble_frame` and
+/// `bubble_stream`) — and a pair of them that disagreed would be a picture of one size painted into a
+/// circle of another.
+pub(super) fn bubble_side(box_: ScreenRegion) -> u32 {
+    logical_px(dpi_at(box_.0, box_.1), PIN_BUBBLE_PIXELS).max(16) as u32
+}
+
+/// The box the bubble's own window is standing in, where one is **up**: the square the circle is
 /// painted in, and the square a film standing in the bubble is put in.
 ///
 /// It is read off the window rather than remembered, because a bubble the hand has carried is a
 /// bubble standing somewhere else — and the film has to be carried with it (see `bubble_film`).
 /// **The circle's own side and not the window's height**, because the window grows downwards while
 /// its menu is up (see `open_bubble_menu`).
+///
+/// **A bubble that is not on screen has no box**, which is the whole of what a pin put away into the
+/// taskbar is: what a seat or a stream would do with the box it still has is move somebody else's
+/// window and decode a film for a circle nobody is looking at.
 pub(super) fn bubble_box_on_screen() -> Option<ScreenRegion> {
     let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
     if hwnd == 0 {
         return None;
     }
 
-    bubble_box_of(HWND(hwnd as *mut _))
+    let hwnd = HWND(hwnd as *mut _);
+    if !unsafe { IsWindowVisible(hwnd).as_bool() } {
+        return None;
+    }
+
+    bubble_box_of(hwnd)
 }
 
 /// The box the circle of `hwnd` is standing in (see `bubble_box_on_screen`).
@@ -1384,11 +1407,14 @@ pub(super) unsafe fn render_pin_bubble(hwnd: HWND) {
     // thumbnail cut down to the bubble's own size — and the chrome paints from a picture it is
     // lent, so this is the one place the two meet (see `BubbleArtOwned`).
     let art = match &art {
-        BubbleArtOwned::Picture(pixels, art_width, art_height) => pin_chrome::BubbleArt::Picture {
-            pixels,
-            width: *art_width,
-            height: *art_height,
-        },
+        BubbleArtOwned::Picture(pixels, art_width, art_height, ring) => {
+            pin_chrome::BubbleArt::Picture {
+                pixels,
+                width: *art_width,
+                height: *art_height,
+                ring: *ring,
+            }
+        }
         BubbleArtOwned::Hole(ring) => pin_chrome::BubbleArt::Hole { ring: *ring },
         _ => pin_chrome::BubbleArt::None,
     };
@@ -1502,8 +1528,12 @@ pub(super) unsafe fn repaint_pin_bubble() {
 /// bubble's own size. One of those outlives the call that asked for it and the other does not, and
 /// the difference is the whole of what the two types are (see `bubble_art`).
 pub(super) enum BubbleArtOwned {
-    /// A picture of `side × side` BGRA, and the side it was cut to.
-    Picture(Vec<u8>, u32, u32),
+    /// A picture of `side × side` BGRA, and the side it was cut to, together with the colour the
+    /// bubble's ring is drawn in where the caller has one to give — which is the still's own average
+    /// for the frames of a film read beside its player, so that the ring over a moving picture is one
+    /// colour rather than the average of every frame that passes. A still passes `None` and is
+    /// ringed in its own colour, which is the same thing it would have been given here.
+    Picture(Vec<u8>, u32, u32, Option<[u8; 3]>),
     /// A hole where the picture would be, with the film's own window standing in it: the middle is
     /// left to that window, the bars and the mark are drawn over it, and the ring is drawn in the
     /// colour here — the still's own average, so that the ring is the film's colour whether the film
@@ -1561,14 +1591,23 @@ pub(super) fn bubble_art(side: u32) -> (BubbleArtOwned, pin_chrome::BubbleMark) 
                 BubbleArtOwned::Hole(
                     frame.and_then(|frame| pin_chrome::average_color(&frame.pixels)),
                 )
+            } else if let Some((pixels, side)) = bubble_stream::latest_frame() {
+                // **And where it is FFmpeg's player, the picture is the frames read beside it** (see
+                // `bubble_stream`). The ring's colour is the still's and not the frame's: a hairline
+                // averaged from every frame that passes is a hairline that changes twenty-five times
+                // a second, and a ring is the file's colour rather than a reading of it.
+                let ring = frame.and_then(|frame| pin_chrome::average_color(&frame.pixels));
+                BubbleArtOwned::Picture(pixels, side, side, ring)
             } else {
                 frame
-                    .map(|frame| BubbleArtOwned::Picture(frame.pixels, frame.side, frame.side))
+                    .map(|frame| {
+                        BubbleArtOwned::Picture(frame.pixels, frame.side, frame.side, None)
+                    })
                     .unwrap_or(BubbleArtOwned::None)
             }
         }
         MediaType::NativeVideo => bubble_thumbnail(media, side)
-            .map(|pixels| BubbleArtOwned::Picture(pixels, side, side))
+            .map(|pixels| BubbleArtOwned::Picture(pixels, side, side, None))
             .unwrap_or(BubbleArtOwned::None),
         // The bands of this app's own sound where this machine reads them, and the mixer's own
         // peak where it will not: the same row of bars, drawn from the answer this machine has
@@ -1578,7 +1617,7 @@ pub(super) fn bubble_art(side: u32) -> (BubbleArtOwned, pin_chrome::BubbleMark) 
             None => BubbleArtOwned::Level(audio_meter::output_peak().unwrap_or(0.0)),
         },
         kind if kind.has_bubble_picture() => bubble_thumbnail(media, side)
-            .map(|pixels| BubbleArtOwned::Picture(pixels, side, side))
+            .map(|pixels| BubbleArtOwned::Picture(pixels, side, side, None))
             .unwrap_or(BubbleArtOwned::None),
         _ => BubbleArtOwned::None,
     };

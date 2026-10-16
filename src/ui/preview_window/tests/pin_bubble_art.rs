@@ -120,3 +120,89 @@ fn a_bubbles_bars_move_for_a_sound_and_for_a_film_that_is_making_one() {
         *media = previous_media;
     }
 }
+
+/// What a film FFmpeg's player is drawing is drawn with: the frames read beside that player, and the
+/// colour the *still* was taken from around them.
+///
+/// The two are deliberately not the same frame. A ring averaged from every live frame that passes is a
+/// hairline that changes twenty-five times a second — a reading of the film rather than its colour —
+/// so the still the collapse grabbed is the ring's, and a bubble over a live picture is ringed in one
+/// colour from the moment it goes up to the moment it comes down (see `bubble_art`).
+#[test]
+fn the_frames_read_beside_a_player_are_ringed_in_the_stills_own_colour() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+    let previous_still = BUBBLE_FRAME.lock().ok().and_then(|mut frame| frame.take());
+    bubble_stream::stand_no_stream();
+
+    stand_pin(Some(overlay_pin((100, 100, 420, 340), PinChrome::always())));
+    let mut media = create_loading_media(320, 240);
+    media.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    // The still as a collapse leaves it: a frame of one colour, so that the ring's colour is that
+    // colour and nothing else, of the size a bubble is drawn at on this display.
+    let side = 44u32;
+    let still = [40u8, 90, 160, 255]
+        .iter()
+        .cycle()
+        .take(side as usize * side as usize * 4)
+        .copied()
+        .collect::<Vec<u8>>();
+    if let Ok(mut frame) = BUBBLE_FRAME.lock() {
+        *frame = Some(BubbleFrame {
+            pixels: still,
+            side,
+            path: PathBuf::from("a-film-a-bubble-shows-playing.mkv"),
+        });
+    }
+
+    // And the frames a stream would have read, of a different colour from the still: which of the two
+    // is the picture and which is the ring is the whole of what this asks.
+    let live = [7u8, 200, 30, 255]
+        .iter()
+        .cycle()
+        .take(side as usize * side as usize * 4)
+        .copied()
+        .collect::<Vec<u8>>();
+    bubble_stream::stand_live_frame(Some((live.clone(), side)));
+
+    match bubble_art(side).0 {
+        BubbleArtOwned::Picture(pixels, picture_side, _, ring) => {
+            assert_eq!(
+                pixels, live,
+                "what is inside the circle is the frame the stream read, not the still it began from"
+            );
+            assert_eq!(picture_side, side);
+            assert_eq!(
+                ring,
+                Some([160, 90, 40]),
+                "and the ring is the still's own colour, in a palette's order — one colour for as \
+                 long as the bubble stands rather than the average of every frame that passes"
+            );
+        }
+        _ => panic!("a film being streamed is a picture in the bubble"),
+    }
+
+    // And with no frames read, the still is the picture — and answers the ring itself, which is the
+    // same colour the live case was given (see `BubbleArt::Picture`).
+    bubble_stream::stand_live_frame(None);
+    match bubble_art(side).0 {
+        BubbleArtOwned::Picture(_, _, _, ring) => assert_eq!(ring, None),
+        _ => panic!("a film with no stream and a still in hand shows the still"),
+    }
+
+    bubble_stream::stand_no_stream();
+    if let Ok(mut frame) = BUBBLE_FRAME.lock() {
+        *frame = previous_still;
+    }
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
