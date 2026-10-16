@@ -507,8 +507,8 @@ pub(super) fn cached_video_source_pixels(path: &Path) -> Option<u64> {
 /// Give up every probed geometry: the engine choice moved, and a geometry read by FFprobe is not
 /// the geometry a media-engine preview wants (or the reverse), so the next hover probes again.
 ///
-/// It is `pub` for the reason `forget_video_hw_accel_answer` is: the tray reaches it through the
-/// re-export `preview_window` makes, and a re-export cannot be wider than what it names.
+/// It is `pub` because the tray reaches it through the re-export `preview_window` makes, and a
+/// re-export cannot be wider than what it names.
 pub fn forget_video_geometry() {
     video_geometry_cache().clear();
 }

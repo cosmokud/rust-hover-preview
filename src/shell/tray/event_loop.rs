@@ -475,7 +475,7 @@ unsafe extern "system" fn tray_window_proc(
                         toggle_engine_persistent(cmd - ID_TRAY_ENGINE_PERSISTENT_BASE)
                     }
                     // Whether a video is decoded on the graphics card, which is the
-                    // `Hardware Acceleration (Video)` row of the `Performance`
+                    // `Hardware Acceleration (MPV Only)` row of the `Performance`
                     // submenu and so has an id of its own rather than
                     // a range.
                     ID_TRAY_VIDEO_HW_ACCEL => toggle_video_hw_accel(),

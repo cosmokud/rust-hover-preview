@@ -1,20 +1,29 @@
-//! What a film is decoded on and how it loops: the hardware device probe, the loop a pinned
-//! film is given, and the route a file takes to a player rather than to a picture.
+//! What a film is decoded on and how it loops: the switch mpv is told about decoding, the loop a
+//! pinned film is given, and the route a file takes to a player rather than to a picture.
 
 use super::*;
 
-/// Whether a video is decoded on the graphics card at all: the `Video` toggle under
+/// Whether a video is decoded on the graphics card at all: the `Video` row under
 /// `Performance → Hardware Acceleration` in the tray, read as the switch it is.
 ///
-/// It is the whole of what mpv is told about decoding — its `--hwdec=auto` is mpv's own safe list
-/// with mpv's own software fallback, so the device the ffplay route has to measure is not a
-/// question for it (see `video_launch::mpv_args`) — and it is read at the launch for the reason
-/// below: a setting read at a hover's beginning is read for the *next* hover.
+/// **It is mpv's switch and nobody else's.** What it reaches is mpv's own `--hwdec=auto` — a safe
+/// list and a software fallback that are the player's business, so there is no device for this side
+/// to measure or to name — and FFmpeg's player is never given `-hwaccel` at all, which is written
+/// down where that launch is made and where the measurement behind it is (see
+/// `video_playback::start_video_playback`).
+///
+/// **And a machine with no `mpv.exe` has no player this switch could act on**, so the answer is no
+/// whatever `config.ini` holds: the row has been checked by default since the app shipped, and every
+/// config written before the row said so holds a `true` that means nothing without mpv.
+///
+/// It is read at the launch rather than at a hover's beginning, because a film already playing was
+/// started with the answer that stood then and is kept playing with it (see `video_launch::mpv_args`).
 pub(super) fn video_hw_accel_wanted() -> bool {
     CONFIG
         .lock()
         .map(|config| config.video_hw_accel)
         .unwrap_or(DEFAULT_VIDEO_HW_ACCEL)
+        && codecs::mpv_available()
 }
 
 /// The `mpv.exe` a launch runs: the path `mpv_path` names where it is still a file, and the first
@@ -27,262 +36,6 @@ pub(super) fn mpv_program(chosen: &str, installs: &[PathBuf]) -> Option<PathBuf>
     let chosen = (!chosen.trim().is_empty()).then_some(Path::new(chosen));
 
     codecs::resolve_mpv(chosen, installs)
-}
-
-/// The device a video is decoded on, or nothing for a video decoded on a core.
-///
-/// This is the `Video` toggle under `Performance → Hardware Acceleration` in the tray, read here
-/// rather than in the tray, because a setting read at a hover's beginning is read for the *next*
-/// hover: a film already playing was launched with the answer that stood then and is kept playing
-/// with it rather than being relaunched under the user's feet.
-///
-/// It is **read, never waited for**: the probe runs on a thread of its own and this is on the
-/// preview thread, which is the one thread that must not be waiting on an external process (see
-/// `HwAccelProbe::read`). A preview begun before the answer has landed is software decoded, which is
-/// the answer that works on every machine and the one a slow first hover should get anyway.
-///
-/// The answer is kept for as long as it answers the question that is being asked, which is the whole
-/// of what `HwAccelProbe` is: the question is about this machine's drivers, about one build of
-/// FFmpeg, and about *the setting as it stands*, and a tray toggle makes the third of those a
-/// different question (see `forget_video_hw_accel_answer`).
-pub(super) fn video_hw_accel_device() -> Option<&'static str> {
-    VIDEO_HW_ACCEL.read(|| {
-        let on = CONFIG
-            .lock()
-            .map(|config| config.video_hw_accel)
-            .unwrap_or(DEFAULT_VIDEO_HW_ACCEL);
-
-        probe_hwaccel_device(on)
-    })
-}
-
-/// The one answer to "which device should a video be decoded on" for the run of the app.
-///
-/// It is a struct rather than a lone `OnceLock` because there are two parties with different rights
-/// over it, and folding them into one is what made the first version of this answer `None` for ever.
-/// A `OnceLock` completed by the thread that *reads* it is completed before the thread that
-/// *writes* it has run, so the write is refused and every launch in the run is software decoded —
-/// and the mistake is invisible to any test that reads the answer twice, because `None` is a
-/// perfectly good answer for a machine where nothing survives the probe.
-///
-/// So the two rights are two fields. `asked` is the reader's to set and the writer's never to touch:
-/// it says the question has been put, and a reader that finds it behind `current` is the one that
-/// puts it — a compare-and-swap, so any number of readers racing this way still ask once. The answer
-/// itself belongs to the probe alone, which is why it carries the generation it was found for: a
-/// probe still running when the user flips the toggle would otherwise land an answer to a question
-/// that is no longer being asked, and a film decoded on a card the user has just switched off is a
-/// worse fault than one decoded in software.
-pub(super) struct HwAccelProbe {
-    /// The generation of the question a probe has been put for, and `0` for none — a reader that
-    /// finds this behind `current` is the one that asks.
-    pub(super) asked: AtomicU32,
-    /// The generation of the question as it stands, which the tray moves on when the setting is
-    /// switched. It starts at one so that zero can mean "no question has ever been asked".
-    pub(super) current: AtomicU32,
-    /// What a probe found, and which question it was found for. The generation is half the field for
-    /// the same reason it is in `asked`: an answer is only an answer to the question it was asked,
-    /// and a reader that cannot tell which question that was would have to take the newest on trust.
-    pub(super) found: Mutex<Option<(u32, Option<&'static str>)>>,
-}
-
-impl HwAccelProbe {
-    /// The answer as it stands, putting the question if it has never been put.
-    ///
-    /// **This never waits for the probe**, which is the whole bargain and the reason the answer is
-    /// not behind a `OnceLock` the reader completes: the probe takes up to three seconds a device and
-    /// walks four of them, and this is on the preview thread — the one thread in this app that must
-    /// not be blocked on an external process, because it is the thread that has to keep answering
-    /// Explorer. So a reader that arrives before the answer gets nothing, and nothing is a working
-    /// answer: FFmpeg decodes in software and the film plays.
-    ///
-    /// The lock below is not a wait for anything slow. It is held by the probe for the length of one
-    /// pointer-sized write, which is the same arrangement every other piece of this app's own state
-    /// uses on this thread (`VIDEO_LOOP`, `PIN_STATE`).
-    ///
-    /// The record is taken by `&'static` rather than borrowed because the probe outlives this call by
-    /// a thread, and a borrow of a caller's frame is not what a thread can write through. That is a
-    /// constraint on where the record lives rather than a trick: it is a `static`, so every caller has
-    /// one.
-    pub(super) fn read(
-        &'static self,
-        probe: impl FnOnce() -> Option<&'static str> + Send + 'static,
-    ) -> Option<&'static str> {
-        let generation = self.current.load(Ordering::Acquire);
-
-        // Asked once per generation however many readers arrive at once: the swap is what makes one
-        // of them the asker, and the losers read rather than ask, which is the answer they would have
-        // got had they waited a moment anyway.
-        if self.asked.load(Ordering::Acquire) != generation
-            && self.asked.swap(generation, Ordering::AcqRel) != generation
-        {
-            std::thread::spawn(move || {
-                let found = probe();
-
-                let Ok(mut answer) = self.found.lock() else {
-                    return;
-                };
-
-                if self.current.load(Ordering::Acquire) == generation {
-                    *answer = Some((generation, found));
-                }
-            });
-        }
-
-        self.found
-            .lock()
-            .ok()
-            .filter(|answer| {
-                answer
-                    .as_ref()
-                    .is_some_and(|(asked, _)| *asked == generation)
-            })
-            .and_then(|answer| answer.and_then(|(_, found)| found))
-    }
-
-    /// Make every answer found so far an answer to a question no longer being asked.
-    ///
-    /// This is what switching the setting does, and it is why the answer is not simply kept for the
-    /// run of the app. The question is about the machine *and* about the setting: a probe run with
-    /// the setting off names no device at all, so a run that kept its first answer would answer the
-    /// switched question with the answer to the question before it.
-    ///
-    /// It is a bump and not a clear, because the answer may be written by a probe that is still
-    /// running and which must be told which question it was asked rather than simply being ignored:
-    /// `read` is what discards it, by comparing the generation it was found for against the current
-    /// one. That is also why a launch made between the switch and the new answer gets nothing rather
-    /// than the old device — software decoding is the answer that is right when the setting is off.
-    pub(super) fn forget(&self) {
-        self.current.fetch_add(1, Ordering::AcqRel);
-    }
-}
-
-/// Where the answer to "which device should a video be decoded on" is kept while it is on its way.
-pub(super) static VIDEO_HW_ACCEL: HwAccelProbe = HwAccelProbe {
-    asked: AtomicU32::new(0),
-    current: AtomicU32::new(1),
-    found: Mutex::new(None),
-};
-
-/// Stop answering the hardware-acceleration question with what was found for the setting as it was
-/// before the user switched it.
-///
-/// The tray calls this when the `Video` row is toggled, and it is the whole of what makes that row
-/// work within a session rather than only across restarts. Without it the answer found for the
-/// setting as it stood at the first hover would stand for the rest of the run, so the row would be a
-/// question about the next run of the app rather than about the next preview — and the promise its
-/// own note makes, that the next hover is the first one decoded differently, would be true only
-/// after a restart the note never mentioned.
-pub fn forget_video_hw_accel_answer() {
-    VIDEO_HW_ACCEL.forget();
-}
-
-/// The first device of the ones worth trying that puts a frame on a screen without dying, and
-/// nothing at all where none of them does.
-///
-/// `None` is the answer on a machine where every name in the list is fatal, which on the machine
-/// this was written on is all of them — `ffplay` takes `-hwaccel` only alongside its Vulkan
-/// renderer, and a renderer that cannot be brought up here dies of an access violation rather than
-/// falling back (see `video_launch::HWACCEL_DEVICES` for the whole of the measurement). Falling
-/// back is therefore this app's job and not FFmpeg's, and a software-decoded preview is a preview.
-/// FFmpeg's own fallback is still behind the answer for a stream the device will not take, and the
-/// cost of that is a slower film rather than a dead one.
-pub(super) fn probe_hwaccel_device(enabled: bool) -> Option<&'static str> {
-    video_launch::hw_accel_candidates(enabled)
-        .iter()
-        .copied()
-        .find(|device| probe_one_hwaccel(device))
-}
-
-/// Whether one device decoded something and drew it without FFmpeg's renderer giving up on it.
-///
-/// The source is FFmpeg's own `testsrc` pattern rather than a file: it asks nothing of the disk and
-/// answers the same on a machine with no video on it. It is the right limit because both of the
-/// ways this option fails happen before a film is looked at — the renderer is brought up when the
-/// option is parsed — so the answer is about the machine and the build rather than about the file.
-///
-/// A clean exit is the whole of the answer. Nothing about the picture is checked, because on a
-/// machine where the device *is* usable the failures being ruled out here are not ones that would
-/// show up in a tenth of a second of synthetic video: what they are is a process that is gone.
-///
-/// **A player that survives the budget is ended rather than left to finish.** It has drawn its tenth
-/// of a second and not died, which is the answer being asked for, so there is nothing more to wait
-/// for — but a `Child` dropped here is not a player ended: a `Drop` that closes a handle does not
-/// kill a process, so a probe that timed out would leave a player on screen for ever, on a machine
-/// that is precisely the slow one where nobody would have noticed it was meant to be a probe. It is
-/// killed rather than waited on, because this runs on the probe thread and the app has no reason to
-/// hold a thread open for a process it has already learned all it needed; the kill is confirmed by
-/// image name and is not ours to confirm by waiting (see `engine_processes::terminate_verified`).
-#[cfg(not(test))]
-pub(super) fn probe_one_hwaccel(device: &str) -> bool {
-    let Ok(mut child) = engine_processes::hidden_command("ffplay")
-        .args([
-            "-hwaccel",
-            device,
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=size=64x64:rate=1:duration=0.1",
-            "-x",
-            "16",
-            "-y",
-            "16",
-            "-noborder",
-            "-autoexit",
-            "-loglevel",
-            "warning",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return false;
-    };
-
-    // Bounded, because a probe that can wait for ever is a probe that can hang a thread of the app
-    // on something it cannot answer. The player is given longer to be alive than the tenth of a
-    // second of video it is asked to draw, because the failure being caught is an exit rather than
-    // a frame — and `try_wait` rather than `wait`, so the bound is this function's own and not a
-    // thread's.
-    let pid = child.id();
-    let deadline = Instant::now() + Duration::from_millis(3000);
-    let outcome = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status.success(),
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            // Still running with nothing left of the budget: it has drawn its tenth of a second and
-            // not died, which is the answer the probe is asking for — the failures being ruled out
-            // here are exits, not hangs.
-            Ok(None) => break true,
-            // A poll that cannot be read is not a poll that saw the player alive, and a device
-            // named on an answer nobody read is a device that can be a fault on its own: this probe
-            // exists to *rule devices in*, so an indeterminate state has to rule nothing out and
-            // name nothing. It is not the exit either — nothing is known about the player — which is
-            // why it is its own arm rather than folded into the one above.
-            Err(_) => break false,
-        }
-    };
-
-    // Only the player that outlived its budget has anything to end. One that exited was reaped by
-    // `try_wait` above, and asking to be killed as well would be a kill aimed at an id the system is
-    // free to hand to something else in the meantime.
-    if child.try_wait().ok().flatten().is_none() {
-        engine_processes::terminate_verified(pid, "ffplay.exe", None);
-    }
-
-    outcome
-}
-
-/// The test build's probe: begin nothing, and answer as a machine whose probe found no device does.
-///
-/// A test run must start no process (see `video_playback::spawn_player`), and naming no device is a
-/// working answer on a machine where nothing survives (`probe_hwaccel_device` says so): the walk
-/// stops at the same place, and the preview is decoded on a core.
-#[cfg(test)]
-pub(super) fn probe_one_hwaccel(_device: &str) -> bool {
-    false
 }
 
 /// A player this app has to loop itself: which one it is, what it is playing, the second it was
