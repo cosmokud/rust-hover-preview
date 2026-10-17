@@ -34,6 +34,49 @@ fn the_spinner_delay_is_read_from_its_own_key() {
     assert_eq!(config.spinner_delay_ms, MAX_SPINNER_DELAY_MS);
 }
 
+/// The duration a pinned image's bounce takes to settle is a setting of its own, read from
+/// its own key in milliseconds: `0` is no bounce, and a number past the ceiling is reduced to it.
+#[test]
+fn the_pin_zoom_bounce_duration_is_read_from_its_own_key() {
+    assert_eq!(
+        AppConfig::default().pin_zoom_bounce_ms,
+        DEFAULT_PIN_ZOOM_BOUNCE_MS,
+        "a bounce takes 240 ms unless the file says otherwise"
+    );
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "pin_zoom_bounce_ms", Some("480".to_string()));
+
+    let config = read_file(&mut ini);
+    assert_eq!(config.pin_zoom_bounce_ms, 480);
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "pin_zoom_bounce_ms", Some("0".to_string()));
+
+    let config = read_file(&mut ini);
+    assert_eq!(config.pin_zoom_bounce_ms, 0, "`0` is a duration like any other");
+
+    let mut ini = Ini::new();
+    ini.set(
+        CONFIG_SECTION,
+        "pin_zoom_bounce_ms",
+        Some((MAX_PIN_ZOOM_BOUNCE_MS + 1).to_string()),
+    );
+
+    let config = read_file(&mut ini);
+    assert_eq!(config.pin_zoom_bounce_ms, MAX_PIN_ZOOM_BOUNCE_MS);
+
+    // Also accepts fallback names if present
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "zoom_bounce_ms", Some("350".to_string()));
+    assert_eq!(read_file(&mut ini).pin_zoom_bounce_ms, 350);
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "pin_bounce_ms", Some("300".to_string()));
+    assert_eq!(read_file(&mut ini).pin_zoom_bounce_ms, 300);
+}
+
+
 /// The settings section is written under the headings the tray lists its menus under, in
 /// the order the tray lists them, with the keys of a heading in alphabetical order and the
 /// file lists left to the sections below — which is the shape a person reads, rather than

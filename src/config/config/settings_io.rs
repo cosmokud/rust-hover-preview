@@ -179,6 +179,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "beat_hz",
             "hdr_exposure",
             "hdr_tone_map",
+            "pin_zoom_bounce_ms",
             "spinner_delay_ms",
             "text_scroll_far_edge_grace_pixels",
             "ttc_face",
