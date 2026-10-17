@@ -104,13 +104,14 @@ pub(super) fn append_labeled_item(menu: HMENU, flags: MENU_ITEM_FLAGS, id: u16, 
 
 /// What a cache size is called in the menu: the size, with the one the cache starts
 /// at marked as the default — the caches do not all start at the same one, which is
-/// why the default is passed in rather than written into the label. The two sizes at
-/// the ceiling are the only ones that are not a plain number of megabytes.
+/// why the default is passed in rather than written into the label. A size that is a
+/// whole number of gigabytes is named in them, so the sizes past a gigabyte read as
+/// `4 GB` and `128 GB` rather than as the megabytes they are.
 pub(super) fn cache_size_label(megabytes: u32, default_mb: u32) -> String {
-    let label = match megabytes {
-        1024 => "1 GB".to_string(),
-        2048 => "2 GB".to_string(),
-        other => format!("{other} MB"),
+    let label = if megabytes >= 1024 && megabytes.is_multiple_of(1024) {
+        format!("{} GB", megabytes / 1024)
+    } else {
+        format!("{megabytes} MB")
     };
 
     default_label(&label, megabytes == default_mb)

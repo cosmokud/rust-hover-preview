@@ -36,9 +36,10 @@ use super::commands::{
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
-    BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, CACHE_SIZE_CHOICES_MB, CODEC_COMMANDS,
-    DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB, DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES,
-    HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_ANIMATED_SCALE_BASE,
+    BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, CODEC_COMMANDS,
+    DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB, DISK_CACHE_SIZE_CHOICES_MB,
+    DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES,
+    ID_TRAY_AFK_TIMER_BASE, ID_TRAY_ANIMATED_SCALE_BASE,
     ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_VOLUME_BASE,
     ID_TRAY_AVOID_BASE, ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE,
     ID_TRAY_DDS_BACKGROUND_BASE,
@@ -74,7 +75,7 @@ use super::ids::{
     ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
     ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
     ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SUBTITLES, ID_TRAY_VIDEO_VOLUME_BASE,
-    ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
+    ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE, IMAGE_CACHE_SIZE_CHOICES_MB,
     TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND,
     PIN_END_OF_FILE_CHOICES, VIDEO_ENGINE_CHOICES, ZOOM_BACKGROUND_CHOICES, WM_TRAYICON,
 };
@@ -494,25 +495,28 @@ unsafe extern "system" fn tray_window_proc(
                     // sizes it offers rather than by the base of the next one, so an item of a
                     // submenu added past these is not read as a cache size.
                     cmd if (ID_TRAY_IMAGE_CACHE_BASE
-                        ..ID_TRAY_IMAGE_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)
+                        ..ID_TRAY_IMAGE_CACHE_BASE + IMAGE_CACHE_SIZE_CHOICES_MB.len() as u16)
                         .contains(&cmd) =>
                     {
                         set_image_cache_mb(cmd - ID_TRAY_IMAGE_CACHE_BASE)
                     }
                     cmd if (ID_TRAY_DOCUMENT_CACHE_BASE
-                        ..ID_TRAY_DOCUMENT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)
+                        ..ID_TRAY_DOCUMENT_CACHE_BASE
+                            + DISK_CACHE_SIZE_CHOICES_MB.len() as u16)
                         .contains(&cmd) =>
                     {
                         set_document_cache_mb(cmd - ID_TRAY_DOCUMENT_CACHE_BASE)
                     }
                     cmd if (ID_TRAY_IMAGE_DISK_CACHE_BASE
-                        ..ID_TRAY_IMAGE_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)
+                        ..ID_TRAY_IMAGE_DISK_CACHE_BASE
+                            + DISK_CACHE_SIZE_CHOICES_MB.len() as u16)
                         .contains(&cmd) =>
                     {
                         set_image_disk_cache_mb(cmd - ID_TRAY_IMAGE_DISK_CACHE_BASE)
                     }
                     cmd if (ID_TRAY_GENERAL_DISK_CACHE_BASE
-                        ..ID_TRAY_GENERAL_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16)
+                        ..ID_TRAY_GENERAL_DISK_CACHE_BASE
+                            + DISK_CACHE_SIZE_CHOICES_MB.len() as u16)
                         .contains(&cmd) =>
                     {
                         set_general_disk_cache_mb(cmd - ID_TRAY_GENERAL_DISK_CACHE_BASE)

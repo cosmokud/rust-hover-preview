@@ -20,9 +20,9 @@
 //! lived in one file.
 
 use super::super::ids::{
-    AUDIO_SEEK_CHOICES, AVOID_CHOICES, BITMAP_SCALE_CHOICES, CACHE_SIZE_CHOICES_MB,
-    DECODE_BUDGET_CHOICES_GB, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS,
-    TRAY_CUSTOM_THEMES,
+    AUDIO_SEEK_CHOICES, AVOID_CHOICES, BITMAP_SCALE_CHOICES, DECODE_BUDGET_CHOICES_GB,
+    DISK_CACHE_SIZE_CHOICES_MB, IMAGE_CACHE_SIZE_CHOICES_MB, TICK_CHOICES_MS,
+    TIMING_DELAY_CHOICES_MS, TRAY_CUSTOM_THEMES,
 };
 use super::super::submenus::{
     afk_timer_secs_at, audio_scale_at, background_at, dds_background_at, document_scale_at,
@@ -407,9 +407,10 @@ pub(in super::super) fn set_afk_timer(index: u16) {
 }
 
 /// The size an item of the `Cache` submenu stands for, by the position it was
-/// listed at. An id past the last size the menu offered is one that is not there.
-fn cache_size_at(index: u16) -> Option<u32> {
-    CACHE_SIZE_CHOICES_MB.get(index as usize).copied()
+/// listed at and the list its own cache is offered in. An id past the last size
+/// the menu offered is one that is not there.
+fn cache_size_at(index: u16, choices: &[u32]) -> Option<u32> {
+    choices.get(index as usize).copied()
 }
 
 /// How much memory the decoded-image cache may hold.
@@ -418,7 +419,7 @@ fn cache_size_at(index: u16) -> Option<u32> {
 /// loaded as, so nothing on screen changes — what changes is how much is freed, and
 /// a smaller size frees it now rather than at the next decode.
 pub(in super::super) fn set_image_cache_mb(index: u16) {
-    let Some(megabytes) = cache_size_at(index) else {
+    let Some(megabytes) = cache_size_at(index, &IMAGE_CACHE_SIZE_CHOICES_MB) else {
         return;
     };
 
@@ -436,7 +437,7 @@ pub(in super::super) fn set_image_cache_mb(index: u16) {
 /// hover that asks for it whatever the size, and a size of nothing means it is given up when
 /// that hover ends. So nothing is rebuilt here either — the next hover answers for itself.
 pub(in super::super) fn set_document_cache_mb(index: u16) {
-    let Some(megabytes) = cache_size_at(index) else {
+    let Some(megabytes) = cache_size_at(index, &DISK_CACHE_SIZE_CHOICES_MB) else {
         return;
     };
 
@@ -455,7 +456,7 @@ pub(in super::super) fn set_document_cache_mb(index: u16) {
 /// hover after it pays for the development again. Nothing is rebuilt here either — the pages are
 /// read by the hover that wants one, so what a size does is bound what is left for it to read.
 pub(in super::super) fn set_image_disk_cache_mb(index: u16) {
-    let Some(megabytes) = cache_size_at(index) else {
+    let Some(megabytes) = cache_size_at(index, &DISK_CACHE_SIZE_CHOICES_MB) else {
         return;
     };
 
@@ -475,7 +476,7 @@ pub(in super::super) fn set_image_disk_cache_mb(index: u16) {
 /// them, which is the answer the first hover of a film gets anyway while its copy is coming
 /// (see `subtitle_files`).
 pub(in super::super) fn set_general_disk_cache_mb(index: u16) {
-    let Some(megabytes) = cache_size_at(index) else {
+    let Some(megabytes) = cache_size_at(index, &DISK_CACHE_SIZE_CHOICES_MB) else {
         return;
     };
 

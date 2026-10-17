@@ -11,8 +11,9 @@
 //! handlers a click reaches are in `commands`.
 
 use super::ids::{
-    EngineIdleIds, BACKGROUND_CHOICES, CACHE_SIZE_CHOICES_MB, DDS_BACKGROUND_CHOICES,
-    DECODE_BUDGET_CHOICES_GB, FONT_SIZE_CHOICES, HTML_BACKGROUND_CHOICES,
+    EngineIdleIds, BACKGROUND_CHOICES, DDS_BACKGROUND_CHOICES,
+    DECODE_BUDGET_CHOICES_GB, DISK_CACHE_SIZE_CHOICES_MB, FONT_SIZE_CHOICES,
+    HTML_BACKGROUND_CHOICES, IMAGE_CACHE_SIZE_CHOICES_MB,
     ZOOM_BACKGROUND_CHOICES,
     ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SHUFFLE, ID_TRAY_AUDIO_VOLUME_BASE,
     ID_TRAY_AVOID_BASE, ID_TRAY_CHECK_UPDATES, ID_TRAY_DDS_BACKGROUND_BASE,
@@ -1396,35 +1397,39 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // being filled out: `AppendMenuW` is handed a pointer, so the wide strings have
     // to outlive the call that lists them. Which size is the default is the one
     // thing they say that differs between the caches.
-    for (name, base, held, default_mb) in [
+    for (name, base, held, default_mb, choices) in [
         (
             w!("Image (RAM)"),
             ID_TRAY_IMAGE_CACHE_BASE,
             image_cache_mb,
             DEFAULT_IMAGE_CACHE_MB,
+            &IMAGE_CACHE_SIZE_CHOICES_MB[..],
         ),
         (
             w!("Document (Disk)"),
             ID_TRAY_DOCUMENT_CACHE_BASE,
             document_cache_mb,
             DEFAULT_DOCUMENT_CACHE_MB,
+            &DISK_CACHE_SIZE_CHOICES_MB[..],
         ),
         (
             w!("Image (Disk)"),
             ID_TRAY_IMAGE_DISK_CACHE_BASE,
             image_disk_cache_mb,
             DEFAULT_IMAGE_DISK_CACHE_MB,
+            &DISK_CACHE_SIZE_CHOICES_MB[..],
         ),
         (
             w!("General (Disk)"),
             ID_TRAY_GENERAL_DISK_CACHE_BASE,
             general_disk_cache_mb,
             DEFAULT_GENERAL_DISK_CACHE_MB,
+            &DISK_CACHE_SIZE_CHOICES_MB[..],
         ),
     ] {
         let sizes_menu = CreatePopupMenu().unwrap();
 
-        let cache_labels: Vec<Vec<u16>> = CACHE_SIZE_CHOICES_MB
+        let cache_labels: Vec<Vec<u16>> = choices
             .iter()
             .map(|megabytes| {
                 cache_size_label(*megabytes, default_mb)
@@ -1434,7 +1439,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             })
             .collect();
 
-        for (index, _) in CACHE_SIZE_CHOICES_MB.iter().enumerate() {
+        for (index, _) in choices.iter().enumerate() {
             let _ = AppendMenuW(
                 sizes_menu,
                 MF_STRING,
@@ -1445,14 +1450,11 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
 
         // A size the menu does not offer — one a hand-edited `config.ini` asked for
         // — leaves every item unmarked rather than marking the nearest one.
-        if let Some(index) = CACHE_SIZE_CHOICES_MB
-            .iter()
-            .position(|megabytes| *megabytes == held)
-        {
+        if let Some(index) = choices.iter().position(|megabytes| *megabytes == held) {
             let _ = CheckMenuRadioItem(
                 sizes_menu,
                 base as u32,
-                (base + CACHE_SIZE_CHOICES_MB.len() as u16 - 1) as u32,
+                (base + choices.len() as u16 - 1) as u32,
                 (base + index as u16) as u32,
                 MF_BYCOMMAND.0,
             );

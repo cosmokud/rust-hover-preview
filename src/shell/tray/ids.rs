@@ -526,11 +526,21 @@ pub(super) const ID_TRAY_GENERAL_DISK_CACHE_BASE: u16 = 1360;
 /// the order it lists them. It sits in the slack between the `Cache` sizes and the
 /// document scale's own range.
 pub(super) const ID_TRAY_DECODE_BUDGET_BASE: u16 = 1380;
-/// The sizes the `Cache` submenu offers, in megabytes, largest first — `2 GB` at
+/// The sizes `Cache → Image (RAM)` offers, in megabytes, largest first — `16 GB` at
 /// the top and a cache that holds nothing at the bottom — and the whole range the
-/// settings allow, so a size a hand-edited `config.ini` asks for that is not one of
+/// setting allows, so a size a hand-edited `config.ini` asks for that is not one of
 /// these is shown with nothing checked rather than rounded to one of them.
-pub(super) const CACHE_SIZE_CHOICES_MB: [u32; 9] = [2048, 1024, 512, 256, 128, 64, 32, 16, 0];
+pub(super) const IMAGE_CACHE_SIZE_CHOICES_MB: [u32; 12] =
+    [16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 0];
+/// The sizes the three disk caches offer — `Document (Disk)`, `Image (Disk)` and
+/// `General (Disk)` — in megabytes, largest first: the same range the memory cache is
+/// offered in, and then on up to `128 GB`, past what a volume would hold long before
+/// the sizes above it are a disk's business. A size a hand-edited `config.ini` asks
+/// for that is not one of these is shown with nothing checked rather than rounded to
+/// one of them, the same as the memory cache's list.
+pub(super) const DISK_CACHE_SIZE_CHOICES_MB: [u32; 15] = [
+    131072, 65536, 32768, 16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 0,
+];
 /// The ceilings the `Decode Budget` submenu offers, in gigabytes, largest first. It is
 /// what one hover may decode or read for rather than what is kept, so the range starts
 /// far above any file someone meant to hover and ends at the smallest ceiling a large

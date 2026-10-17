@@ -230,7 +230,7 @@ pub const MAX_SPINNER_DELAY_MS: u64 = 10_000;
 /// cache is what answers a pin taken up again at a size it was decoded at before. A budget that
 /// has dropped those frames is a decode — of the file at its full resolution — after all.
 pub const DEFAULT_IMAGE_CACHE_MB: u32 = 128;
-pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
+pub const MAX_IMAGE_CACHE_MB: u32 = 16384;
 /// The folder a document's page is kept in may hold, in megabytes. What a page costs is the
 /// size of the file it is kept as — a PDF the engine that drew it exported, a slide's PNG, a
 /// workbook's picture — and what is kept is the working set of the documents a user previews,
@@ -248,7 +248,7 @@ pub const MAX_IMAGE_CACHE_MB: u32 = 2048;
 /// twice as much costs is disk rather than memory: nothing is read from the volume while it
 /// is not in use.
 pub const DEFAULT_DOCUMENT_CACHE_MB: u32 = 256;
-pub const MAX_DOCUMENT_CACHE_MB: u32 = 2048;
+pub const MAX_DOCUMENT_CACHE_MB: u32 = 131072;
 /// The folder a developed picture is kept in may hold, in megabytes. What a picture costs is the
 /// size of the PNG the image engine wrote — a few hundred kilobytes to a few megabytes at the
 /// size a preview is shown — and what is kept is the pictures a user hovers, least recently used
@@ -261,7 +261,7 @@ pub const MAX_DOCUMENT_CACHE_MB: u32 = 2048;
 /// changed. It is disk rather than memory: nothing is read from the folder while it is not in
 /// use. See `document_cache`.
 pub const DEFAULT_IMAGE_DISK_CACHE_MB: u32 = 512;
-pub const MAX_IMAGE_DISK_CACHE_MB: u32 = 2048;
+pub const MAX_IMAGE_DISK_CACHE_MB: u32 = 131072;
 /// The folder a film's extracted subtitle files are kept in may hold, in megabytes. What it
 /// holds are the small files this app copied a film's own subtitle tracks into, with the fonts
 /// that came out of the container dumped beside them (see `preview_window::subtitle_files`),
@@ -277,7 +277,7 @@ pub const MAX_IMAGE_DISK_CACHE_MB: u32 = 2048;
 /// read from the folder while it is not in use — and the budget is what bounds a library's
 /// worth of films hovered across months rather than anything a single film needs.
 pub const DEFAULT_GENERAL_DISK_CACHE_MB: u32 = 128;
-pub const MAX_GENERAL_DISK_CACHE_MB: u32 = 2048;
+pub const MAX_GENERAL_DISK_CACHE_MB: u32 = 131072;
 /// What one hover may decode or read for, in gigabytes: the ceiling every reader is
 /// handed before it allocates — a picture's decode, a document's bytes, the page
 /// Office exported, a theme a preview is painted with.
