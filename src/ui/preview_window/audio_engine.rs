@@ -30,6 +30,18 @@ pub(super) fn current_audio_seek() -> AudioSeek {
         .unwrap_or(DEFAULT_AUDIO_SEEK)
 }
 
+/// The top of the band a card's mark is read from, in hertz, or nothing where the setting is
+/// `off`: read as the card is painted rather than as a player is started, because it is a
+/// question about the drawing and not about the sound — a change reaches the card already on
+/// screen the next time it is drawn (see `audio_meter::output_beat`).
+pub(super) fn current_beat_hz() -> Option<u32> {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.beat_hz)
+        .unwrap_or(DEFAULT_BEAT_HZ)
+        .top()
+}
+
 /// Where a pinned sound starts, read the way the hover's is and at
 /// the same moment: from the pin's own setting as a player is
 /// started, so a change in the tray reaches the next pin — and a
