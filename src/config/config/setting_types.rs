@@ -395,6 +395,18 @@ impl TransparentBackground {
 /// squares are the answer that cannot be taken for part of the picture the way black can.
 pub const DEFAULT_IMAGE_BACKGROUND: TransparentBackground = TransparentBackground::Checkerboard;
 
+/// What the band beside a zoomed picture is filled with: black, the page that band starts
+/// at.
+///
+/// The band is what a picture a hand has carried off its window leaves behind it, and it is
+/// a page rather than a hole: the window it is filled in is layered and hit-tested by the
+/// shape of its pixels, so a band left transparent is a band the hand clicks through to
+/// whatever stands under the window. Black is where the setting starts because the band is
+/// the frame around a picture rather than a page to read one against — the squares a picture
+/// is normally drawn over are how a file's alpha is shown, which is the file's question and
+/// not this band's (see `zoom_background`).
+pub const DEFAULT_ZOOM_BACKGROUND: TransparentBackground = TransparentBackground::Black;
+
 /// The same for a vector drawing — an SVG document the browser draws, or a metafile the
 /// drawing layer replays.
 ///
@@ -461,6 +473,20 @@ pub fn sanitize_html_background(background: TransparentBackground) -> Transparen
         | TransparentBackground::White
         | TransparentBackground::Checkerboard => background,
         TransparentBackground::Transparent => DEFAULT_HTML_BACKGROUND,
+    }
+}
+
+/// The backdrop the band beside a zoomed picture is filled with, as the setting keeps it:
+/// the three backdrops a band can be filled with, and the default for the one that is not
+/// offered — a `transparent` a hand-edited `config.ini` names, which is not something the
+/// menu beside it has an item for because what fills a band beside a picture is never a
+/// hole in the desktop (see `ZOOM_BACKGROUND_CHOICES`).
+pub fn sanitize_zoom_background(background: TransparentBackground) -> TransparentBackground {
+    match background {
+        TransparentBackground::Black
+        | TransparentBackground::White
+        | TransparentBackground::Checkerboard => background,
+        TransparentBackground::Transparent => DEFAULT_ZOOM_BACKGROUND,
     }
 }
 

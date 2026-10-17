@@ -33,7 +33,7 @@ use super::setting_types::{
     DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_TEXT_SCALE, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND,
-    DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_LOOP,
+    DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_LOOP, DEFAULT_ZOOM_BACKGROUND,
 };
 
 #[derive(Debug, Clone)]
@@ -173,6 +173,16 @@ pub struct AppConfig {
     /// The backdrop a picture is drawn over — and every other preview that is not a
     /// document: a PDF page, a painted text frame, a page Office rendered.
     pub image_background: TransparentBackground,
+    /// The backdrop the band beside a zoomed picture is filled with.
+    ///
+    /// A setting of its own for the reason the one above is not: what stands behind a
+    /// picture nobody has touched is the file's own business — a photograph's transparency
+    /// is the photograph's — while the band a hand has carried the picture off its window
+    /// is the window's, the frame around a picture rather than a page behind one. It is
+    /// read for that band and nothing else, so a hover and a pin at the size of its window
+    /// are composited over the backdrop the file's kind asks for exactly as they always
+    /// were (see `zoom_background` and `sanitize_zoom_background`).
+    pub zoom_background: TransparentBackground,
     /// The backdrop a font specimen is drawn over.
     ///
     /// A setting of its own for the reason the one above is: a specimen is a page with text
@@ -683,6 +693,7 @@ impl Default for AppConfig {
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             image_background: DEFAULT_IMAGE_BACKGROUND,
+            zoom_background: DEFAULT_ZOOM_BACKGROUND,
             font_background: DEFAULT_FONT_BACKGROUND,
             dds_background: DEFAULT_DDS_BACKGROUND,
             design_background: DEFAULT_DESIGN_BACKGROUND,

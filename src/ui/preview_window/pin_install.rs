@@ -726,7 +726,13 @@ impl PinLoad {
     pub(super) fn start(path: &Path, update: PinUpdate, walk: Option<PinStep>) -> Self {
         let width = (update.content.2 - update.content.0).max(1) as u32;
         let height = (update.content.3 - update.content.1).max(1) as u32;
-        let answer = pin_media_load(path, width, height, update.dpi);
+        let answer = pin_media_load(
+            path,
+            width,
+            height,
+            update.dpi,
+            PreviewScale::FitToScreen,
+        );
 
         PinLoad {
             path: path.to_path_buf(),
@@ -816,6 +822,7 @@ pub(super) fn pin_media_load(
     width: u32,
     height: u32,
     dpi: u32,
+    scale: PreviewScale,
 ) -> Receiver<Option<MediaData>> {
     let (answer, answers) = channel();
     let path = path.to_path_buf();
@@ -835,7 +842,7 @@ pub(super) fn pin_media_load(
                 &path,
                 width,
                 height,
-                PreviewScale::FitToScreen,
+                scale,
                 dpi,
                 Arc::new(AtomicBool::new(false)),
             )
@@ -1068,6 +1075,13 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
             keeps_its_box,
             content,
         ),
+        // A picture the wheel zooms arrives filling its window: every take-up is a whole window
+        // built around the file it landed on, so there is no view of another picture to carry — a
+        // walk from a zoomed-in photograph to the one beside it is the new file at the size the window
+        // was given, which is what a walk has always been (see `reset_pin_zoom`).
+        zoom: kind
+            .is_some_and(|kind| kind.is_zoomable_picture())
+            .then(|| PinZoom::filling(content)),
         restore: carried.and_then(|(restore, ..)| restore),
         dpi,
         // The share the card was taken up at, which the card is
@@ -1194,10 +1208,11 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
 /// new box — the same answer a resized video is given for as long as the engine's next frame is
 /// on its way (see `compose_media_into_band`).
 ///
-/// **`road` is what tells the one kind whose answer differs which of the two roads is asking**
-/// (see `PinRelayoutRoad`): every other kind lays its media out again wherever the box came from,
+/// **`road` is what tells the one kind whose answer differs which of the roads is asking** (see
+/// `PinRelayoutRoad`): every other kind lays its media out again wherever the box came from,
 /// but a video's box change is a player being ended and begun again, and that is the one thing a
-/// take-up is not doing.
+/// take-up is not doing. It is also what says what the box is a box *of* — a window's own room, or the
+/// size a picture has been zoomed to — and so what scale the file is decoded at.
 pub(super) fn relayout_pinned_media(
     path: &Path,
     content: ScreenRegion,
@@ -1207,6 +1222,20 @@ pub(super) fn relayout_pinned_media(
 ) -> Option<PinRelayout> {
     let width = (content.2 - content.0).max(1) as u32;
     let height = (content.3 - content.1).max(1) as u32;
+
+    // What the box is a box *of*, which is the one thing the road decides besides the kind: a window
+    // given another box is laid out in that box, and a picture the wheel has taken past its window is
+    // laid out for its own pixels instead.
+    //
+    // A zoom past the size the file holds has nothing left to decode — the pixels are one for one
+    // already, and every one past them would be an invention — and a zoom *under* that size is a picture
+    // that would be decoded larger than the file it came from if the room were the whole of the
+    // question. `Percent(100)` is exactly that pair: the fit of the file into the box, and never a scale
+    // above one (see `scale_in_room`).
+    let scale = match road {
+        PinRelayoutRoad::Zoom => PreviewScale::Percent(100),
+        PinRelayoutRoad::TakeUp | PinRelayoutRoad::BoxChange => PreviewScale::FitToScreen,
+    };
 
     // What is on screen, read in one look: what it is decides which arm answers below, and how big
     // its frame is decides whether this box owes it anything at all (see `box_is_covered`).
@@ -1375,7 +1404,7 @@ pub(super) fn relayout_pinned_media(
         // and the band is filled from the frame that is there until it lands.
         Some(_) => Some(PinRelayout {
             path: path.to_path_buf(),
-            answer: pin_media_load(path, width, height, dpi),
+            answer: pin_media_load(path, width, height, dpi, scale),
         }),
         None => None,
     }
@@ -1412,7 +1441,7 @@ fn box_is_covered(
     width: u32,
     height: u32,
 ) -> bool {
-    matches!(road, PinRelayoutRoad::BoxChange)
+    matches!(road, PinRelayoutRoad::BoxChange | PinRelayoutRoad::Zoom)
         && matches!(
             kind,
             MediaType::StaticImage
@@ -1430,13 +1459,17 @@ fn box_is_covered(
         })
 }
 
-/// Which of the two roads asked for a relayout, for the one kind of media whose answer differs.
+/// Which of the roads asked for a relayout, for the one kind of media whose answer differs and for the
+/// one size it is asked at.
 ///
-/// Every kind lays its media out again in whatever box it is given, so the road is a fact only a
-/// video needs — and a video needs it because a box change for one is a player being ended and
-/// another begun, which is the WS-J press road: freeze the clock, cover the outgoing frame, kill
-/// the old player before the replacement's window is on screen to be seen empty over a transparent
-/// band (see `begin_covered_box_change`).
+/// Every kind lays its media out again in whatever box it is given, so the road is a fact only a video
+/// needs — and a video needs it because a box change for one is a player being ended and another begun,
+/// which is the WS-J press road: freeze the clock, cover the outgoing frame, kill the old player before
+/// the replacement's window is on screen to be seen empty over a transparent band (see
+/// `begin_covered_box_change`).
+///
+/// The box a zoom is laid out for is the other thing a road decides, and it is the only one the scale
+/// below is read from (see `relayout_pinned_media`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum PinRelayoutRoad {
     /// A take-up: the pin is being built whole for a file this window has not stood on before. No
@@ -1448,6 +1481,13 @@ pub(super) enum PinRelayoutRoad {
     /// player is ended and begun again in it. The press road, and the relaunch the press's own end
     /// makes (see `begin_covered_box_change` and `relaunch_gesture_end_at`).
     BoxChange,
+    /// A zoom: the wheel has taken a picture past the box its window has, so what is laid out again is
+    /// not a window's own room but the size the picture is drawn at.
+    ///
+    /// It is the one road a *picture* takes without its window having changed size, and the one road on
+    /// which the box is not a box the window has but a box the picture has — which is why it is the road
+    /// that decides the scale the file is decoded at, rather than the kind (see `relayout_pinned_media`).
+    Zoom,
 }
 
 /// A relayout of a pinned window's own media, waited for on a thread of its own.
@@ -1471,22 +1511,28 @@ pub(super) struct PinRelayout {
     pub(super) answer: Receiver<Option<MediaData>>,
 }
 
-/// Take a relayout that has answered, and install it.
+/// Take a relayout that has answered, install it, and answer whether a frame was installed.
 ///
 /// One still running is the ordinary case for the first few ticks after a window is dragged to a
 /// new size: what is on screen is the frame already decoded, and this is where it is replaced by
 /// one drawn for the box the window is now at.
 ///
+/// **The answer is what the caller paints on, and nothing else on the tick it lands is looking for
+/// one.** A frame that has just been installed is a frame the window has not drawn: a picture that is
+/// not moving has no frame to advance and no clock to repaint for, so a relayout no one repaints for
+/// is a sharper frame the user never sees — which is exactly what a picture settled at a size the
+/// wheel took it to would be (see `render_layered_preview`).
+///
 /// The frame is installed here, on the loop's own thread, because `CURRENT_MEDIA` is the loop's
 /// (see `swap_pinned_media` for the same rule on a swap's answer) — and `keep_text_place` is asked
 /// of the media being replaced *before* that lock is taken, for the reason it takes the lock
 /// itself: a lock this thread already holds is not a lock it can wait for.
-pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) {
+pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     let Some(media) = answered(relayout.as_ref().map(|pending| &pending.answer)) else {
-        return;
+        return false;
     };
     let Some(pending) = relayout.take() else {
-        return;
+        return false;
     };
 
     // A relayout is only an answer while the pin is still standing on the file it was asked for.
@@ -1494,17 +1540,20 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) {
     // a window that is no longer there, and its frame must not be installed over whatever is
     // there now.
     if pinned_path().as_deref() != Some(pending.path.as_path()) {
-        return;
+        return false;
     }
 
-    let Some(media) = media else { return };
+    let Some(media) = media else { return false };
     let media = keep_text_place(media);
-    if let Ok(mut current) = CURRENT_MEDIA.lock() {
-        if let Some(ref mut existing) = *current {
-            existing.cancel_background_work();
-        }
-        *current = Some(media);
+    let Ok(mut current) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+    if let Some(ref mut existing) = *current {
+        existing.cancel_background_work();
     }
+    *current = Some(media);
+
+    true
 }
 
 /// Carry where a page of text was up to — the line its frame starts at and what was selected —

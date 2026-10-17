@@ -210,6 +210,78 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     let band_width = width.max(1) as u32;
     let mem_dc = layered_surface_dc(hwnd.0 as isize);
 
+    // Where in that band the media lands. A picture is the band's own box unless the wheel has
+    // zoomed it into a window that stopped growing, in which case it lands on a box larger than the
+    // band and is carried around inside it — and a box outside the band is left to GDI to clip, since
+    // what makes it whole is the placement and not the size (see `PinZoom::picture_box`).
+    //
+    // What `picture_box` answers is a *rectangle* — a left, a top and the two edges the picture runs
+    // to — and what a band is filled from is a left, a top and the two *extents* it covers, so the one
+    // is turned into the other here. Handing an edge over as an extent is a picture drawn at the
+    // window's own size plus the size it overhangs by over two, which is a picture that shrinks as it
+    // is zoomed in and is carried the wrong way as it is panned: the whole of what a zoom past the cap
+    // must not be.
+    //
+    // And the place the picture *really* lands is read beside it, which is the same box in the floats the
+    // zoom is walked in: a picture in motion is drawn at a place and a size a whole-pixel box cannot hold,
+    // and the box is the one thing a sampler may not map through (see `PinZoom::picture_place`).
+    let (frame, exact) = match paint.zoom {
+        Some(zoom) => {
+            let (left, top, right, bottom) =
+                zoom.picture_box((band_width as i32, band_height as i32));
+
+            (
+                (left, top, right - left, bottom - top),
+                zoom.picture_place((band_width as i32, band_height as i32)),
+            )
+        }
+        None => (
+            (0, 0, band_width as i32, band_height as i32),
+            (0.0, 0.0, band_width as f32, band_height as f32),
+        ),
+    };
+
+    // Whether the picture is drawn on a box other than the band's own, which is the case a backdrop is
+    // filled for at all (see `pinned_band_backdrop`).
+    let zoomed = frame != (0, 0, band_width as i32, band_height as i32);
+
+    // And whether this window is going to compose the media into the band itself: an engine's page and a
+    // player's window stand in the band and are somebody else's to draw, and a band with no media behind
+    // it is one nothing is composed into at all. A band that is not composed into is filled *whole*,
+    // because the surface's own pixels are then the last frame this window drew.
+    let composed_here = mem_dc.is_some()
+        && CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| {
+                media.as_ref().map(|media| {
+                    !media.media_type.is_engine()
+                        && !matches!(media.media_type, MediaType::Video)
+                })
+            })
+            .unwrap_or(false);
+
+    // The rows a zoomed picture has been carried off are the backdrop's rather than nobody's, and they
+    // are filled before the picture goes on top: a layered window is hit-tested by the shape of its
+    // pixels, so a band left transparent where the picture used to be would be a band a press falls
+    // through (see `fill_band_backdrop`). What is filled is the band *less* the box the picture lands
+    // on, since the compose below writes that box — which on a band of a display's own size is 2.0 ms
+    // of the 6.94 ms a 144 Hz frame has that was spent painting pixels the picture then covered.
+    if zoomed && mem_dc.is_some() {
+        fill_band_backdrop(
+            out,
+            band_width,
+            band_top.max(0) as u32,
+            band_height,
+            if composed_here {
+                frame
+            } else {
+                (0, 0, band_width as i32, band_height as i32)
+            },
+            zoom_background(),
+        );
+    }
+
     // A player parked for the length of a drag is painted over rather than painted through: the
     // band is transparent everywhere else so that FFmpeg's own window shows through it, and a
     // transparent band with the player hidden is a hole in the desktop shaped like a video. So the
@@ -218,7 +290,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // than the configured `Background -> Video` — that setting is allowed to be `Transparent`, and
     // a deliberately transparent band is exactly the hole this is here not to leave.
     if paint.parked {
-        if let Some(mem_dc) = mem_dc {
+        if mem_dc.is_some() {
             let held = held_video_frame();
             compose_parked_band(
                 held.as_ref()
@@ -226,10 +298,19 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 band_width,
                 BandTarget {
                     out,
-                    dc: mem_dc,
                     width: band_width,
                     origin_y: band_top.max(0) as u32,
                     height: band_height,
+                    frame,
+                    // A parked film is stood in for by the frame it was holding, scaled to the place the
+                    // box is: the film is in a window of its own over this band, so this is the last frame
+                    // before the drag and not a picture the wheel has placed.
+                    exact: (
+                        frame.0 as f32,
+                        frame.1 as f32,
+                        frame.2 as f32,
+                        frame.3 as f32,
+                    ),
                 },
             );
         } else {
@@ -237,23 +318,35 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         }
     }
 
-    if let Some(mem_dc) = mem_dc {
+    if mem_dc.is_some() {
         if let Ok(media) = CURRENT_MEDIA.lock() {
             if let Some(media) = media.as_ref() {
-                if !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video) {
+                if composed_here {
+                    // What the band is filled with: a picture the wheel has taken past its window is
+                    // drawn over the tray's own backdrop for a zoom, and every other picture over the
+                    // backdrop its own kind asks for. The two are two different things to look at —
+                    // what stands behind a picture nobody has touched is the picture's business, and
+                    // what fills the band beside one a hand has carried off is the window's (see
+                    // `pinned_band_backdrop`).
+                    let backdrop = pinned_band_backdrop(media.media_type, zoomed);
+
                     compose_media_into_band(
                         media.current_pixels(),
                         media.current_width(),
                         media.current_height(),
                         (band_width, band_height),
-                        preview_background(media.media_type),
+                        backdrop,
                         media.current_frame_is_opaque(),
                         BandTarget {
                             out,
-                            dc: mem_dc,
                             width: band_width,
                             origin_y: band_top.max(0) as u32,
                             height: band_height,
+                            frame,
+                            // The place the picture really lands, which for a picture the wheel has taken
+                            // past its window is not the box: a zoom in motion is drawn at a fraction of a
+                            // pixel (see `PinZoom::picture_place`).
+                            exact,
                         },
                     );
                 } else if film_band_is_hit_testable(
@@ -422,6 +515,13 @@ pub(super) struct PinnedPaint {
     pub(super) height: i32,
     pub(super) caption_height: i32,
     pub(super) transport_height: i32,
+    /// How the media is drawn inside its band, or nothing for a kind the wheel does not zoom: what
+    /// a picture the wheel has taken inside its window is placed by, rather than the band itself (see
+    /// `PinZoom`).
+    ///
+    /// Nothing means the media lands on the whole of its band, which is every repaint of everything
+    /// but a zoomed picture.
+    pub(super) zoom: Option<PinZoom>,
     /// Whether the chrome is drawn over the media rather than in bands around it, which is what
     /// says where the media's band of the window is and even whether there is one.
     pub(super) overlay: bool,
@@ -490,12 +590,21 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             height,
             caption_height: pin.caption,
             transport_height: pinned_transport_height(pin.dpi, pin.transport_bar),
+            zoom: pin.zoom,
             overlay: pin.overlay,
             // A kind with no caption of its own is asked for none whatever its chrome is doing:
             // there is no row above the media for one to be drawn in, and a strip painted over the
             // first row of a card is a title bar with the controls underneath it (see
             // `pinned_caption_height`).
-            caption: pin.caption > 0 && pin.chrome.caption,
+            //
+            // And a caption too narrow to be a command bar is drawn none at all, whatever the pointer
+            // is asking for: a window taken down to a hundredth of a display has no room for a strip,
+            // and a strip drawn into one is a title bar with no title in it and buttons that do not
+            // fit (see `caption_fits`). It is the same question the press is answered by, asked of the
+            // same width, so what the caption refuses to draw is what it also refuses to answer.
+            caption: pin.caption > 0
+                && pin.chrome.caption
+                && pin_chrome::caption_fits(width, pin.dpi, pin.frame != PinFrame::None),
             bar: pin.chrome.bar,
             dpi: pin.dpi,
             title: pin
@@ -539,21 +648,35 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
     Some(paint)
 }
 
-/// Where a frame that is not the whole of a window is composed: the surface it goes on and the
-/// memory DC that surface is selected into, its own row width, the row the band the frame goes in
-/// begins at, and how tall that band is.
-///
-/// The DC travels with the pixels because there are two ways to fill a band that is not the
-/// frame's size and one of them is not this app's: a frame that is opaque is scaled by GDI,
-/// straight into the surface `UpdateLayeredWindow` will read, which is the difference between a
-/// window that follows a hand while an edge is dragged and one that stutters behind it (see
-/// `stretch_into_band`).
+/// Where a frame that is not the whole of a window is composed: the surface it goes on, its own row
+/// width, the row the band the frame goes in begins at, and how tall that band is.
 pub(super) struct BandTarget<'a> {
     pub(super) out: &'a mut [u8],
-    pub(super) dc: HDC,
     pub(super) width: u32,
     pub(super) origin_y: u32,
     pub(super) height: u32,
+    /// Where in the band the media lands, `(left, top, width, height)` measured from the band's own
+    /// top-left — the whole of the band for every caller but a zoomed pin, whose picture is drawn
+    /// larger than the window it is inside and carried around by the hand (see `PinZoom`).
+    ///
+    /// It is what makes the band a *box* rather than a frame to be filled: the rows and columns
+    /// outside it are left exactly as they were, so a caller that wants a backdrop around a picture
+    /// smaller than its band fills one in first (see `fill_band_backdrop`).
+    ///
+    /// **It is the box the picture is written *into* and not where its pixels are *drawn*.** Those two
+    /// are the same box for every caller whose picture lands on whole pixels, and they are a fraction of
+    /// a pixel apart for the one caller whose picture does not: a zoom's picture in motion is drawn at a
+    /// size and a place the release walks by a fraction of a pixel a frame, and a frame mapped through a
+    /// whole-pixel box is a picture placed on the pixel grid — every time the place crosses a half pixel
+    /// the picture steps a pixel, which a hand that is holding still reads as a jolt backwards at the end
+    /// of a zoom (`exact` is that place, and `resample_into_band` is where it is owed).
+    pub(super) frame: (i32, i32, i32, i32),
+    /// Where the picture *really* lands, in the window's own coordinates: the same box as `frame` and
+    /// the fraction of a pixel a box of whole ones cannot hold (see `PinZoom::picture_place`).
+    ///
+    /// A caller with nothing of its own to say sets it to `frame`'s own numbers, which is what every
+    /// caller but a zoomed pin has, and what a test of the sampler's scaling is written with.
+    pub(super) exact: (f32, f32, f32, f32),
 }
 
 /// Put the media of a pinned window into the band its window has left for it.
@@ -564,11 +687,22 @@ pub(super) struct BandTarget<'a> {
 /// changed a moment ago holds a frame of the size it had, and what a drag has to show is that
 /// frame filling the box it is being dragged to rather than standing at its old size inside it.
 ///
-/// The scaling itself is GDI's wherever it can be, because the box is under a hand while it
-/// happens: a frame whose own pixels are opaque everywhere is stretched by the window's own
-/// surface DC, and the pixel-at-a-time sampler below is kept for the frames that need it — one
-/// with an alpha channel to composite and a backdrop to composite it over, which is a per-pixel
-/// question GDI cannot be asked (see `stretch_into_band` and `resample_into_band`).
+/// The scaling is this app's own sampler, and it is the only road there is. It used to be GDI's
+/// wherever the frame was opaque — a `HALFTONE` `StretchBlt` straight into the surface
+/// `UpdateLayeredWindow` reads — on the belief that the platform's own scaler is what keeps a box
+/// under a hand up with the pointer, and on the idea that a per-pixel question only had to be asked
+/// of a frame that had an alpha channel to composite. Measured on a band of 2490 by 1400, that road
+/// is 16 ms a frame for a picture drawn a third larger than its window, 33 ms for one drawn half
+/// again as large out of a file's own pixels, and 50 ms for one drawn back down from them, against
+/// 4.3, 3.7 and 2.0 ms for the sampler beside it. A frame of a 144 Hz display is 6.9 ms, so what the
+/// road a photograph's zoom was taken down bought was a picture that could not keep up with the
+/// wheel — and paid four to twelve times what the same pixels would have cost with an alpha channel
+/// in them. It is a frame the layout at the size it settles on replaces in any case (see
+/// `resample_into_band`).
+///
+/// And a frame that is drawn at the size it was *decoded* at is a copy of the rows that land on the
+/// band, which is the road a zoomed picture takes and the one the sampler would charge for: a
+/// bilinear sample per pixel of a frame that has nothing to sample (see `copy_frame_into_band`).
 pub(super) fn compose_media_into_band(
     bgra: &[u8],
     width: u32,
@@ -582,117 +716,99 @@ pub(super) fn compose_media_into_band(
         return;
     }
 
-    if (width, height) == band {
+    // A frame that is the band's own size and lands on the whole of it is composed row for row,
+    // which is the whole of the cost of an ordinary paint. A frame that lands on *part* of the
+    // band is not that case however its size compares, since the rows it lands on are the ones that
+    // matter and the rest of the band belongs to the caller (see `BandTarget::frame`).
+    let frame = target.frame;
+    let lands_on_everything = frame == (0, 0, band.0 as i32, band.1 as i32);
+
+    if lands_on_everything && (width, height) == band {
         compose_preview_pixels_into_band(bgra, width, height, background, opaque, target);
-    } else if !opaque || !stretch_into_band(bgra, (width, height), band, &mut target) {
+    } else if !copy_frame_into_band(bgra, (width, height), opaque, &mut target) {
         resample_into_band(bgra, (width, height), band, background, opaque, target);
     }
 }
 
-/// Fill a band of another size with the frame, scaled by GDI, answering whether it was drawn.
+/// Fill a band from a frame that is drawn at exactly the size it was decoded at, a row at a time,
+/// answering whether it did.
 ///
-/// It is `resample_into_band`'s fast road and the reason it exists: the frame is copied into a
-/// surface of its own — the media's pixels, not the window's — and `StretchBlt` scales it into
-/// the band, which for a box under a hand is the difference between a picture that keeps up with
-/// the pointer and one the hand outruns. What GDI is asked for is the quality a still picture is
-/// scaled at rather than the fastest one it has (`HALFTONE`), since what is being watched is a
-/// file, and what the drag owes the eye at the end of it is still a layout at the box the window
-/// ended up with rather than the stretch it was being shown (see `relayout_pinned_media`).
+/// It is the road the sampler cannot be asked for and should not be: a picture drawn at the size its
+/// own frame is is a scaling with nothing to do, and the cheap way to do nothing is a copy of the rows
+/// the band has and the columns of them that land on it rather than a bilinear sample of every one of
+/// them (see `resample_into_band`).
 ///
-/// Only a frame whose every pixel is opaque comes here. That is what makes the stretch the whole
-/// of the picture: there is no alpha to composite and no backdrop behind it to composite it over,
-/// so the band can be filled by a copy of the pixels at another size — while a frame with an
-/// alpha channel is a per-pixel question (what is behind it, and where the checkerboard's squares
-/// fall) that GDI cannot be asked, and is sampled the long way instead.
+/// Only a frame whose every pixel is opaque comes here: a frame with an alpha channel is a per-pixel
+/// question about what stands behind it, and what this is is a copy (see `current_frame_is_opaque`).
 ///
-/// The alpha byte is forced opaque over the band afterwards rather than trusted to the stretch: a
-/// 32-bit `BI_RGB` DIB has no alpha channel as far as GDI is concerned, and what it does with that
-/// byte — copy it, interpolate it as a fourth channel, or write zero over it — is not something a
-/// layered window can afford to be wrong about (see `UpdateLayeredWindow`'s `ULW_ALPHA`).
-pub(super) fn stretch_into_band(
+/// And the frame has to be the size of the box it lands in, which is the whole of what makes a copy the
+/// right answer: a frame of any other size is one the band has to be filled *from* (see
+/// `compose_media_into_band`).
+pub(super) fn copy_frame_into_band(
     bgra: &[u8],
     source: (u32, u32),
-    band: (u32, u32),
+    opaque: bool,
     target: &mut BandTarget<'_>,
 ) -> bool {
     let (source_width, source_height) = source;
+    let frame = target.frame;
+
+    if !opaque || (source_width as i32, source_height as i32) != (frame.2, frame.3) {
+        return false;
+    }
+
     let row_bytes = source_width as usize * 4;
-    let wanted = row_bytes * source_height as usize;
-
-    if row_bytes == 0 || source_height == 0 || bgra.len() < wanted {
+    if row_bytes == 0 || source_height == 0 || bgra.len() < row_bytes * source_height as usize {
         return false;
     }
 
-    let (out_width, band_height, origin_y, dc) =
-        (target.width, target.height, target.origin_y, target.dc);
+    let (out_width, band_height, origin_y) = (target.width, target.height, target.origin_y);
     let out_row_bytes = out_width as usize * 4;
-    let rows = (band.1 as usize).min(band_height as usize);
-    if rows == 0 || out_row_bytes == 0 {
-        return false;
+    let top = origin_y as i32 + frame.1;
+
+    // The same cuts the two roads below make, and for the same reasons: the columns to the surface,
+    // because a picture carried wholly off one side is a frame with no columns on the band at all, and
+    // the rows to the band, because a picture carried a long way off is a frame whose rows are mostly
+    // not on screen.
+    //
+    // **The picture's own column for a band's column is that column *less where the picture's left edge
+    // is*, and the two are not the same column unless the picture begins at the band's own left.** A
+    // picture carried off one side — which is every picture a zoom has taken past its window — begins
+    // to the left of the band, so a copy that read the band's column as the frame's is a crop taken from
+    // the wrong end of the picture: measured through `render_pinned_preview_at` on a picture drawn twice
+    // its window's width and carried 37 pixels right, the whole band was drawn from the picture's own
+    // first column instead of its hundred and twenty-third, which is the picture snapping back to where
+    // it stood before the hand took it (see `resample_into_band`, which maps the whole frame across the
+    // box and so is right about this).
+    let first = frame.0.max(0);
+    let last = (frame.0 + frame.2).min(out_width as i32).max(first);
+    let source_first = (first - frame.0) as usize;
+    let source_last = (last - frame.0) as usize;
+    let (first, last) = (first as usize, last as usize);
+    let first_row = top.max(origin_y as i32).max(0);
+    let last_row = (top + frame.3)
+        .min(origin_y as i32 + band_height as i32)
+        .max(first_row);
+    let out = &mut *target.out;
+
+    for row in first_row as usize..last_row as usize {
+        // Which row of the frame this row of the band is: one for one, since the two are the same size
+        // and the frame's top is the picture's own top.
+        let source_row = (row as i32 - top) as usize;
+        let start = row * out_row_bytes;
+        let (Some(destination), Some(source)) = (
+            out.get_mut(start + first * 4..start + last * 4),
+            bgra.get(source_row * row_bytes + source_first * 4..source_row * row_bytes + source_last * 4),
+        ) else {
+            break;
+        };
+
+        destination.copy_from_slice(source);
     }
 
-    BAND_SOURCE.with(|cell| {
-        let mut held = cell.borrow_mut();
-        let size = (source_width.max(1), source_height.max(1));
-        if held.as_ref().map(|surface| (surface.width, surface.height)) != Some(size) {
-            *held = DibSurface::create(size.0, size.1);
-        }
-
-        let Some(source_surface) = held.as_ref() else {
-            return false;
-        };
-
-        // The frame's own pixels, into the surface GDI scales out of. It is the frame that is
-        // copied rather than the window, and the surface is kept between repaints: what a still
-        // picture costs a drag is this copy and the stretch, per pointer move.
-        let source_bits = unsafe {
-            std::slice::from_raw_parts_mut(source_surface.bits(), row_bytes * size.1 as usize)
-        };
-        source_bits[..wanted].copy_from_slice(&bgra[..wanted]);
-
-        unsafe {
-            // A stretch's brush origin is the DC's, and a DC that keeps the one it had is a
-            // halftone pattern placed by whatever drew on it last.
-            let _ = SetStretchBltMode(dc, HALFTONE);
-            let _ = SetBrushOrgEx(dc, 0, 0, None);
-            let _ = StretchBlt(
-                dc,
-                0,
-                origin_y as i32,
-                out_width as i32,
-                rows as i32,
-                source_surface.dc,
-                0,
-                0,
-                source_width as i32,
-                source_height as i32,
-                SRCCOPY,
-            );
-            // GDI batches its calls, and what reads this surface is not a GDI call: the bits are
-            // handed to `UpdateLayeredWindow` by the caller, so anything still in the batch is
-            // work nobody waits for.
-            let _ = GdiFlush();
-        }
-
-        // A `BI_RGB` surface carries no alpha as far as GDI is concerned, and what a layered
-        // window is drawn from is premultiplied coverage: an opaque frame's is 255 everywhere.
-        let out = &mut *target.out;
-        for row in 0..rows {
-            let start = (origin_y as usize + row) * out_row_bytes;
-            let Some(destination) = out.get_mut(start..start + out_row_bytes) else {
-                break;
-            };
-
-            for pixel in destination.as_chunks_mut::<4>().0 {
-                pixel[3] = 255;
-            }
-        }
-
-        true
-    })
+    true
 }
 
-/// Fill the band a parked player's window has left, answering whether a picture filled it.
 ///
 /// **This is the whole of what a drag of a pinned film is drawn from, and both halves of it are
 /// load-bearing.** The opaque fill is there whatever else happens: the band is transparent
@@ -793,6 +909,12 @@ pub(super) fn compose_preview_pixels_into_band(
 /// layered surface wants: the sample composited over the backdrop at the place it lands, with the
 /// squares of a checkerboard placed by where a pixel is in the *band* rather than by where it came
 /// from, so a picture being resized keeps the backdrop it had instead of dragging it around.
+///
+/// The rows are split across the cores rather than walked in one thread, which is the one thing about
+/// this that is not a plain loop. A window's band is millions of pixels, and a frame of a 144 Hz
+/// display has 6.9 ms to be drawn in: the same arithmetic on the same pixels over the machine's cores
+/// is what a zoom of a 4K picture costs, and one thread of it is what a band with a few rows in it is
+/// left with (see `resample_threads`).
 pub(super) fn resample_into_band(
     bgra: &[u8],
     source: (u32, u32),
@@ -806,10 +928,23 @@ pub(super) fn resample_into_band(
         width: out_width,
         origin_y,
         height: band_height,
+        frame,
+        exact,
         ..
     } = target;
 
-    if out_width == 0 || band_height == 0 {
+    if out_width == 0 || band_height == 0 || frame.2 <= 0 || frame.3 <= 0 {
+        return;
+    }
+    // A place with no room in it is nothing to map through, and neither is one that is not a number at
+    // all: a caller hands over a box, and every box a caller hands over has a pixel in each direction.
+    if !exact.0.is_finite()
+        || !exact.1.is_finite()
+        || !exact.2.is_finite()
+        || !exact.3.is_finite()
+        || exact.2 < 1.0
+        || exact.3 < 1.0
+    {
         return;
     }
 
@@ -821,68 +956,167 @@ pub(super) fn resample_into_band(
     }
 
     let out_row_bytes = out_width as usize * 4;
-    // Where a destination pixel's center maps back to in the source, in 16.16 fixed point: the
-    // mapping is two multiplies a row and two a pixel, and there is no division in the loop.
-    let step_x = ((source_width as u64) << 16) / band.0 as u64;
-    let step_y = ((source_height as u64) << 16) / band.1 as u64;
+    // Where a destination pixel's center maps back to in the source, in 32.32 fixed point: the mapping
+    // is two multiplies a row and two a pixel, and there is no division in the loop.
+    //
+    // The two are the *place's* own widths rather than the box's, because the picture is drawn where it
+    // is and not where the box of pixels it is written into says (see `BandTarget::exact`): a picture a
+    // release is walking is a tenth of a pixel wider than the box it is written into on one frame and
+    // half a pixel wider on the next, and a scale read off the box is a picture that steps the way the
+    // box does. It is the frame's own place inside the band that the box is measured from, so a picture
+    // drawn larger than its window still maps the whole of the source into the frame.
+    //
+    // Sixteen bits of fraction would not be enough to keep a step in: the quotient a step is made of is
+    // truncated to the last of them, which is a sixteenth of a pixel of drift over a four-thousand-pixel
+    // band, and a place whose fraction is a place's own has nowhere to go in it at all (see `SAMPLE_ONE`).
+    let step_x = ((source_width as f64 / exact.2 as f64) * SAMPLE_ONE) as u64;
+    let step_y = ((source_height as f64 / exact.3 as f64) * SAMPLE_ONE) as u64;
+    // And the source point the first column's own centre maps back to, less the half pixel the four taps
+    // are taken around: the half of a destination pixel a centre sits at, and where the picture really
+    // begins relative to the box the walk counts from. Everything the walk adds to it is a whole step.
+    let base_x = ((0.5 - (exact.0 - frame.0 as f32) as f64) * step_x as f64 - SAMPLE_ONE / 2.0) as i64;
+    let base_y = ((0.5 - (exact.1 - frame.1 as f32) as f64) * step_y as f64 - SAMPLE_ONE / 2.0) as i64;
     let rows = (band.1 as usize).min(band_height as usize);
 
-    for y in 0..rows {
-        let destination_row = origin_y as usize + y;
-        let start = destination_row * out_row_bytes;
-        let Some(destination) = out.get_mut(start..start + out_row_bytes) else {
-            break;
-        };
-
-        let sy = (y as u64 * step_y + step_y / 2).saturating_sub(0x8000);
-        let top_row = ((sy >> 16) as usize).min(source_height as usize - 1);
-        let bottom_row = (top_row + 1).min(source_height as usize - 1);
-        let wy = ((sy & 0xFFFF) >> 8) as u32;
-        let top = &bgra[top_row * row_bytes..top_row * row_bytes + row_bytes];
-        let bottom = &bgra[bottom_row * row_bytes..bottom_row * row_bytes + row_bytes];
-
-        for (x, pixel) in destination.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-            let sx = (x as u64 * step_x + step_x / 2).saturating_sub(0x8000);
-            let left_column = ((sx >> 16) as usize).min(source_width as usize - 1);
-            let right_column = (left_column + 1).min(source_width as usize - 1);
-            let wx = ((sx & 0xFFFF) >> 8) as u32;
-
-            let [b, g, r, a] =
-                sample_bilinear(top, bottom, left_column * 4, right_column * 4, wx, wy);
-
-            if opaque {
-                pixel.copy_from_slice(&[b, g, r, a]);
-                continue;
-            }
-
-            match background {
-                TransparentBackground::Transparent => {
-                    let alpha = a as u32;
-                    pixel[0] = ((b as u32 * alpha + 127) / 255) as u8;
-                    pixel[1] = ((g as u32 * alpha + 127) / 255) as u8;
-                    pixel[2] = ((r as u32 * alpha + 127) / 255) as u8;
-                    pixel[3] = a;
-                }
-                TransparentBackground::Black => {
-                    blend_pixel_over(&[b, g, r, a], pixel, 0, 0, 0);
-                }
-                TransparentBackground::White => {
-                    blend_pixel_over(&[b, g, r, a], pixel, 255, 255, 255);
-                }
-                TransparentBackground::Checkerboard => {
-                    let (square_r, square_g, square_b) = checkerboard_color(x as u32, y as u32);
-                    blend_pixel_over(
-                        &[b, g, r, a],
-                        pixel,
-                        square_b as u32,
-                        square_g as u32,
-                        square_r as u32,
-                    );
-                }
-            }
-        }
+    // The rows of the surface this is to write: the band's own, and never past the end of the
+    // surface a caller has handed over.
+    let first_row = origin_y as usize;
+    let last_row = (first_row + rows).min(out.len() / out_row_bytes);
+    if last_row <= first_row {
+        return;
     }
+
+    // And the rows are split across the cores rather than walked one after the other, because the
+    // rows of a band are one another's business and a scale is millions of pixels: it is the same
+    // arithmetic writing the same pixels, and it is the whole of what keeps a zoom of a 4K picture
+    // inside one frame of a 144 Hz display (see `resample_threads`).
+    let rows_each = (last_row - first_row).div_ceil(resample_threads(last_row - first_row));
+    let band_rows = &mut out[first_row * out_row_bytes..last_row * out_row_bytes];
+
+    std::thread::scope(|scope| {
+        for (index, rows_of_a_thread) in band_rows
+            .chunks_mut(rows_each * out_row_bytes)
+            .enumerate()
+        {
+            let first_row_of_a_thread = index * rows_each;
+
+            scope.spawn(move || {
+                for (row, destination) in rows_of_a_thread.chunks_mut(out_row_bytes).enumerate() {
+                    // The row of the *band* this is, and not of the surface: the frame a picture lands
+                    // in and the squares of a checkerboard are both measured from the band's own
+                    // top-left (see `BandTarget::frame`), and which rows of the surface those are is
+                    // what the slice this thread was handed already says.
+                    let y = first_row_of_a_thread + row;
+
+                    // A row the picture does not land on is left exactly as the caller left it,
+                    // which is the backdrop a picture carried off its band has left behind (see
+                    // `fill_band_backdrop`).
+                    let offset_y = y as i32 - frame.1;
+                    if offset_y < 0 || offset_y >= frame.3 {
+                        continue;
+                    }
+
+                    let sy = (offset_y as i64 * step_y as i64 + base_y).max(0) as u64;
+                    let top_row = ((sy >> 32) as usize).min(source_height as usize - 1);
+                    let bottom_row = (top_row + 1).min(source_height as usize - 1);
+                    let wy = ((sy >> 24) & 0xFF) as u32;
+                    let top = &bgra[top_row * row_bytes..top_row * row_bytes + row_bytes];
+                    let bottom = &bgra[bottom_row * row_bytes..bottom_row * row_bytes + row_bytes];
+
+                    for (x, pixel) in destination.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                        let offset_x = x as i32 - frame.0;
+                        if offset_x < 0 || offset_x >= frame.2 {
+                            continue;
+                        }
+
+                        let sx = (offset_x as i64 * step_x as i64 + base_x).max(0) as u64;
+                        let left_column = ((sx >> 32) as usize).min(source_width as usize - 1);
+                        let right_column = (left_column + 1).min(source_width as usize - 1);
+                        let wx = ((sx >> 24) & 0xFF) as u32;
+
+                        let [b, g, r, a] = sample_bilinear(
+                            top,
+                            bottom,
+                            left_column * 4,
+                            right_column * 4,
+                            wx,
+                            wy,
+                        );
+
+                        if opaque {
+                            pixel.copy_from_slice(&[b, g, r, a]);
+                            continue;
+                        }
+
+                        match background {
+                            TransparentBackground::Transparent => {
+                                let alpha = a as u32;
+                                pixel[0] = ((b as u32 * alpha + 127) / 255) as u8;
+                                pixel[1] = ((g as u32 * alpha + 127) / 255) as u8;
+                                pixel[2] = ((r as u32 * alpha + 127) / 255) as u8;
+                                pixel[3] = a;
+                            }
+                            TransparentBackground::Black => {
+                                blend_pixel_over(&[b, g, r, a], pixel, 0, 0, 0);
+                            }
+                            TransparentBackground::White => {
+                                blend_pixel_over(&[b, g, r, a], pixel, 255, 255, 255);
+                            }
+                            TransparentBackground::Checkerboard => {
+                                let (square_r, square_g, square_b) =
+                                    checkerboard_color(x as u32, y as u32);
+                                blend_pixel_over(
+                                    &[b, g, r, a],
+                                    pixel,
+                                    square_b as u32,
+                                    square_g as u32,
+                                    square_r as u32,
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
 }
+
+/// How many threads a band's worth of rows is worth being scaled by.
+///
+/// One per core, and never more than the rows can give a few each: a spawn costs a fraction of a
+/// millisecond (eight of them measure 0.20 ms on the machine this was written on, sixteen 0.36 ms),
+/// which is worth paying for a band with a window's worth of pixels in it and is not worth paying for
+/// a caption strip or a thumbnail. Below that floor the caller's own thread scales the whole band,
+/// which is what every band did before this existed.
+pub(super) fn resample_threads(rows: usize) -> usize {
+    /// The rows a thread is given before more of them are worth spawning: with a full window's band
+    /// a few thousand rows, this is sixteen on a sixteen-core machine and three on a band of a
+    /// hundred.
+    const ROWS_A_THREAD_HAS_TO_HAVE: usize = 32;
+
+    if rows < ROWS_A_THREAD_HAS_TO_HAVE {
+        return 1;
+    }
+
+    std::thread::available_parallelism()
+        .map(|cores| cores.get())
+        .unwrap_or(1)
+        .min(rows / ROWS_A_THREAD_HAS_TO_HAVE)
+        .max(1)
+}
+
+/// How many units of a destination pixel the sampler's own mapping is kept in: the fraction of a pixel a
+/// step is carried at, as `2^32` of them to the pixel.
+///
+/// It is the whole of what keeps a place that is not a whole pixel from being rounded away. Sixteen bits
+/// of fraction — which is what the walk used to be kept in — has room for a *scale* and none at all for a
+/// place's own fraction, and the quotient the step is made of is truncated to the last of its sixteen bits,
+/// which is a sixteenth of a pixel of drift over a four-thousand-pixel band and a picture that creeps
+/// sideways as it is scaled. Thirty-two bits leaves a hundred-thousandth of one, which is nothing any eye
+/// or any display has; what it costs is one add and one clamp per pixel, measured at 0.47 ms of a band of
+/// 3440 by 1440 with a 6000-pixel source against the 5.57 ms the same frame costs without it (see
+/// `resample_into_band`).
+pub(super) const SAMPLE_ONE: f64 = 4_294_967_296.0;
 
 /// One sample of a frame at a point between four of its pixels: the four are weighted by how far
 /// the point is from each of them, in 256ths, and the sum of the four weights is 65536.
@@ -897,21 +1131,21 @@ pub(super) fn sample_bilinear(
 ) -> [u8; 4] {
     let (left_near, right_near) = (256 - wx, wx);
     let (top_near, bottom_near) = (256 - wy, wy);
-    let weights = [
-        left_near * top_near,
-        right_near * top_near,
-        left_near * bottom_near,
-        right_near * bottom_near,
-    ];
-    let corners = [left, right, left, right];
+
+    // The four taps of the square, named as the row and the column each is, rather than walked as
+    // one array of corners with the row picked per tap: what the compiler makes of a walk is a
+    // bounds check and a branch for every channel of every pixel, and what it makes of this is the
+    // multiplies a vector multiply-add takes. A band's worth of pixels is millions of these, so it
+    // is the one piece of the sampler worth writing out by hand.
+    let (top_left, top_right) = (left_near * top_near, right_near * top_near);
+    let (bottom_left, bottom_right) = (left_near * bottom_near, right_near * bottom_near);
 
     let mut sample = [0u8; 4];
     for channel in 0..4 {
-        let mut value = 0u32;
-        for (index, weight) in weights.iter().enumerate() {
-            let row = if index < 2 { top } else { bottom };
-            value += row[corners[index] + channel] as u32 * weight;
-        }
+        let value = (top[left + channel] as u32) * top_left
+            + (top[right + channel] as u32) * top_right
+            + (bottom[left + channel] as u32) * bottom_left
+            + (bottom[right + channel] as u32) * bottom_right;
 
         sample[channel] = ((value + 32_768) >> 16) as u8;
     }

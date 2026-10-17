@@ -289,6 +289,39 @@ pub(super) fn preview_background(kind: MediaType) -> TransparentBackground {
     }
 }
 
+/// What a *zoomed* pinned picture is drawn over: the band a picture a hand has carried off its window
+/// leaves behind it, which is a question about the zoom rather than about the file.
+///
+/// It is a setting of its own rather than the picture's own backdrop because the two are two different
+/// things to look at. What stands behind the transparency of a picture nobody has touched is the
+/// picture's own business, and it is answered by the `Background` submenu; what fills the band beside a
+/// picture that has been taken past its window is the window's, and it is answered by
+/// `Image → Zoom → Background` (see the tray's own menu for the two).
+///
+/// It is deliberately *not* read for anything else: a hover's picture and a pinned picture at the size
+/// of its window are composited over the backdrop the file's kind asks for, exactly as they always
+/// were, and the only band this fills is the one a zoom opened.
+pub(super) fn zoom_background() -> TransparentBackground {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.zoom_background)
+        .unwrap_or(DEFAULT_ZOOM_BACKGROUND)
+}
+
+/// What the band of a *pinned* picture is filled with: the tray's own backdrop for a zoom when the
+/// picture has been taken past its window, and the one the file's kind asks for otherwise.
+///
+/// It is the whole of what tells the two apart, and it is a function rather than two lines at the paint
+/// so that the rule can be asked without a window: the paint is one call away from a layered surface,
+/// and what stands behind a picture is a question about the picture (see `zoom_background`).
+pub(super) fn pinned_band_backdrop(kind: MediaType, zoomed: bool) -> TransparentBackground {
+    if zoomed {
+        zoom_background()
+    } else {
+        preview_background(kind)
+    }
+}
+
 /// The pinned preview: the preview that stopped being a hover.
 ///
 /// The media is the same media — pinning is not a reload, so nothing about the picture moves
@@ -325,6 +358,19 @@ pub(super) struct PinnedPreview {
     /// it a box no wider than the portrait was. A side is what the user's own hand asked for when
     /// it dragged an edge, so a side is what every shape gets to use.
     pub(super) bound: Option<i32>,
+    /// The wheel's own view of the picture this pin shows — how much of it is drawn and where it
+    /// sits — or nothing for a kind the wheel does not zoom.
+    ///
+    /// `Some` is the whole of what "this pin's media is a picture the wheel zooms" means, asked
+    /// where it can be asked without a lock: the wheel hook reads the pin without waiting for it,
+    /// and a field that was a flag *beside* the view would be a second answer to the same question
+    /// (see `pin_zoom_keep_alive_try`).
+    ///
+    /// It is not the pin's box and it does not survive one: everything that lays a box out again —
+    /// a walk to another file, a maximize, a double-click, an edge dragged — puts the picture back
+    /// to filling its window, because a box chosen for the whole of a window is not a box chosen for
+    /// a picture inside one (see `reset_pin_zoom`).
+    pub(super) zoom: Option<PinZoom>,
     /// The box a restore down puts back, and `None` while the pin is not maximized: the box the
     /// window had before it was maximized, kept in step with the hand while it is one — and given up
     /// altogether the moment a hand moves the window, since a maximize the user has taken hold of
@@ -478,6 +524,7 @@ impl PinnedPreview {
             path: PathBuf::from("picture.png"),
             bound: Some(100),
             content: (0, 0, 100, 100),
+            zoom: Some(PinZoom::filling((0, 0, 100, 100))),
             restore: None,
             dpi: 96,
             audio_scale: None,
@@ -770,6 +817,30 @@ pub(super) fn pin_transport_live(kind: Option<MediaType>) -> bool {
 /// whatever the pointer is doing, and a sound has no chrome at all (see `pinned_caption_height`).
 pub(super) fn pin_hides_chrome(kind: Option<MediaType>) -> bool {
     pin_overlay_chrome(kind)
+}
+
+/// The box of the pinned picture the wheel zooms, or nothing where the pin is not one — asked
+/// without blocking, and asked from the wheel hook rather than from this thread.
+///
+/// The rules the text preview's own region follows are all of this one's: the hook runs inside a
+/// procedure every wheel message on the desktop waits for, so a lock that cannot be taken at once
+/// means the wheel is not ours to take either (see `text_scroll_keep_alive_try`). What it answers is
+/// the *window's* box, which for the kinds this is about is the media's own — the chrome of a
+/// picture is drawn over it rather than in bands around it (see `pin_overlay_chrome`).
+///
+/// A pin with the hand already on it is left out, which is the one thing here that is not a fact
+/// about the media: a picture being dragged is a box the hand is carrying, and a wheel notch landing
+/// in the middle of that drag would be a second answer to the same question (see `pin_zoom_view`).
+pub(crate) fn pin_zoom_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
+    let pinned = pin_window::pin_state_try()?;
+    let pin = pinned.pin()?;
+
+    // The same question the wheel's own arithmetic asks, and the same answer: a pin that is a bubble,
+    // a pin whose media is a kind the wheel does not zoom, and a pin with a drag under its hand are all
+    // pins this hook leaves the wheel to (see `pin_zoom_view`).
+    pin_zoom_view(pin)?;
+
+    Some(pin.window_box())
 }
 
 /// The name a pinned window's caption button is saying out loud, and the button it belongs to.

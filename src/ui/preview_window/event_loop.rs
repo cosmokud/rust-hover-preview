@@ -253,6 +253,14 @@ pub fn run_preview_window() {
         // the frame it had — scaled into the new box — until the frame drawn for that box
         // lands, rather than costing a tick as long as the decode (see `PinRelayout`).
         let mut pin_relayout: Option<PinRelayout> = None;
+        // The box a zoomed picture was last laid out again for, so that the file is asked for once per
+        // size the picture settles at rather than on every tick it stands there (see
+        // `pin_zoom_oversize_box`).
+        let mut zoom_sharpened: Option<ScreenRegion> = None;
+        // When the last frame of a pinned picture's zoom was taken, which is the clock the travel is
+        // measured against: a release is written in seconds, and the loop is the one thing here that
+        // knows how long its own last tick was (see `step_pin_zoom`).
+        let mut last_zoom_frame = Instant::now();
         // A walk a pin's own caption button stepped, held for as long as the walk has files
         // left to offer rather than for the length of the tick that started it: a file the pin
         // cannot be shown is stepped over rather than stopped at, and the file after it is
@@ -1933,6 +1941,51 @@ pub fn run_preview_window() {
                 }
             }
 
+            // And a notch over a pinned picture is the picture being zoomed: the same hook swallowed it
+            // and left the count here. What the notches come to is written down as the size the picture
+            // is *going* to rather than the size it is given the instant they are counted, and the
+            // travel to it is taken a frame at a time below — a zoom that landed on its size the moment
+            // a notch was turned would be a zoom that jumped (see `aim_pin_zoom` and `pin_zoom_step`).
+            //
+            // The count is in the wheel's own units — 120 to a notch — and it is divided as a fraction
+            // rather than truncated to whole notches, because a high-resolution wheel reports less than
+            // a notch per message and a truncated count is most of its travel thrown away (see
+            // `notch_step`).
+            let zoom_delta = wheel_input::take_pin_zoom_delta();
+            if zoom_delta != 0 {
+                aim_pin_zoom(zoom_delta as f32 / WHEEL_DELTA as f32);
+            }
+
+            // And where that travel has got to by now. The clock is read every tick rather than only
+            // while there is a travel, so that the frame a notch's own tick takes is measured from the
+            // tick before it and not from whenever the last zoom happened to be.
+            let zoom_elapsed = last_zoom_frame.elapsed().as_secs_f32();
+            last_zoom_frame = Instant::now();
+            step_pin_zoom(hwnd, zoom_elapsed);
+
+            // And the frame it is owed. A picture the wheel has taken past its window is a frame the
+            // window is holding scaled up, so the file itself is asked for at the size the picture has
+            // settled at — once per size and not on every frame of a travel, which would be a decode
+            // per frame, and only once the wheel has stopped asking, since a decode of a box the hand
+            // is still passing through is one nothing is looking at by the time it lands (see
+            // `pin_zoom_oversize_box`).
+            if pin_zoom_in_flight() {
+                zoom_sharpened = None;
+            } else if let Some(drawn) = pin_zoom_oversize_box() {
+                if zoom_sharpened != Some(drawn) {
+                    if let Some((path, dpi)) = pinned_media_owner() {
+                        zoom_sharpened = Some(drawn);
+                        pin_relayout =
+                            relayout_pinned_media(&path, drawn, dpi, None, PinRelayoutRoad::Zoom);
+                    }
+                }
+            } else {
+                // Nothing is owed a decode: no pin at all, a kind the wheel does not zoom, or a
+                // picture that fills its window — so what was asked for last is not a size this pin is
+                // standing at any more, and the next one that is will be asked for afresh.
+                zoom_sharpened = None;
+            }
+
             // Check for our custom messages. Only the newest hover target matters;
             // collapse stale Show/Hide traffic so we do not spend time computing
             // layouts for files the cursor has already left.
@@ -2762,8 +2815,13 @@ pub fn run_preview_window() {
             // decode of the file being held over, for a window that is about to be shown
             // something else. The answer waits in the slot until the hold is over and the path
             // check has an honest question to refuse it with (see `PinSwapHold`).
-            if pin_swap_hold.is_none() {
-                take_pin_relayout(&mut pin_relayout);
+            if pin_swap_hold.is_none() && take_pin_relayout(&mut pin_relayout) {
+                // A frame that has just been laid out again is a frame the window has not drawn: what
+                // is on screen is the one before it, scaled into the box the new one was decoded for.
+                // Nothing else on this tick is looking for a paint — a picture that is not moving has
+                // no frame to advance and no clock to repaint for — so this is where the sharper frame
+                // goes up (see `take_pin_relayout`).
+                render_layered_preview(hwnd);
             }
 
             let swap = settle_pin_swap(&mut pin_swap_hold, &mut pin_load);
@@ -3879,9 +3937,25 @@ pub fn run_preview_window() {
                 {
                     media_dynamic_hint = true;
                 }
-                let wait_ms =
-                    wait_before_the_next_tick(false, media_dynamic_hint || tick_has_wait, pinned());
-                carried_preview_msg = wait_preview_channel(&rx, wait_ms);
+                // A travel of the wheel's is a picture with something to animate, so it keeps the
+                // frame cadence for as long as it lasts and the loop drops back to its own wait the
+                // tick after it has arrived (see `pin_zoom_in_flight`).
+                let travelling = pin_zoom_in_flight();
+                let wait_ms = wait_before_the_next_tick(
+                    false,
+                    media_dynamic_hint || tick_has_wait || travelling,
+                    pinned(),
+                );
+                // And a travel is paced by the compositor rather than by that wait, because what its
+                // frames are worth is the display's own period and not a timer's: a sleep of
+                // `FRAME_WAIT_MS` comes back in 27.8 ms — 36 frames a second — where a flush of the
+                // compositor comes back in the 6.94 ms of a 144 Hz display's frame (see
+                // `wait_for_the_compositor`).
+                carried_preview_msg = if travelling {
+                    wait_for_the_compositor(&rx, wait_ms)
+                } else {
+                    wait_preview_channel(&rx, wait_ms)
+                };
             }
         }
 

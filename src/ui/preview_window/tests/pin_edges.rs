@@ -585,6 +585,7 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         path: PathBuf::from("picture.png"),
         bound: Some(600),
         content: (100, 100, 700, 500),
+        zoom: Some(PinZoom::filling((100, 100, 700, 500))),
         restore: None,
         dpi: 96,
         audio_scale: None,
@@ -676,7 +677,7 @@ fn a_press_on_the_engines_window_begins_the_drag_its_place_means() {
         |x: i32, y: i32| pinned_engine_press_action(window, 96, PinFrame::Shaped, (x, y));
     let edge_of = |action: PinDragAction| match action {
         PinDragAction::Resize(edge) => Some(edge),
-        PinDragAction::Move => None,
+        PinDragAction::Move | PinDragAction::Pan { .. } => None,
     };
 
     // The middle of the band is the media, which is the handle a window's body is.

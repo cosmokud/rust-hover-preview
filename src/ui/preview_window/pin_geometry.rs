@@ -107,6 +107,7 @@ pub(super) fn replace_pinned_window() -> Option<PreviewMessage> {
 
     pin.content = content;
     pin.restore = None;
+    reset_pin_zoom(pin);
     Some(PreviewMessage::PinBox(content))
 }
 
@@ -179,6 +180,7 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
 
             pin.restore = restore;
             pin.content = content;
+            reset_pin_zoom(pin);
             Some(())
         })
         .is_some();
@@ -259,6 +261,9 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
         ),
     };
 
+    // The box a double-click puts back is the box the scaling settings ask for, so the picture is
+    // put back to filling it: there is no view of a zoomed picture to keep across a size that is
+    // the file's rather than the hand's (see `reset_pin_zoom`).
     let content = clamp_pinned_box(centred_box(size, room), dpi, &DESKTOPS);
 
     // The check and the write are one lock and one step, as they are for a maximize: a walk taken
@@ -276,6 +281,7 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
             pin.restore = None;
             pin.bound = None;
             pin.content = content;
+            reset_pin_zoom(pin);
             Some(())
         })
         .is_some();
@@ -647,7 +653,43 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     }
     let (dx, dy) = (point.0 - drag.from.0, point.1 - drag.from.1);
 
+    // A pan is the picture moving while the window holds still, so it is answered before the box is
+    // asked about at all: the pointer's travel is added to where the pan stood when the press began,
+    // and the window is painted again at the place it already stands — which is the whole of what
+    // makes a drag of a zoomed-in picture smooth, since a window that was `SetWindowPos`-ed for every
+    // pointer move would be this app moving a box the hand never asked it to move (see `PinZoom`).
+    if let PinDragAction::Pan { from } = drag.action {
+        let carried = (from.0 + dx as f32, from.1 + dy as f32);
+        let painted = pin_state().and_then(|mut pinned| {
+            let pin = pinned.pin_mut()?;
+            let zoom = pin.zoom?;
+            pin.zoom = Some(PinZoom {
+                pan: carried,
+                // A hand taking the picture is a hand taking over from the wheel: a travel still in
+                // flight ends at the size the picture has reached rather than going on under a hand
+                // that is carrying it, which would be two answers to where the picture is — and the
+                // loop owes the frame of that size for the same reason it owes one to any other size a
+                // picture has settled at (see `pin_zoom_oversize_box`).
+                toward: zoom.drawn.0,
+                ..zoom
+            });
+            // Where the pointer has been carried out to, so that the next ask for a pointer that has
+            // not moved is recognised as the same question (see the early return above).
+            if let Some(drag) = pin.dragging.as_mut() {
+                drag.carried = point;
+            }
+            Some(pin.content)
+        });
+
+        if let Some(content) = painted {
+            render_pinned_preview_at(hwnd, content.0, content.1);
+        }
+        return;
+    }
+
     let window = match drag.action {
+        // Answered above and unreachable here: a pan never asks the window for a box.
+        PinDragAction::Pan { .. } => return,
         PinDragAction::Move => (
             drag.window.0 + dx,
             drag.window.1 + dy,
@@ -683,6 +725,10 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // `PinnedPreview::bound`).
         if matches!(drag.action, PinDragAction::Resize(_)) {
             pin.bound = Some((content.2 - content.0).max(content.3 - content.1).max(1));
+            // A box the hand pulled to a size is a box chosen for the whole of a window, so the
+            // picture goes back to filling it: the two are one fact about the window, and a picture
+            // left zoomed into a box of another size is a picture hanging off it (see `reset_pin_zoom`).
+            reset_pin_zoom(pin);
         }
         // And a maximized window gives its restore up to any hand that has moved it, carried to
         // another place or pulled to a size of its own: a window the user has taken hold of is one
@@ -796,6 +842,7 @@ pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
         };
         pin.restore = pin_restore_box(restore, was, content);
         pin.content = content;
+        reset_pin_zoom(pin);
     }
 
     let placed = pinned_window_box_of(content, dpi, transport, overlay, caption);

@@ -89,6 +89,7 @@ fn pin_state_dump() -> BTreeMap<String, String> {
                 .map(|drag| match drag.action {
                     PinDragAction::Move => "move".to_string(),
                     PinDragAction::Resize(_) => "resize".to_string(),
+                    PinDragAction::Pan { .. } => "pan".to_string(),
                 })
                 .unwrap_or_else(|| "none".to_string()),
         );

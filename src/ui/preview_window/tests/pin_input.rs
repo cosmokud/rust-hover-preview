@@ -1213,3 +1213,83 @@ fn a_paired_press_asks_for_the_size_back_rather_than_writing_one() {
         *current = previous_media;
     }
 }
+
+/// A press on the media of a picture the wheel has taken inside its window carries the picture; a
+/// press on a picture that fills its window carries the window, exactly as it always has.
+///
+/// The two halves differ by nothing but what the wheel has done to the picture between them, which is
+/// the whole of the claim: the gesture is the same press, and which of the two things under it is the
+/// handle is the picture's own size against the window it is drawn in (see `PinZoom::picture_box`).
+#[test]
+fn a_press_on_a_picture_bigger_than_its_window_carries_the_picture_rather_than_the_window() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 100, 500, 400);
+    let hwnd = HWND(0x1000 as *mut _);
+    let window = a_window_at(content);
+    let dragging = || pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging));
+
+    // A picture the size of its window has nowhere to be carried, so the press stays the window's own
+    // handle and nothing is taken hold of.
+    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    assert!(
+        !begin_pin_pan(hwnd, &window),
+        "a picture the size of its window is not a picture with room to be carried"
+    );
+    assert!(dragging().is_none(), "and nothing is taken hold of for one");
+
+    // And the same press on the same picture once the wheel has taken it inside that window.
+    stand_pin(Some(with_pin_zoom(
+        overlay_pin(content, PinChrome::always()),
+        3.0,
+    )));
+    assert!(
+        begin_pin_pan(hwnd, &window),
+        "a picture drawn larger than its window is the hand's own handle"
+    );
+    assert!(
+        matches!(
+            dragging().map(|drag| drag.action),
+            Some(PinDragAction::Pan { from }) if from == (0.0, 0.0)
+        ),
+        "a press begins a pan of it, measured from the pan the pin already had"
+    );
+    assert!(
+        window.calls().contains(&PinWindowCall::Capture),
+        "and the pointer is taken for the duration of the drag"
+    );
+
+    // What a move carries the pan out to: the picture's own centre travels with the pointer, and the
+    // window it is drawn in does not move at all — which is the whole of the difference between a pan
+    // and the window drag it replaced.
+    super::probes::step_the_pin_drag_by(40, 25);
+    unsafe { apply_pin_drag(hwnd) };
+
+    let zoom = pin_state()
+        .and_then(|pinned| pinned.pin().and_then(|pin| pin.zoom))
+        .expect("the pin this test stood up");
+    assert!(
+        (zoom.pan.0 - 40.0).abs() <= 2.0 && (zoom.pan.1 - 25.0).abs() <= 2.0,
+        "the picture went the way the hand did and by as much: {:?}",
+        zoom.pan
+    );
+    assert_eq!(
+        zoom.drawn,
+        {
+            let (width, height) = region_size(content);
+            (width as f32 * 3.0, height as f32 * 3.0)
+        },
+        "and a pan is a place rather than a size: the picture is drawn exactly as large as it was"
+    );
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.content)),
+        Some(content),
+        "and the window the press was on is not the drag's to move"
+    );
+
+    stand_pin(None);
+    stand_pin(previous_pin);
+}
