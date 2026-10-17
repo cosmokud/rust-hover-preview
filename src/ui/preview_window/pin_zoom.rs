@@ -167,6 +167,35 @@ impl PinZoom {
         self.drawn.1 / self.drawn.0
     }
 
+    /// Where the picture *really* lands inside its window: the place in the floats the zoom's own
+    /// arithmetic walks, which is what a sampler is owed and what a box of whole pixels is a rounding of.
+    ///
+    /// **The fraction is the whole of what the wheel's anchoring is worth.** The release walks the size by
+    /// a fraction of a pixel a frame and the place with it, and a frame mapped through a whole-pixel box is
+    /// a picture placed on the pixel grid: every time the place crosses a half pixel the whole picture steps
+    /// a pixel — which a hand that is holding still reads as the picture jolting *backwards* at the end of a
+    /// zoom, because the jolt is the same size whatever the frame's own travel was. Measured on six notches
+    /// taken at the cap, the point of the picture under the wheel stepped 1.00 pixels back on a frame whose
+    /// travel was 0.33 forwards, and the place handed to the sampler is where that stops (see
+    /// `BandTarget::exact` and `resample_into_band`).
+    ///
+    /// The box the picture is written *into* is `picture_box`, and the two are the same place rounded: a
+    /// caller wants the exact one or the whole-pixel one and never a third answer.
+    pub(super) fn picture_place(&self, window: (i32, i32)) -> (f32, f32, f32, f32) {
+        let (width, height) = (window.0.max(1), window.1.max(1));
+        let (drawn_width, drawn_height) = drawn_pixels(self.drawn);
+        if drawn_width <= width && drawn_height <= height {
+            return (0.0, 0.0, width as f32, height as f32);
+        }
+
+        (
+            (width as f32 - self.drawn.0) / 2.0 + self.pan.0,
+            (height as f32 - self.drawn.1) / 2.0 + self.pan.1,
+            self.drawn.0,
+            self.drawn.1,
+        )
+    }
+
     /// Where the picture lands inside its window: the box in the window's own coordinates, which is
     /// the whole of what a repaint and a crop both need.
     ///
@@ -176,6 +205,12 @@ impl PinZoom {
     /// room to move in. The pan is the picture's centre's own offset from the window's, so the box
     /// steps the way the pan names: a hand carried to the right shows the left of the picture, which
     /// is a box that steps left.
+    ///
+    /// It is the box the picture's pixels are written *into* — which is what a fill has to know, and what a
+    /// frame drawn at its own size is copied through — and where they are *drawn* is the place beside it, in
+    /// the floats this box is a rounding of (see `picture_place`). The half pixel of place a copy gives up is
+    /// what a copy is worth here: a frame the size of its own box sampled rather than copied is the sampler's
+    /// several milliseconds a frame (see `copy_frame_into_band`).
     pub(super) fn picture_box(&self, window: (i32, i32)) -> (i32, i32, i32, i32) {
         let (width, height) = (window.0.max(1), window.1.max(1));
         let (drawn_width, drawn_height) = drawn_pixels(self.drawn);
@@ -367,10 +402,9 @@ pub(super) fn pin_zoom_to(
         (window_width * shape).round().max(1.0) as i32,
     );
 
-    // The picture's centre as it stands, in the screen's own coordinates, and where the window is put
-    // around it: the centre is what a zoom holds still, and a window twice the size about its own
-    // middle is a picture that grew in every direction by the same amount where one grown about a
-    // corner would walk off the screen as it grew.
+    // The picture's centre as it stands, and where the window is put around it: the centre is what a zoom
+    // holds still, and a window twice the size about its own middle is a picture that grew in every
+    // direction by the same amount where one grown about a corner would walk off the screen as it grew.
     //
     // A window that is *not* changing size keeps the box it has, whatever the pan is doing: a picture
     // carried inside a window that has stopped is the picture moving and not the window, and a window
@@ -382,7 +416,10 @@ pub(super) fn pin_zoom_to(
     } else {
         clamp_pinned_box(centred_at(size, drawn_centre), input.dpi, displays)
     };
-    let box_centre = ((placed.0 + placed.2) / 2, (placed.1 + placed.3) / 2);
+    let box_centre = (
+        (placed.0 + placed.2) as f32 / 2.0,
+        (placed.1 + placed.3) as f32 / 2.0,
+    );
 
     // And where the picture sits inside it. A picture the window's own size — or one a hand has
     // shrunk under the window's floor, which is smaller than it — fills it and has nowhere to sit,
@@ -406,6 +443,16 @@ pub(super) fn pin_zoom_to(
     // the picture off the far side of a window it was covering. That notch grows the window by a tenth
     // at the very most, since the window grows with the picture a frame at a time (see `pin_zoom_step`),
     // and the rule above covers it by the same arithmetic as every other notch.
+    // The same centre in the floats the zoom is walked in, which is what the pan below is measured from
+    // and not the whole-pixel one the window's place is chosen about: a centre rounded to the pixel grid
+    // is half a pixel of the last frame's rounding carried into the anchor of every frame that follows,
+    // and it compounds — measured on six notches taken at the cap, the point of the picture under the
+    // wheel drifted 3.49 pixels off it and this centre holds it to 0.75, which the place beside it then
+    // takes to nothing (see `picture_place`).
+    let (exact_x, exact_y) = (
+        (content.0 + content.2) as f32 / 2.0 + input.zoom.pan.0,
+        (content.1 + content.3) as f32 / 2.0 + input.zoom.pan.1,
+    );
     let (drawn_width, drawn_height) = drawn_pixels(drawn);
     let pan = match input
         .pointer
@@ -413,14 +460,11 @@ pub(super) fn pin_zoom_to(
     {
         Some(point) => {
             let grown = drawn.0 / input.zoom.drawn.0;
-            let (dx, dy) = (
-                (drawn_centre.0 - point.0) as f32,
-                (drawn_centre.1 - point.1) as f32,
-            );
+            let (dx, dy) = (exact_x - point.0 as f32, exact_y - point.1 as f32);
 
             (
-                (point.0 - box_centre.0) as f32 + dx * grown,
-                (point.1 - box_centre.1) as f32 + dy * grown,
+                point.0 as f32 - box_centre.0 + dx * grown,
+                point.1 as f32 - box_centre.1 + dy * grown,
             )
         }
         None => (0.0, 0.0),
@@ -674,7 +718,14 @@ fn drawn_pixels(drawn: (f32, f32)) -> (i32, i32) {
     )
 }
 
-/// Where the picture's centre sits on the screen: a box's middle carried by the pan.
+/// Where the picture's centre sits on the screen: a box's middle carried by the pan, in the *whole
+/// pixels* the window's own place is chosen in.
+///
+/// It is the window's question and not a travel's: a box grown about its middle is a box of whole pixels
+/// that has to be put somewhere on a screen grid, and the pan below the anchor is an offset of its own in
+/// the floats the zoom walks (see `pin_zoom_to`). Rounding a *travel* about this centre would be half a
+/// pixel of drift per frame; rounding a *window's place* about it is the one rounding a whole-pixel box
+/// is owed.
 fn pinned_centre(content: ScreenRegion, pan: (f32, f32)) -> (i32, i32) {
     (
         (content.0 + content.2) / 2 + pan.0.round() as i32,

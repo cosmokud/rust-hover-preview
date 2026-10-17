@@ -886,6 +886,68 @@ fn a_travel_past_the_cap_keeps_the_point_of_the_picture_under_its_anchor() {
     );
 }
 
+/// A travel's frames place the picture so that the point the wheel read stays under the pointer — in the
+/// floats the picture is really *drawn* at, and not only in the arithmetic that decided them.
+///
+/// The two are not the same question, and the difference is the whole of what an eye sees at the end of a
+/// zoom: `drawn` is a float the release walks by a fraction of a pixel a frame, and a picture drawn
+/// through a box of whole pixels is a picture on the pixel grid — every time the place crosses a half
+/// pixel the whole picture steps a pixel, which a hand that is holding still reads as a jolt *backwards*,
+/// since the jolt is the same size whatever the frame's own travel was. Measured on six notches taken at
+/// the cap, the point under the wheel stepped a whole pixel back on a frame that had moved a third of one
+/// forwards; the place a sampler is handed holds it to a hundredth (see `PinZoom::picture_place`).
+#[test]
+fn a_travel_keeps_the_point_of_the_picture_under_the_wheel_where_it_is_drawn() {
+    for anchor in [(900, 700), (100, 100), (500, 400), (890, 60)] {
+        let cap = at_the_cap(anchor);
+        let toward = cap.zoom.drawn.0 * PIN_ZOOM_PER_NOTCH.powi(6);
+        let asking = |zoom| PinZoomInputs {
+            content: cap.content,
+            zoom,
+            dpi: DESK,
+            room: bounds(),
+            pointer: Some(anchor),
+        };
+        let (width, height) = region_size(cap.content);
+
+        // Which point of the picture the wheel read, as a share of the picture's whole width, read out
+        // of the floats the place is worked from rather than out of a box of pixels: a share taken from a
+        // box that is half a pixel out would spend the whole of this test's own room for being half a
+        // pixel out. The pointer's own screen point is asked in the *window's* coordinates, which is where
+        // the pan and the place are both measured (see `PinZoom::picture_place`).
+        let anchor = (anchor.0 - cap.content.0, anchor.1 - cap.content.1);
+        let (left, _, drawn_width, _) = cap.zoom.picture_place((width, height));
+        let share = (anchor.0 as f32 - left) / drawn_width;
+
+        let mut zoom = PinZoom {
+            toward,
+            ..cap.zoom
+        };
+        let mut frames = 0;
+
+        while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
+            zoom = plan.zoom;
+            let (left, _, drawn_width, _) = zoom.picture_place((width, height));
+            let drawn_at = left + share * drawn_width;
+
+            assert!(
+                (drawn_at - anchor.0 as f32).abs() <= 0.01,
+                "frame {frames} drew the point of the picture the wheel read {} pixels from where the \
+                 hand left it",
+                drawn_at - anchor.0 as f32
+            );
+            frames += 1;
+            assert!(frames < 120, "a travel of two seconds is not a travel");
+        }
+
+        assert!(
+            zoom.drawn.0 > cap.zoom.drawn.0 * 1.5,
+            "and the picture did travel: {} of {toward}",
+            zoom.drawn.0
+        );
+    }
+}
+
 /// A wheel notch does not move the picture at all: what it writes down is where the picture is *going*,
 /// and the frames that take it there are the loop's.
 ///

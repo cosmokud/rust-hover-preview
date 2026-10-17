@@ -47,6 +47,7 @@ fn a_band_tall_enough_to_split_is_scaled_row_for_row_where_the_band_is() {
             origin_y,
             height: band_height,
             frame: (0, 0, width as i32, band_height as i32),
+            exact: (0.0, 0.0, width as f32, band_height as f32),
         },
     );
 
@@ -80,6 +81,47 @@ fn a_band_tall_enough_to_split_is_scaled_row_for_row_where_the_band_is() {
 /// window draws while an edge of it is being dragged, and what it may never draw is the frame
 /// standing at its own size with nothing around it.
 #[test]
+fn a_frame_drawn_at_a_size_of_its_own_is_sampled_through_the_place_it_really_lands_on() {
+    // A picture of two columns, black and white, drawn into a band four columns wide at a place of a
+    // quarter of a pixel: the band's columns are the blends the place asks for, and not the blends a box
+    // of whole pixels — which is where this picture begins — would give.
+    //
+    // Worked example, the picture's left edge a quarter of a pixel in from the band's left and the band
+    // twice the picture's own width: column *i* of the band samples the picture at `(i + 0.25) / 2 - 0.5`,
+    // which is 0.125, 0.625 and 1.125 for the three columns the picture's own pixels reach — a line whose
+    // grey goes 32, 159, 255 in 256ths — where the box alone would sample 0.25 and 0.75 and give 64 and
+    // 191. Measured through `render_pinned_preview_at`, that difference is the whole of what a picture in
+    // motion owes the wheel's own anchor (see `PinZoom::picture_place`).
+    let picture = [0u8, 0, 0, 255, 255, 255, 255, 255];
+    let mut out = vec![0u8; 4 * 4];
+
+    resample_into_band(
+        &picture,
+        (2, 1),
+        (4, 1),
+        TransparentBackground::Black,
+        true,
+        BandTarget {
+            out: &mut out,
+            width: 4,
+            origin_y: 0,
+            height: 1,
+            frame: (0, 0, 4, 1),
+            exact: (0.25, 0.0, 4.0, 1.0),
+        },
+    );
+
+    let grey = |column: usize| out[column * 4];
+    for (column, wanted) in [(0usize, 0u8), (1, 32), (2, 159), (3, 255)] {
+        assert!(
+            grey(column).abs_diff(wanted) <= 1,
+            "column {column} of the band is the picture sampled where it really begins: {} against {wanted}",
+            grey(column)
+        );
+    }
+}
+
+#[test]
 fn a_frame_of_another_size_is_sampled_into_the_band_it_is_drawn_in() {
     fn band(
         frame: &[u8],
@@ -101,6 +143,7 @@ fn a_frame_of_another_size_is_sampled_into_the_band_it_is_drawn_in() {
                 origin_y: 0,
                 height: size.1,
                 frame: (0, 0, size.0 as i32, size.1 as i32),
+                exact: (0.0, 0.0, size.0 as f32, size.1 as f32),
             },
         );
         out
@@ -200,6 +243,7 @@ fn an_opaque_frame_of_another_size_fills_the_band_it_is_drawn_in() {
             origin_y,
             height: band_height,
             frame: (0, 0, width as i32, band_height as i32),
+            exact: (0.0, 0.0, width as f32, band_height as f32),
         },
     );
 
@@ -273,6 +317,7 @@ fn a_frame_bigger_than_its_band_is_drawn_at_the_size_it_is_drawn_at() {
             origin_y: 0,
             height,
             frame: (0, (height as i32 - 32) / 2, source_width as i32, 32),
+            exact: (0.0, ((height as i32 - 32) / 2) as f32, source_width as f32, 32.0),
         },
     );
 
@@ -386,6 +431,7 @@ fn a_frame_drawn_at_its_own_size_is_a_crop_of_it() {
                 origin_y: 0,
                 height,
                 frame: (left, -4, width as i32, 16),
+                exact: (left as f32, -4.0, width as f32, 16.0),
             },
         )
     };
@@ -433,6 +479,7 @@ fn a_frame_drawn_at_its_own_size_is_a_crop_of_it() {
                 origin_y: 0,
                 height,
                 frame: (0, -4, width as i32, 8),
+                exact: (0.0, -4.0, width as f32, 8.0),
             },
         ),
         "a frame drawn at another size is a scale and not a copy"
@@ -452,6 +499,7 @@ fn a_frame_drawn_at_its_own_size_is_a_crop_of_it() {
                 origin_y: 0,
                 height,
                 frame: (0, -4, width as i32, 16),
+                exact: (0.0, -4.0, width as f32, 16.0),
             },
         ),
         "a frame to be composited is the sampler's"
@@ -544,6 +592,7 @@ fn a_band_whose_player_is_parked_is_the_last_frame_scaled_and_never_a_hole() {
                 origin_y,
                 height: band_height,
                 frame: (0, 0, width as i32, band_height as i32),
+                exact: (0.0, 0.0, width as f32, band_height as f32),
             },
         );
         (out.to_vec(), filled)
@@ -622,6 +671,127 @@ fn a_band_whose_player_is_parked_is_the_last_frame_scaled_and_never_a_hole() {
 fn surface_pixel(surface: &[u8], window: (u32, u32), row: usize, column: usize) -> &[u8] {
     let stride = window.0 as usize * 4;
     &surface[row * stride + column * 4..row * stride + column * 4 + 4]
+}
+
+/// A picture the wheel has taken past its window is drawn where the zoom's own arithmetic says it is — by
+/// both of the roads a repaint takes to it.
+///
+/// **The crop road is the one a deep zoom's pan takes, and the one a picture's own columns are lost on.** A
+/// frame at the size of the box it lands in is *copied*, and a copy that read the band's column as the
+/// picture's is a crop taken from the wrong end of the picture: measured through `render_pinned_preview_at`
+/// on a picture drawn twice its window's width and carried 37 pixels right, the whole band was drawn from
+/// the picture's own first column where its own arithmetic says the hundred-and-twenty-third, which is the
+/// picture snapping back to where it stood before the hand took it (see `copy_frame_into_band`).
+///
+/// **And the sampled road is the one a picture in *motion* takes**, where the loss is smaller and just as
+/// visible: the place the picture really lands on is a fraction of a pixel that a box of whole ones cannot
+/// hold, and a mapping that drops it draws the picture on the pixel grid — which steps the whole picture a
+/// pixel every time the place crosses a half, and is the jolt a hand holding still sees at the end of a
+/// zoom (see `PinZoom::picture_place`).
+///
+/// The two are one claim and one window, and they are told apart by the frame the media is drawn from: a
+/// frame the size of the box is copied, and any other size is sampled.
+#[test]
+fn a_picture_the_wheel_has_taken_past_its_window_is_drawn_where_the_zoom_says_it_is() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME.lock();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 420, 320);
+    let (window_width, window_height) = region_size(content);
+    // A quarter of a pixel of pan, so the place and the box differ by exactly the fraction this is about:
+    // the box begins at -123 and the place at -123.25.
+    let pan = 37.25;
+    let (drawn_width, drawn_height) = ((window_width * 2) as u32, (window_height * 2) as u32);
+
+    let mut pin = overlay_pin(
+        content,
+        PinChrome {
+            caption: false,
+            bar: false,
+            until: None,
+        },
+    );
+    pin.zoom = Some(PinZoom::still(
+        (drawn_width as f32, drawn_height as f32),
+        (pan, 0.0),
+    ));
+    stand_pin(Some(pin));
+
+    let hwnd = HWND(0x1000 as *mut _);
+    let row = window_height as usize / 2;
+    let painted = |media: MediaData| {
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(media);
+        }
+        unsafe { render_pinned_preview_at(hwnd, content.0, content.1) };
+
+        let bits = ensure_layered_surface(hwnd.0 as isize, window_width as u32, window_height as u32)
+            .expect("the surface the paint drew into");
+        let surface = unsafe {
+            std::slice::from_raw_parts(bits, window_width as usize * window_height as usize * 4)
+        };
+
+        (0..window_width as usize)
+            .map(|column| {
+                surface_pixel(
+                    surface,
+                    (window_width as u32, window_height as u32),
+                    row,
+                    column,
+                )[0]
+            })
+            .collect::<Vec<u8>>()
+    };
+
+    // The frame a zoom's own decode hands back for a box: the picture at the size of the box, with every
+    // column its own shade, so a crop taken from the wrong end of it says so. The box begins at -123, so
+    // column *x* of the window is the picture's own column `x + 123`.
+    let mut at_the_box = Vec::with_capacity((drawn_width * drawn_height * 4) as usize);
+    for _ in 0..drawn_height {
+        for column in 0..drawn_width {
+            at_the_box.extend_from_slice(&[((column % 250) + 1) as u8, 0, 0, 255]);
+        }
+    }
+
+    let mut media = create_loading_media(drawn_width, drawn_height);
+    media.frames[0] = Arc::new(ImageFrame::new(at_the_box, drawn_width, drawn_height, 33));
+    media.media_type = MediaType::StaticImage;
+
+    for (column, drawn) in painted(media).into_iter().enumerate() {
+        let of_the_picture = ((column as i32 + 123).rem_euclid(250)) as u8 + 1;
+
+        assert_eq!(
+            drawn, of_the_picture,
+            "column {column} of the window is the picture's own column {of_the_picture}, not {drawn}"
+        );
+    }
+
+    // And the same window from a frame that is not the size of the box, which the sampler takes: a picture
+    // of stripes, one column of each, so where the place falls between two of them is what every column of
+    // the window says. The place begins at -123.25, so column *x* samples the picture at `x + 122.75`: a
+    // quarter of the way onto the column after it, which is 191 of 255 on a window column whose two
+    // picture columns are black then white and 64 where they are white then black.
+    let stripes: Vec<u8> = (0..drawn_width)
+        .flat_map(|column| [(column % 2) as u8 * 255, 0, 0, 255])
+        .collect();
+    let mut media = create_loading_media(drawn_width, 1);
+    media.frames[0] = Arc::new(ImageFrame::new(stripes, drawn_width, 1, 33));
+    media.media_type = MediaType::StaticImage;
+
+    for (column, drawn) in painted(media).into_iter().enumerate() {
+        let wanted = if column % 2 == 0 { 191 } else { 64 };
+
+        assert!(
+            drawn.abs_diff(wanted) <= 1,
+            "column {column} of the window is the picture sampled a quarter of a pixel in: {drawn} against {wanted}"
+        );
+    }
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
 }
 
 /// **The first of the two flashes a drag used to have, and it is an ordering rather than a
