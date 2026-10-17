@@ -295,6 +295,83 @@ fn a_beat_draws_ripples_around_the_mark() {
     );
 }
 
+/// The mark a fall ends on is the mark a card at rest draws: the ripples' lines narrow as they come
+/// home, so there is nothing of them left to take away by the time the beat reaches its rest, and a
+/// fall's last leg is a fall rather than a jump in the mark's size (see `Mark::thickness` and
+/// `paint`).
+///
+/// A fall is last drawn a step of itself above its rest — a hair over a hundredth, `0.01 *
+/// e^(0.033/0.4)`, the step being the cadence a card is painted at, `AUDIO_NAME_REPAINT`, and the
+/// 0.4 the fall's own clock, `BEAT_FADE` — and it is drawn at the widest share the menu offers,
+/// which is where an arriving ripple's fat line is worth the most pixels: the same step is a third
+/// of a pixel at the 10% card and a couple of pixels at the 50% one.
+#[test]
+fn a_fall_ends_on_the_mark_a_card_at_rest_draws() {
+    let options = options_at(313);
+    let (width, height) = measure(&card(), 374, 144, 96, options).expect("a measured card");
+    let page = scrolled_at(&card(), width, 0, options);
+    let mark = page.mark.expect("a card is drawn with a mark");
+    let header_bottom = (page.header_top + page.header_height) as usize;
+    let name_left = page.header[0].x as usize;
+    // The page's own color, read where no mark of any card stands.
+    let page_color = |painted: &(Vec<u8>, u32, u32)| {
+        let index = ((height as usize - 1) * width as usize + (width as usize - 1)) * 4;
+        [
+            painted.0[index],
+            painted.0[index + 1],
+            painted.0[index + 2],
+            painted.0[index + 3],
+        ]
+    };
+
+    // How far from the mark's centre the ink of a card reaches: the whole of what the mark is drawn
+    // as, ripples and the dot alike.
+    let reach = |painted: &(Vec<u8>, u32, u32)| -> f32 {
+        let color = page_color(painted);
+        let mut out = 0.0f32;
+        for y in page.header_top as usize..header_bottom {
+            for x in 0..name_left {
+                let index = (y * width as usize + x) * 4;
+                if [painted.0[index], painted.0[index + 1], painted.0[index + 2], painted.0[index + 3]]
+                    == color
+                {
+                    continue;
+                }
+                let dx = x as f32 + 0.5 - mark.center_x;
+                let dy = y as f32 + 0.5 - mark.center_y;
+                out = out.max((dx * dx + dy * dy).sqrt());
+            }
+        }
+        out
+    };
+    let draw_at = |beat: f32| {
+        let mut card = card();
+        card.beat = beat;
+        render(&card, width, height, 96, options).expect("a painted card")
+    };
+
+    // The dot as a card at rest draws it, and the mark as a fall's last frame draws it: the two are
+    // the same mark, a hair of a pixel apart at worst.
+    let dot = reach(&draw_at(0.0));
+    let arriving = reach(&draw_at(0.01 * (0.033f32 / 0.4).exp()));
+    assert!(
+        arriving - dot <= 1.0,
+        "a fall's last frame reached {arriving:.1} where a card at rest reaches {dot:.1}"
+    );
+
+    // And a fall only ever comes home: no beat on the way down stands ink further out than the beat
+    // above it, so the steps of a fall are the fall itself and no one of them is a jump.
+    let mut previous = f32::MAX;
+    for beat in [1.0f32, 0.6, 0.4, 0.2, 0.1, 0.05, 0.02, 0.01] {
+        let out = reach(&draw_at(beat));
+        assert!(
+            out <= previous + 0.01,
+            "a beat of {beat} reached {out:.1}, further than the {previous:.1} above it"
+        );
+        previous = out;
+    }
+}
+
 /// A card with nothing to say about its length still draws, and one with no room at all is
 /// answered with the page every painted preview gives in that place.
 #[test]

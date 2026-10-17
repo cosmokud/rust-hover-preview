@@ -89,7 +89,9 @@ pub(super) struct Mark {
     /// The ripples' own radii, the smallest first, and all of them nothing for a card at rest.
     /// A ripple whose radius has fallen inside the dot is a ripple the beat has taken back in.
     pub(super) ripples: [f32; RIPPLE_COUNT],
-    /// How thick each ripple's own line is drawn.
+    /// How thick each ripple's own line is drawn where the ripple stands a dot's radius off the
+    /// mark: within that it is drawn thinner the nearer it is home, so a ripple that has arrived
+    /// is a line of nothing (see `paint`).
     pub(super) thickness: f32,
 }
 
@@ -885,14 +887,20 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
             if radius <= mark.radius {
                 continue;
             }
-            let share = ((radius - mark.radius) / (mark.reach - mark.radius)).clamp(0.0, 1.0);
+            // The line it is drawn with narrows as the ripple comes home — its whole width once it
+            // stands a dot's radius out, a share of that within, and a line of nothing at the dot
+            // — which is what keeps the end of a fall from being a change in the mark's size: the
+            // ripples have gone by the time the beat reaches its rest (see `Mark::thickness`).
+            let out = radius - mark.radius;
+            let home = (out / mark.radius).clamp(0.0, 1.0);
+            let share = (out / (mark.reach - mark.radius)).clamp(0.0, 1.0);
             fill_ring(
                 buffer,
                 surface.width as i32,
                 mark.center_x,
                 mark.center_y,
                 radius,
-                mark.thickness,
+                mark.thickness * home,
                 accent,
                 1.0 - RIPPLE_FADE * share,
             );
