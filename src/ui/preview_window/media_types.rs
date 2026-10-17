@@ -413,11 +413,12 @@ impl MediaType {
     ///
     /// It is the kinds whose frame is a picture rather than a layout: still ones, the five
     /// animation kinds whose next frame is another picture of the same file, a texture, the picture
-    /// a design document or a vector drawing is previewed from, and the picture an image converter
-    /// developed. Nothing of a page is here — a PDF, an Office document, a comic and a book are all
-    /// pictures *of* a page, drawn at whatever box they are asked for, and what a zoom would have to
-    /// show of one is a stretched copy of the last frame it drew where the page itself would be
-    /// sharp at the new size (see `Libre` and `Calibre`).
+    /// a design document or a vector drawing is previewed from, the picture an image converter
+    /// developed, and a page — a PDF, a comic's plate, a book's, and the page a document previewer
+    /// or a render engine drew. A page is the file rasterized at whatever box it is asked for, so a
+    /// zoom past the box it is drawn at is the same file laid out again at the size the picture is
+    /// drawn at, sharp as the source allows, rather than a stretched copy of the last frame (see
+    /// `box_is_covered` and `PinRelayoutRoad::Zoom`).
     ///
     /// A video is the other refusal, and for the opposite reason: its picture is sharp at any size
     /// too, but it belongs to a player of somebody else's, whose window is under the band rather
@@ -435,6 +436,11 @@ impl MediaType {
                 | Self::Design
                 | Self::Vector
                 | Self::Magick
+                | Self::Pdf
+                | Self::Comic
+                | Self::Office
+                | Self::Libre
+                | Self::Calibre
         )
     }
 
