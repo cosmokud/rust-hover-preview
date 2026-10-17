@@ -669,8 +669,10 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
                 // flight ends at the size the picture has reached rather than going on under a hand
                 // that is carrying it, which would be two answers to where the picture is — and the
                 // loop owes the frame of that size for the same reason it owes one to any other size a
-                // picture has settled at (see `pin_zoom_oversize_box`).
+                // picture has settled at (see `pin_zoom_oversize_box`). The flinch ends with it, for
+                // the same reason a new notch ends one (see `aim_pin_zoom`).
                 toward: zoom.drawn.0,
+                settle: 0.0,
                 ..zoom
             });
             // Where the pointer has been carried out to, so that the next ask for a pointer that has
