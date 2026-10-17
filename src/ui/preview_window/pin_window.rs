@@ -282,6 +282,14 @@ pub(super) fn pin_state() -> Option<MutexGuard<'static, PinState>> {
     PIN_STATE.lock().ok()
 }
 
+/// The pin's own state, without waiting for it: what `pin_state` answers for a reader that may not
+/// block. The wheel hook is that reader, and the rule is the text preview's own — a hook procedure
+/// is a place every wheel message on the desktop waits for, so a lock that cannot be taken at once
+/// means the wheel is not ours to take either (see `pin_zoom_keep_alive_try`).
+pub(super) fn pin_state_try() -> Option<MutexGuard<'static, PinState>> {
+    PIN_STATE.try_lock().ok()
+}
+
 /// Whether a pin is up: the published copy, and the answer every thread may take without a lock.
 ///
 /// The Explorer hook asks this on every tick, and it cannot be answered off the lock: a hook

@@ -152,6 +152,19 @@ pub(super) const HTML_BACKGROUND_CHOICES: [TransparentBackground; 3] = [
 /// rather than kept as a value the menu has no item for (see `sanitize_dds_background`).
 pub(super) const DDS_BACKGROUND_CHOICES: [TransparentBackground; 2] =
     [TransparentBackground::Black, TransparentBackground::White];
+/// The backdrops the `Zoom → Background` half offers, which are three of the four rather
+/// than all of them: what fills the band beside a picture the wheel has taken past its
+/// window is never a hole in the desktop, because a layered window is hit-tested by the
+/// shape of its pixels — a band left transparent would be a band the hand clicks through to
+/// whatever stands under the window. The black the setting starts at is listed first, as
+/// every other half lists its own, and a file that names transparency anyway is read as the
+/// backdrop the setting starts at rather than kept as a value the menu has no item for (see
+/// `sanitize_zoom_background`).
+pub(super) const ZOOM_BACKGROUND_CHOICES: [TransparentBackground; 3] = [
+    TransparentBackground::Black,
+    TransparentBackground::White,
+    TransparentBackground::Checkerboard,
+];
 /// The two halves of the `Volume` submenu: one command per level it offers, in the order it
 /// lists them, the video's range first and the sound's beside it. Each half is a base plus the
 /// position a level was listed at, so one table and one builder serve both — the arrangement
@@ -291,6 +304,16 @@ pub(super) const ID_TRAY_AUDIO_SHUFFLE: u16 = 1044;
 /// walk has no end of file to jump from, so its shuffle is the caption's buttons and the
 /// keyboard's alone. It sits beside the other two, in the same slack.
 pub(super) const ID_TRAY_IMAGE_SHUFFLE: u16 = 1045;
+/// The `Preview Settings → Image → Zoom → Background` submenu: one command per backdrop the
+/// band beside a zoomed picture can be filled with, in the order it lists them.
+///
+/// It is a base plus the position a choice was listed at rather than a name of its own, the
+/// way every other backdrop is, because what fills that band is one of a list — and it wants
+/// a run of ids three wide rather than a single one because the menu offers three of the four
+/// backdrops. It sits in the slack the picture kind's `Shuffle` row and the theme items
+/// leave: 1046 to 1048 is the free run between 1045 and 1050, so a click on one of the three
+/// is never read as the row above it or as a theme.
+pub(super) const ID_TRAY_ZOOM_BACKGROUND_BASE: u16 = 1046;
 /// The `Video → Pin Mode → End of File` and `Audio → Pin Mode → End of File`
 /// submenus: one command per way a pinned film or sound can end, in the order they list
 /// them — `Pause`, `Loop` and `Jump`.

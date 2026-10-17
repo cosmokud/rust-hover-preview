@@ -22,6 +22,28 @@ use std::cell::RefCell;
 use windows::Win32::Foundation::{RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{GetTextExtentPoint32W, SelectObject};
 
+/// How much room a caption needs beside its buttons for a run of text to be a name rather than a
+/// stub: three characters and the ellipsis that says the rest of it was cut, at the caption's own
+/// face.
+///
+/// It is written in logical pixels rather than measured, which is the one thing about it worth saying:
+/// the question is asked of a window's width on the road a *press* takes as well as on the road a
+/// paint takes, and a paint's own answer would be a font create, a `GetTextExtentPoint32W` and a font
+/// delete on every pointer move across a caption. What it is for is the width at which a name stops
+/// being worth saying, and no name that matters is longer or shorter than another by this much.
+pub(super) const TITLE_MIN_PIXELS: f32 = 42.0;
+
+/// How much room a caption needs beside its buttons to be a command bar at all, rather than a row of
+/// buttons over somebody's picture.
+///
+/// The bar goes when even the *ellipsis* has nowhere to go, which is the one thing left that a
+/// caption could still be saying: three steps go as a window is narrowed, in the order a window owes
+/// them. The name is cut first, which is `fit_title`'s own business. Then the name goes altogether,
+/// because a name with room for two characters in it is not a name. And then the strip goes, because
+/// there is nothing left for it to say and a row of window buttons over the top of a picture is not
+/// worth the band of it.
+pub(super) const CAPTION_MIN_PIXELS: f32 = 10.0;
+
 /// How wide a caption button is, in the units a display's scale multiplies: the width
 /// Windows 11 gives one, so the three land where a hand expects them.
 pub(super) const BUTTON_PIXELS: f32 = 46.0;
@@ -217,6 +239,55 @@ pub(crate) fn button_at(
         .map(|button| button.kind)
 }
 
+/// The room a caption has for the name of what is pinned: what is left of its width once its buttons
+/// have taken their side of it and the padding at either end of the run has been given up.
+///
+/// It is `button_boxes`' answer rather than an arithmetic of its own, because the two have to be one
+/// answer: a room measured beside a group of buttons the caption was not drawn with is a name that
+/// either runs under the buttons or stops short of them.
+pub(crate) fn title_room(width: i32, dpi: u32, maximizable: bool) -> i32 {
+    // The height is a stand-in and not a measurement: only a button's left edge is read below, and a
+    // button's left edge is its kind's own packing against the right of the strip.
+    let buttons = button_boxes(width, 1, dpi, maximizable);
+    let right = buttons
+        .iter()
+        .map(|button| button.rect.left)
+        .min()
+        .unwrap_or(width);
+
+    right - 2 * text_paint::scaled(TITLE_PADDING_PIXELS as i32, dpi as f32 / 96.0)
+}
+
+/// Whether a caption of this width is a command bar that can be shown without cutting anything, which
+/// is a question asked of two roads at once: the strip is drawn on one, and a press is answered on the
+/// other (see `pinned_paint` and `pinned_caption_geometry`).
+///
+/// Three steps go as a window is narrowed, in the order a window owes them. The name is cut first,
+/// which is `fit_title`'s own business and happens below `TITLE_MIN_PIXELS`. Then the name goes
+/// altogether, because a name with room for two characters in it is not a name and an ellipsis alone
+/// says nothing about anything. And then the strip goes, because what is left of it is the window's
+/// own buttons over the top of somebody's picture — and those are not worth a band of the picture and
+/// are not what the strip is for.
+///
+/// All three come back as it is widened, which is the whole of what makes this a rule rather than a
+/// threshold: the question is asked of the width the window has now, every time it changes.
+pub(crate) fn caption_fits(width: i32, dpi: u32, maximizable: bool) -> bool {
+    let scale = dpi as f32 / 96.0;
+    let least = text_paint::scaled(CAPTION_MIN_PIXELS as i32, scale);
+
+    title_room(width, dpi, maximizable) >= least
+}
+
+/// Whether there is room in a caption to say the name of what is pinned at all, which is the step
+/// above the one that gives the strip up: a name cut to two characters and an ellipsis is not a name,
+/// and one the caption cannot say is one it is better off without.
+pub(crate) fn title_fits(width: i32, dpi: u32, maximizable: bool) -> bool {
+    let scale = dpi as f32 / 96.0;
+    let least = text_paint::scaled(TITLE_MIN_PIXELS as i32, scale);
+
+    title_room(width, dpi, maximizable) >= least
+}
+
 /// Paint a caption into a surface the size of the strip: the bar, the three buttons with
 /// whatever state the pointer has put them in, and the name of what is pinned.
 pub(crate) fn paint_caption(
@@ -295,7 +366,16 @@ pub(crate) fn paint_caption(
         .map(|button| button.rect.left)
         .min()
         .unwrap_or(width);
-    paint_title(surface, palette, caption.title, title_right, scale);
+
+    // A name is only said where there is room to say one: a caption cut down to an ellipsis and a
+    // character is a strip saying that a file has a name rather than saying what it is, and what the
+    // room it would take up is for at that width is the buttons beside it (see `title_fits`).
+    let title = if title_fits(width, dpi, caption.maximizable) {
+        caption.title
+    } else {
+        ""
+    };
+    paint_title(surface, palette, title, title_right, scale);
 
     // The tooltip is not drawn here: it is a panel of its own hanging below the strip, over
     // the media, and is the window's own business to place (see `tooltip_layout`). All this

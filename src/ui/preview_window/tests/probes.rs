@@ -150,7 +150,11 @@ fn app_hover_probe() {
 /// Put the pointer at a point on the screen, as a hand would: a real `SendInput` move,
 /// because a drag is a sequence of moves delivered to whatever window is under the pointer
 /// and nothing less is one.
-fn send_pointer_to(x: i32, y: i32) {
+///
+/// Only the `#[ignore]`d drag probes use this, because a real move is the user's own pointer
+/// teleported and left wherever the probe finished: a plain test takes its step with
+/// `step_the_pin_drag_by` instead, which asks the machine nothing but where the cursor already is.
+pub(super) fn send_pointer_to(x: i32, y: i32) {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
         SM_YVIRTUALSCREEN,
@@ -174,6 +178,28 @@ fn send_pointer_to(x: i32, y: i32) {
             MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
         )]);
     }
+}
+
+/// Take a step of `(dx, dy)` with a drag that is going, without moving the pointer: a step is
+/// `(where the cursor is) - (the drag's own anchor)`, and the cursor is the one end of that a
+/// stand-in window cannot answer for — `apply_pin_drag` reads `GetCursorPos` itself
+/// (see `PinWindow::pointer`). So the anchor is put a step's travel behind wherever the cursor
+/// really is, the callers' own `apply_pin_drag` measures the step from there, and the hand's
+/// pointer stays where the user's hand left it — which is what a plain `cargo test` owes the
+/// desktop (see `a_border_stroke` in the edges' own tests).
+pub(super) fn step_the_pin_drag_by(dx: i32, dy: i32) {
+    let at = cursor_screen_point().expect("the pointer is somewhere on the desktop");
+    let mut anchored = false;
+    with_pin(|pin| {
+        if let Some(drag) = pin.dragging.as_mut() {
+            drag.from = (at.0 - dx, at.1 - dy);
+            // The guard reads the point the last step was measured at, and a hand that has not
+            // moved would otherwise be read as the same point twice and the step dropped.
+            drag.carried = (i32::MIN, i32::MIN);
+            anchored = true;
+        }
+    });
+    assert!(anchored, "a step is asked for with a drag going");
 }
 
 fn send_left_button(down: bool) {
@@ -840,8 +866,7 @@ fn a_dragged_mpv_pin_carries_its_players_window_on_every_move_step() {
 
     for step in 1..=3 {
         let (dx, dy) = (step * 20, step * 10);
-        send_pointer_to(content.0 + dx, content.1 + dy);
-        std::thread::sleep(Duration::from_millis(25));
+        step_the_pin_drag_by(dx, dy);
 
         // The stand-in is re-asserted here rather than left standing across the pair, because the
         // record of a player's window is the whole process's and not this test's: the monitor
@@ -1431,8 +1456,7 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
     let window = a_window_at(content);
     begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
     assert!(pin_is_dragging(), "the hand is carrying the window");
-    send_pointer_to(content.0 + 20, content.1 + 10);
-    std::thread::sleep(Duration::from_millis(25));
+    step_the_pin_drag_by(20, 10);
 
     // The stand-in is re-asserted here rather than left standing across the pair, because the
     // record of a player's window is the whole process's and not this test's (see
@@ -1660,8 +1684,7 @@ fn a_pinned_mpv_film_is_placed_by_a_tick_a_drag_and_a_monitor_pass() {
     // A drag's move: the player travels with the band rather than being left behind it.
     let window = a_window_at(content);
     begin_pin_drag(hwnd, &window, PinDragAction::Move, true);
-    send_pointer_to(content.0 + 10, content.1 + 10);
-    std::thread::sleep(Duration::from_millis(25));
+    step_the_pin_drag_by(10, 10);
     unsafe { apply_pin_drag(hwnd) };
     assert_eq!(
         last_player_order(),

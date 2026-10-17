@@ -91,6 +91,7 @@ mod pin_swap;
 mod pin_taskbar;
 mod pin_walk;
 mod pin_window;
+mod pin_zoom;
 mod pixels;
 mod pointer;
 mod preview_scale;
@@ -130,7 +131,8 @@ use crate::config::config::{
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
     DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL,
     DEFAULT_VIDEO_LOOP,
-    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES, DEFAULT_WEBP_PLAYBACK_FPS, VIDEO_FFMPEG_ABOVE_PIXELS,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_ZOOM_BACKGROUND, VIDEO_FFMPEG_ABOVE_PIXELS,
 };
 use crate::engines::calibre_render;
 use crate::engines::imagemagick_render;
@@ -197,12 +199,12 @@ use windows::Win32::Foundation::{
     CloseHandle, GlobalFree, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
     WAIT_TIMEOUT, WPARAM,
 };
+use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EndPaint, GdiFlush, MonitorFromWindow, SelectObject, SetBrushOrgEx, SetStretchBltMode,
-    StretchBlt, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
-    DIB_RGB_COLORS, HALFTONE, HBITMAP, HDC, HGDIOBJ, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
-    SRCCOPY,
+    EndPaint, GdiFlush, MonitorFromWindow, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
+    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -273,6 +275,7 @@ pub(crate) use pin_bubble::PIN_BUBBLE_HWND;
 pub(crate) use pin_drag::publish_pin_media_press;
 pub(crate) use pin_lifecycle::PinCommand;
 pub(crate) use pin_model::pin_is_focused;
+pub(crate) use pin_model::pin_zoom_keep_alive_try;
 pub(crate) use pin_walk::PinPlanned;
 pub(crate) use pin_walk::PinStep;
 pub(crate) use pixels::rgba_to_bgra;
@@ -309,6 +312,7 @@ pub(crate) use requests::update_pinned_preview;
 pub(crate) use subtitle_files::keep_extraction_for;
 pub(crate) use subtitle_files::trim_now as trim_subtitle_cache;
 pub(crate) use tick::preview_stall_ms;
+pub(crate) use tick::wake_for_a_wheel_notch;
 pub(crate) use tick::PREVIEW_SENDER;
 // What the tray's `Engine -> Select Engine -> Video` submenu reads: what the choice moving costs
 // the probe cache (see `set_video_engine`). Which engines this machine has is
@@ -345,6 +349,7 @@ use pin_playback::*;
 use pin_swap::*;
 use pin_taskbar::*;
 use pin_walk::*;
+use pin_zoom::*;
 use pixels::*;
 use pointer::*;
 use preview_scale::*;

@@ -35,7 +35,8 @@ pub(crate) use bubble::{
     BubbleArt, BubbleMark, TooltipText, BUBBLE_BARS,
 };
 pub(crate) use caption::{
-    button_at, button_boxes, measure_caption_text, paint_caption, Caption, CaptionButton,
+    button_at, button_boxes, caption_fits, measure_caption_text, paint_caption, Caption,
+    CaptionButton,
 };
 pub(crate) use menu::{
     menu_flyout_from_menu, menu_flyout_gap_holds, menu_popup_from_point, menu_popup_shifted,

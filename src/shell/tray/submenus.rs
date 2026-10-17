@@ -23,7 +23,7 @@ use super::ids::{
     ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL,
     ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK,
     PIN_END_OF_FILE_CHOICES,
-    TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
+    TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES, ZOOM_BACKGROUND_CHOICES,
 };
 
 use crate::app::dialogs;
@@ -721,6 +721,14 @@ pub(super) fn dds_background_at(index: u16) -> Option<TransparentBackground> {
 /// backdrops of the four — everything but the transparency a page is not drawn over.
 pub(super) fn html_background_at(index: u16) -> Option<TransparentBackground> {
     HTML_BACKGROUND_CHOICES.get(index as usize).copied()
+}
+
+/// And the same for an item of the zoom's half, which offers the three backdrops that fill
+/// a band beside a picture and leaves the one that would not: the band is filled by the
+/// window rather than looked through, since the window is layered and hit-tested by the
+/// shape of its pixels (see `ZOOM_BACKGROUND_CHOICES`).
+pub(super) fn zoom_background_at(index: u16) -> Option<TransparentBackground> {
+    ZOOM_BACKGROUND_CHOICES.get(index as usize).copied()
 }
 
 /// One of the display-share submenus — `Vector`, `Text`, `Ebook`,

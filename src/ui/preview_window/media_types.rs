@@ -409,6 +409,35 @@ impl MediaType {
         )
     }
 
+    /// Whether a pinned window of this kind is a picture the wheel zooms.
+    ///
+    /// It is the kinds whose frame is a picture rather than a layout: still ones, the five
+    /// animation kinds whose next frame is another picture of the same file, a texture, the picture
+    /// a design document or a vector drawing is previewed from, and the picture an image converter
+    /// developed. Nothing of a page is here — a PDF, an Office document, a comic and a book are all
+    /// pictures *of* a page, drawn at whatever box they are asked for, and what a zoom would have to
+    /// show of one is a stretched copy of the last frame it drew where the page itself would be
+    /// sharp at the new size (see `Libre` and `Calibre`).
+    ///
+    /// A video is the other refusal, and for the opposite reason: its picture is sharp at any size
+    /// too, but it belongs to a player of somebody else's, whose window is under the band rather
+    /// than drawn into it (see `draws_in_a_window_of_its_own`).
+    pub(super) fn is_zoomable_picture(&self) -> bool {
+        matches!(
+            self,
+            Self::StaticImage
+                | Self::Dds
+                | Self::AnimatedGif
+                | Self::AnimatedApng
+                | Self::AnimatedWebP
+                | Self::AnimatedHeif
+                | Self::AnimatedJxl
+                | Self::Design
+                | Self::Vector
+                | Self::Magick
+        )
+    }
+
     /// The mark the bubble carries when there is no picture to stand in for one.
     ///
     /// What a bubble stands for is asked of the kind and the *playback* together, because the mark

@@ -201,7 +201,12 @@ pub(super) fn pinned_caption_geometry() -> Option<PinnedCaption> {
             dpi: pin.dpi,
             width,
             frame: pin.frame,
-            wanted: pin.chrome.caption,
+            // A caption showing *and* wide enough to be one: a strip too narrow for its own buttons
+            // and a stub of a name is not drawn, so its buttons are not there to be pressed — what is
+            // under them then is the picture, which is a handle for moving the window (see
+            // `caption_fits`).
+            wanted: pin.chrome.caption
+                && pin_chrome::caption_fits(width, pin.dpi, pin.frame != PinFrame::None),
         }
     })
 }
@@ -801,6 +806,38 @@ pub(super) fn within_double_click(
         && (point.1 - at.1).abs() <= reach_y
 }
 
+/// What a press on the media does when the picture it shows is bigger than the window it is in: takes
+/// the pointer for the picture rather than for the window, answering whether there was one to take.
+///
+/// Whether there is one is the wheel's own view and nothing else: a picture that fills its window has
+/// nowhere to be carried, so a press on one is the window's own handle exactly as it has always been
+/// (see `PinZoom::picture_box` and `press_carries_the_pin`).
+///
+/// The pan is read out of the pin here and not into the drag by `begin_pin_drag`, because it is the
+/// place the drag is measured *from* rather than anything the window is asked: a drag that added the
+/// pointer's travel to the pan as it went would be a drag that accumulated its own rounding, and one
+/// measured from where the hand took hold is the same answer however many moves it is asked in.
+///
+/// It is behind `PinWindow` for the same reason `begin_pin_drag` is: what decides *whether* there is
+/// a pan to begin with is a question about the pin, and the pointer it is then taken with is the
+/// machine's — so the decision is the half a test can stand a window in front of.
+pub(super) fn begin_pin_pan(hwnd: HWND, window: &dyn PinWindow) -> bool {
+    let pan = pin_state().and_then(|pinned| {
+        let pin = pinned.pin()?;
+        let zoom = pin.zoom?;
+        let size = pin.window_size();
+
+        (zoom.picture_box(size) != (0, 0, size.0, size.1)).then_some(zoom.pan)
+    });
+
+    let Some(pan) = pan else {
+        return false;
+    };
+
+    begin_pin_drag(hwnd, window, PinDragAction::Pan { from: pan }, true);
+    true
+}
+
 /// What a press that would carry the window does: the drag the hand asked for — or, where the
 /// press is the second of a double-click and the configuration asks for it, the window put in the
 /// middle of the screen it stands on, with no drag begun and nothing carried. A pair asks the loop
@@ -928,6 +965,15 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
     }
 
     if pinned_content_is_the_pins(x, y) {
+        // A picture the wheel has taken inside its window is carried by the hand rather than the
+        // window: the press that would move the window moves what is inside it instead. A pair of
+        // presses is left to the window's own road whatever the picture is doing — a double-click is
+        // what puts a window in the middle of its screen, and a pan begun under it would be the first
+        // press of the pair taken from the second (see `press_carries_the_pin`).
+        if !double_click && begin_pin_pan(hwnd, &Win32PinWindow) {
+            return true;
+        }
+
         press_carries_the_pin(hwnd, double_click);
         return true;
     }

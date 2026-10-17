@@ -119,6 +119,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "html_background",
             "image_background",
             "vector_background",
+            "zoom_background",
         ],
     ),
     (
@@ -380,11 +381,19 @@ pub(super) fn take_reset_markers(folder: &Path) -> (bool, bool) {
 static FILE_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
-static HELD_FOLDER: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+static HELD_FOLDER: std::sync::Mutex<Option<(std::thread::ThreadId, PathBuf)>> =
+    std::sync::Mutex::new(None);
 
 /// The folder of a test's own, held while the test has the app's configuration file. The
 /// app's own folder is pointed at it for as long as the guard lives, and the folder goes
 /// away with it — including whatever the app wrote in it.
+///
+/// It is pointed at it for the thread that *took* the guard and for no other, which is the whole of
+/// what keeps a test beside this one out of its round trip: the app is asked for its configuration
+/// from wherever the app is running, and in a test binary that is a test's own thread — so an
+/// unguarded test saving its settings would otherwise be answered with the folder of whichever
+/// guarded test happened to be holding one, and its write would land in the middle of that test's
+/// save-and-read-back (see `test_folder`).
 #[cfg(test)]
 pub(crate) struct ConfigFolderOfItsOwn {
     path: PathBuf,
@@ -415,7 +424,8 @@ impl ConfigFolderOfItsOwn {
 
         *HELD_FOLDER
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(path.clone());
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some((std::thread::current().id(), path.clone()));
 
         Self { path, _turn }
     }
@@ -439,14 +449,22 @@ impl Drop for ConfigFolderOfItsOwn {
 
 /// Where a test build of the app keeps its own configuration while a test does not hold a
 /// folder of its own: one folder of the tests' own, never the machine's.
+///
+/// The held folder is handed to the thread that took the guard and to no other. A test beside this one
+/// — a tray menu, a chrome button, a save of its own — is asking from its own thread, and what it must
+/// not be answered with is the folder a guarded test is in the middle of a save and a read-back
+/// through: that is the round trip this test's own file failed, a file that was there when it was
+/// written and gone when it was read (see `HELD_FOLDER`).
 #[cfg(test)]
 fn test_folder() -> PathBuf {
     let held = HELD_FOLDER
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    held.clone()
-        .unwrap_or_else(|| std::env::temp_dir().join("rust-hover-preview-tests"))
+    match held.as_ref() {
+        Some((thread, path)) if *thread == std::thread::current().id() => path.clone(),
+        _ => std::env::temp_dir().join("rust-hover-preview-tests"),
+    }
 }
 
 impl AppConfig {

@@ -165,6 +165,26 @@ pub(super) fn preview_channel_event() -> HANDLE {
     HANDLE(*EVENT as *mut core::ffi::c_void)
 }
 
+/// Wake the preview loop where it stands, without a message: what a wheel notch over a pinned picture
+/// asks for.
+///
+/// A notch is counted on the wheel hook's own thread — an atomic written there and nothing else — and
+/// read by the loop on its next tick, so a loop waiting for a pin is a loop that will not see it until
+/// its own wait runs out: `STATIC_PIN_WAIT_MS` rounded up to the system timer's own 15.6 ms tick, which
+/// measured 62.2 ms over forty waits, worst 63.7 — four frames of a 144 Hz display, and the whole of
+/// what makes a zoom start unevenly. The same wait signalled where the notch is counted came back in
+/// 5.4 ms with the signal sent five in.
+///
+/// It is the channel's own event rather than one of its own, so nothing new is waited on: the loop is
+/// already armed on it, and a signal to an event nobody is waiting on is read by the next wait — it is
+/// manual-reset, and reset after the wait rather than at the send (see `wait_preview_channel`).
+pub(crate) fn wake_for_a_wheel_notch() {
+    // Safety: an event created once for the process, signalled: nothing here is dereferenced.
+    unsafe {
+        let _ = SetEvent(preview_channel_event());
+    }
+}
+
 /// Send a message to the preview loop and wake it, so that a wait in progress ends at once.
 pub(super) fn send_preview(message: PreviewMessage) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
@@ -411,6 +431,60 @@ pub(super) fn pump_window_messages() {
 /// the stillness test never provided: that one ends a carry when the hand stops, and says
 /// nothing about a hand that never does.
 pub(super) const PIN_DRAG_WAIT_MS: u64 = 2_000;
+
+/// The shortest a wait for the compositor can come back in and still have paced anything: a flush
+/// that returns in less than this is a compositor with nothing to draw rather than a display that
+/// drew in no time at all.
+///
+/// It is not about how long a frame takes — the display this was written on draws one in 6.94 ms and
+/// a 60 Hz one in 16.7 — but about the difference between an answer and no answer, and the number is
+/// a floor well under any display's period and well over a call that returned without waiting.
+///
+/// A tick that is not paced by the compositor is a tick that says so: the loop keeps its own wait
+/// (see `wait_for_the_compositor`), so a session where the compositor has nothing to draw is a
+/// session that turns at the cadence it turned at before rather than one that spins.
+pub(super) const COMPOSITOR_FRAME_FLOOR: Duration = Duration::from_millis(1);
+
+/// Whether a wait for the compositor is what paced this tick: that it answered at all, and that the
+/// answer was a frame rather than a return that came straight back.
+pub(super) fn compositor_paced_the_tick(flushed: bool, took: Duration) -> bool {
+    flushed && took >= COMPOSITOR_FRAME_FLOOR
+}
+
+/// Wait for the frame the compositor is about to put on the screen, or for a preview message,
+/// whichever comes first.
+///
+/// It is what paces a wheel zoom's travel, and the whole of why it exists is what a *sleep* is not:
+/// a travel is a movement, and a movement's frames are worth taking as often as the display can show
+/// them. The loop's own wait is `FRAME_WAIT_MS`, which is 62 frames a second even when it comes back
+/// exactly when it is asked to — and it does not: a timeout is rounded up to the system timer's own
+/// tick, which is 15.6 ms unless something in the process asks for it otherwise, so a wait of 16 ms
+/// comes back in 31. Measured through this loop's own function it is 27.8 ms, which is 36 frames a
+/// second, against 6.94 ms — the display's own period, worst 7.10 over 300 calls — for a flush.
+///
+/// Nothing about the *clock* a travel is measured by changes: the frame is still however long the
+/// last tick took, and it is now the display's period rather than a timer's. A tick that took longer
+/// than a frame is clamped by the release itself (see `PIN_ZOOM_LONGEST_FRAME`), so a compositor that
+/// stalls drops a frame rather than putting a jump in the travel.
+///
+/// The channel is polled after the flush rather than blocked on, for the reason the same poll is in
+/// `wait_preview_channel`: a hover, a walk or a key that arrived while the flush was in progress is
+/// answered on the tick that follows it.
+pub(super) fn wait_for_the_compositor(
+    rx: &Receiver<PreviewMessage>,
+    wait_ms: u64,
+) -> Option<PreviewMessage> {
+    let flush_began = Instant::now();
+    // Safety: a call with no arguments and no state of its own, which asks the compositor to flush
+    // the frame it has and answers whether it could.
+    let flushed = unsafe { DwmFlush() }.is_ok();
+
+    if !compositor_paced_the_tick(flushed, flush_began.elapsed()) {
+        return wait_preview_channel(rx, wait_ms);
+    }
+
+    wait_preview_channel(rx, 0)
+}
 
 /// Wait for a preview message or for window input, whichever comes first.
 ///
