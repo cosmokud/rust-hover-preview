@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::config::DEFAULT_IMAGE_CACHE_MB;
 use std::path::PathBuf;
 
 /// The order the submenu is built in is the order it is read in, and it is
@@ -882,6 +883,28 @@ fn the_document_scale_ranges_are_not_another_submenus_range() {
             );
         }
     }
+}
+
+/// A cache size is named in the unit that reads best for it: the whole gigabytes
+/// in gigabytes, everything below one in megabytes, and the size the cache starts
+/// at marked.
+#[test]
+fn a_cache_size_is_named_in_the_unit_that_reads_best() {
+    for (megabytes, label) in [
+        (131072, "128 GB"),
+        (16384, "16 GB"),
+        (4096, "4 GB"),
+        (1024, "1 GB"),
+        (512, "512 MB"),
+        (0, "0 MB"),
+    ] {
+        assert_eq!(cache_size_label(megabytes, DEFAULT_IMAGE_CACHE_MB), label);
+    }
+
+    assert_eq!(
+        cache_size_label(DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_CACHE_MB),
+        "128 MB (Default)"
+    );
 }
 
 /// The largest size a cache is offered is the largest the setting behind it keeps,
