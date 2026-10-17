@@ -402,19 +402,16 @@ pub(super) fn pin_zoom_to(
         (window_width * shape).round().max(1.0) as i32,
     );
 
-    // The picture's centre as it stands, and where the window is put around it: the centre is what a zoom
-    // holds still, and a window twice the size about its own middle is a picture that grew in every
-    // direction by the same amount where one grown about a corner would walk off the screen as it grew.
-    //
-    // A window that is *not* changing size keeps the box it has, whatever the pan is doing: a picture
-    // carried inside a window that has stopped is the picture moving and not the window, and a window
-    // re-placed about a picture's carried centre is a window that walks across the screen as the hand
-    // drags the picture in it.
-    let drawn_centre = pinned_centre(content, input.zoom.pan);
+    // Where the window is put: about its own middle, and never about the picture's carried
+    // centre inside it. A picture carried inside a window that has stopped is the picture moving
+    // and not the window, so a window shrinking about a carried centre is a window that walks
+    // across the screen as the hand zooms out of a pan — the window follows the window itself,
+    // whatever the pan is doing, and the pan only ever moves the picture within it.
+    let window_centre = ((content.0 + content.2) / 2, (content.1 + content.3) / 2);
     let placed = if size == (width, height) {
         content
     } else {
-        clamp_pinned_box(centred_at(size, drawn_centre), input.dpi, displays)
+        clamp_pinned_box(centred_at(size, window_centre), input.dpi, displays)
     };
     let box_centre = (
         (placed.0 + placed.2) as f32 / 2.0,
@@ -715,21 +712,6 @@ fn drawn_pixels(drawn: (f32, f32)) -> (i32, i32) {
     (
         drawn.0.round().max(1.0) as i32,
         drawn.1.round().max(1.0) as i32,
-    )
-}
-
-/// Where the picture's centre sits on the screen: a box's middle carried by the pan, in the *whole
-/// pixels* the window's own place is chosen in.
-///
-/// It is the window's question and not a travel's: a box grown about its middle is a box of whole pixels
-/// that has to be put somewhere on a screen grid, and the pan below the anchor is an offset of its own in
-/// the floats the zoom walks (see `pin_zoom_to`). Rounding a *travel* about this centre would be half a
-/// pixel of drift per frame; rounding a *window's place* about it is the one rounding a whole-pixel box
-/// is owed.
-fn pinned_centre(content: ScreenRegion, pan: (f32, f32)) -> (i32, i32) {
-    (
-        (content.0 + content.2) / 2 + pan.0.round() as i32,
-        (content.1 + content.3) / 2 + pan.1.round() as i32,
     )
 }
 
