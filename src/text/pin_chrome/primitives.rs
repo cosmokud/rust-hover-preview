@@ -299,6 +299,42 @@ pub(super) fn fill_disc(
     }
 }
 
+/// Fill a ring: the outline of a circle at `radius`, `thickness` wide — the shape a sound's beat
+/// travels as, around the mark beside its name (see `audio_preview`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fill_ring(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: f32,
+    center_y: f32,
+    radius: f32,
+    thickness: f32,
+    color: [u8; 3],
+    coverage: f32,
+) {
+    let outer = radius + thickness / 2.0;
+    let inner = (radius - thickness / 2.0).max(0.0);
+    let left = (center_x - outer - 1.0).floor() as i32;
+    let right = (center_x + outer + 1.0).ceil() as i32;
+    let top = (center_y - outer - 1.0).floor() as i32;
+    let bottom = (center_y + outer + 1.0).ceil() as i32;
+
+    for y in top..=bottom {
+        for x in left..=right {
+            let dx = x as f32 + 0.5 - center_x;
+            let dy = y as f32 + 0.5 - center_y;
+            let distance = (dx * dx + dy * dy).sqrt();
+            // The share of the pixel the band leaves: the ramp the outer edge is drawn with — the
+            // ramp a disc's own edge is drawn with (see `fill_disc`) — less the ramp the hole cuts.
+            let edge =
+                (outer - distance + 0.5).clamp(0.0, 1.0) - (inner - distance + 0.5).clamp(0.0, 1.0);
+            if edge > 0.0 {
+                put(buffer, width, x, y, color, coverage * edge);
+            }
+        }
+    }
+}
+
 /// Fill a triangle, by the distance to each of its three edges: what a pixel carries is the share
 /// of it the nearest edge leaves, which is the ramp a disc's edge is drawn with (see `fill_disc`)
 /// asked of three straight lines instead of one circle.

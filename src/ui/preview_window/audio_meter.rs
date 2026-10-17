@@ -1,5 +1,5 @@
-//! The level the sound on screen is being heard at: the seven bands of this app's own sound, and
-//! the mixer's own peak for the machine that cannot read them.
+//! The level the sound on screen is being heard at: the seven bands of this app's own sound, the
+//! beat its bass carries, and the mixer's own peak for the machine that cannot read the bands.
 //!
 //! **The bands are what this app is playing and nothing else.** They are read from a process
 //! loopback capture of this process and its children — the media engine plays in this process,
@@ -141,21 +141,44 @@ pub(super) const WINDOW_SAMPLES: usize = 4_096;
 /// tone within a third of a bar of the floor.
 const RANGE_DB: f32 = 60.0;
 
-/// The level of each band of a window of samples, 0.0..=1.0, the lowest band first.
+/// The two ends of what the card's pulse is read from, in hertz: the bass that is felt rather
+/// than heard, from the lowest note a speaker puts out to the top of a bass line's own range.
+///
+/// One range rather than the seven band edges above, because a pulse is a reading of how hard
+/// the low end is hitting and not of where in the spectrum it sits (see `readings`).
+const BEAT_HZ: (f32, f32) = (20.0, 1_600.0);
+
+/// How far down the pulse reaches: thirty-six decibels between a sound at the top of the scale
+/// and a ring at rest.
+///
+/// Narrower than a bar's sixty because a pulse has less room to travel than a bar has to stand
+/// up — a handful of pixels of ring against tens of pixels of height — so the range is what
+/// makes a small change in the sound a visible change in the ring: six decibels is a sixth of
+/// the travel, where over a bar's range it would be a tenth.
+const BEAT_DB: f32 = 36.0;
+
+/// How long the pulse takes to fall back, which is what makes it a pulse: a hit jumps the ring
+/// out and this is the release that brings it home like the heartbeat the word names, where the
+/// same rise and fall in steps of a repaint would flicker (see `beat_pulse`).
+const BEAT_RELEASE: Duration = Duration::from_millis(150);
+
+/// What one window of samples reads as: the level of each band, 0.0..=1.0 the lowest band first,
+/// and the beat of the bass under it, 0.0..=1.0.
 ///
 /// The whole of the meter is here, and it is arithmetic on numbers rather than anything about a
-/// machine: what a window of mono samples says about seven ranges of frequency. The window is
-/// transformed once (`fft`) and a band is the loudest bin that falls inside it — seven readings of
-/// one spectrum rather than seven filters, so that a band stands for everything in its range and
-/// not only for the frequencies a filter happened to be pointed at.
+/// machine: what a window of mono samples says about seven ranges of frequency and about the one
+/// range a card's pulse is read from. The window is transformed once (`fft`) and a band is the
+/// loudest bin that falls inside it — seven readings of one spectrum rather than seven filters,
+/// so that a band stands for everything in its range and not only for the frequencies a filter
+/// happened to be pointed at — and the beat is one more reading of the same spectrum.
 ///
 /// The samples are the last `WINDOW_SAMPLES` of what is given and are padded at the front where
 /// there are fewer of them, so what is read is the sound being played now and a capture that has
 /// just begun reads as a quiet window rather than as a window of the wrong length.
-pub(super) fn band_levels(samples: &[f32], rate: u32) -> [f32; BARS] {
+pub(super) fn readings(samples: &[f32], rate: u32) -> ([f32; BARS], f32) {
     let count = samples.len().min(WINDOW_SAMPLES);
     if count < 2 {
-        return [0.0; BARS];
+        return ([0.0; BARS], 0.0);
     }
 
     // The samples read through one window for the whole row rather than through one window per
@@ -194,7 +217,16 @@ pub(super) fn band_levels(samples: &[f32], rate: u32) -> [f32; BARS] {
         *level = bar_level(scale * loudest);
     }
 
-    levels
+    // The beat: the loudest bin between the two ends of the bass (see `BEAT_HZ`), read over the
+    // range a ring travels by rather than the range a bar stands up over (see `BEAT_DB`).
+    let first = ((BEAT_HZ.0 * per_hertz).ceil() as usize).max(1);
+    let last = ((BEAT_HZ.1 * per_hertz).round() as usize).min(nyquist);
+    let mut beat = 0.0f32;
+    for bin in first..=last {
+        beat = beat.max(real[bin].hypot(imag[bin]));
+    }
+
+    (levels, decibel_level(scale * beat, BEAT_DB))
 }
 
 /// The spectrum of a window of samples, in place: `real` and `imag` come back as the bins of the
@@ -270,8 +302,28 @@ fn turns() -> &'static [(f32, f32)] {
 /// The top of a bar an amplitude is drawn at: the decibels it stands for, over the range a bar
 /// spans, so that a sound a tenth as loud is a bar a tenth as tall rather than a hundredth.
 fn bar_level(amplitude: f32) -> f32 {
+    decibel_level(amplitude, RANGE_DB)
+}
+
+/// What a window's beat makes of the pulse as it stands: a bass at least as loud as the ring is
+/// out stands the ring at itself, and a drop falls back through the reads that follow, an
+/// exponential of `BEAT_RELEASE`.
+///
+/// The falling is by the time between two reads rather than by a step a read, because reads come
+/// at the card's cadence while it is up and at the bubble's while it animates, and the pulse has
+/// to be the sound's clock rather than the reader's. A window still holding the bass is never
+/// fallen through, so a sustained note stands the ring still rather than flickering it.
+pub(super) fn beat_pulse(shown: f32, beat: f32, elapsed: Duration) -> f32 {
+    let fallen = shown * (-elapsed.as_secs_f32() / BEAT_RELEASE.as_secs_f32()).exp();
+
+    beat.max(fallen).clamp(0.0, 1.0)
+}
+
+/// Where an amplitude stands between silence and the top of the scale, as decibels counted over
+/// `range_db` — the one arithmetic every level here is read through, each over its own range.
+fn decibel_level(amplitude: f32, range_db: f32) -> f32 {
     let decibels = 20.0 * amplitude.max(1e-6).log10();
-    ((decibels + RANGE_DB) / RANGE_DB).clamp(0.0, 1.0)
+    ((decibels + range_db) / range_db).clamp(0.0, 1.0)
 }
 
 /// The window every band is read through, made once and kept.
@@ -346,6 +398,29 @@ const ACTIVATION_WAIT: Duration = Duration::from_millis(250);
 /// a system that never answers are all the same answer — no bands — and the caller falls back to
 /// the mixer's peak, which is what a bubble has always drawn its bars from (see `output_peak`).
 pub(super) fn output_bands() -> Option<[f32; BARS]> {
+    capture_reading(Bands::read)
+}
+
+/// The beat of the sound this app is playing now, 0.0..=1.0, or nothing where the machine will
+/// not let the capture be had: the loudest of the bass as the last window held it, fallen back
+/// since, which is what the card's mark travels out by (see `beat_pulse`).
+///
+/// Asking for it reads the capture the same way asking for the bands does — one reading answers
+/// both (see `readings`) — so whichever of a frame's two asks comes first is the one that pays
+/// for it.
+pub(super) fn output_beat() -> Option<f32> {
+    capture_reading(|capture| {
+        capture.read()?;
+        Some(capture.pulse())
+    })
+}
+
+/// Ask this thread's capture, opening it on the first ask and never asking for one again, and
+/// answer with what it has to say.
+///
+/// Nothing where the machine will not have a capture at all, and nothing where the ask itself
+/// refuses: a stream that will not start is the same answer as a machine that never had one.
+fn capture_reading<T>(ask: impl FnOnce(&mut Bands) -> Option<T>) -> Option<T> {
     CAPTURE.with(|slot| {
         let mut slot = slot.borrow_mut();
 
@@ -359,7 +434,7 @@ pub(super) fn output_bands() -> Option<[f32; BARS]> {
         }
 
         match slot.as_mut()? {
-            Reading::Bands(capture) => capture.read(),
+            Reading::Bands(capture) => ask(capture),
             Reading::Refused => None,
         }
     })
@@ -400,6 +475,11 @@ struct Bands {
     /// The bars as they stand, which is what the falling is: a band quieter than it was is read
     /// through the bar that is already up (see `FALL`).
     shown: [f32; BARS],
+    /// The pulse as it stands, which is what the falling is: a beat quieter than it was is read
+    /// through the ring that is already out (see `beat_pulse`).
+    beat: f32,
+    /// When the pulse was last stepped, since what it falls by is the time between reads.
+    beat_at: Instant,
     /// When a bubble last asked, which is the whole of what tells an idle capture from a busy one.
     asked: Instant,
     /// When a packet last brought samples, which is what tells a stream that has stopped giving
@@ -451,12 +531,20 @@ impl Bands {
             self.window.drain(..oldest);
         }
 
-        let levels = band_levels(&self.window, RATE);
+        let (levels, beat) = readings(&self.window, RATE);
         for (shown, level) in self.shown.iter_mut().zip(levels) {
             *shown = level.max(*shown * FALL);
         }
+        let elapsed = self.beat_at.elapsed();
+        self.beat_at = Instant::now();
+        self.beat = beat_pulse(self.beat, beat, elapsed);
 
         Some(self.shown)
+    }
+
+    /// The pulse as it stands, after the read that just stepped it (see `beat_pulse`).
+    fn pulse(&self) -> f32 {
+        self.beat
     }
 
     /// Take everything the capture has to give, as the mono samples a window is read from, and
@@ -535,7 +623,7 @@ impl Bands {
 /// the engine's, and the engine converts: this is the short way round because the mix format is not
 /// readable on such a client at all (`GetMixFormat` answers `E_NOTIMPL` on one of these, which is a
 /// fact of the interface rather than of a machine) and because a format this side chose is one the
-/// reading of a window can be sure about (see `band_levels`).
+/// reading of a window can be sure about (see `readings`).
 fn open_capture() -> Option<Bands> {
     let params = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
@@ -652,6 +740,8 @@ fn open_capture() -> Option<Bands> {
             capture,
             window: Vec::with_capacity(WINDOW_SAMPLES),
             shown: [0.0; BARS],
+            beat: 0.0,
+            beat_at: Instant::now(),
             asked: Instant::now(),
             last_packet: Instant::now(),
             running: false,

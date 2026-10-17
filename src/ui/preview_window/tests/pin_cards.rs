@@ -632,7 +632,7 @@ fn a_repaint_keeps_the_frame_it_was_painted_at() {
         window_buttons: true,
     });
     assert!(
-        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome),
+        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome, 0.0),
         "the card is repainted"
     );
 
@@ -863,7 +863,7 @@ fn a_repaint_still_follows_the_theme_setting() {
         window_buttons: true,
     });
     assert!(
-        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome),
+        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome, 0.0),
         "the card is repainted"
     );
 
