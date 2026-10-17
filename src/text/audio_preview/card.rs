@@ -19,13 +19,10 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC};
 
-/// The mark the card opens with: a round bullet rather than an icon glyph, so the card asks
-/// for no face beyond the fixed-pitch one the page is painted in. It is drawn in the accent
-/// color, which is what makes it read as a mark rather than as punctuation.
-pub(super) const BULLET: &str = "●";
-
-/// The cell the bullet is drawn in, in header advances: the mark and the room after it.
-pub(super) const BULLET_CELL_ADVANCES: i32 = 2;
+/// The cell the card's mark is drawn in, in header advances: the room the dot keeps and the room
+/// the name begins after. The dot itself is drawn rather than set as a glyph, at a fifth of the
+/// ripples a beat stands around it (see `super::page::mark`).
+pub(super) const MARK_CELL_ADVANCES: i32 = 2;
 
 /// Room between the last fact and the clock at the right edge.
 pub(super) const TIME_GAP_ADVANCES: i32 = 3;
@@ -44,8 +41,8 @@ pub(super) const CLOCK_ADVANCES: i32 = 17;
 /// not the control that takes a sound to a second of it (see `control_boxes`).
 pub(super) const MIN_CONTENT_ADVANCES: i32 = 34;
 
-/// The size level the name is set in, which is the level an archive's header is set in. The
-/// bullet is drawn at the same level as the text beside it, so the two share a baseline.
+/// The size level the name is set in, which is the level an archive's header is set in — and the
+/// line the mark is drawn on, centred on the band that level's ink stands in.
 pub(super) const HEADER_LEVEL: u8 = 3;
 
 /// The hairline under the name, and the room kept around it.
@@ -145,6 +142,13 @@ pub(crate) struct Card {
     /// it: what a repaint of a card whose name moves hands over, and nothing at all for the
     /// card a hover is measured with or the first frame of one (see [`NameScroll`]).
     pub name_offset: i32,
+    /// The beat the mark beside the name is beating at, 0.0..=1.0: how loud the bass under the
+    /// sound is now, which is how far the ripples around the mark have travelled out. Zero —
+    /// the mark at rest, with the dot and nothing around it — is a card with no player behind
+    /// it: a hover's own card as much as a pinned one, for as long as nothing is playing (see
+    /// `a_sound_is_playing`), and any machine where the capture cannot be had (see
+    /// `audio_meter::output_beat`).
+    pub beat: f32,
     /// What the controls a pinned card carries are saying: whether a player is running behind
     /// it, the level this window is playing at, and which button the pointer is over and holding.
     ///
@@ -308,7 +312,7 @@ fn name_room(width: u32, dpi: u32, options: AudioPreviewOptions) -> Option<(i32,
 
     let result = TextMetrics::new(dc, dpi, options.font_scale_percent).map(|metrics| {
         let advance = metrics.advance[HEADER_LEVEL as usize].max(1);
-        let room = width as i32 - metrics.padding * 2 - advance * BULLET_CELL_ADVANCES;
+        let room = width as i32 - metrics.padding * 2 - advance * MARK_CELL_ADVANCES;
 
         (advance, room)
     });

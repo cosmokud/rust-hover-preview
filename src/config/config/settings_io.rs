@@ -176,6 +176,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
     (
         "Advanced",
         &[
+            "beat_hz",
             "hdr_exposure",
             "hdr_tone_map",
             "spinner_delay_ms",

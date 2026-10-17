@@ -15,7 +15,8 @@ use super::app_config::AppConfig;
 use super::defaults::{
     sanitize_audio_scale_percent, sanitize_preview_scale_percent, DEFAULT_ANIMATED_SCALE_PERCENT,
     DEFAULT_AUDIO_SCALE_PERCENT, DEFAULT_FONT_SCALE_PERCENT, DEFAULT_PREVIEW_SCALE_PERCENT,
-    DEFAULT_VIDEO_SCALE_PERCENT, MAX_AFK_TIMER_SECS, MAX_OFFICE_ENGINE_IDLE_SECS,
+    DEFAULT_VIDEO_SCALE_PERCENT, MAX_AFK_TIMER_SECS, MAX_BEAT_HZ, MAX_OFFICE_ENGINE_IDLE_SECS,
+    MIN_BEAT_HZ,
 };
 
 /// How the preview is sized relative to the media's native pixel dimensions.
@@ -844,6 +845,54 @@ impl AudioSeek {
 /// time it was hovered, which is the answer that makes a folder of music behave the way a
 /// player does — the file picked up again rather than begun again.
 pub const DEFAULT_AUDIO_SEEK: AudioSeek = AudioSeek::Remember;
+
+/// The band a *pinned* sound's beat card follows, which the ripples drawn over it are gated
+/// behind: the top of the band, in hertz, with the bottom fixed at `MIN_BEAT_HZ` — or no band
+/// at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeatHz {
+    /// The top of the band, in hertz; the bottom is fixed at `MIN_BEAT_HZ`.
+    Top(u32),
+    /// No band at all: the card's ripples are not drawn.
+    Off,
+}
+
+impl BeatHz {
+    pub fn as_str(self) -> String {
+        match self {
+            Self::Top(hz) => sanitize_beat_hz(hz).to_string(),
+            Self::Off => "off".to_string(),
+        }
+    }
+
+    /// The band a `config.ini` value names, or `None` for one that is neither `off` nor a
+    /// number of hertz.
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            other => other
+                .parse::<u32>()
+                .ok()
+                .map(|hz| Self::Top(sanitize_beat_hz(hz))),
+        }
+    }
+
+    /// The top of the band, or `None` for a card that follows nothing.
+    pub fn top(self) -> Option<u32> {
+        match self {
+            Self::Top(hz) => Some(hz),
+            Self::Off => None,
+        }
+    }
+}
+
+fn sanitize_beat_hz(hz: u32) -> u32 {
+    hz.clamp(MIN_BEAT_HZ, MAX_BEAT_HZ)
+}
+
+/// The band a *pinned* sound's beat card follows unless the configuration says otherwise: a
+/// top of `250 Hz`, with the bottom fixed at `MIN_BEAT_HZ`.
+pub const DEFAULT_BEAT_HZ: BeatHz = BeatHz::Top(250);
 
 /// Where a *pinned* sound starts unless the configuration says otherwise.
 ///

@@ -20,7 +20,8 @@ use super::defaults::{
 use super::setting_types::{
     sanitize_afk_timer_secs, sanitize_dds_background, sanitize_html_background,
     sanitize_zoom_background, AudioSeek,
-    AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile, PinMinimizeTo, PinNavFileTypes,
+    AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile, PinMinimizeTo,
+    PinNavFileTypes,
     PreviewScale, TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine,
 };
 
@@ -219,6 +220,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "audio_seek",
             Some(self.audio_seek.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "beat_hz",
+            Some(self.beat_hz.as_str()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -770,6 +776,11 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "audio_seek") {
             if let Some(seek) = AudioSeek::from_str(&value) {
                 self.audio_seek = seek;
+            }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "beat_hz") {
+            if let Some(hz) = BeatHz::from_str(&value) {
+                self.beat_hz = hz;
             }
         }
         // Where a *pinned* sound starts, read the way the hover's own is: a

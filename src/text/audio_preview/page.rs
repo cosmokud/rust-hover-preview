@@ -8,12 +8,14 @@
 
 use super::card::{
     clock, AudioPreviewOptions, Card, CardChrome, CardControl, Fact, FactKind, BAR_GAP_PIXELS,
-    BAR_PIXELS, BAR_REACH_PIXELS, BULLET, BULLET_CELL_ADVANCES, CHASE_DIVISOR, CHASE_SECONDS,
-    CLOCK_ADVANCES, CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, MIN_CONTENT_ADVANCES,
-    RULE_GAP_PIXELS, RULE_PIXELS, TIME_GAP_ADVANCES, TRACK_PIXELS, WINDOW_BUTTON_CUSHION_PIXELS,
+    BAR_PIXELS, BAR_REACH_PIXELS, CHASE_DIVISOR, CHASE_SECONDS, CLOCK_ADVANCES, CONTROL_GAP_PIXELS,
+    CONTROL_SIDE_PIXELS, HEADER_LEVEL, MARK_CELL_ADVANCES, MIN_CONTENT_ADVANCES, RULE_GAP_PIXELS,
+    RULE_PIXELS, TIME_GAP_ADVANCES, TRACK_PIXELS, WINDOW_BUTTON_CUSHION_PIXELS,
     WINDOW_BUTTON_GAP_PIXELS,
 };
-use crate::text::pin_chrome::{self, stroke_segment, surface_pixels, ControlGlyph};
+use crate::text::pin_chrome::{
+    self, fill_disc, fill_ring, stroke_segment, surface_pixels, ControlGlyph,
+};
 use crate::text::text_paint::{
     blend, fill_rect, plain_style, readable, rgb, scaled, DibSurface, RunPainter, TextMetrics,
     TextStyle, BODY_LEVEL,
@@ -53,6 +55,44 @@ pub(super) struct Bar {
     /// instead, which is the difference between a sound and a stream.
     pub(super) fill_start: i32,
     pub(super) fill_width: i32,
+}
+
+/// The ripples a beat travels as: three, which is what the room a header line leaves a mark of
+/// this size can hold apart — and three is what the loader the ripples come from draws.
+const RIPPLE_COUNT: usize = 3;
+
+/// How much softer the ripple at the end of its travel is drawn than one still standing just off
+/// the dot, which is how that loader's own rings fade as they go: the beat as it arrives is the
+/// full accent and the widest ripple a card can hold is two fifths of it (see `mark`).
+const RIPPLE_FADE: f32 = 0.6;
+
+/// The dot's radius as a share of what its ripples travel: a fifth, which is the share that
+/// loader draws its own dot at — so the mark a card is left with is the small centre of a wide
+/// ripple rather than a shape the widest of them only just clears (see `mark`).
+const MARK_DOT_SHARE: f32 = 0.2;
+
+/// The mark beside the name: the dot the card is drawn with, the ripples a beat travels as around
+/// it, and where the two stand.
+///
+/// The dot is drawn rather than set as the bullet it replaces, and drawn smaller than that glyph
+/// was: it is the centre the ripples are measured from, so it is the one part of the mark whose
+/// size a beat does not change and whose centre never moves (see `mark`).
+#[derive(Clone, Copy)]
+pub(super) struct Mark {
+    pub(super) center_x: f32,
+    pub(super) center_y: f32,
+    /// The dot's own radius, which a beat does not touch: the ripples travel and the dot stands.
+    pub(super) radius: f32,
+    /// How far out the front ripple stands with the beat at the top of its scale — the room the
+    /// mark has, and the length a ripple's own travel is a share of (see `paint`).
+    pub(super) reach: f32,
+    /// The ripples' own radii, the smallest first, and all of them nothing for a card at rest.
+    /// A ripple whose radius has fallen inside the dot is a ripple the beat has taken back in.
+    pub(super) ripples: [f32; RIPPLE_COUNT],
+    /// How thick each ripple's own line is drawn where the ripple stands a dot's radius off the
+    /// mark: within that it is drawn thinner the nearer it is home, so a ripple that has arrived
+    /// is a line of nothing (see `paint`).
+    pub(super) thickness: f32,
 }
 
 /// The row the bar is drawn in: where it begins beneath the facts, how tall it is, and how thick
@@ -404,6 +444,10 @@ pub(super) struct Page {
     pub(super) facts_top: i32,
     pub(super) facts_height: i32,
     pub(super) bar: Bar,
+    /// The mark the card is drawn with: the dot it is marked by and the ripples a beat stands
+    /// around it, which are none at all for a card at rest — a card with no player running
+    /// behind it, hovered or pinned (see `Card::beat` and `Mark`).
+    pub(super) mark: Option<Mark>,
     /// The boxes the row's controls are drawn in and answered against, and nothing at all for a
     /// card that carries none.
     pub(super) boxes: Option<CardBoxes>,
@@ -414,6 +458,62 @@ pub(super) struct Page {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) padding: i32,
+}
+
+/// The mark a card is drawn with: the dot, and the ripples a beat has stood around it.
+///
+/// The dot is centred on the mark's own cell — half a header advance in from the card's margin,
+/// which is where the ink of the glyph it replaces stood — and the ripples are drawn from that
+/// same centre, so what a beat does is travel around the mark and never off it. The room they
+/// have is the nearest of the three things they could reach: the two edges of the card the mark
+/// stands between and the box the name begins in, each less half a ripple's own line and a pixel
+/// of air — so the widest ripple is the widest a mark of this size can be drawn without lapping
+/// the letter beside it, and the dot is a fifth of it.
+///
+/// The ripples travel as a train rather than each on its own: the front one leads and the ones
+/// behind it keep their spacing, so a beat of half the scale stands the front halfway out and a
+/// bass that drops pulls it back in, taking the ripples behind it under the dot one at a time —
+/// the same travel the single ring made, drawn as the ripple it was always meant to be (see
+/// `Card::beat`).
+fn mark(beat: f32, metrics: &TextMetrics, header_top: i32, name_left: i32) -> Mark {
+    let beat = beat.clamp(0.0, 1.0);
+
+    let advance = metrics.advance[HEADER_LEVEL as usize].max(1) as f32;
+    let ink_top = metrics.ink_top[HEADER_LEVEL as usize] as f32;
+    let ink_bottom = metrics.ink_bottom[HEADER_LEVEL as usize] as f32;
+    let center_x = metrics.padding as f32 + advance / 2.0;
+    let center_y = header_top as f32 + (ink_top + ink_bottom) / 2.0;
+    let thickness = scaled(1, metrics.scale) as f32;
+    let reach = (center_x
+        .min(center_y)
+        .min(name_left as f32 - center_x)
+        - thickness / 2.0
+        - 1.0)
+        .max(0.0);
+    let radius = reach * MARK_DOT_SHARE;
+
+    // The train a beat sends out: the front ripple travels the whole room and the ones behind it
+    // follow at the same spacing, so a beat that only whispers stands a ripple just off the dot
+    // rather than crowding three of them into a blur, and the ripples a falling bass has taken
+    // back inside the dot are the ones the card no longer draws (see `paint`).
+    let mut ripples = [0.0; RIPPLE_COUNT];
+    if beat > 0.0 {
+        let travel = (reach - radius).max(0.0);
+        let front = travel * beat;
+        let gap = travel / RIPPLE_COUNT as f32;
+        for (index, ripple) in ripples.iter_mut().enumerate() {
+            *ripple = radius + front - gap * (RIPPLE_COUNT - 1 - index) as f32;
+        }
+    }
+
+    Mark {
+        center_x,
+        center_y,
+        radius,
+        reach,
+        ripples,
+        thickness,
+    }
 }
 
 pub(super) fn build_page(
@@ -455,7 +555,7 @@ pub(super) fn build_page(
     // ask the display for a card a hundred advances wide, so what gives way is the
     // name, which is drawn whole and scrolled across the card (see
     // `Card::name_offset`).
-    let bullet_cell = header_advance * BULLET_CELL_ADVANCES;
+    let mark_cell = header_advance * MARK_CELL_ADVANCES;
     let content = ((box_width as i32) - padding * 2).max(body_advance * MIN_CONTENT_ADVANCES);
     let width = (content + padding * 2).max(1) as u32;
 
@@ -476,32 +576,19 @@ pub(super) fn build_page(
     // starts, and the box that clips it never does. A run's own origin is its box's left edge
     // for every other run of the card, so this is the one place the two are told apart (see
     // `PageRun::origin` and `Card::name_offset`).
-    let name_left = content_left + bullet_cell;
-    let header = vec![
-        PageRun {
-            text: BULLET.to_string(),
-            x: content_left,
-            width: bullet_cell,
-            origin: content_left,
-            style: {
-                let mut style = plain_style(HEADER_LEVEL);
-                style.foreground = accent;
-                style
-            },
+    let name_left = content_left + mark_cell;
+    let header = vec![PageRun {
+        text: card.name.clone(),
+        x: name_left,
+        width: content_right - name_left,
+        origin: name_left - card.name_offset.max(0),
+        style: {
+            let mut style = plain_style(HEADER_LEVEL);
+            style.foreground = foreground;
+            style.bold = true;
+            style
         },
-        PageRun {
-            text: card.name.clone(),
-            x: name_left,
-            width: content_right - name_left,
-            origin: name_left - card.name_offset.max(0),
-            style: {
-                let mut style = plain_style(HEADER_LEVEL);
-                style.foreground = foreground;
-                style.bold = true;
-                style
-            },
-        },
-    ];
+    }];
 
     let (header_top, rule_top) = header_line(metrics);
     let facts_top = rule_top + rule_height + rule_gap;
@@ -543,6 +630,7 @@ pub(super) fn build_page(
         },
         boxes,
         chrome: card.controls,
+        mark: Some(mark(card.beat, metrics, header_top, name_left)),
         width,
         // The height is the card's own: the name line, the rule, the facts line
         // and the bar, with the card's own margin under it — content-driven at
@@ -575,6 +663,7 @@ fn empty_page(width: u32, padding: i32) -> Page {
         },
         boxes: None,
         chrome: None,
+        mark: None,
         width,
         height: 1,
         padding,
@@ -769,6 +858,51 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
                 &run.style,
                 run.style.foreground,
                 page_color,
+            );
+        }
+    }
+
+    if let Some(mark) = page.mark {
+        // The mark and its ripples are drawn over the runs rather than under them, because each
+        // run's own box is filled with the page as it is painted (see `paint_run`) — and they are
+        // drawn from one centre, so a beat travels around the dot rather than off it.
+        let buffer = unsafe {
+            std::slice::from_raw_parts_mut(
+                surface_pixels(surface),
+                surface.width as usize * surface.height as usize * 4,
+            )
+        };
+        fill_disc(
+            buffer,
+            surface.width as i32,
+            mark.center_x,
+            mark.center_y,
+            mark.radius,
+            accent,
+            1.0,
+        );
+        for radius in mark.ripples {
+            // A ripple the beat has taken back inside the dot is one the card has put away, and
+            // so is every ripple of a card at rest: what is left of a beat is its front.
+            if radius <= mark.radius {
+                continue;
+            }
+            // The line it is drawn with narrows as the ripple comes home — its whole width once it
+            // stands a dot's radius out, a share of that within, and a line of nothing at the dot
+            // — which is what keeps the end of a fall from being a change in the mark's size: the
+            // ripples have gone by the time the beat reaches its rest (see `Mark::thickness`).
+            let out = radius - mark.radius;
+            let home = (out / mark.radius).clamp(0.0, 1.0);
+            let share = (out / (mark.reach - mark.radius)).clamp(0.0, 1.0);
+            fill_ring(
+                buffer,
+                surface.width as i32,
+                mark.center_x,
+                mark.center_y,
+                radius,
+                mark.thickness * home,
+                accent,
+                1.0 - RIPPLE_FADE * share,
             );
         }
     }

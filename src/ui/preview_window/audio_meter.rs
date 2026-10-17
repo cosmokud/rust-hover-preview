@@ -1,5 +1,5 @@
-//! The level the sound on screen is being heard at: the seven bands of this app's own sound, and
-//! the mixer's own peak for the machine that cannot read them.
+//! The level the sound on screen is being heard at: the seven bands of this app's own sound, the
+//! beat its bass carries, and the mixer's own peak for the machine that cannot read the bands.
 //!
 //! **The bands are what this app is playing and nothing else.** They are read from a process
 //! loopback capture of this process and its children — the media engine plays in this process,
@@ -141,21 +141,56 @@ pub(super) const WINDOW_SAMPLES: usize = 4_096;
 /// tone within a third of a bar of the floor.
 const RANGE_DB: f32 = 60.0;
 
-/// The level of each band of a window of samples, 0.0..=1.0, the lowest band first.
+/// How far down the pulse reaches: thirty-six decibels between a sound at the top of the scale
+/// and the mark at rest.
+///
+/// Narrower than a bar's sixty because a pulse has less room to travel than a bar has to stand
+/// up — a handful of pixels of travel against tens of pixels of height — so the range is what
+/// makes a small change in the sound a visible change in the mark's ripples: six decibels is a
+/// sixth of the travel, where over a bar's range it would be a tenth.
+const BEAT_DB: f32 = 36.0;
+
+/// How long the pulse takes to fall back, which is what makes it a pulse: a hit sends the ripples
+/// out and this is the release that brings them home like the heartbeat the word names, where the
+/// same rise and fall in steps of a repaint would flicker (see `beat_pulse`).
+const BEAT_RELEASE: Duration = Duration::from_millis(150);
+
+/// How long the ripples take to come home when the sound stops being played, as the time
+/// constant of the fall: a pause hands the loop no pulse to read, so what the mark is drawn by
+/// until it is home is this alone (see `beat_fade`). It is the release above read over a longer
+/// time — a hand leaving a sound is not a hit, so the ripples are seen coming home rather than
+/// snapped there the moment the sound stops.
+const BEAT_FADE: Duration = Duration::from_millis(400);
+
+/// What is left of a fall when it is over: under a hundredth of the travel the mark is at rest
+/// and stays there, which is what turns the fall into nothing and lets the card go back to its
+/// own slow clock (see `beat_fade`).
+const BEAT_REST: f32 = 0.01;
+
+/// The longest wait one step of a fall counts for — a quarter of the fall's own clock, `BEAT_FADE`
+/// — and so the share of what is left that one step of it can take: a card the loop comes back to
+/// late is a fall still seen coming home rather than one that arrives at the mark in a single jump
+/// (see `beat_step`).
+const BEAT_STEP: Duration = Duration::from_millis(BEAT_FADE.as_millis() as u64 / 4);
+
+/// What one window of samples reads as: the level of each band, 0.0..=1.0 the lowest band first,
+/// and the beat of the bass under it, 0.0..=1.0 — read from the band `beat_hz` names where it
+/// names one, whose bottom is `MIN_BEAT_HZ`, and as no beat at all where it is `off`.
 ///
 /// The whole of the meter is here, and it is arithmetic on numbers rather than anything about a
-/// machine: what a window of mono samples says about seven ranges of frequency. The window is
-/// transformed once (`fft`) and a band is the loudest bin that falls inside it — seven readings of
-/// one spectrum rather than seven filters, so that a band stands for everything in its range and
-/// not only for the frequencies a filter happened to be pointed at.
+/// machine: what a window of mono samples says about seven ranges of frequency and about the one
+/// range a card's pulse is read from. The window is transformed once (`fft`) and a band is the
+/// loudest bin that falls inside it — seven readings of one spectrum rather than seven filters,
+/// so that a band stands for everything in its range and not only for the frequencies a filter
+/// happened to be pointed at — and the beat is one more reading of the same spectrum.
 ///
 /// The samples are the last `WINDOW_SAMPLES` of what is given and are padded at the front where
 /// there are fewer of them, so what is read is the sound being played now and a capture that has
 /// just begun reads as a quiet window rather than as a window of the wrong length.
-pub(super) fn band_levels(samples: &[f32], rate: u32) -> [f32; BARS] {
+pub(super) fn readings(samples: &[f32], rate: u32, beat_hz: Option<u32>) -> ([f32; BARS], f32) {
     let count = samples.len().min(WINDOW_SAMPLES);
     if count < 2 {
-        return [0.0; BARS];
+        return ([0.0; BARS], 0.0);
     }
 
     // The samples read through one window for the whole row rather than through one window per
@@ -194,7 +229,21 @@ pub(super) fn band_levels(samples: &[f32], rate: u32) -> [f32; BARS] {
         *level = bar_level(scale * loudest);
     }
 
-    levels
+    // The beat: the loudest bin between the bottom of the bass — the felt rather than heard,
+    // from the lowest note a speaker puts out (`MIN_BEAT_HZ`) — and the top the setting names,
+    // read over the range a ring travels by rather than the range a bar stands up over (see
+    // `BEAT_DB`). A band that is off is no beat at all, and the walk below is not taken for it.
+    let Some(top) = beat_hz else {
+        return (levels, 0.0);
+    };
+    let first = ((MIN_BEAT_HZ as f32 * per_hertz).ceil() as usize).max(1);
+    let last = ((top as f32 * per_hertz).round() as usize).min(nyquist);
+    let mut beat = 0.0f32;
+    for bin in first..=last {
+        beat = beat.max(real[bin].hypot(imag[bin]));
+    }
+
+    (levels, decibel_level(scale * beat, BEAT_DB))
 }
 
 /// The spectrum of a window of samples, in place: `real` and `imag` come back as the bins of the
@@ -270,8 +319,60 @@ fn turns() -> &'static [(f32, f32)] {
 /// The top of a bar an amplitude is drawn at: the decibels it stands for, over the range a bar
 /// spans, so that a sound a tenth as loud is a bar a tenth as tall rather than a hundredth.
 fn bar_level(amplitude: f32) -> f32 {
+    decibel_level(amplitude, RANGE_DB)
+}
+
+/// What a window's beat makes of the pulse as it stands: a bass at least as loud as the pulse is
+/// stands it at itself, and a drop falls back through the reads that follow, an exponential of
+/// `BEAT_RELEASE`.
+///
+/// The falling is by the time between two reads rather than by a step a read, because reads come
+/// at the card's cadence while it is up and at the bubble's while it animates, and the pulse has
+/// to be the sound's clock rather than the reader's. A window still holding the bass is never
+/// fallen through, so a sustained note stands the ripples still rather than flickering them.
+pub(super) fn beat_pulse(shown: f32, beat: f32, elapsed: Duration) -> f32 {
+    let fallen = shown * (-elapsed.as_secs_f32() / BEAT_RELEASE.as_secs_f32()).exp();
+
+    beat.max(fallen).clamp(0.0, 1.0)
+}
+
+/// Where a pulse stands after the sound behind it has stopped being played, 0.0..=1.0: what it
+/// stood at, fallen over `elapsed` by the fade's own clock (see `BEAT_FADE`), or at rest for
+/// good once what is left of it is under `BEAT_REST`.
+///
+/// It is the arithmetic of the release above under a longer time constant, and it is a function
+/// of what was shown and how long ago rather than a step of whatever a reader saw, so the fall
+/// is the same whether a card is painted every repaint of a second or at the end of one — with
+/// the wait a caller hands it bounded by a step of its own where the card it is drawing on is
+/// one the loop can come back to late (see `beat_step`).
+pub(super) fn beat_fade(shown: f32, elapsed: Duration) -> f32 {
+    let fallen = shown * (-elapsed.as_secs_f32() / BEAT_FADE.as_secs_f32()).exp();
+
+    if fallen < BEAT_REST {
+        0.0
+    } else {
+        fallen
+    }
+}
+
+/// The wait one step of a fall counts for: the time a card was away for, counted up to
+/// `BEAT_STEP`.
+///
+/// A card painted at its own cadence counts the whole of the wait between one frame and the next,
+/// so a fall goes home by the wall clock however many frames there are. A longer wait is a frame
+/// the loop missed — a stall, a frame spent elsewhere — and counting it as the one step is what
+/// keeps the fall's last leg a fall: what the mark does is go on coming home rather than arrive at
+/// the dot in a single jump (see `beat_fade` and, for the cadence such a card is painted at,
+/// `AUDIO_NAME_REPAINT`).
+pub(super) fn beat_step(elapsed: Duration) -> Duration {
+    elapsed.min(BEAT_STEP)
+}
+
+/// Where an amplitude stands between silence and the top of the scale, as decibels counted over
+/// `range_db` — the one arithmetic every level here is read through, each over its own range.
+fn decibel_level(amplitude: f32, range_db: f32) -> f32 {
     let decibels = 20.0 * amplitude.max(1e-6).log10();
-    ((decibels + RANGE_DB) / RANGE_DB).clamp(0.0, 1.0)
+    ((decibels + range_db) / range_db).clamp(0.0, 1.0)
 }
 
 /// The window every band is read through, made once and kept.
@@ -345,7 +446,35 @@ const ACTIVATION_WAIT: Duration = Duration::from_millis(250);
 /// about the machine, so a Windows without process loopback, a refusal from the audio service and
 /// a system that never answers are all the same answer — no bands — and the caller falls back to
 /// the mixer's peak, which is what a bubble has always drawn its bars from (see `output_peak`).
+///
+/// A window asked for this way is read for the bars alone: the beat is a card's own reading (see
+/// `output_beat`), and a caller that wants the bars is not made to pay for a pulse as well.
 pub(super) fn output_bands() -> Option<[f32; BARS]> {
+    capture_reading(|capture| capture.read(None))
+}
+
+/// The beat of the sound this app is playing now, 0.0..=1.0, read from the band whose top is
+/// `band` hertz — the setting's own (`BeatHz`) — or nothing where the machine will not let the
+/// capture be had: the loudest of the bass as the last window held it, fallen back since, which
+/// is how far the mark's ripples stand out (see `beat_pulse`).
+///
+/// Asking for it reads the capture the same way asking for the bands does — one reading answers
+/// both (see `readings`) — so whichever of a frame's two asks comes first is the one that pays
+/// for it. A card whose setting is `off` never asks at all: there would be no band to read the
+/// pulse from, and its mark pays nothing for the feature (see the caller in `event_loop`).
+pub(super) fn output_beat(band: u32) -> Option<f32> {
+    capture_reading(|capture| {
+        capture.read(Some(band))?;
+        Some(capture.pulse())
+    })
+}
+
+/// Ask this thread's capture, opening it on the first ask and never asking for one again, and
+/// answer with what it has to say.
+///
+/// Nothing where the machine will not have a capture at all, and nothing where the ask itself
+/// refuses: a stream that will not start is the same answer as a machine that never had one.
+fn capture_reading<T>(ask: impl FnOnce(&mut Bands) -> Option<T>) -> Option<T> {
     CAPTURE.with(|slot| {
         let mut slot = slot.borrow_mut();
 
@@ -359,7 +488,7 @@ pub(super) fn output_bands() -> Option<[f32; BARS]> {
         }
 
         match slot.as_mut()? {
-            Reading::Bands(capture) => capture.read(),
+            Reading::Bands(capture) => ask(capture),
             Reading::Refused => None,
         }
     })
@@ -400,6 +529,11 @@ struct Bands {
     /// The bars as they stand, which is what the falling is: a band quieter than it was is read
     /// through the bar that is already up (see `FALL`).
     shown: [f32; BARS],
+    /// The pulse as it stands, which is what the falling is: a beat quieter than it was is read
+    /// through the pulse that is already out (see `beat_pulse`).
+    beat: f32,
+    /// When the pulse was last stepped, since what it falls by is the time between reads.
+    beat_at: Instant,
     /// When a bubble last asked, which is the whole of what tells an idle capture from a busy one.
     asked: Instant,
     /// When a packet last brought samples, which is what tells a stream that has stopped giving
@@ -411,8 +545,11 @@ struct Bands {
 }
 
 impl Bands {
-    /// What the seven bands are doing now, read from every packet the capture is holding.
-    fn read(&mut self) -> Option<[f32; BARS]> {
+    /// What the seven bands are doing now, read from every packet the capture is holding, and
+    /// the pulse of the band `beat_hz` names where one is asked for. A read with none leaves the
+    /// pulse at rest rather than at whatever the last banded read made of it: what a card comes
+    /// back to when the setting is turned on again is a live reading, not the tail of an old one.
+    fn read(&mut self, beat_hz: Option<u32>) -> Option<[f32; BARS]> {
         let idle = self.asked.elapsed() > IDLE;
         self.asked = Instant::now();
         let taken: usize;
@@ -451,12 +588,24 @@ impl Bands {
             self.window.drain(..oldest);
         }
 
-        let levels = band_levels(&self.window, RATE);
+        let (levels, beat) = readings(&self.window, RATE, beat_hz);
         for (shown, level) in self.shown.iter_mut().zip(levels) {
             *shown = level.max(*shown * FALL);
         }
+        let elapsed = self.beat_at.elapsed();
+        self.beat_at = Instant::now();
+        self.beat = if beat_hz.is_some() {
+            beat_pulse(self.beat, beat, elapsed)
+        } else {
+            0.0
+        };
 
         Some(self.shown)
+    }
+
+    /// The pulse as it stands, after the read that just stepped it (see `beat_pulse`).
+    fn pulse(&self) -> f32 {
+        self.beat
     }
 
     /// Take everything the capture has to give, as the mono samples a window is read from, and
@@ -535,7 +684,7 @@ impl Bands {
 /// the engine's, and the engine converts: this is the short way round because the mix format is not
 /// readable on such a client at all (`GetMixFormat` answers `E_NOTIMPL` on one of these, which is a
 /// fact of the interface rather than of a machine) and because a format this side chose is one the
-/// reading of a window can be sure about (see `band_levels`).
+/// reading of a window can be sure about (see `readings`).
 fn open_capture() -> Option<Bands> {
     let params = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
@@ -652,6 +801,8 @@ fn open_capture() -> Option<Bands> {
             capture,
             window: Vec::with_capacity(WINDOW_SAMPLES),
             shown: [0.0; BARS],
+            beat: 0.0,
+            beat_at: Instant::now(),
             asked: Instant::now(),
             last_packet: Instant::now(),
             running: false,

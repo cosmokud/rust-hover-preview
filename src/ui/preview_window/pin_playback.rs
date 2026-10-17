@@ -93,7 +93,7 @@ pub(super) fn pin_is_playing(transport: &PinTransport) -> bool {
 ///
 /// The engine's own is asked whether it is *held* rather than whether it is playing, because a
 /// session that was asked to hold is a session that is still there (see `a_sound_that_is_held`).
-pub(super) fn pinned_audio_playing() -> bool {
+pub(super) fn a_sound_is_playing() -> bool {
     let running = CURRENT_MEDIA
         .lock()
         .ok()

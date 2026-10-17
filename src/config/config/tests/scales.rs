@@ -91,6 +91,65 @@ fn office_engine_idle_expires_on_its_own_clock() {
     );
 }
 
+#[test]
+fn beat_hz_reads_back_what_it_writes() {
+    for band in [
+        BeatHz::Top(MIN_BEAT_HZ),
+        BeatHz::Top(1200),
+        BeatHz::Top(MAX_BEAT_HZ),
+        BeatHz::Off,
+    ] {
+        let written = band.as_str();
+        assert_eq!(
+            BeatHz::from_str(&written),
+            Some(band),
+            "`{written}` read back"
+        );
+    }
+}
+
+#[test]
+fn beat_hz_takes_the_words_a_person_would_write() {
+    for written in ["off", "Off", " OFF "] {
+        assert_eq!(BeatHz::from_str(written), Some(BeatHz::Off), "`{written}`");
+    }
+    assert_eq!(
+        BeatHz::Off.top(),
+        None,
+        "a card that follows no band has no top"
+    );
+    assert_eq!(BeatHz::Top(1200).top(), Some(1200));
+
+    assert_eq!(BeatHz::from_str(" 1200 "), Some(BeatHz::Top(1200)));
+    assert_eq!(
+        BeatHz::from_str("99999"),
+        Some(BeatHz::Top(MAX_BEAT_HZ)),
+        "a number past the ceiling is reduced to it"
+    );
+    assert_eq!(
+        BeatHz::from_str("3"),
+        Some(BeatHz::Top(MIN_BEAT_HZ)),
+        "and one below the floor is raised to it"
+    );
+    assert_eq!(
+        BeatHz::from_str("soon"),
+        None,
+        "a value that is neither a band top nor `off` is not one"
+    );
+}
+
+/// A file that says nothing about the band leaves it where a fresh installation starts,
+/// like every other setting this build added.
+#[test]
+fn a_file_without_a_beat_hz_leaves_it_where_it_starts() {
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "audio_volume", Some("50".to_string()));
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(config.beat_hz, DEFAULT_BEAT_HZ);
+}
+
 /// A drawing is drawn at the whole room the display has unless the file says
 /// otherwise — which is what the setting starts at, and what a fresh install
 /// writes.
