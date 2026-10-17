@@ -181,7 +181,7 @@ impl PinMenuRow {
     /// one to read. The hold is named for what it will do rather than for what it already does,
     /// the way the bubble's own hold is (see `bubble_menu_row_label`): `Pause` while the sound is
     /// playing and `Play` while it is held — the same answer the card's own play button gives
-    /// (see `pinned_audio_playing`).
+    /// (see `a_sound_is_playing`).
     fn label(self, playing: bool) -> &'static str {
         match self {
             PinMenuRow::ToBubble => "To Bubble",
@@ -237,13 +237,13 @@ fn row_of(row: PinMenuRow) -> Option<usize> {
 ///
 /// The hold is named at the paint as well, from what the player behind the card is doing:
 /// `Pause` while the sound is playing and `Play` while it is held (see
-/// `pinned_audio_playing`).
+/// `a_sound_is_playing`).
 ///
 /// The rows a hand counts here are the rows themselves, with no rule between them: the doors
 /// the flyouts hang from are named rather than numbered (see `row_of` and
 /// `pinned_menu_paint`).
 pub(super) fn menu_rows() -> Vec<pin_chrome::MenuRow> {
-    let playing = pinned_audio_playing();
+    let playing = a_sound_is_playing();
     PIN_MENU_ROWS
         .iter()
         .map(|row| pin_chrome::MenuRow {
