@@ -718,6 +718,12 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         let Some(pin) = pinned.pin_mut() else {
             return;
         };
+        // And a maximized window gives its restore up to any hand that has moved it, carried to
+        // another place or pulled to a size of its own: a window the user has taken hold of is one
+        // there is no maximize left to undo, so the caption's restore glyph goes back to a maximize
+        // with it and the button maximizes again (see `pin_restore_box`).
+        pin.restore = pin_restore_box(pin.restore, pin.content, content);
+        pin.content = content;
         // A hand that pulled the box to a size is the box's new bound as well as its size: the
         // side the user dragged the window out to is the side the files that follow may use, and
         // it writes one where the pin had none — a size asked for by hand is the size, not the box
@@ -727,15 +733,13 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             pin.bound = Some((content.2 - content.0).max(content.3 - content.1).max(1));
             // A box the hand pulled to a size is a box chosen for the whole of a window, so the
             // picture goes back to filling it: the two are one fact about the window, and a picture
-            // left zoomed into a box of another size is a picture hanging off it (see `reset_pin_zoom`).
+            // left zoomed into a box of another size is a picture hanging off it. It is filled from
+            // the box *just written* and not the one the step came from — a picture filled to the
+            // box a step ago stands larger than the window it was just given, which is the shape a
+            // press takes for a pan of the picture rather than a handle on the window (see
+            // `reset_pin_zoom` and `begin_pin_pan`).
             reset_pin_zoom(pin);
         }
-        // And a maximized window gives its restore up to any hand that has moved it, carried to
-        // another place or pulled to a size of its own: a window the user has taken hold of is one
-        // there is no maximize left to undo, so the caption's restore glyph goes back to a maximize
-        // with it and the button maximizes again (see `pin_restore_box`).
-        pin.restore = pin_restore_box(pin.restore, pin.content, content);
-        pin.content = content;
         // And where it was carried to, so that the next ask for a pointer that has not moved is
         // recognised as the same question (see the early return above).
         if let Some(drag) = pin.dragging.as_mut() {
