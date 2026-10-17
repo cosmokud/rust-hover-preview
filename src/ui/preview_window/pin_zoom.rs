@@ -12,10 +12,6 @@
 //! A picture already larger than a fit — a huge photograph taken up at `100%`, or a box a hand has
 //! dragged out past it — is given a cap of its own size rather than of the fit's, because the cap is
 //! there to stop a window growing and never to shrink one (see `pin_zoom_after`).
-//!
-//! A window a zoom out brings *down* does not stop dead on the size it was asked for: it dips a little
-//! past it and comes home, over a tenth of a second or so, so the landing is a soft one rather than a
-//! snap (see `pin_zoom_step`).
 
 use super::*;
 
@@ -60,22 +56,6 @@ pub(super) const PIN_ZOOM_RELEASE_SECONDS: f32 = 0.1;
 /// is what makes the release nine tenths of the ask in a tenth of a second and ninety-nine hundredths
 /// of it in twice that.
 const PIN_ZOOM_RELEASE_LEFT: f32 = 0.1;
-
-/// How long a window coming down takes to settle once the travel has landed it: just over a tenth
-/// of a second.
-///
-/// It is a *settle* and not a slower end to the travel: the travel lands on the size it was asked
-/// for first, and what follows is one clean overshoot past it and back — a flinch rather than a
-/// stop — so a hand that is still on the wheel is never kept waiting for it (see `pin_zoom_step`).
-pub(super) const PIN_ZOOM_SETTLE_SECONDS: f32 = 0.12;
-
-/// How far past the size it was asked for a settling window dips at its deepest: three hundredths
-/// of it.
-///
-/// It is a share of the ask rather than pixels, so the flinch is the same gesture on every window;
-/// at this share a second wobble would be below what an eye catches, so the settle is one clean
-/// overshoot and lands (see `settle_dip`).
-const PIN_ZOOM_SETTLE_DIP: f32 = 0.03;
 
 /// The longest a single frame of a travel is taken to have lasted, in seconds.
 ///
@@ -147,13 +127,6 @@ pub(super) struct PinZoom {
     /// picture has no overhang for an anchor to move the picture into, and the middle is what a
     /// picture that has not been carried is measured about (see `pin_zoom_to`).
     pub(super) anchor: Option<(i32, i32)>,
-    /// How far into its settle a shrinking window is, in seconds: nothing except while a shrink that
-    /// has landed is flinching past the size it was asked for and back (see `pin_zoom_step`).
-    ///
-    /// A travel lands on its ask and *then* flinches rather than overshooting on the way in, so a
-    /// hand that is still on the wheel is never kept waiting for it — and a growth never flinches at
-    /// all: the flinch is a shrink's landing, and a growth's landing is exact.
-    pub(super) settle: f32,
 }
 
 impl PinZoom {
@@ -173,15 +146,13 @@ impl PinZoom {
             pan,
             toward: drawn.0,
             anchor: None,
-            settle: 0.0,
         }
     }
 
-    /// Whether this view is still on its way to the size the wheel asked for, or flinching through
-    /// the settle after landing there — either of which is what the loop keeps the frame cadence for
-    /// (see `pin_zoom_in_flight`).
+    /// Whether this view is still on its way to the size the wheel asked for, which is what the loop
+    /// keeps the frame cadence for (see `pin_zoom_in_flight`).
     pub(super) fn travelling(&self) -> bool {
-        self.drawn.0 != self.toward || self.settle > 0.0
+        self.drawn.0 != self.toward
     }
 
     /// The size the picture is drawn at in whole pixels, which is what a repaint crops against and what
@@ -501,13 +472,12 @@ pub(super) fn pin_zoom_to(
         zoom: PinZoom {
             drawn,
             pan,
-            // What the travel is aimed at, what it is anchored on and how far into its settle it
-            // is are not this function's business and are carried through it: where a picture
-            // *lands* is the whole of what is decided here, and a caller that is walking a size is
-            // the caller that knows what it is walking toward (see `pin_zoom_step`).
+            // What the travel is aimed at and what it is anchored on are not this function's
+            // business and are carried through it: where a picture *lands* is the whole of what is
+            // decided here, and a caller that is walking a size is the caller that knows what it is
+            // walking toward (see `pin_zoom_step`).
             toward: input.zoom.toward,
             anchor: input.zoom.anchor,
-            settle: input.zoom.settle,
         },
     }
 }
@@ -552,41 +522,6 @@ fn released_share(elapsed: f32) -> f32 {
     1.0 - PIN_ZOOM_RELEASE_LEFT.powf(dt / PIN_ZOOM_RELEASE_SECONDS)
 }
 
-/// How far past the size it was asked for a settling window has dipped by the time `at` of the
-/// settle has passed: a raised cosine over `PIN_ZOOM_SETTLE_SECONDS`, so the window leaves the ask
-/// at rest, dips to `PIN_ZOOM_SETTLE_DIP` of it at the halfway point, and lands back on it at rest.
-///
-/// Past the settle it is nothing rather than a second wobble: at this share a second one would be
-/// below what an eye catches, so the flinch is one clean overshoot that lands (see
-/// `PIN_ZOOM_SETTLE_DIP`).
-fn settle_dip(at: f32) -> f32 {
-    if !(0.0..PIN_ZOOM_SETTLE_SECONDS).contains(&at) {
-        return 0.0;
-    }
-
-    let turn = std::f32::consts::PI * at / PIN_ZOOM_SETTLE_SECONDS;
-
-    PIN_ZOOM_SETTLE_DIP * (0.5 - 0.5 * turn.cos())
-}
-
-/// Whether a flinch at its deepest would move the window's own box: the whole of what decides whether
-/// a shrink flinches at all.
-///
-/// It is asked of the *box a dip lands the window in* rather than of the picture, and it is asked once,
-/// where the flinch would start: a zoom out that merely spends a picture's overhang inside a window that
-/// has already stopped leaves that window's box exactly as it was, and neither does one whose dip the
-/// floor clamps away — a pulse of the picture for a window that never moved is motion nobody asked for
-/// and a frame cadence kept for nothing (see `pin_zoom_to` and `pin_zoom_floor`).
-fn flinch_moves_the_window(input: &PinZoomInputs, displays: &dyn Displays) -> bool {
-    let dipped = pin_zoom_to(
-        input,
-        input.zoom.toward * (1.0 - PIN_ZOOM_SETTLE_DIP),
-        displays,
-    );
-
-    pin_zoom_to(input, input.zoom.toward, displays).content != dipped.content
-}
-
 /// Carry a travel one frame further on: where the picture has got to by the time `elapsed` has passed,
 /// and the box that comes with it — or nothing at all for a picture already at the size the wheel asked
 /// for.
@@ -594,13 +529,6 @@ fn flinch_moves_the_window(input: &PinZoomInputs, displays: &dyn Displays) -> bo
 /// The frame is the wheel's ask *released* and not the ask itself, which is the whole of what a notch is
 /// worth to an eye: a step landed whole is a jump, and a hand that has stopped turning is a picture that
 /// goes on moving for as long as the rest of the ask takes to carry out (see `pin_zoom_release`).
-///
-/// What a shrink that brought the *window* down lands into is one clean flinch past the size it was
-/// asked for and back, over `PIN_ZOOM_SETTLE_SECONDS`: the window comes down past its size and home
-/// again rather than stopping dead on it. The dip is asked of the ask and not of the size the release is
-/// passing, so a fast wheel's landing is the same gesture as a slow one's and ends on the same size —
-/// and it is kept only where it moves the window's own box, so a zoom out that only spends a picture's
-/// overhang inside a window that has stopped is left exactly as it was (see `flinch_moves_the_window`).
 pub(super) fn pin_zoom_step(
     input: &PinZoomInputs,
     elapsed: f32,
@@ -611,34 +539,8 @@ pub(super) fn pin_zoom_step(
     }
 
     let drawn = pin_zoom_release(input.zoom.drawn.0, input.zoom.toward, elapsed);
-    // The flinch's own clock. A travel lands on its ask and the settle starts there — a *shrink*, whose
-    // ask is under the size it came down from, and one the dip would move the window for. A flinch
-    // already running carries on to its end whatever the release is doing, which is how the dip is
-    // measured from the ask rather than accumulated onto the size a frame at a time.
-    let settled = if input.zoom.settle > 0.0 {
-        input.zoom.settle + elapsed
-    } else if drawn == input.zoom.toward
-        && input.zoom.drawn.0 > input.zoom.toward
-        && flinch_moves_the_window(input, displays)
-    {
-        elapsed
-    } else {
-        0.0
-    };
-    let shown = if settled > 0.0 {
-        input.zoom.toward * (1.0 - settle_dip(settled))
-    } else {
-        drawn
-    };
 
-    let mut plan = pin_zoom_to(input, shown, displays);
-    plan.zoom.settle = if settled < PIN_ZOOM_SETTLE_SECONDS {
-        settled
-    } else {
-        0.0
-    };
-
-    Some(plan)
+    Some(pin_zoom_to(input, drawn, displays))
 }
 
 /// The view of a pinned picture the wheel is the owner of, or nothing at all where it is not this pin's
@@ -741,10 +643,6 @@ pub(super) fn aim_pin_zoom(notches: f32) {
         // The point this travel is anchored on: read from the pointer once, here, and kept for every
         // frame of the travel rather than re-read by each of them.
         view.anchor = cursor_screen_point();
-        // A new notch is a travel of its own, so a flinch from the last one ends here: the settle
-        // is shown and not aimed at, and a wheel that is still being turned is never made to wait
-        // for it (see `pin_zoom_step`).
-        view.settle = 0.0;
         Some(())
     });
 }
