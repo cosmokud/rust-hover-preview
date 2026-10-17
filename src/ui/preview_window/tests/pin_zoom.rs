@@ -873,8 +873,11 @@ fn an_image_is_brought_home_by_the_zoom_out_that_reaches_the_fit() {
     );
 }
 
+static PIN_ZOOM_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
 #[test]
 fn the_image_swings_past_its_place_and_comes_back() {
+    let _guard = PIN_ZOOM_TEST_MUTEX.lock().unwrap();
     // The bounce: the image is brought home over the last of the overhang, and the swing is laid over
     // that — past the place it is being brought to and back again, so that the image lands rather than
     // stops. What it swings past is the *image's* own offset: the window's box is the wheel's own
@@ -887,8 +890,8 @@ fn the_image_swings_past_its_place_and_comes_back() {
         room: bounds(),
         pointer: Some((200, 400)),
     };
-    let mut zoom = PinZoom::still((1127.0, 901.6), (451.0, 0.0));
-    zoom.toward = zoom.drawn.0 / PIN_ZOOM_PER_NOTCH;
+    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0));
+    zoom.toward = 1000.0;
 
     // Where the fit would put the picture at the size it stands at: the middle, with what it overhangs
     // by hanging off both sides alike.
@@ -921,6 +924,114 @@ fn the_image_swings_past_its_place_and_comes_back() {
         (home(&zoom) - zoom.picture_box((1000, 800)).0 as f32).abs() < 2.0,
         "so it comes to rest in the place the fit would put it"
     );
+}
+
+/// An intermediate zoom out that leaves the image oversized neither bounces nor gives up its pan:
+/// the bounce and the return home belong to reaching the fit itself, so an image zoomed out within
+/// its oversized range does not bounce towards center only to bounce right back to its pan.
+#[test]
+fn intermediate_zoom_out_does_not_bounce_and_zoom_out_to_fit_clamps_and_bounces_cleanly() {
+    let _guard = PIN_ZOOM_TEST_MUTEX.lock().unwrap();
+    let window = (0, 0, 1000, 800);
+    let asking = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some((200, 400)),
+    };
+
+    // Picture starts at 1200px (oversized, window is 1000px), panned significantly.
+    let mut zoom = PinZoom::still((1200.0, 960.0), (300.0, 50.0));
+
+    // First notch out: 1200 / 1.10 = 1090.9 > cap (1000.0).
+    let next_toward = pin_zoom_toward(&asking(zoom), -1.0);
+    assert!(
+        next_toward > 1000.0,
+        "the first notch out leaves the image still oversized: {next_toward}"
+    );
+    zoom.toward = next_toward;
+
+    // Walk the travel to 1090.9:
+    while zoom.drawn.0 != zoom.toward {
+        let plan = pin_zoom_step(&asking(zoom), 0.016, &display())
+            .expect("frame in flight");
+        zoom = plan.zoom;
+        assert_eq!(
+            zoom.bounce, 0.0,
+            "intermediate zoom out to oversized never starts a bounce"
+        );
+    }
+    // Pan is preserved:
+    assert!(
+        zoom.pan.0 > 200.0,
+        "pan is not prematurely reduced by home_share while still oversized: {}",
+        zoom.pan.0
+    );
+
+    // Second notch out: from 1090.9, 1090.9 / 1.10 = 991.7 < cap (1000.0).
+    // It clamps to cap (1000.0)!
+    let fit_toward = pin_zoom_toward(&asking(zoom), -1.0);
+    assert_eq!(
+        fit_toward, 1000.0,
+        "a zoom out crossing the fit boundary clamps to fit (1000.0) first"
+    );
+    zoom.toward = fit_toward;
+
+    let mut swang = 0.0f32;
+    let mut saw_bounce = false;
+    let mut frames = 0;
+
+    while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
+        zoom = plan.zoom;
+        if zoom.bounce > 0.0 {
+            saw_bounce = true;
+        }
+        let (left, _, _, _) = zoom.picture_box((1000, 800));
+        let past = 0.0 - left as f32;
+        swang = swang.max(past);
+        frames += 1;
+        assert!(frames < 240, "a travel and its bounce are not forever");
+    }
+
+    assert!(saw_bounce, "the bounce triggered when heading home to the fit");
+    assert!(swang > 4.0, "the bounce swung past center: {swang} pixels");
+    assert_eq!(zoom.bounce, 0.0, "bounce finished");
+    assert_eq!(zoom.pan, (0.0, 0.0), "pan came home completely to zero");
+    assert_eq!(
+        zoom.picture_box((1000, 800)),
+        (0, 0, 1000, 800),
+        "the image settled cleanly at fit to screen without bouncing back"
+    );
+}
+
+#[test]
+fn pin_zoom_bounce_duration_respects_config() {
+    let _guard = PIN_ZOOM_TEST_MUTEX.lock().unwrap();
+    let window = (0, 0, 1000, 800);
+    let asking = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some((200, 400)),
+    };
+
+    // When configured to 0 ms: no bounce occurs.
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.pin_zoom_bounce_ms = 0;
+    }
+    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0));
+    zoom.toward = 1000.0;
+    while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
+        zoom = plan.zoom;
+        assert_eq!(zoom.bounce, 0.0, "0 ms config disables bounce");
+    }
+
+    // Reset back to default
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.pin_zoom_bounce_ms = crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_MS;
+    }
 }
 
 #[test]
