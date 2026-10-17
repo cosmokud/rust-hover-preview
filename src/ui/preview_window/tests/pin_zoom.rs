@@ -399,6 +399,49 @@ fn zooming_back_out_of_the_window_consumes_the_overhang_before_it_shrinks_it() {
 }
 
 #[test]
+fn a_window_shrinking_back_out_follows_itself_and_not_the_panned_picture() {
+    // A picture half as large again as its window, carried a long way off it: the window is 0..1000
+    // across and the picture is drawn from 450, so the backdrop — the `Image -> Zoom -> Background`
+    // colour, black by a fresh configuration — is showing down the window's left side. Zooming out
+    // shrinks the window back toward the picture's size, and where that smaller window lands is
+    // about its own middle: a window re-placed about the picture's carried centre would walk across
+    // the screen with the pan, following the image inside the window instead of the window itself.
+    let window = (0, 0, 1000, 800);
+    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0));
+    assert_eq!(
+        carried.picture_box((1000, 800)),
+        (450, -200, 1950, 1000),
+        "the backdrop is showing down the window's left side"
+    );
+
+    // Notches out spend the overhang first — the window holds while the picture is larger than it —
+    // so the wheel is turned until the window itself starts coming down, the hand over the backdrop
+    // the whole way, as a hand zooming out of a pan is.
+    let (mut content, mut zoom) = (window, carried);
+    for _ in 0..40 {
+        let plan = zoomed(content, zoom, -1.0, Some((200, 400)));
+        content = plan.content;
+        zoom = plan.zoom;
+        if content != window {
+            break;
+        }
+    }
+    assert_ne!(
+        content, window,
+        "the window comes down once the picture fits it"
+    );
+    let (before, after) = (
+        ((window.0 + window.2) / 2, (window.1 + window.3) / 2),
+        ((content.0 + content.2) / 2, (content.1 + content.3) / 2),
+    );
+    assert_eq!(
+        after, before,
+        "the smaller window sits about the window's own middle and not the carried picture's: \
+         {after:?} against {before:?}"
+    );
+}
+
+#[test]
 fn a_notch_of_zero_is_no_plan_at_all() {
     // The hook counts notches in wheel units and the loop divides by a notch, so a count that came to
     // nothing has to answer nothing rather than a box it happened to work out.
