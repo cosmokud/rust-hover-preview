@@ -167,6 +167,12 @@ const BEAT_FADE: Duration = Duration::from_millis(400);
 /// own slow clock (see `beat_fade`).
 const BEAT_REST: f32 = 0.01;
 
+/// The longest wait one step of a fall counts for — a quarter of the fall's own clock, `BEAT_FADE`
+/// — and so the share of what is left that one step of it can take: a card the loop comes back to
+/// late is a fall still seen coming home rather than one that arrives at the mark in a single jump
+/// (see `beat_step`).
+const BEAT_STEP: Duration = Duration::from_millis(BEAT_FADE.as_millis() as u64 / 4);
+
 /// What one window of samples reads as: the level of each band, 0.0..=1.0 the lowest band first,
 /// and the beat of the bass under it, 0.0..=1.0 — read from the band `beat_hz` names where it
 /// names one, whose bottom is `MIN_BEAT_HZ`, and as no beat at all where it is `off`.
@@ -336,7 +342,9 @@ pub(super) fn beat_pulse(shown: f32, beat: f32, elapsed: Duration) -> f32 {
 ///
 /// It is the arithmetic of the release above under a longer time constant, and it is a function
 /// of what was shown and how long ago rather than a step of whatever a reader saw, so the fall
-/// is the same whether a card is painted every repaint of a second or at the end of one.
+/// is the same whether a card is painted every repaint of a second or at the end of one — with
+/// the wait a caller hands it bounded by a step of its own where the card it is drawing on is
+/// one the loop can come back to late (see `beat_step`).
 pub(super) fn beat_fade(shown: f32, elapsed: Duration) -> f32 {
     let fallen = shown * (-elapsed.as_secs_f32() / BEAT_FADE.as_secs_f32()).exp();
 
@@ -345,6 +353,19 @@ pub(super) fn beat_fade(shown: f32, elapsed: Duration) -> f32 {
     } else {
         fallen
     }
+}
+
+/// The wait one step of a fall counts for: the time a card was away for, counted up to
+/// `BEAT_STEP`.
+///
+/// A card painted at its own cadence counts the whole of the wait between one frame and the next,
+/// so a fall goes home by the wall clock however many frames there are. A longer wait is a frame
+/// the loop missed — a stall, a frame spent elsewhere — and counting it as the one step is what
+/// keeps the fall's last leg a fall: what the mark does is go on coming home rather than arrive at
+/// the dot in a single jump (see `beat_fade` and, for the cadence such a card is painted at,
+/// `AUDIO_NAME_REPAINT`).
+pub(super) fn beat_step(elapsed: Duration) -> Duration {
+    elapsed.min(BEAT_STEP)
 }
 
 /// Where an amplitude stands between silence and the top of the scale, as decibels counted over
