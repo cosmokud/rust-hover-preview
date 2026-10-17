@@ -1095,6 +1095,16 @@ pub fn run_preview_window() {
             // `pinned_audio_chrome`). Nothing at all is asked of a tick with nothing pinned: the
             // published flag answers that in one atomic read.
             let audio_chrome = pinned_audio_chrome(audio_paused);
+            // Whether a sound is playing behind the card on screen, which is what its mark beats
+            // with: a pinned card's own controls say so, and a hovered sound is the same question
+            // put to the players behind it — asked here, beside the pin's own answer and for the
+            // same reason, because it is a question that takes the media's lock (see
+            // `a_sound_is_playing`). Nothing is playing behind a collapsed pin's bubble, which is
+            // the one card this leaves out.
+            let sound_playing = match audio_chrome {
+                Some(chrome) => chrome.playing,
+                None => !pinned() && a_sound_is_playing(),
+            };
 
             let media_lock = need_media_check.then(|| CURRENT_MEDIA.lock());
             if let Some(Ok(mut media_guard)) = media_lock {
@@ -1228,20 +1238,20 @@ pub fn run_preview_window() {
                             }
                         }
 
-                        // The mark beats whenever a player is running behind the card, which is
-                        // the third thing a card can be moving by — read from the band the
-                        // setting names, and not at all where it is `off` (see `current_beat_hz`
-                        // and `audio_meter::output_beat`).
-                        let beating = audio_chrome.is_some_and(|chrome| chrome.playing);
-                        let beat_hz = if beating { current_beat_hz() } else { None };
-                        // A mark the pause left mid-beat is the fourth thing a card can be
-                        // moving by: with nothing playing and nothing to read, the ripples are
-                        // drawn by the fall until they are home, which is a second or so and
-                        // then nothing (see `audio_meter::beat_fade`).
+                        // The mark beats whenever a sound is playing behind the card — a pinned
+                        // one whose player is running, and a hovered one the same way — which is
+                        // the third thing a card can be moving by: read from the band the setting
+                        // names, and not at all where it is `off` (see `sound_playing`,
+                        // `current_beat_hz` and `audio_meter::output_beat`).
+                        let beat_hz = if sound_playing { current_beat_hz() } else { None };
+                        // A mark a stop left mid-beat is the fourth thing a card can be moving
+                        // by: with nothing playing and nothing to read, the ripples are drawn by
+                        // the fall until they are home, which is a second or so and then nothing
+                        // (see `audio_meter::beat_fade`).
                         let falling = audio_beat > 0.0;
                         let cadence = match &audio_name_scroll {
                             Some(scroll) if scroll.moves() => AUDIO_NAME_REPAINT,
-                            _ if beating || falling => AUDIO_NAME_REPAINT,
+                            _ if sound_playing || falling => AUDIO_NAME_REPAINT,
                             _ => AUDIO_CARD_REPAINT,
                         };
 
@@ -1301,12 +1311,12 @@ pub fn run_preview_window() {
                                     }
                                 }
 
-                                // The beat is read from the capture only while a player is
-                                // running: a card with none behind it has no pulse to read, and
-                                // a hovered card pays nothing for the feature at all (see
-                                // `audio_meter::output_beat`). A mark the pause left mid-beat is
-                                // drawn by the fall instead, timed by the repaint happening now
-                                // (see `audio_meter::beat_fade`).
+                                // The beat is read from the capture only while a sound is playing
+                                // behind the card, whichever card it is: a card with no player
+                                // behind it has no pulse to read and pays nothing for the feature
+                                // at all (see `audio_meter::output_beat`). A mark a stop left
+                                // mid-beat is drawn by the fall instead, timed by the repaint
+                                // happening now (see `audio_meter::beat_fade`).
                                 let beat = match beat_hz {
                                     Some(band) => audio_meter::output_beat(band).unwrap_or(0.0),
                                     None if falling => {

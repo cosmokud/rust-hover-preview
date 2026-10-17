@@ -443,8 +443,8 @@ pub(super) struct Page {
     pub(super) facts_height: i32,
     pub(super) bar: Bar,
     /// The mark the card is drawn with: the dot it is marked by and the ripples a beat stands
-    /// around it, which are none at all for a card at rest — every card but a pinned one with a
-    /// player running behind it (see `Card::beat` and `Mark`).
+    /// around it, which are none at all for a card at rest — a card with no player running
+    /// behind it, hovered or pinned (see `Card::beat` and `Mark`).
     pub(super) mark: Option<Mark>,
     /// The boxes the row's controls are drawn in and answered against, and nothing at all for a
     /// card that carries none.

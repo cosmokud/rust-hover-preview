@@ -145,7 +145,8 @@ pub(crate) struct Card {
     /// The beat the mark beside the name is beating at, 0.0..=1.0: how loud the bass under the
     /// sound is now, which is how far the ripples around the mark have travelled out. Zero —
     /// the mark at rest, with the dot and nothing around it — is a card with no player behind
-    /// it, a hover's card, and any machine where the capture cannot be had (see
+    /// it: a hover's own card as much as a pinned one, for as long as nothing is playing (see
+    /// `a_sound_is_playing`), and any machine where the capture cannot be had (see
     /// `audio_meter::output_beat`).
     pub beat: f32,
     /// What the controls a pinned card carries are saying: whether a player is running behind
