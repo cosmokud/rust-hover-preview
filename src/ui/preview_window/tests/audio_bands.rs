@@ -288,3 +288,42 @@ fn a_fall_comes_home_by_the_clock_and_reaches_rest() {
     // is drawn by.
     assert_eq!(audio_meter::beat_fade(held, Duration::from_secs(2)), 0.0);
 }
+
+#[test]
+fn a_wait_the_loop_missed_falls_by_a_step_and_not_by_the_whole_of_it() {
+    // A card painted at its own cadence counts the whole of the wait between its frames, which is
+    // the clock a fall goes home by (see `beat_step`).
+    assert_eq!(
+        audio_meter::beat_step(Duration::from_millis(33)),
+        Duration::from_millis(33)
+    );
+    // A wait longer than that is a frame the loop came back late for, and it is counted as the one
+    // step: a quarter of the fall's own clock, and so the share of what is left of it that one
+    // frame can take.
+    assert_eq!(
+        audio_meter::beat_step(Duration::from_millis(1_500)),
+        Duration::from_millis(100)
+    );
+    assert_eq!(
+        audio_meter::beat_step(Duration::from_secs(5)),
+        Duration::from_millis(100)
+    );
+
+    // The value in this comment and not from the arithmetic again: eight tenths a quarter of a
+    // clock later is 0.8 * e^-0.25.
+    let held = 0.8f32;
+    let stepped =
+        audio_meter::beat_fade(held, audio_meter::beat_step(Duration::from_millis(1_500)));
+    assert!(
+        (0.60..0.65).contains(&stepped),
+        "a wait the loop missed took the beat to {stepped:.3} of eight tenths"
+    );
+
+    // Where the same wait counted whole is the whole of the travel gone in one frame — the jump
+    // this step is here to stop (0.8 * e^-3.75).
+    let whole = audio_meter::beat_fade(held, Duration::from_millis(1_500));
+    assert!(
+        whole < 0.05,
+        "the uncounted wait left {whole:.3} of eight tenths"
+    );
+}

@@ -1316,12 +1316,16 @@ pub fn run_preview_window() {
                                 // behind it has no pulse to read and pays nothing for the feature
                                 // at all (see `audio_meter::output_beat`). A mark a stop left
                                 // mid-beat is drawn by the fall instead, timed by the repaint
-                                // happening now (see `audio_meter::beat_fade`).
+                                // happening now and counted a step at a time, so a frame the loop
+                                // came back late for is a fall still seen coming home and not a
+                                // jump to the dot (see `audio_meter::beat_step` and
+                                // `audio_meter::beat_fade`).
                                 let beat = match beat_hz {
                                     Some(band) => audio_meter::output_beat(band).unwrap_or(0.0),
-                                    None if falling => {
-                                        audio_meter::beat_fade(audio_beat, since_paint)
-                                    }
+                                    None if falling => audio_meter::beat_fade(
+                                        audio_beat,
+                                        audio_meter::beat_step(since_paint),
+                                    ),
                                     None => 0.0,
                                 };
                                 // What the next fall — or the pause that starts one — stands on.
