@@ -145,6 +145,11 @@ pub(crate) struct Card {
     /// it: what a repaint of a card whose name moves hands over, and nothing at all for the
     /// card a hover is measured with or the first frame of one (see [`NameScroll`]).
     pub name_offset: i32,
+    /// The beat the mark beside the name is beating at, 0.0..=1.0: how loud the bass under the
+    /// sound is now, which is how far the ring around the mark has travelled out. Zero — the
+    /// mark at rest — is a card with no player behind it, a hover's card, and any machine where
+    /// the capture cannot be had (see `audio_meter::output_beat`).
+    pub beat: f32,
     /// What the controls a pinned card carries are saying: whether a player is running behind
     /// it, the level this window is playing at, and which button the pointer is over and holding.
     ///

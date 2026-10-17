@@ -1155,10 +1155,11 @@ pub fn run_preview_window() {
                     }
                     // A sound's card is the one painted preview that changes while it is on
                     // screen: the clock and the bar under it are drawn from a player that is
-                    // running, and a name the card has no room for is scrolled across it. The
-                    // clock's own seconds are worth watching four times a second and a scroll
-                    // is not, so a card with a name to move is painted at the cadence the
-                    // spinner's overlay uses and one whose whole name fits keeps the slower one
+                    // running, a name the card has no room for is scrolled across it, and the
+                    // mark beside the name beats with the sound's own bass. The clock's own
+                    // seconds are worth watching four times a second and the other two are
+                    // not, so a card with something moving on it is painted at the cadence the
+                    // spinner's overlay uses and a card that is standing keeps the slower one
                     // (see `AUDIO_CARD_REPAINT` and `AUDIO_NAME_REPAINT`). What a card with no
                     // player behind it — a file nothing will play, at any level — costs is its scroll
                     // and nothing else.
@@ -1222,8 +1223,12 @@ pub fn run_preview_window() {
                             }
                         }
 
+                        // The mark beats whenever a player is running behind the card, which is
+                        // the third thing a card can be moving by (see `audio_meter::output_beat`).
+                        let beating = audio_chrome.is_some_and(|chrome| chrome.playing);
                         let cadence = match &audio_name_scroll {
                             Some(scroll) if scroll.moves() => AUDIO_NAME_REPAINT,
+                            _ if beating => AUDIO_NAME_REPAINT,
                             _ => AUDIO_CARD_REPAINT,
                         };
 
@@ -1279,6 +1284,16 @@ pub fn run_preview_window() {
                                     }
                                 }
 
+                                // The ring reads the capture only while a player is running: a
+                                // card with none behind it has no pulse to read, and a hovered
+                                // card pays nothing for the feature at all (see
+                                // `audio_meter::output_beat`).
+                                let beat = if beating {
+                                    audio_meter::output_beat().unwrap_or(0.0)
+                                } else {
+                                    0.0
+                                };
+
                                 if media.refresh_audio_card(
                                     path,
                                     elapsed,
@@ -1286,6 +1301,7 @@ pub fn run_preview_window() {
                                     audio_card_dpi,
                                     name_offset,
                                     audio_chrome,
+                                    beat,
                                 ) {
                                     needs_repaint = true;
                                 }

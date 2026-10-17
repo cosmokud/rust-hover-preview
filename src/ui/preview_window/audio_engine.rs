@@ -217,6 +217,7 @@ pub(super) fn audio_card(
         duration: duration.or(track.duration),
         elapsed,
         name_offset,
+        beat: 0.0,
         controls: chrome,
     })
 }

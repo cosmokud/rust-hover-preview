@@ -267,13 +267,14 @@ impl MediaData {
     /// drawn by asking for the page again — the same arrangement a text preview's scrolling has
     /// (see `repaint_text_preview`), and what keeps the card's own layout in one place: the box
     /// it was painted in is the box it is painted in again, and only the clock, the bar under
-    /// it, the scroll of a name the card has no room for and what the card's own controls are
-    /// saying differ.
+    /// it, the scroll of a name the card has no room for, what the card's own controls are
+    /// saying and the pulse of the mark beside the name differ.
     ///
     /// `chrome` carries the whole of that last one, the loop's `playing` included — it is read in
     /// one look by `pinned_audio_chrome` rather than handed over beside itself, because both
     /// callers of this are reached with the media's own lock held and a pin's lock asked from
     /// under it is the re-entrancy `toggle_pinned_playback` is written down for.
+    #[allow(clippy::too_many_arguments)] // Each one is a distinct fact about the card being repainted.
     pub(super) fn refresh_audio_card(
         &mut self,
         path: &Path,
@@ -282,15 +283,17 @@ impl MediaData {
         dpi: u32,
         name_offset: i32,
         chrome: Option<CardChrome>,
+        beat: f32,
     ) -> bool {
         let Some(frame) = self.frames.first() else {
             return false;
         };
         let (width, height) = (frame.width, frame.height);
 
-        let Some(card) = audio_card(path, elapsed, duration, name_offset, chrome) else {
+        let Some(mut card) = audio_card(path, elapsed, duration, name_offset, chrome) else {
             return false;
         };
+        card.beat = beat;
         // The clock and the creeping bar keep their own cadence, but the
         // size they are painted at stays where the frame was first painted:
         // the share the frame was painted at is part of the drawing, so

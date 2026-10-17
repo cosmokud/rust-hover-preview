@@ -25,6 +25,7 @@ fn card() -> Card {
         duration: Some(562.0),
         elapsed: Some(67.0),
         name_offset: 0,
+        beat: 0.0,
         controls: None,
     }
 }
@@ -135,6 +136,49 @@ fn draws_the_card_a_sound_is_previewed_as() {
             .iter()
             .all(|pixel| pixel[3] == 255),
         "a page is a page: what stands behind the card is the card"
+    );
+}
+
+/// A card with a beat draws a ring the resting card does not, and draws it in the header line:
+/// the mark's own pulse, read where it is painted rather than where it is computed (see
+/// `Card::beat`).
+#[test]
+fn a_beat_draws_a_ring_around_the_mark() {
+    let (width, height) = measured_at_the_default_share(&card());
+    let resting = render(&card(), width, height, 96, options())
+        .expect("a painted card")
+        .0;
+
+    let mut beating = card();
+    beating.beat = 1.0;
+    let beating = render(&beating, width, height, 96, options())
+        .expect("a painted card")
+        .0;
+
+    let changed: Vec<(usize, usize)> = resting
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(beating.as_chunks::<4>().0)
+        .enumerate()
+        .filter(|(_, (left, right))| left != right)
+        .map(|(index, _)| (index % width as usize, index / width as usize))
+        .collect();
+
+    assert!(
+        changed.len() > 8,
+        "a card beating at the top of its scale drew {} pixels the resting card has not",
+        changed.len()
+    );
+    assert!(
+        changed.iter().all(|(_, y)| *y < height as usize / 2),
+        "the pulse drew outside the header line"
+    );
+
+    // And a resting card carries no ring to draw at all.
+    assert!(
+        scrolled(&card(), width, 0).halo.is_none(),
+        "a card at rest carries a pulse"
     );
 }
 

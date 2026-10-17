@@ -13,7 +13,7 @@ use super::card::{
     RULE_GAP_PIXELS, RULE_PIXELS, TIME_GAP_ADVANCES, TRACK_PIXELS, WINDOW_BUTTON_CUSHION_PIXELS,
     WINDOW_BUTTON_GAP_PIXELS,
 };
-use crate::text::pin_chrome::{self, stroke_segment, surface_pixels, ControlGlyph};
+use crate::text::pin_chrome::{self, fill_ring, stroke_segment, surface_pixels, ControlGlyph};
 use crate::text::text_paint::{
     blend, fill_rect, plain_style, readable, rgb, scaled, DibSurface, RunPainter, TextMetrics,
     TextStyle, BODY_LEVEL,
@@ -53,6 +53,16 @@ pub(super) struct Bar {
     /// instead, which is the difference between a sound and a stream.
     pub(super) fill_start: i32,
     pub(super) fill_width: i32,
+}
+
+/// The pulse around the mark beside the name: the circle a beat travels as, where its centre
+/// stands, and how thick the ring's line is drawn.
+#[derive(Clone, Copy)]
+pub(super) struct Halo {
+    pub(super) center_x: f32,
+    pub(super) center_y: f32,
+    pub(super) radius: f32,
+    pub(super) thickness: f32,
 }
 
 /// The row the bar is drawn in: where it begins beneath the facts, how tall it is, and how thick
@@ -404,6 +414,9 @@ pub(super) struct Page {
     pub(super) facts_top: i32,
     pub(super) facts_height: i32,
     pub(super) bar: Bar,
+    /// The beat's own ring around the mark, and nothing at all for the card at rest — which is
+    /// every card but a pinned one with a player running behind it (see `Card::beat`).
+    pub(super) halo: Option<Halo>,
     /// The boxes the row's controls are drawn in and answered against, and nothing at all for a
     /// card that carries none.
     pub(super) boxes: Option<CardBoxes>,
@@ -414,6 +427,37 @@ pub(super) struct Page {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) padding: i32,
+}
+
+/// The pulse ring a beat draws around the mark beside the name, or nothing for a card at rest.
+///
+/// The ring is centred on the mark's own ink — the middle of the band the line is centred by,
+/// half an advance in from the card's left margin — and starts at a radius under the ink, so
+/// what a person sees is the mark growing an edge rather than a second shape appearing beside
+/// it. It travels the room the card's nearest edge leaves it, so a ring at the top of the
+/// scale is as wide as a mark of that size can be drawn (see `Card::beat`).
+fn halo(beat: f32, metrics: &TextMetrics, header_top: i32) -> Option<Halo> {
+    let beat = beat.clamp(0.0, 1.0);
+    if beat <= 0.0 {
+        return None;
+    }
+
+    let advance = metrics.advance[HEADER_LEVEL as usize].max(1) as f32;
+    let ink_top = metrics.ink_top[HEADER_LEVEL as usize] as f32;
+    let ink_bottom = metrics.ink_bottom[HEADER_LEVEL as usize] as f32;
+    let center_x = metrics.padding as f32 + advance / 2.0;
+    let center_y = header_top as f32 + (ink_top + ink_bottom) / 2.0;
+    // Half the ink band is about the mark's own radius: the ring starts under the ink.
+    let core = (ink_bottom - ink_top) / 4.0;
+    let thickness = scaled(2, metrics.scale) as f32;
+    let room = (center_x.min(center_y) - core - thickness / 2.0 - 1.0).max(0.0);
+
+    Some(Halo {
+        center_x,
+        center_y,
+        radius: core + room * beat,
+        thickness,
+    })
 }
 
 pub(super) fn build_page(
@@ -504,6 +548,7 @@ pub(super) fn build_page(
     ];
 
     let (header_top, rule_top) = header_line(metrics);
+    let halo = halo(card.beat, metrics, header_top);
     let facts_top = rule_top + rule_height + rule_gap;
 
     let bar_width = content_right - content_left;
@@ -543,6 +588,7 @@ pub(super) fn build_page(
         },
         boxes,
         chrome: card.controls,
+        halo,
         width,
         // The height is the card's own: the name line, the rule, the facts line
         // and the bar, with the card's own margin under it — content-driven at
@@ -575,6 +621,7 @@ fn empty_page(width: u32, padding: i32) -> Page {
         },
         boxes: None,
         chrome: None,
+        halo: None,
         width,
         height: 1,
         padding,
@@ -771,6 +818,28 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
                 page_color,
             );
         }
+    }
+
+    if let Some(halo) = page.halo {
+        // The pulse is drawn over the runs rather than under them, because each run's own box
+        // is filled with the page as it is painted (see `paint_run`), and in the accent the
+        // mark itself is drawn in: where the two overlap, the ring reads as the mark growing.
+        let buffer = unsafe {
+            std::slice::from_raw_parts_mut(
+                surface_pixels(surface),
+                surface.width as usize * surface.height as usize * 4,
+            )
+        };
+        fill_ring(
+            buffer,
+            surface.width as i32,
+            halo.center_x,
+            halo.center_y,
+            halo.radius,
+            halo.thickness,
+            accent,
+            1.0,
+        );
     }
 
     if page.rule_height > 0 {
