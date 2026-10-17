@@ -219,6 +219,12 @@ pub const DEFAULT_SPINNER_DELAY_MS: u64 = 250;
 /// shows has finished or failed, and a larger number switches the spinner off by
 /// arithmetic rather than by a setting of its own.
 pub const MAX_SPINNER_DELAY_MS: u64 = 10_000;
+/// How long the image inside a pinned window takes to swing back to its place once a zoom out has
+/// brought the picture within a notch of the fit, in milliseconds.
+pub const DEFAULT_PIN_ZOOM_BOUNCE_MS: u64 = 240;
+/// The ceiling a hand-edited bounce duration is reduced to, in milliseconds.
+pub const MAX_PIN_ZOOM_BOUNCE_MS: u64 = 10_000;
+
 /// Memory the decoded-image cache may hold. A preview is decoded at the size the
 /// layout asked for, so this is a ceiling on retained pixels rather than on
 /// files: how many images fit depends entirely on how large they are shown.
@@ -478,6 +484,12 @@ pub fn sanitize_text_scroll_far_edge_grace_pixels(value: f32) -> f32 {
 pub fn sanitize_spinner_delay_ms(value: u64) -> u64 {
     value.min(MAX_SPINNER_DELAY_MS)
 }
+
+/// The duration a pinned image bounce takes to swing back to place, in milliseconds.
+pub fn sanitize_pin_zoom_bounce_ms(value: u64) -> u64 {
+    value.min(MAX_PIN_ZOOM_BOUNCE_MS)
+}
+
 
 /// The decode budget in gigabytes.
 ///
