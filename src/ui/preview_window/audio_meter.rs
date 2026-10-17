@@ -149,16 +149,16 @@ const RANGE_DB: f32 = 60.0;
 const BEAT_HZ: (f32, f32) = (20.0, 1_600.0);
 
 /// How far down the pulse reaches: thirty-six decibels between a sound at the top of the scale
-/// and a ring at rest.
+/// and the mark at rest.
 ///
 /// Narrower than a bar's sixty because a pulse has less room to travel than a bar has to stand
-/// up — a handful of pixels of ring against tens of pixels of height — so the range is what
-/// makes a small change in the sound a visible change in the ring: six decibels is a sixth of
-/// the travel, where over a bar's range it would be a tenth.
+/// up — a handful of pixels of travel against tens of pixels of height — so the range is what
+/// makes a small change in the sound a visible change in the mark's ripples: six decibels is a
+/// sixth of the travel, where over a bar's range it would be a tenth.
 const BEAT_DB: f32 = 36.0;
 
-/// How long the pulse takes to fall back, which is what makes it a pulse: a hit jumps the ring
-/// out and this is the release that brings it home like the heartbeat the word names, where the
+/// How long the pulse takes to fall back, which is what makes it a pulse: a hit sends the ripples
+/// out and this is the release that brings them home like the heartbeat the word names, where the
 /// same rise and fall in steps of a repaint would flicker (see `beat_pulse`).
 const BEAT_RELEASE: Duration = Duration::from_millis(150);
 
@@ -305,14 +305,14 @@ fn bar_level(amplitude: f32) -> f32 {
     decibel_level(amplitude, RANGE_DB)
 }
 
-/// What a window's beat makes of the pulse as it stands: a bass at least as loud as the ring is
-/// out stands the ring at itself, and a drop falls back through the reads that follow, an
-/// exponential of `BEAT_RELEASE`.
+/// What a window's beat makes of the pulse as it stands: a bass at least as loud as the pulse is
+/// stands it at itself, and a drop falls back through the reads that follow, an exponential of
+/// `BEAT_RELEASE`.
 ///
 /// The falling is by the time between two reads rather than by a step a read, because reads come
 /// at the card's cadence while it is up and at the bubble's while it animates, and the pulse has
 /// to be the sound's clock rather than the reader's. A window still holding the bass is never
-/// fallen through, so a sustained note stands the ring still rather than flickering it.
+/// fallen through, so a sustained note stands the ripples still rather than flickering them.
 pub(super) fn beat_pulse(shown: f32, beat: f32, elapsed: Duration) -> f32 {
     let fallen = shown * (-elapsed.as_secs_f32() / BEAT_RELEASE.as_secs_f32()).exp();
 
@@ -403,7 +403,7 @@ pub(super) fn output_bands() -> Option<[f32; BARS]> {
 
 /// The beat of the sound this app is playing now, 0.0..=1.0, or nothing where the machine will
 /// not let the capture be had: the loudest of the bass as the last window held it, fallen back
-/// since, which is what the card's mark travels out by (see `beat_pulse`).
+/// since, which is how far the mark's ripples stand out (see `beat_pulse`).
 ///
 /// Asking for it reads the capture the same way asking for the bands does — one reading answers
 /// both (see `readings`) — so whichever of a frame's two asks comes first is the one that pays
@@ -476,7 +476,7 @@ struct Bands {
     /// through the bar that is already up (see `FALL`).
     shown: [f32; BARS],
     /// The pulse as it stands, which is what the falling is: a beat quieter than it was is read
-    /// through the ring that is already out (see `beat_pulse`).
+    /// through the pulse that is already out (see `beat_pulse`).
     beat: f32,
     /// When the pulse was last stepped, since what it falls by is the time between reads.
     beat_at: Instant,
