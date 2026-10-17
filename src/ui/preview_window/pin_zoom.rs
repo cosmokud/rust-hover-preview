@@ -68,7 +68,16 @@ const PIN_ZOOM_RELEASE_LEFT: f32 = 0.1;
 /// It is a *landing* and not a slower zoom: the image is brought home by the zoom itself, over the last
 /// of the picture's overhang, and this is the bounce laid over the end of it — long enough to be read as
 /// a movement and short enough that the image is never left behind the wheel (see `pin_zoom_step`).
-pub(super) const PIN_ZOOM_BOUNCE_SECONDS: f32 = 0.12;
+pub(super) const PIN_ZOOM_BOUNCE_SECONDS: f32 =
+    crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_MS as f32 / 1000.0;
+
+/// The bounce duration in seconds, read from the configuration (or defaulting to 240 ms).
+pub(super) fn pin_zoom_bounce_seconds() -> f32 {
+    crate::CONFIG
+        .lock()
+        .map(|config| config.pin_zoom_bounce_ms as f32 / 1000.0)
+        .unwrap_or(PIN_ZOOM_BOUNCE_SECONDS)
+}
 
 /// How far past its place the image swings at the top of that bounce, as a share of the offset it is
 /// being brought home from: a sixth of it.
@@ -199,6 +208,10 @@ impl PinZoom {
     /// is the wheel's own and never this one, so an image carried off its window comes home without the
     /// window moving with it (see `pin_zoom_to`).
     fn swung_pan(&self) -> (f32, f32) {
+        if self.bounce <= 0.0 {
+            return self.pan;
+        }
+
         let swing = bounce_swing(self.bounce);
 
         (self.pan.0 * swing, self.pan.1 * swing)
@@ -233,7 +246,7 @@ impl PinZoom {
     pub(super) fn picture_place(&self, window: (i32, i32)) -> (f32, f32, f32, f32) {
         let (width, height) = (window.0.max(1), window.1.max(1));
         let (drawn_width, drawn_height) = drawn_pixels(self.drawn);
-        if drawn_width <= width && drawn_height <= height {
+        if self.bounce <= 0.0 && drawn_width <= width && drawn_height <= height {
             return (0.0, 0.0, width as f32, height as f32);
         }
 
@@ -265,7 +278,7 @@ impl PinZoom {
     pub(super) fn picture_box(&self, window: (i32, i32)) -> (i32, i32, i32, i32) {
         let (width, height) = (window.0.max(1), window.1.max(1));
         let (drawn_width, drawn_height) = drawn_pixels(self.drawn);
-        if drawn_width <= width && drawn_height <= height {
+        if self.bounce <= 0.0 && drawn_width <= width && drawn_height <= height {
             return (0, 0, width, height);
         }
 
@@ -302,20 +315,20 @@ pub(super) fn home_share(overhang: f32, window: f32) -> f32 {
 }
 
 /// The swing a bounce has the image at by the time `at` of it has passed, as a factor on the offset the
-/// image is being brought home from: nothing at either end of the bounce, and a sixth of that offset on
-/// the *other* side of its place at the top of it (see `PIN_ZOOM_BOUNCE_PAST`).
+/// image is being brought home from: starts at the offset (1.0), passes its place by a sixth of that offset
+/// on the *other* side of its place at the top of it (-PIN_ZOOM_BOUNCE_PAST), and smoothly settles at zero (0.0).
 ///
-/// Either end being the whole of it is what makes the bounce a bounce rather than a move: it is laid over
-/// a return that the zoom itself is carrying out, so an image whose bounce has run its course is exactly
-/// where that return has brought it — nothing to undo and nothing left over (see `swung_pan`).
+/// It brings the image completely home to center without ever bouncing back to its previous position.
 fn bounce_swing(at: f32) -> f32 {
-    if at <= 0.0 || at >= PIN_ZOOM_BOUNCE_SECONDS {
-        return 1.0;
+    let duration = pin_zoom_bounce_seconds();
+    if at <= 0.0 || duration <= 0.0 || at >= duration {
+        return 0.0;
     }
 
-    let turn = std::f32::consts::PI * at / PIN_ZOOM_BOUNCE_SECONDS;
+    let p = (at / duration).clamp(0.0, 1.0);
+    let turn = std::f32::consts::PI * p;
 
-    1.0 - (1.0 + PIN_ZOOM_BOUNCE_PAST) * turn.sin()
+    (1.0 - p) - (1.0 - p + PIN_ZOOM_BOUNCE_PAST) * turn.sin()
 }
 
 /// The box the window ends up with after a wheel notch, and the view the picture is left with.
@@ -379,6 +392,22 @@ pub(super) fn pin_zoom_after(
     Some(plan)
 }
 
+/// The largest a window may grow to: the picture's own width at the size `Fit to Screen` would give it.
+/// A window already past that is given a cap of its own size instead.
+pub(super) fn pin_zoom_cap(input: &PinZoomInputs) -> f32 {
+    let (width, height) = region_size(input.content);
+    let (fit_width, _) = pinned_media_box(
+        (width.max(1) as u32, height.max(1) as u32),
+        input.room,
+        PreviewScale::FitToScreen,
+    );
+    if width as f32 >= fit_width as f32 {
+        width as f32
+    } else {
+        fit_width.max(1) as f32
+    }
+}
+
 /// The width a wheel's notches ask a pinned picture to be drawn at: the number a zoom accumulates
 /// into, and the whole of what "a notch is a tenth" means.
 ///
@@ -390,8 +419,16 @@ pub(super) fn pin_zoom_after(
 pub(super) fn pin_zoom_toward(input: &PinZoomInputs, notches: f32) -> f32 {
     let step = notch_step(notches);
     let floor = pin_zoom_floor(input, input.zoom.toward);
+    let mut toward = (input.zoom.toward * step).max(floor).min(PIN_ZOOM_CEILING);
 
-    (input.zoom.toward * step).max(floor).min(PIN_ZOOM_CEILING)
+    if notches < 0.0 {
+        let cap = pin_zoom_cap(input);
+        if input.zoom.toward > cap && toward < cap {
+            toward = cap;
+        }
+    }
+
+    toward
 }
 
 /// What a wheel's own turn is worth as a factor: the step of a notch taken as many times as the wheel
@@ -463,24 +500,8 @@ pub(super) fn pin_zoom_to(
     let drawn = (drawn_width, drawn_width * shape);
 
     // The largest the window may grow to: the picture's own width at the size `Fit to Screen` would
-    // give it — the whole of what "a maximum the size of a fit" means, and read off the function the
-    // maximize button reads it off so that the two are one rule.
-    //
-    // And a window already past that is given a cap of its own size instead, which is what a picture
-    // taken up larger than a fit is left alone by: the cap's whole business is to stop a window
-    // *growing*, and a rule that also shrank one would turn the first notch of a zoom into a picture
-    // the hand did not ask for. It applies to growth alone, so a window already past the fit still
-    // comes down when the wheel is turned the other way.
-    let (fit_width, _) = pinned_media_box(
-        (width.max(1) as u32, height.max(1) as u32),
-        input.room,
-        PreviewScale::FitToScreen,
-    );
-    let cap = if width as f32 >= fit_width as f32 {
-        width as f32
-    } else {
-        fit_width.max(1) as f32
-    };
+    // give it — the whole of what "a maximum the size of a fit" means (see `pin_zoom_cap`).
+    let cap = pin_zoom_cap(input);
 
     // The window is the smaller of what the picture asks for and the cap, which is the whole of the
     // two stages in one line: while the picture is under the cap the window is the picture, and once
@@ -654,6 +675,11 @@ pub(super) fn pin_zoom_step(
     let mut plan = pin_zoom_to(input, drawn, displays);
 
     plan.zoom.bounce = bounce;
+    if bounce > 0.0 {
+        plan.zoom.pan = input.zoom.pan;
+    } else if input.zoom.bounce > 0.0 && bounce == 0.0 {
+        plan.zoom.pan = (0.0, 0.0);
+    }
 
     Some(plan)
 }
@@ -666,20 +692,31 @@ pub(super) fn pin_zoom_step(
 /// of it; and it is asked of the size the release is passing rather than of the size it was aimed at, so
 /// the swing is laid over the last frames of the travel that brought it there.
 fn pin_zoom_bounce(input: &PinZoomInputs, drawn: f32, elapsed: f32) -> f32 {
+    let duration = pin_zoom_bounce_seconds();
+    if duration <= 0.0 {
+        return 0.0;
+    }
+
+    let cap = pin_zoom_cap(input);
+    if input.zoom.toward > cap {
+        return 0.0;
+    }
+
     if input.zoom.bounce > 0.0 {
         let at = input.zoom.bounce + elapsed;
 
-        return if at < PIN_ZOOM_BOUNCE_SECONDS {
+        return if at < duration {
             at
         } else {
             0.0
         };
     }
 
-    let window = region_size(input.content).0 as f32;
-    let last = window * (PIN_ZOOM_PER_NOTCH - 1.0);
-    let crossing =
-        drawn < input.zoom.drawn.0 && input.zoom.drawn.0 - window > last && drawn - window <= last;
+    let last = cap * (PIN_ZOOM_PER_NOTCH - 1.0);
+    let crossing = drawn < input.zoom.drawn.0
+        && input.zoom.drawn.0 > cap
+        && input.zoom.toward <= cap
+        && drawn - cap <= last;
 
     // And a swing worth taking, which is a swing an eye could see: a picture sitting in the middle of its
     // window has no offset to give up, and one a hair off the middle has a hair's swing — neither is a
