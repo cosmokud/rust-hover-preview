@@ -94,7 +94,7 @@ use ids::{
 #[cfg(test)]
 use submenus::{
     audio_scale_at, audio_seek_label, avoid_label, background_at, background_label,
-    bitmap_scale_label, dds_background_at, document_scale_at, document_scale_label,
+    bitmap_scale_label, cache_size_label, dds_background_at, document_scale_at, document_scale_label,
     end_of_file_label,
     engine_idle_at, engine_idle_label, html_background_at, is_mpv_row, mpv_menu_items, mpv_row_label,
     pin_minimize_label,
