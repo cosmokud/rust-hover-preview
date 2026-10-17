@@ -218,7 +218,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
 /// the way the bubble's own hold is: `Pause` while the sound behind the card is playing
 /// and `Play` while it is held — the same answer the card's own play button gives, and
 /// the row holds its place in the menu whichever of the two it says (see `menu_rows` and
-/// `pinned_audio_playing`).
+/// `a_sound_is_playing`).
 ///
 /// The media slot is the one place the answer is read from, so it is taken for the length
 /// of the test and put back what it was: a player of this app's is the process in it, and

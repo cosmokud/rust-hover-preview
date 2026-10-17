@@ -1593,7 +1593,7 @@ pub(super) fn bubble_art(side: u32) -> (BubbleArtOwned, pin_chrome::BubbleMark) 
 /// sound's card is a transport this app keeps, so the question is put to the players themselves — a
 /// process of this app's is one this app started and can see, and the engine's own is a session in
 /// this process that is read whether it is *held* rather than whether it is playing, so a sound
-/// sitting under a hold is not one a bubble claims is running (see `pinned_audio_playing`). A sound
+/// sitting under a hold is not one a bubble claims is running (see `a_sound_is_playing`). A sound
 /// with neither behind it is a sound that is not playing rather than an answer that could not be
 /// given.
 ///
@@ -1609,9 +1609,9 @@ pub(super) fn bubble_is_playing() -> bool {
             // The card's own question, asked the way it asks it: a player this app started is
             // seen in the media, and the engine's own session is read whether it is *held*
             // rather than whether it is playing, because a session asked to hold is a session
-            // that is still there and is a sound nobody can hear (see `pinned_audio_playing`
+            // that is still there and is a sound nobody can hear (see `a_sound_is_playing`
             // and the same rule on a card's own clock).
-            pinned_audio_playing()
+            a_sound_is_playing()
         }
         _ => false,
     }
