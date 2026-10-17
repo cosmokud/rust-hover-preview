@@ -1000,3 +1000,72 @@ fn a_notch_aims_the_picture_and_leaves_it_where_it_is() {
     stand_pin(None);
     stand_pin(previous);
 }
+
+/// A page is taken up as a picture the wheel zooms, because a page is a frame this window draws like
+/// any other: what rasterized it — a renderer, a converter, a comic's own reader — is nothing a notch
+/// or a box change asks (see `box_is_covered`), and the view it arrives with is its picture filling
+/// the window the take-up just laid it out in.
+///
+/// What the take-up must keep refusing is here beside it, because the difference is the whole of what
+/// the gate is for: a document the engine draws is a window of somebody else's behind the band, a
+/// film is a player's frames arriving one at a time rather than a picture this window holds, and a
+/// card is a layout painted at the box rather than a picture rasterized into it.
+#[test]
+fn a_page_is_a_picture_the_wheel_zooms_and_a_card_or_an_engines_window_is_not() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    // Every kind goes through the one road: the media in the slot is the kind's, and the pin that
+    // comes back is the whole of what the take-up decided — including whether it is zoomable at all.
+    let stood = |kind: MediaType| {
+        let mut media = create_loading_media(400, 300);
+        media.media_type = kind;
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(media);
+        }
+        take_up_pinned_window(&PathBuf::from("a-pinned-file"), (100, 80, 800, 400))
+    };
+
+    for kind in [
+        MediaType::StaticImage,
+        MediaType::Pdf,
+        MediaType::Comic,
+        MediaType::Calibre,
+        MediaType::Libre,
+        MediaType::Office,
+    ] {
+        let pin = stood(kind);
+        assert_eq!(
+            pin.zoom,
+            Some(PinZoom::filling(pin.content)),
+            "{kind:?} is a frame this window draws, so the wheel zooms it: the pin is taken up with \
+             its picture filling the window"
+        );
+    }
+
+    for kind in [
+        MediaType::EngineSvg,
+        MediaType::EngineFont,
+        MediaType::Video,
+        MediaType::NativeVideo,
+        MediaType::Text,
+        MediaType::Archive,
+        MediaType::Peazip,
+        MediaType::Audio,
+    ] {
+        let pin = stood(kind);
+        assert_eq!(
+            pin.zoom, None,
+            "{kind:?} is not a still picture this window holds, so there is no view for the wheel \
+             to write"
+        );
+    }
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    stand_pin(previous_pin);
+}
