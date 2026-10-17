@@ -845,13 +845,14 @@ fn every_offered_document_scale_round_trips_through_the_file() {
 #[test]
 fn the_document_scale_ranges_are_not_another_submenus_range() {
     let caches = [
-        ID_TRAY_IMAGE_CACHE_BASE..ID_TRAY_IMAGE_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+        ID_TRAY_IMAGE_CACHE_BASE
+            ..ID_TRAY_IMAGE_CACHE_BASE + IMAGE_CACHE_SIZE_CHOICES_MB.len() as u16,
         ID_TRAY_DOCUMENT_CACHE_BASE
-            ..ID_TRAY_DOCUMENT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+            ..ID_TRAY_DOCUMENT_CACHE_BASE + DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
         ID_TRAY_IMAGE_DISK_CACHE_BASE
-            ..ID_TRAY_IMAGE_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+            ..ID_TRAY_IMAGE_DISK_CACHE_BASE + DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
         ID_TRAY_GENERAL_DISK_CACHE_BASE
-            ..ID_TRAY_GENERAL_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+            ..ID_TRAY_GENERAL_DISK_CACHE_BASE + DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
         ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE,
     ];
 
@@ -880,6 +881,28 @@ fn the_document_scale_ranges_are_not_another_submenus_range() {
                 "the ranges {scales:?} and {other:?} overlap"
             );
         }
+    }
+}
+
+/// The largest size a cache is offered is the largest the setting behind it keeps,
+/// so a click on the top item writes the size it named rather than one the config
+/// clamps under it.
+#[test]
+fn the_largest_cache_size_is_one_the_setting_keeps() {
+    assert_eq!(
+        IMAGE_CACHE_SIZE_CHOICES_MB[0], MAX_IMAGE_CACHE_MB,
+        "the memory cache's largest item"
+    );
+
+    for cap in [
+        MAX_DOCUMENT_CACHE_MB,
+        MAX_IMAGE_DISK_CACHE_MB,
+        MAX_GENERAL_DISK_CACHE_MB,
+    ] {
+        assert_eq!(
+            DISK_CACHE_SIZE_CHOICES_MB[0], cap,
+            "a disk cache's largest item"
+        );
     }
 }
 
@@ -1102,19 +1125,19 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
         // The cache sizes, one range per cache.
         (
             ID_TRAY_IMAGE_CACHE_BASE,
-            ID_TRAY_IMAGE_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+            ID_TRAY_IMAGE_CACHE_BASE + IMAGE_CACHE_SIZE_CHOICES_MB.len() as u16,
         ),
         (
             ID_TRAY_DOCUMENT_CACHE_BASE,
-            ID_TRAY_DOCUMENT_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+            ID_TRAY_DOCUMENT_CACHE_BASE + DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
         ),
         (
             ID_TRAY_IMAGE_DISK_CACHE_BASE,
-            ID_TRAY_IMAGE_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+            ID_TRAY_IMAGE_DISK_CACHE_BASE + DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
         ),
         (
             ID_TRAY_GENERAL_DISK_CACHE_BASE,
-            ID_TRAY_GENERAL_DISK_CACHE_BASE + CACHE_SIZE_CHOICES_MB.len() as u16,
+            ID_TRAY_GENERAL_DISK_CACHE_BASE + DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
         ),
         // The delays the timing submenus offer, and the loop's own tick.
         (
