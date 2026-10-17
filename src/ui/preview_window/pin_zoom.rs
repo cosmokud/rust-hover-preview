@@ -12,6 +12,11 @@
 //! A picture already larger than a fit — a huge photograph taken up at `100%`, or a box a hand has
 //! dragged out past it — is given a cap of its own size rather than of the fit's, because the cap is
 //! there to stop a window growing and never to shrink one (see `pin_zoom_after`).
+//!
+//! An image a hand has carried off its window — the backdrop showing around it — is brought home by
+//! the zoom out that takes the picture back toward the fit, and swings a little past its place on the
+//! way: the *image* inside the window is what bounces there, and the window's own box is the wheel's
+//! and nothing else (see `pin_zoom_step`).
 
 use super::*;
 
@@ -56,6 +61,29 @@ pub(super) const PIN_ZOOM_RELEASE_SECONDS: f32 = 0.1;
 /// is what makes the release nine tenths of the ask in a tenth of a second and ninety-nine hundredths
 /// of it in twice that.
 const PIN_ZOOM_RELEASE_LEFT: f32 = 0.1;
+
+/// How long the image inside a window takes to swing back to its place once a zoom out has brought the
+/// picture within a notch of the fit: a tenth of a second or so.
+///
+/// It is a *landing* and not a slower zoom: the image is brought home by the zoom itself, over the last
+/// of the picture's overhang, and this is the bounce laid over the end of it — long enough to be read as
+/// a movement and short enough that the image is never left behind the wheel (see `pin_zoom_step`).
+pub(super) const PIN_ZOOM_BOUNCE_SECONDS: f32 = 0.12;
+
+/// How far past its place the image swings at the top of that bounce, as a share of the offset it is
+/// being brought home from: a sixth of it.
+///
+/// It is what an eye reads as a bounce rather than as a stop, and the whole of what it swings is the
+/// *image's* offset inside a window whose box never moves: the picture is never taken far off its
+/// window and the frame the fit asks for is reached exactly all the same (see `bounce_swing`).
+const PIN_ZOOM_BOUNCE_PAST: f32 = 0.15;
+
+/// The least a bounce is worth taking: the pixels the image would be swung by.
+///
+/// A picture sitting in the middle of its window has no offset to give up and one a hair off the middle
+/// has a hair's swing, and a swing under a pixel is not a movement — so neither is worth the frames it
+/// would cost the loop, and the zoom out of them is the motion it always was (see `pin_zoom_bounce`).
+const PIN_ZOOM_BOUNCE_LEAST_PIXELS: f32 = 1.0;
 
 /// The longest a single frame of a travel is taken to have lasted, in seconds.
 ///
@@ -127,6 +155,13 @@ pub(super) struct PinZoom {
     /// picture has no overhang for an anchor to move the picture into, and the middle is what a
     /// picture that has not been carried is measured about (see `pin_zoom_to`).
     pub(super) anchor: Option<(i32, i32)>,
+    /// How far into its bounce the image inside the window is, in seconds: nothing except while a zoom
+    /// out is bringing a panned image back to its place (see `pin_zoom_step`).
+    ///
+    /// It is the *image's* own motion and never the window's: what a bounce swings is where the picture
+    /// sits inside its window, and the frame the window is drawn in is the wheel's own and stays exactly
+    /// where the wheel put it (see `swung_pan`).
+    pub(super) bounce: f32,
 }
 
 impl PinZoom {
@@ -146,13 +181,27 @@ impl PinZoom {
             pan,
             toward: drawn.0,
             anchor: None,
+            bounce: 0.0,
         }
     }
 
-    /// Whether this view is still on its way to the size the wheel asked for, which is what the loop
-    /// keeps the frame cadence for (see `pin_zoom_in_flight`).
+    /// Whether this view is still on its way to the size the wheel asked for, or swinging the image
+    /// inside it back to its place — either of which is what the loop keeps the frame cadence for (see
+    /// `pin_zoom_in_flight`).
     pub(super) fn travelling(&self) -> bool {
-        self.drawn.0 != self.toward
+        self.drawn.0 != self.toward || self.bounce > 0.0
+    }
+
+    /// The pan the picture is *drawn* with: the offset the wheel and the hand left it with, swung a
+    /// little past its place while the bounce of a return is still running (see `bounce_swing`).
+    ///
+    /// It is where the *image* is inside the window and not where the window is: the box the window takes
+    /// is the wheel's own and never this one, so an image carried off its window comes home without the
+    /// window moving with it (see `pin_zoom_to`).
+    fn swung_pan(&self) -> (f32, f32) {
+        let swing = bounce_swing(self.bounce);
+
+        (self.pan.0 * swing, self.pan.1 * swing)
     }
 
     /// The size the picture is drawn at in whole pixels, which is what a repaint crops against and what
@@ -188,9 +237,11 @@ impl PinZoom {
             return (0.0, 0.0, width as f32, height as f32);
         }
 
+        let (pan_x, pan_y) = self.swung_pan();
+
         (
-            (width as f32 - self.drawn.0) / 2.0 + self.pan.0,
-            (height as f32 - self.drawn.1) / 2.0 + self.pan.1,
+            (width as f32 - self.drawn.0) / 2.0 + pan_x,
+            (height as f32 - self.drawn.1) / 2.0 + pan_y,
             self.drawn.0,
             self.drawn.1,
         )
@@ -218,11 +269,53 @@ impl PinZoom {
             return (0, 0, width, height);
         }
 
-        let left = (width - drawn_width) / 2 + self.pan.0.round() as i32;
-        let top = (height - drawn_height) / 2 + self.pan.1.round() as i32;
+        let (pan_x, pan_y) = self.swung_pan();
+        let left = (width - drawn_width) / 2 + pan_x.round() as i32;
+        let top = (height - drawn_height) / 2 + pan_y.round() as i32;
 
         (left, top, left + drawn_width, top + drawn_height)
     }
+}
+
+/// How much of a panned picture's offset is still its own, by how far the picture overhangs its window:
+/// the whole of it while the overhang is worth more than a notch, and none of it at the fit itself.
+///
+/// **This is what brings an image home.** A hand may carry a picture clean off its window — the backdrop
+/// showing around it — and the wheel will follow it rather than undoing it; what is not free is the *end*
+/// of that: the moment the picture is the window's own size again there is no room to sit off the middle
+/// in, and an offset given up there is given up at once — a picture's worth of a jump. So it is given up
+/// over the last of the overhang instead, one notch's worth of it, and the share is a smooth step, so that
+/// the offset neither starts nor stops being given up with a jerk (see `pin_zoom_to`).
+///
+/// The share is asked of the overhang and not of a clock, which is the whole of why the image is *already*
+/// home by the time the picture reaches the fit: whatever the wheel does — however fast it is turned,
+/// wherever it is stopped — the fit is the one size at which the offset is nothing.
+pub(super) fn home_share(overhang: f32, window: f32) -> f32 {
+    let last = window * (PIN_ZOOM_PER_NOTCH - 1.0);
+    if last <= 0.0 || overhang >= last {
+        return 1.0;
+    }
+
+    let left = (overhang / last).clamp(0.0, 1.0);
+
+    left * left * (3.0 - 2.0 * left)
+}
+
+/// The swing a bounce has the image at by the time `at` of it has passed, as a factor on the offset the
+/// image is being brought home from: nothing at either end of the bounce, and a sixth of that offset on
+/// the *other* side of its place at the top of it (see `PIN_ZOOM_BOUNCE_PAST`).
+///
+/// Either end being the whole of it is what makes the bounce a bounce rather than a move: it is laid over
+/// a return that the zoom itself is carrying out, so an image whose bounce has run its course is exactly
+/// where that return has brought it — nothing to undo and nothing left over (see `swung_pan`).
+fn bounce_swing(at: f32) -> f32 {
+    if at <= 0.0 || at >= PIN_ZOOM_BOUNCE_SECONDS {
+        return 1.0;
+    }
+
+    let turn = std::f32::consts::PI * at / PIN_ZOOM_BOUNCE_SECONDS;
+
+    1.0 - (1.0 + PIN_ZOOM_BOUNCE_PAST) * turn.sin()
 }
 
 /// The box the window ends up with after a wheel notch, and the view the picture is left with.
@@ -467,6 +560,19 @@ pub(super) fn pin_zoom_to(
         None => (0.0, 0.0),
     };
 
+    // And what a picture coming *back* to the fit gives up of it, which is the whole of what brings an
+    // image home: over the last notch's worth of overhang the offset is handed back a share at a time, so
+    // that the size the hand is aiming at — the one where a picture its window's own size has nowhere to
+    // sit off its middle — is reached with nothing left to give up at once. A zoom *in* gives up nothing:
+    // a hand turning the wheel the other way is opening room for the offset, not taking it away.
+    let pan = if drawn.0 < input.zoom.drawn.0 {
+        let share = home_share(drawn.0 - size.0 as f32, size.0 as f32);
+
+        (pan.0 * share, pan.1 * share)
+    } else {
+        pan
+    };
+
     PinZoomPlan {
         content: placed,
         zoom: PinZoom {
@@ -478,6 +584,7 @@ pub(super) fn pin_zoom_to(
             // walking toward (see `pin_zoom_step`).
             toward: input.zoom.toward,
             anchor: input.zoom.anchor,
+            bounce: input.zoom.bounce,
         },
     }
 }
@@ -529,6 +636,10 @@ fn released_share(elapsed: f32) -> f32 {
 /// The frame is the wheel's ask *released* and not the ask itself, which is the whole of what a notch is
 /// worth to an eye: a step landed whole is a jump, and a hand that has stopped turning is a picture that
 /// goes on moving for as long as the rest of the ask takes to carry out (see `pin_zoom_release`).
+///
+/// And the *image* inside the window is brought home as the picture comes back to the fit, with a bounce
+/// laid over the end of it — the window's own box is nothing to do with either, and is the wheel's own to
+/// the pixel (see `home_share` and `bounce_swing`).
 pub(super) fn pin_zoom_step(
     input: &PinZoomInputs,
     elapsed: f32,
@@ -539,8 +650,48 @@ pub(super) fn pin_zoom_step(
     }
 
     let drawn = pin_zoom_release(input.zoom.drawn.0, input.zoom.toward, elapsed);
+    let bounce = pin_zoom_bounce(input, drawn, elapsed);
+    let mut plan = pin_zoom_to(input, drawn, displays);
 
-    Some(pin_zoom_to(input, drawn, displays))
+    plan.zoom.bounce = bounce;
+
+    Some(plan)
+}
+
+/// How far into its bounce a picture's image is after this frame: the clock the image's swing is measured
+/// by, started on the one frame a zoom out first brings the picture within a notch of the fit.
+///
+/// The trigger is that *edge* and not the state, so a picture that spends many frames inside the last
+/// notch's worth of overhang — a slow release, a wheel turned on — swings once rather than on every frame
+/// of it; and it is asked of the size the release is passing rather than of the size it was aimed at, so
+/// the swing is laid over the last frames of the travel that brought it there.
+fn pin_zoom_bounce(input: &PinZoomInputs, drawn: f32, elapsed: f32) -> f32 {
+    if input.zoom.bounce > 0.0 {
+        let at = input.zoom.bounce + elapsed;
+
+        return if at < PIN_ZOOM_BOUNCE_SECONDS {
+            at
+        } else {
+            0.0
+        };
+    }
+
+    let window = region_size(input.content).0 as f32;
+    let last = window * (PIN_ZOOM_PER_NOTCH - 1.0);
+    let crossing =
+        drawn < input.zoom.drawn.0 && input.zoom.drawn.0 - window > last && drawn - window <= last;
+
+    // And a swing worth taking, which is a swing an eye could see: a picture sitting in the middle of its
+    // window has no offset to give up, and one a hair off the middle has a hair's swing — neither is a
+    // movement, and neither is worth the loop's frame cadence (see `PIN_ZOOM_SETTLED_PIXELS` for what a
+    // hair is worth, and `PIN_ZOOM_BOUNCE_PAST` for how much of an offset a swing moves).
+    let swung = input.zoom.pan.0.abs().max(input.zoom.pan.1.abs()) * (1.0 + PIN_ZOOM_BOUNCE_PAST);
+
+    if crossing && swung > PIN_ZOOM_BOUNCE_LEAST_PIXELS {
+        elapsed
+    } else {
+        0.0
+    }
 }
 
 /// The view of a pinned picture the wheel is the owner of, or nothing at all where it is not this pin's

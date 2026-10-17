@@ -663,14 +663,26 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         let painted = pin_state().and_then(|mut pinned| {
             let pin = pinned.pin_mut()?;
             let zoom = pin.zoom?;
+            // A hand carrying a picture that is all but the window's own size is carrying it into room
+            // it does not have, so the offset is given up here exactly as the wheel gives it up — over
+            // the last of the overhang rather than all at once at the fit (see `home_share`). Without
+            // this the hand could leave an offset the wheel would then have to drop in a single frame,
+            // which is the one thing bringing the image home exists to prevent.
+            let window = region_size(pin.content).0 as f32;
+            let share = home_share(zoom.drawn.0 - window, window);
+            let carried = (carried.0 * share, carried.1 * share);
+
             pin.zoom = Some(PinZoom {
                 pan: carried,
                 // A hand taking the picture is a hand taking over from the wheel: a travel still in
                 // flight ends at the size the picture has reached rather than going on under a hand
                 // that is carrying it, which would be two answers to where the picture is — and the
                 // loop owes the frame of that size for the same reason it owes one to any other size a
-                // picture has settled at (see `pin_zoom_oversize_box`).
+                // picture has settled at (see `pin_zoom_oversize_box`). The bounce ends with it, for
+                // the same reason a notch's end does: a hand taking the picture is a hand taking over
+                // from the wheel (see `pin_zoom_bounce`).
                 toward: zoom.drawn.0,
+                bounce: 0.0,
                 ..zoom
             });
             // Where the pointer has been carried out to, so that the next ask for a pointer that has
