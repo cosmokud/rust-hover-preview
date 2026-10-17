@@ -26,6 +26,13 @@ pub const DEFAULT_VIDEO_VOLUME: u32 = 0;
 /// rather than loud, so a pointer crossing a folder of music is a few seconds of something
 /// half-heard rather than a jukebox.
 pub const DEFAULT_AUDIO_VOLUME: u32 = 10;
+/// The bottom of the band a pinned sound's beat card follows, which `beat_hz` names the top
+/// of: `20 Hz`, the low end of what is heard as a beat rather than as the file's own rumble.
+pub const MIN_BEAT_HZ: u32 = 20;
+/// The highest top that band may be given, and the ceiling a hand-edited `beat_hz` is reduced
+/// to: `16 kHz`, past which a card is reading the whole of what is heard rather than the beat
+/// it is drawn for.
+pub const MAX_BEAT_HZ: u32 = 16_000;
 /// Whether a sound's measured loudness is brought to one level before it is played, so that a
 /// folder of files is heard at one level rather than at each file's own.
 ///

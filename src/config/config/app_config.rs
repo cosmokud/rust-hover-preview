@@ -20,9 +20,9 @@ use super::defaults::{
     DEFAULT_WEBVIEW_IDLE_SECS,
 };
 use super::setting_types::{
-    AudioSeek, AvoidMode, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile, PinMinimizeTo,
+    AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile, PinMinimizeTo,
     PinNavFileTypes, PreviewScale, TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine,
-    DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
+    DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE, DEFAULT_BEAT_HZ,
     DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
     DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
@@ -247,6 +247,10 @@ pub struct AppConfig {
     /// worth depends on how much of it is heard, and a file being listened to again is
     /// usually wanted from where it was left rather than from the top (see `AudioSeek`).
     pub audio_seek: AudioSeek,
+    /// The band a *pinned* sound's beat card follows, which the ripples drawn over it are
+    /// gated behind: the top of the band in hertz — the bottom is fixed at `MIN_BEAT_HZ` —
+    /// or `off` for a card whose ripples follow nothing (see `BeatHz`).
+    pub beat_hz: BeatHz,
     /// Where in a file a *pinned* sound starts playing — the pin's own
     /// answer to the question the setting above it answers for a hover,
     /// and a setting of its own for the same reason: what a pin is
@@ -702,6 +706,7 @@ impl Default for AppConfig {
             video_volume: DEFAULT_VIDEO_VOLUME,
             audio_volume: DEFAULT_AUDIO_VOLUME,
             audio_seek: DEFAULT_AUDIO_SEEK,
+            beat_hz: DEFAULT_BEAT_HZ,
             pin_mode_audio_seek: DEFAULT_PIN_MODE_AUDIO_SEEK,
             pin_mode_audio_end_of_file: DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
             pin_mode_audio_shuffle: DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
