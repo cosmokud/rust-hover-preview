@@ -151,6 +151,11 @@ pub fn run_preview_window() {
         // started. Asked again the moment a player reports a length (see the tick below).
         let mut audio_share_seek: Option<AudioSeek> = None;
         let mut audio_repaint_at = Instant::now();
+        // The beat the card's mark was last drawn with, which is what a fall starts from: a
+        // pause hands this loop no pulse to read, and the ripples come home over the repaints
+        // that follow instead of standing where the sound left them (see
+        // `audio_meter::beat_fade`).
+        let mut audio_beat = 0.0f32;
         // The name on screen, scrolled sideways while the card has no room for it, put up with
         // the card it belongs to so a hover that changes begins at the beginning again.
         let mut audio_name_scroll: Option<audio_preview::NameScroll> = None;
@@ -1224,17 +1229,29 @@ pub fn run_preview_window() {
                         }
 
                         // The mark beats whenever a player is running behind the card, which is
-                        // the third thing a card can be moving by (see `audio_meter::output_beat`).
+                        // the third thing a card can be moving by — read from the band the
+                        // setting names, and not at all where it is `off` (see `current_beat_hz`
+                        // and `audio_meter::output_beat`).
                         let beating = audio_chrome.is_some_and(|chrome| chrome.playing);
+                        let beat_hz = if beating { current_beat_hz() } else { None };
+                        // A mark the pause left mid-beat is the fourth thing a card can be
+                        // moving by: with nothing playing and nothing to read, the ripples are
+                        // drawn by the fall until they are home, which is a second or so and
+                        // then nothing (see `audio_meter::beat_fade`).
+                        let falling = audio_beat > 0.0;
                         let cadence = match &audio_name_scroll {
                             Some(scroll) if scroll.moves() => AUDIO_NAME_REPAINT,
-                            _ if beating => AUDIO_NAME_REPAINT,
+                            _ if beating || falling => AUDIO_NAME_REPAINT,
                             _ => AUDIO_CARD_REPAINT,
                         };
 
                         if audio_repaint_at.elapsed() >= cadence
                             || AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel)
                         {
+                            // How long a fall has been falling by: the time since the paint
+                            // the mark was last drawn at, taken before that clock is reset
+                            // (see `audio_meter::beat_fade`).
+                            let since_paint = audio_repaint_at.elapsed();
                             audio_repaint_at = Instant::now();
 
                             let name_offset = match audio_name_scroll.as_mut() {
@@ -1285,14 +1302,20 @@ pub fn run_preview_window() {
                                 }
 
                                 // The beat is read from the capture only while a player is
-                                // running: a card with none behind it has no pulse to read, and a
-                                // hovered card pays nothing for the feature at all (see
-                                // `audio_meter::output_beat`).
-                                let beat = if beating {
-                                    audio_meter::output_beat().unwrap_or(0.0)
-                                } else {
-                                    0.0
+                                // running: a card with none behind it has no pulse to read, and
+                                // a hovered card pays nothing for the feature at all (see
+                                // `audio_meter::output_beat`). A mark the pause left mid-beat is
+                                // drawn by the fall instead, timed by the repaint happening now
+                                // (see `audio_meter::beat_fade`).
+                                let beat = match beat_hz {
+                                    Some(band) => audio_meter::output_beat(band).unwrap_or(0.0),
+                                    None if falling => {
+                                        audio_meter::beat_fade(audio_beat, since_paint)
+                                    }
+                                    None => 0.0,
                                 };
+                                // What the next fall — or the pause that starts one — stands on.
+                                audio_beat = beat;
 
                                 if media.refresh_audio_card(
                                     path,
@@ -1631,6 +1654,9 @@ pub fn run_preview_window() {
                                 audio_start_offset = start;
                                 audio_paused = None;
                                 audio_repaint_at = Instant::now();
+                                // A card that has just been put up is at rest, whatever the
+                                // mark of the card before it was doing.
+                                audio_beat = 0.0;
                                 // The marquee the card's name is drawn with, if it needs one:
                                 // what a name is scrolled by is the card's own box, which is
                                 // the frame that has just arrived, and a scroll is put up with
