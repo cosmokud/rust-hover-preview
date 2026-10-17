@@ -139,46 +139,159 @@ fn draws_the_card_a_sound_is_previewed_as() {
     );
 }
 
-/// A card with a beat draws a ring the resting card does not, and draws it in the header line:
-/// the mark's own pulse, read where it is painted rather than where it is computed (see
-/// `Card::beat`).
+/// A card's mark is a dot with the beat's ripples around it: the dot small, still and centred,
+/// the ripples a shape that stands out with the bass and comes back in as it drops, and a card
+/// at rest carrying the dot and no ripple at all (see `Card::beat` and `Mark`).
 #[test]
-fn a_beat_draws_a_ring_around_the_mark() {
+fn a_beat_draws_ripples_around_the_mark() {
     let (width, height) = measured_at_the_default_share(&card());
-    let resting = render(&card(), width, height, 96, options())
-        .expect("a painted card")
-        .0;
+    let mut loud = card();
+    loud.beat = 1.0;
+    let mut quiet = card();
+    quiet.beat = 0.5;
+    let mut quietest = card();
+    quietest.beat = 0.25;
+    let resting = render(&card(), width, height, 96, options()).expect("a painted card");
+    let beating = render(&loud, width, height, 96, options()).expect("a painted card");
+    let half = render(&quiet, width, height, 96, options()).expect("a painted card");
+    let whisper = render(&quietest, width, height, 96, options()).expect("a painted card");
 
-    let mut beating = card();
-    beating.beat = 1.0;
-    let beating = render(&beating, width, height, 96, options())
-        .expect("a painted card")
-        .0;
+    // The mark as the beat reads it: the dot, and the ripples at their own widest.
+    let page = scrolled(&loud, width, 0);
+    let mark = page.mark.expect("a card is drawn with a mark");
+    let header_bottom = (page.header_top + page.header_height) as usize;
+    let distance = |x: usize, y: usize| {
+        let dx = x as f32 + 0.5 - mark.center_x;
+        let dy = y as f32 + 0.5 - mark.center_y;
+        (dx * dx + dy * dy).sqrt()
+    };
+    let ink = |painted: &(Vec<u8>, u32, u32), (x, y): (usize, usize)| {
+        let index = (y * width as usize + x) * 4;
+        [
+            painted.0[index],
+            painted.0[index + 1],
+            painted.0[index + 2],
+            painted.0[index + 3],
+        ]
+    };
+    // The page's own color, read where no mark of any card stands.
+    let page_color = ink(&resting, (width as usize - 1, height as usize - 1));
 
-    let changed: Vec<(usize, usize)> = resting
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(beating.as_chunks::<4>().0)
-        .enumerate()
-        .filter(|(_, (left, right))| left != right)
-        .map(|(index, _)| (index % width as usize, index / width as usize))
-        .collect();
+    // The mark's own room on the page: the header line, left of where the name begins — the one
+    // place the mark and its ripples are drawn, and the room they must never leave.
+    let name_left = page.header[0].x as usize;
+    let marked = |painted: &(Vec<u8>, u32, u32)| -> Vec<(usize, usize)> {
+        (page.header_top as usize..header_bottom)
+            .flat_map(|y| (0..name_left).map(move |x| (x, y)))
+            .filter(|&point| ink(painted, point) != page_color)
+            .collect()
+    };
+    // Every pixel of the card a beat has changed, which is the whole of what the beat draws.
+    let changed = |painted: &(Vec<u8>, u32, u32)| -> Vec<(usize, usize)> {
+        (0..height as usize)
+            .flat_map(|y| (0..width as usize).map(move |x| (x, y)))
+            .filter(|&point| ink(painted, point) != ink(&resting, point))
+            .collect()
+    };
+    let center_of = |points: &[(usize, usize)]| -> (i32, i32) {
+        let xs: Vec<usize> = points.iter().map(|&(x, _)| x).collect();
+        let ys: Vec<usize> = points.iter().map(|&(_, y)| y).collect();
+        (
+            ((xs.iter().min().unwrap() + xs.iter().max().unwrap()) / 2) as i32,
+            ((ys.iter().min().unwrap() + ys.iter().max().unwrap()) / 2) as i32,
+        )
+    };
+    // How far from the mark's centre a set of its pixels stands, at its nearest and its furthest.
+    let spread = |points: &[(usize, usize)]| -> (f32, f32) {
+        points
+            .iter()
+            .map(|&(x, y)| distance(x, y))
+            .fold((f32::MAX, 0.0f32), |(low, high), out| {
+                (low.min(out), high.max(out))
+            })
+    };
 
+    // A card at rest is marked with the dot and nothing else: every pixel of the room the
+    // ripples will travel in that is not the page's own color is inside the dot's radius.
+    let dot = marked(&resting);
+    assert!(!dot.is_empty(), "a card at rest is not marked at all");
     assert!(
-        changed.len() > 8,
+        dot.iter().all(|&(x, y)| distance(x, y) <= mark.radius + 1.0),
+        "a card at rest draws ink outside its own dot, as far out as {}",
+        spread(&dot).1
+    );
+
+    // A beating card draws the ripples where the mark says they stand, and no closer to the dot
+    // than the first of them: what a beat draws is a shape around the mark, drawn in the mark's
+    // own room — never over the name beside it and never below its own line.
+    let ripples = changed(&beating);
+    assert!(
+        ripples.len() > 8,
         "a card beating at the top of its scale drew {} pixels the resting card has not",
-        changed.len()
+        ripples.len()
     );
     assert!(
-        changed.iter().all(|(_, y)| *y < height as usize / 2),
-        "the pulse drew outside the header line"
+        ripples
+            .iter()
+            .all(|&(x, y)| x < name_left && y < header_bottom),
+        "the beat drew outside the mark's own room: the header line left of the name"
+    );
+    assert!(
+        ripples.iter().all(|&(x, y)| {
+            let out = distance(x, y);
+            out >= mark.ripples[0] - 1.0 && out <= mark.ripples[2] + 1.0
+        }),
+        "the ripples stood outside the room the mark gives them: {:.1}..{:.1}",
+        spread(&ripples).0,
+        spread(&ripples).1
     );
 
-    // And a resting card carries no ring to draw at all.
+    // They are a shape rather than a line: there is ink of them on every side of the mark.
+    let (dot_x, dot_y) = (mark.center_x, mark.center_y);
+    for (side, found) in [
+        ("left", ripples.iter().any(|&(x, _)| (x as f32 + 0.5) < dot_x)),
+        ("right", ripples.iter().any(|&(x, _)| (x as f32 + 0.5) > dot_x)),
+        ("above", ripples.iter().any(|&(_, y)| (y as f32 + 0.5) < dot_y)),
+        ("below", ripples.iter().any(|&(_, y)| (y as f32 + 0.5) > dot_y)),
+    ] {
+        assert!(found, "the ripples are not drawn to the {side} of the mark");
+    }
+
+    // The dot is the small centre of them — a fifth of what they travel, and no more than a
+    // quarter — and it is the centre they are drawn from: the dot's own ink and the ripples'
+    // ink are centred on the same pixel, which is what keeps the mark inside its own ripples.
     assert!(
-        scrolled(&card(), width, 0).halo.is_none(),
-        "a card at rest carries a pulse"
+        mark.radius * 4.0 <= mark.ripples[2],
+        "the dot is {:.1} wide around ripples that travel {:.1}",
+        mark.radius,
+        mark.ripples[2]
+    );
+    let (dot_center, ripple_center) = (center_of(&dot), center_of(&ripples));
+    assert!(
+        (dot_center.0 - ripple_center.0).abs() <= 1 && (dot_center.1 - ripple_center.1).abs() <= 1,
+        "the dot stands at {dot_center:?} inside ripples centred at {ripple_center:?}"
+    );
+
+    // And the beat is the ripples' travel rather than their own size: a beat of half the scale
+    // stands them half the way out, which is the travel coming back in as the bass drops.
+    let (whole, part) = (spread(&ripples).1, spread(&changed(&half)).1);
+    let share = (part - mark.radius) / (whole - mark.radius);
+    assert!(
+        (0.45..=0.55).contains(&share),
+        "a card at half the beat stood its ripples {share:.2} of the way out"
+    );
+
+    // A beat that only whispers stands one ripple just off the dot rather than crowding three of
+    // them into a blur: a quarter of the scale draws a narrow ring and the ripples the beat has
+    // not sent out yet are still under the dot.
+    let (low, high) = spread(&changed(&whisper));
+    assert!(
+        high - low <= 2.5,
+        "a whisper drew a blur {low:.1}..{high:.1} around the mark rather than one ripple"
+    );
+    assert!(
+        high > mark.radius,
+        "a whisper drew nothing outside the dot at all"
     );
 }
 
@@ -741,7 +854,7 @@ fn a_pinned_card_carries_its_four_controls_where_they_are_drawn() {
 /// The two window buttons a pinned sound carries are answered in their
 /// own boxes and nowhere else: a hand in one is a hand on that button,
 /// and the cell the card's mark is drawn in answers for nothing at all —
-/// the mark is a plain bullet no hand can press (see `BULLET`). There is
+/// the mark is a dot no hand can press (see `Mark`). There is
 /// no third window button: the card's menu opens from a right-click on
 /// the window rather than from a gear (see `pin_menu::open_pin_menu`).
 #[test]
@@ -750,14 +863,13 @@ fn the_two_window_buttons_are_answered_in_their_own_boxes() {
     let page = scrolled(&pinned(), width, 0);
     let boxes = page.boxes.as_ref().expect("a card that carries controls");
 
-    // The cell the card's mark is drawn in, read of the name line's
-    // own first run: the mark and the room after it, and a hand in it
-    // is a hand on no control.
-    let mark = &page.header[0];
+    // The cell the card's mark is drawn in: the card's own margin across to the left edge of
+    // the name's box, which is the room the mark keeps and the room after it — and a hand
+    // anywhere in it is a hand on no control.
     let cell = RECT {
-        left: mark.x,
+        left: page.padding,
         top: page.header_top,
-        right: mark.x + mark.width,
+        right: page.header[0].x,
         bottom: page.header_top + page.header_height,
     };
     let centre = ((cell.left + cell.right) / 2, (cell.top + cell.bottom) / 2);

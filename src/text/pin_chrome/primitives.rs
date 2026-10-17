@@ -271,8 +271,9 @@ fn round_rect_coverage(x: i32, y: i32, rect: RECT, radius: f32) -> f32 {
     (0.5 - distance).clamp(0.0, 1.0)
 }
 
-/// Fill a circle: the knob a level is dragged by, and the collar around it.
-pub(super) fn fill_disc(
+/// Fill a circle: the knob a level is dragged by, the collar around it, and the dot a sound's
+/// card is marked with (see `audio_preview`).
+pub(crate) fn fill_disc(
     buffer: &mut [u8],
     width: i32,
     center_x: f32,

@@ -1284,9 +1284,9 @@ pub fn run_preview_window() {
                                     }
                                 }
 
-                                // The ring reads the capture only while a player is running: a
-                                // card with none behind it has no pulse to read, and a hovered
-                                // card pays nothing for the feature at all (see
+                                // The beat is read from the capture only while a player is
+                                // running: a card with none behind it has no pulse to read, and a
+                                // hovered card pays nothing for the feature at all (see
                                 // `audio_meter::output_beat`).
                                 let beat = if beating {
                                     audio_meter::output_beat().unwrap_or(0.0)
