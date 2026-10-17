@@ -841,6 +841,54 @@ fn a_left_border_and_a_right_border_stroke_each_land_the_edge_where_the_hand_put
     stand_pin(previous_pin);
 }
 
+/// A stroke that pulls a pin's edge back *in* leaves the picture filling the box the stroke came
+/// out with, and not the larger one the step before it had: a picture still drawn at the larger
+/// box is a picture with room around it, and the press that follows carries the picture rather
+/// than the window — a pin that cannot be moved by hand at all until something lays it out again
+/// (see `begin_pin_pan`).
+#[test]
+fn a_stroke_that_pulls_an_edge_in_leaves_a_press_carrying_the_window_rather_than_the_picture() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+
+    // A picture the wheel zooms, taken up filling the box it stands at: the state every pin of
+    // the kind starts in, and the state a resize owes it back to.
+    let room = work_area_at(100, 100);
+    let start = (
+        room.left + 400,
+        room.top + 300,
+        room.left + 800,
+        room.top + 600,
+    );
+    stand_pin(Some(with_pin_zoom(
+        overlay_pin(start, PinChrome::always()),
+        1.0,
+    )));
+
+    // The right border taken hold of and pulled 100 pixels in, so that the box the stroke leaves
+    // is smaller than the one the step before it was drawn at.
+    let after = a_border_stroke(edge(false, false, true, false), -100);
+    assert_eq!(
+        after.2 - after.0,
+        start.2 - start.0 - 100,
+        "the stroke pulled the border it held in by the stroke"
+    );
+
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.zoom)),
+        Some(PinZoom::filling(after)),
+        "the picture fills the box the stroke left rather than the one its last step came from"
+    );
+    assert!(
+        !begin_pin_pan(HWND(0x1000 as *mut _), &a_window_at(after)),
+        "so the press that follows carries the window rather than panning the picture"
+    );
+
+    stand_pin(previous_pin);
+}
+
 /// A pin on a film at a box, with the live bar and the shape a video is taken up with.
 fn stand_a_pin_at(content: ScreenRegion) {
     let mut pin = overlay_pin(content, PinChrome::always());
