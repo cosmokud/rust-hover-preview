@@ -788,6 +788,215 @@ fn a_wheels_ask_is_released_over_the_frames_that_follow_it() {
     assert_eq!(pin_zoom_release(toward - 0.1, toward, 0.007), toward);
 }
 
+#[test]
+fn an_image_is_brought_home_by_the_zoom_out_that_reaches_the_fit() {
+    // A picture half as large again as its window, carried most of the way off it: the picture is drawn
+    // from x=450, so the backdrop — black by a fresh configuration — is showing down the window's left
+    // side, and the hand turns the wheel out from there. What the image inside the window is owed is the
+    // place the fit would put it in *before* the size at which it has nowhere else to sit: the last of
+    // the picture's overhang is where the offset a hand left is given up, so the moment the picture is
+    // the window's own size there is nothing left to drop at once — which, without this, is the whole of
+    // the pan in a single frame.
+    let window = (0, 0, 1000, 800);
+    let carried = PinZoom::still((1500.0, 1200.0), (700.0, 0.0));
+    let asking = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some((200, 400)),
+    };
+
+    // The wheel is turned out one notch at a time, each notch walked to its end, which is the shape a
+    // hand turns it in and the shape the loop draws it in. What is kept is the last frame at which the
+    // picture still *overhangs* its window: the frame the offset a hand left has to be gone by, if the
+    // fit is not to be reached by dropping the whole of it at once.
+    let mut content = window;
+    let mut zoom = carried;
+    let mut last_overhang = None;
+    let mut notches = 0;
+
+    while region_size(content).0 >= 1000 && notches < 20 {
+        zoom.toward = zoom.drawn.0 / PIN_ZOOM_PER_NOTCH;
+        let mut frames = 0;
+
+        while zoom.drawn.0 != zoom.toward {
+            let plan = pin_zoom_step(&asking(zoom), 0.016, &display())
+                .expect("a picture on its way to a size is a frame to take");
+            let was = zoom.drawn.0;
+
+            let (drawn_width, drawn_height) = plan.zoom.drawn_size();
+            let (window_width, window_height) = region_size(plan.content);
+
+            // The last frame at which the *pan is in play at all*: a picture whole pixels larger than
+            // its window is the only picture `picture_box` has anywhere else to put than the whole of
+            // it, which is why a picture a fraction of a pixel larger is no use to this test.
+            if drawn_width > window_width || drawn_height > window_height {
+                last_overhang = Some((plan.content, plan.zoom));
+            }
+
+            zoom = plan.zoom;
+            content = plan.content;
+            frames += 1;
+            assert!(frames < 240, "a travel is not forever");
+            assert!(
+                zoom.drawn.0 < was,
+                "the wheel was turned out and the picture comes down: {} of {was}",
+                zoom.drawn.0
+            );
+        }
+
+        notches += 1;
+    }
+
+    assert_eq!(
+        region_size(content).0,
+        931,
+        "the wheel has taken the picture under the fit"
+    );
+
+    let (content, zoom) = last_overhang.expect("the wheel was turned at least once");
+    let (width, height) = region_size(content);
+    let (left, top, right, bottom) = zoom.picture_box((width, height));
+
+    assert!(
+        left <= 0 && top <= 0 && right >= width && bottom >= height,
+        "the last frame the picture overhangs its window is already where the fit would put it, with no \
+         backdrop left showing: {left}..{right} of {width} against a picture {:?} and an offset {:?}",
+        zoom.drawn,
+        zoom.pan
+    );
+    assert!(
+        zoom.pan.0.abs() < 1.0 && zoom.pan.1.abs() < 1.0,
+        "which is the offset a hand left given up by then, and not dropped at the fit: {:?} of 700",
+        zoom.pan
+    );
+}
+
+#[test]
+fn the_image_swings_past_its_place_and_comes_back() {
+    // The bounce: the image is brought home over the last of the overhang, and the swing is laid over
+    // that — past the place it is being brought to and back again, so that the image lands rather than
+    // stops. What it swings past is the *image's* own offset: the window's box is the wheel's own
+    // through every frame of it (see `pin_zoom_to`).
+    let window = (0, 0, 1000, 800);
+    let asking = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some((200, 400)),
+    };
+    let mut zoom = PinZoom::still((1127.0, 901.6), (451.0, 0.0));
+    zoom.toward = zoom.drawn.0 / PIN_ZOOM_PER_NOTCH;
+
+    // Where the fit would put the picture at the size it stands at: the middle, with what it overhangs
+    // by hanging off both sides alike.
+    let home = |zoom: &PinZoom| (1000.0 - zoom.drawn.0) / 2.0;
+    let mut swang = 0.0f32;
+    let mut frames = 0;
+
+    while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
+        zoom = plan.zoom;
+        let (left, _, _, _) = zoom.picture_box((1000, 800));
+        let past = home(&zoom) - left as f32;
+        swang = swang.max(past);
+        frames += 1;
+        assert!(frames < 240, "a travel and its bounce are not forever");
+    }
+
+    assert!(
+        swang > 8.0,
+        "the image is swung past its place by more than a hair: {swang} pixels"
+    );
+    assert!(
+        swang < 100.0,
+        "and never far off its window: {swang} pixels past the middle"
+    );
+    assert!(
+        zoom.bounce == 0.0,
+        "and the swing is over with, leaving nothing to undo"
+    );
+    assert!(
+        (home(&zoom) - zoom.picture_box((1000, 800)).0 as f32).abs() < 2.0,
+        "so it comes to rest in the place the fit would put it"
+    );
+}
+
+#[test]
+fn a_picture_sitting_in_the_middle_neither_bounces_nor_keeps_the_loop_awake() {
+    // The bounce is for an image that has somewhere to be brought home *from*: a picture nothing has
+    // carried off its window has no offset to give up. Such a picture is the ordinary one — every pin
+    // zoomed past the fit to look at something closely, with nothing ever dragged — so what a zoom out of
+    // one owes is the motion it always was: no swing, and no frame cadence kept for one (see
+    // `pin_zoom_bounce`).
+    let window = (0, 0, 1000, 800);
+    // A picture overhanging its window with nothing carried off it: everything the ordinary pin zoomed in
+    // to look at something closely is, and the state the stretch is crossed from.
+    let mut zoom = PinZoom::still((1200.0, 960.0), (0.0, 0.0));
+    let asking = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some((500, 400)),
+    };
+
+    assert!(
+        zoom.drawn.0 > 1000.0 && zoom.pan == (0.0, 0.0),
+        "the picture overhangs its window and sits in the middle of it"
+    );
+    let mut frames = 0;
+
+    while zoom.drawn.0 > 1000.0 {
+        zoom.toward = zoom.drawn.0 / PIN_ZOOM_PER_NOTCH;
+
+        while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
+            zoom = plan.zoom;
+            frames += 1;
+            assert_eq!(
+                zoom.bounce, 0.0,
+                "frame {frames} swings an image that has nothing to bring home"
+            );
+            assert_eq!(zoom.pan, (0.0, 0.0), "and gives up an offset it never had");
+            assert!(frames < 240, "a travel is not forever");
+        }
+    }
+
+    assert!(frames > 1, "the wheel was turned at least once");
+}
+
+#[test]
+fn a_zoom_in_gives_up_nothing_of_an_offset() {
+    // The other half of the rule: a hand turning the wheel *in* is opening room for the picture's offset
+    // rather than taking it away, so a notch in over the last of the overhang carries the offset it has
+    // — the wheel's own anchoring, whole (see `home_share`).
+    let window = (0, 0, 1000, 800);
+    let carried = PinZoom::still((1024.0, 819.2), (383.0, 0.0));
+    let asking = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some((500, 400)),
+    };
+
+    let mut zoom = carried;
+    zoom.toward = zoom.drawn.0 * PIN_ZOOM_PER_NOTCH;
+    let mut frames = 0;
+
+    while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
+        zoom = plan.zoom;
+        frames += 1;
+        assert!(
+            zoom.pan.0 > carried.pan.0 * 0.9,
+            "frame {frames} gives up an offset a zoom in has no business giving up: {}",
+            zoom.pan.0
+        );
+        assert!(frames < 240, "a travel is not forever");
+    }
+}
+
 /// A frame of a travel is the wheel's ask *released* and not the ask itself: a notch's own tenth of a
 /// picture is carried out over the frames that follow it, which is what leaves the picture still moving
 /// after the hand has stopped (see `pin_zoom_release`).
