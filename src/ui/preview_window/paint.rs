@@ -268,6 +268,20 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // on, since the compose below writes that box — which on a band of a display's own size is 2.0 ms
     // of the 6.94 ms a 144 Hz frame has that was spent painting pixels the picture then covered.
     if zoomed && mem_dc.is_some() {
+        // What fills it is the zoom's own backdrop for a picture with no transparency in it and the
+        // picture's own for one that has, which is what the compose below draws the picture over too
+        // (see `pinned_band_backdrop`). A band with no picture on screen yet is filled with the zoom's
+        // own: there is no transparency for the picture's setting to answer.
+        let backdrop = CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| {
+                media.as_ref().map(|media| {
+                    pinned_band_backdrop(media.media_type, true, media.current_frame_is_opaque())
+                })
+            })
+            .unwrap_or_else(zoom_background);
+
         fill_band_backdrop(
             out,
             band_width,
@@ -278,7 +292,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
             } else {
                 (0, 0, band_width as i32, band_height as i32)
             },
-            zoom_background(),
+            backdrop,
         );
     }
 
@@ -322,13 +336,16 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         if let Ok(media) = CURRENT_MEDIA.lock() {
             if let Some(media) = media.as_ref() {
                 if composed_here {
-                    // What the band is filled with: a picture the wheel has taken past its window is
-                    // drawn over the tray's own backdrop for a zoom, and every other picture over the
-                    // backdrop its own kind asks for. The two are two different things to look at —
-                    // what stands behind a picture nobody has touched is the picture's business, and
-                    // what fills the band beside one a hand has carried off is the window's (see
-                    // `pinned_band_backdrop`).
-                    let backdrop = pinned_band_backdrop(media.media_type, zoomed);
+                    // What the picture is composited over, and what the band beside it was filled with:
+                    // the tray's own backdrop for a zoom when the wheel has taken the picture off its
+                    // window and the picture has no transparency in it, and the backdrop the file's kind
+                    // asks for otherwise — which is what stands behind a picture with a transparent pixel
+                    // in it at any size, the zoom's band included (see `pinned_band_backdrop`).
+                    let backdrop = pinned_band_backdrop(
+                        media.media_type,
+                        zoomed,
+                        media.current_frame_is_opaque(),
+                    );
 
                     compose_media_into_band(
                         media.current_pixels(),
