@@ -17,8 +17,9 @@
 use super::*;
 
 use windows::Win32::UI::WindowsAndMessaging::{
-    SC_CLOSE, SC_RESTORE, SetWindowTextW, SW_SHOWMINNOACTIVE, WA_ACTIVE, WM_COMMAND, WM_QUERYOPEN,
-    WS_CAPTION, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
+    SC_CLOSE, SC_RESTORE, SHOW_WINDOW_CMD, SW_MINIMIZE, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE,
+    SetWindowTextW, WA_ACTIVE, WM_COMMAND, WM_QUERYOPEN, WS_CAPTION, WS_EX_APPWINDOW,
+    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
 };
 /// The class the taskbar stand-in is created from.
 pub(super) const PIN_TASKBAR_CLASS: PCWSTR = w!("RustHoverPreviewPinTaskbar");
@@ -27,19 +28,22 @@ pub(super) const PIN_TASKBAR_CLASS: PCWSTR = w!("RustHoverPreviewPinTaskbar");
 pub(super) static PIN_TASKBAR_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// Where the stand-in is kept: far enough off every display that even a momentary un-minimize
-/// cannot put a window on screen. It is never meant to be seen — only its taskbar button is.
-const TASKBAR_OFFSCREEN: i32 = -32000;
+/// cannot put a window on screen. It is never meant to be seen — only its taskbar button is, and the
+/// picture the Shell mirrors into it (see `pin_taskbar_mirror`).
+pub(super) const TASKBAR_OFFSCREEN: i32 = -32000;
 
 /// The title the taskbar button carries. The app's own name rather than the pinned file's, since
 /// the button stands for the app that has a window put away, not for a document.
 const TASKBAR_TITLE: PCWSTR = w!("Rust Preview");
 
-/// Put the stand-in up: the app appears in the taskbar, minimized and off the screen, and the pin
-/// stays hidden until the button is clicked.
+/// Put the stand-in up: the app appears in the taskbar, off the screen, in whichever of its two forms
+/// the pin asks for.
 ///
-/// It is *shown minimized* rather than shown and then minimized, because a window that is up has
-/// a place on the desktop and this one has none: `SW_SHOWMINNOACTIVE` asks the Shell for the
-/// taskbar button without taking the focus, which is the whole of what a pin put away wants.
+/// A pin that is *on the screen* is shown in it: the window is up and the Shell is composing it, which
+/// is the whole of what makes the hover a picture of the pin rather than a still frame of it. A pin
+/// that has been put away into the taskbar is the other form — the window is minimized, and the frame
+/// the Shell cached on the way down is the last frame it was showing (see `pin_taskbar_mirror`).
+///
 pub(super) unsafe fn show_pin_taskbar() {
     let Some(hwnd) = pin_taskbar_window() else {
         return;
@@ -49,8 +53,47 @@ pub(super) unsafe fn show_pin_taskbar() {
     // before it is revealed: a window that is already up is not asked again for the name it was
     // shown with, and a handle kept across a Shell restart is not the window it was.
     let _ = SetWindowTextW(hwnd, TASKBAR_TITLE);
-    let _ = MoveWindow(hwnd, TASKBAR_OFFSCREEN, TASKBAR_OFFSCREEN, 1, 1, false);
-    let _ = ShowWindow(hwnd, SW_SHOWMINNOACTIVE);
+
+    if pin_is_collapsed() {
+        // The pin is put away, so the button is all there is of it: what a hover shows of a window
+        // that has gone down is the frame the Shell cached on the way down, and the frame it caches
+        // is the one the window was last showing — so it is minimized here rather than hidden, and
+        // what it was last showing it keeps (see `pin_taskbar_mirror`).
+        let _ = ShowWindow(hwnd, minimized_form(hwnd));
+        return;
+    }
+
+    show_pin_taskbar_mirroring();
+}
+
+/// Put the stand-in up in the form that shows the pin: off the screen, and *shown* — a window the
+/// Shell composes, because a window it is not composing has no picture in it to put in a hover.
+///
+/// The size comes with the picture rather than being set here: the box a mirror is drawn into is the
+/// source's own shape, and only the mirror knows what it is mirroring (see `pin_taskbar_mirror`).
+pub(super) unsafe fn show_pin_taskbar_mirroring() {
+    let Some(hwnd) = pin_taskbar_window() else {
+        return;
+    };
+
+    let _ = SetWindowTextW(hwnd, TASKBAR_TITLE);
+    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+}
+
+/// How a stand-in is taken down to its put-away form: minimized, whichever state of up it is in.
+///
+/// A window that is already up — one a pin on the screen was being shown in — is minimized rather
+/// than shown minimized, since a stand-in that is up is one the Shell is composing and the frame it
+/// caches is the one it was composing a moment ago. `SW_SHOWMINNOACTIVE` is the other half of that:
+/// it asks the Shell for a taskbar button *and* for the minimized state in one call, which is what a
+/// stand-in that has never been up needs.
+fn minimized_form(hwnd: HWND) -> SHOW_WINDOW_CMD {
+    // Safety: asks a window whether it is up, which is a property rather than a change.
+    if unsafe { IsWindowVisible(hwnd).as_bool() } {
+        SW_MINIMIZE
+    } else {
+        SW_SHOWMINNOACTIVE
+    }
 }
 
 /// Take the stand-in down, if one is up.
@@ -60,15 +103,19 @@ pub(super) unsafe fn hide_pin_taskbar() {
         return;
     }
 
+    // Nothing of the pin is left for the button to be a picture of, so the Shell is told to stop
+    // drawing one: a registration behind a window nobody is showing is a registration that outlives
+    // the pin it was for (see `pin_taskbar_mirror`).
+    pin_taskbar_mirror::stop_pin_mirror();
     let _ = ShowWindow(HWND(hwnd as *mut _), SW_HIDE);
 }
 
-/// Whether the stand-in is showing, which is the same question as whether the pin was put away
-/// into the taskbar rather than into the bubble.
+/// Whether the stand-in is up, in either of the two forms it has: the one a pin that is on the screen
+/// is shown in, and the put-away one a hover holds the last frame in.
 ///
-/// It is read before a restore does anything, because it is what tells the two apart: a restore
-/// from the bubble places the window beside the bubble (see `placed_pin_box`), and a restore from
-/// the taskbar simply puts it back where it stood.
+/// It is read before a restore does anything, because it is what tells the two places a pin can be put
+/// away into apart: a restore from the bubble places the window beside the bubble (see
+/// `placed_pin_box`), and a restore from the taskbar simply puts it back where it stood.
 pub(super) fn pin_taskbar_is_showing() -> bool {
     showing_taskbar_window().is_some()
 }

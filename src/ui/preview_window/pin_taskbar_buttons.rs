@@ -88,15 +88,13 @@ struct PinMediaButtons {
     playing: bool,
 }
 
-/// Tell the taskbar hover what the pin is offering, if the stand-in is up to be told.
+/// Tell the taskbar button's hover what the pin is offering, if the stand-in is up to be told.
 ///
-/// It is called on every tick of the preview loop with the two facts the chrome is already drawn
-/// from — what the pin is showing, and whether that is playing — and it is asked of the stand-in's
-/// window first, because a tick that finds the app in no taskbar at all has nothing to say.
-///
-/// A state the Shell has already been told is not sent again, and one it has not is sent once, the
-/// first time there is a window up to send it to: the toolbar is added on that tick, which is the
-/// only tick it can be, since a window that is not showing has no taskbar button to hang one on.
+/// Called on every tick of the preview loop with the two facts the chrome is drawn from: what the
+/// pin is showing, and whether that is playing. Nothing is asked of the Shell until the stand-in's
+/// window is up — an unshown window has no taskbar button, and a toolbar cannot be added to one —
+/// and nothing is sent once the answer stops changing. The picture the hover shows is the same two
+/// facts asked of the same tick (see `sync_pin_mirror`).
 pub(super) fn refresh_pin_media_buttons(kind: Option<MediaType>, playing: bool) {
     let Some(hwnd) = pin_taskbar::showing_taskbar_window() else {
         return;
