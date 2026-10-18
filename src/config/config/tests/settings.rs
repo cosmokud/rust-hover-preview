@@ -41,7 +41,7 @@ fn the_pin_zoom_bounce_duration_is_read_from_its_own_key() {
     assert_eq!(
         AppConfig::default().pin_zoom_bounce_ms,
         DEFAULT_PIN_ZOOM_BOUNCE_MS,
-        "a bounce takes 240 ms unless the file says otherwise"
+        "a bounce takes 360 ms unless the file says otherwise"
     );
 
     let mut ini = Ini::new();
@@ -74,6 +74,40 @@ fn the_pin_zoom_bounce_duration_is_read_from_its_own_key() {
     let mut ini = Ini::new();
     ini.set(CONFIG_SECTION, "pin_bounce_ms", Some("300".to_string()));
     assert_eq!(read_file(&mut ini).pin_zoom_bounce_ms, 300);
+}
+
+/// The bounce gate, snap-back speed, and drift power are settings of their own with fallbacks and sanitization.
+#[test]
+fn the_pin_zoom_bounce_gate_speed_and_power_are_read_from_their_own_keys() {
+    assert_eq!(AppConfig::default().pin_zoom_bounce_gate, DEFAULT_PIN_ZOOM_BOUNCE_GATE);
+    assert_eq!(AppConfig::default().pin_zoom_bounce_speed_ms, DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS);
+    assert_eq!(AppConfig::default().pin_zoom_bounce_power, DEFAULT_PIN_ZOOM_BOUNCE_POWER);
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "pin_zoom_bounce_gate", Some("false".to_string()));
+    ini.set(CONFIG_SECTION, "pin_zoom_bounce_speed_ms", Some("35".to_string()));
+    ini.set(CONFIG_SECTION, "pin_zoom_bounce_power", Some("0.08".to_string()));
+
+    let config = read_file(&mut ini);
+    assert_eq!(config.pin_zoom_bounce_gate, false);
+    assert_eq!(config.pin_zoom_bounce_speed_ms, 35);
+    assert!((config.pin_zoom_bounce_power - 0.08).abs() < 1e-4);
+
+    // Percentage input for power: e.g. "5" -> 0.05
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "pin_zoom_bounce_power", Some("5".to_string()));
+    assert!((read_file(&mut ini).pin_zoom_bounce_power - 0.05).abs() < 1e-4);
+
+    // Fallbacks
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "pin_zoom_bounce_enabled", Some("false".to_string()));
+    ini.set(CONFIG_SECTION, "bounce_speed_ms", Some("40".to_string()));
+    ini.set(CONFIG_SECTION, "bounce_power", Some("0.02".to_string()));
+
+    let config = read_file(&mut ini);
+    assert_eq!(config.pin_zoom_bounce_gate, false);
+    assert_eq!(config.pin_zoom_bounce_speed_ms, 40);
+    assert!((config.pin_zoom_bounce_power - 0.02).abs() < 1e-4);
 }
 
 

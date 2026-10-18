@@ -1034,6 +1034,96 @@ fn pin_zoom_bounce_duration_respects_config() {
     }
 }
 
+/// When the bounce gate is switched off, the image still smoothly returns to the fit, but skips
+/// the overshoot bounce entirely and lands directly at center.
+#[test]
+fn pin_zoom_bounce_gate_disabled_skips_overshoot() {
+    let _guard = PIN_ZOOM_TEST_MUTEX.lock().unwrap();
+    let window = (0, 0, 1000, 800);
+    let asking = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some((200, 400)),
+    };
+
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.pin_zoom_bounce_gate = false;
+    }
+
+    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0));
+    zoom.toward = 1000.0;
+    let home = |zoom: &PinZoom| (1000.0 - zoom.drawn.0) / 2.0;
+    let mut swang = 0.0f32;
+
+    while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
+        zoom = plan.zoom;
+        let (left, _, _, _) = zoom.picture_box((1000, 800));
+        let past = home(&zoom) - left as f32;
+        swang = swang.max(past);
+    }
+
+    // Because gate is false, it glides home and stops without swinging past center
+    assert!(
+        swang <= 0.0,
+        "when gate is disabled, image never swings past center: swang={swang}"
+    );
+    assert_eq!(zoom.pan, (0.0, 0.0));
+    assert_eq!(zoom.picture_box((1000, 800)), (0, 0, 1000, 800));
+
+    // Reset back
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.pin_zoom_bounce_gate = crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_GATE;
+    }
+}
+
+/// Bounce speed and power can be customized via configuration.
+#[test]
+fn pin_zoom_bounce_speed_and_power_configurable() {
+    let _guard = PIN_ZOOM_TEST_MUTEX.lock().unwrap();
+    let window = (0, 0, 1000, 800);
+    let asking = |zoom| PinZoomInputs {
+        content: window,
+        zoom,
+        dpi: DESK,
+        room: bounds(),
+        pointer: Some((200, 400)),
+    };
+
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.pin_zoom_bounce_gate = true;
+        config.pin_zoom_bounce_speed_ms = 40;
+        config.pin_zoom_bounce_power = 0.08;
+    }
+
+    let mut zoom = PinZoom::still((1100.0, 880.0), (451.0, 0.0));
+    zoom.toward = 1000.0;
+    let home = |zoom: &PinZoom| (1000.0 - zoom.drawn.0) / 2.0;
+    let mut swang = 0.0f32;
+
+    while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {
+        zoom = plan.zoom;
+        let (left, _, _, _) = zoom.picture_box((1000, 800));
+        let past = home(&zoom) - left as f32;
+        swang = swang.max(past);
+    }
+
+    // With power = 0.08 on pan 451.0, overshoot is ~451 * 0.08 = ~36 pixels
+    assert!(
+        swang > 30.0,
+        "higher power yields proportionally larger overshoot: swang={swang}"
+    );
+    assert_eq!(zoom.pan, (0.0, 0.0));
+
+    // Reset back
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.pin_zoom_bounce_gate = crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_GATE;
+        config.pin_zoom_bounce_speed_ms = crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS;
+        config.pin_zoom_bounce_power = crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_POWER;
+    }
+}
+
 #[test]
 fn a_picture_sitting_in_the_middle_neither_bounces_nor_keeps_the_loop_awake() {
     // The bounce is for an image that has somewhere to be brought home *from*: a picture nothing has

@@ -12,7 +12,8 @@ use super::app_config::AppConfig;
 use super::defaults::{
     parse_text_font_scale, sanitize_decode_budget_gb, sanitize_document_cache_mb,
     sanitize_general_disk_cache_mb, sanitize_hdr_exposure, sanitize_image_cache_mb,
-    sanitize_image_disk_cache_mb, sanitize_mpv_path, sanitize_pin_zoom_bounce_ms, sanitize_spinner_delay_ms,
+    sanitize_image_disk_cache_mb, sanitize_mpv_path, sanitize_pin_zoom_bounce_ms,
+    sanitize_pin_zoom_bounce_power, sanitize_pin_zoom_bounce_speed_ms, sanitize_spinner_delay_ms,
     sanitize_text_font_scale_percent,
     sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms, sanitize_ttc_face,
     sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
@@ -165,6 +166,21 @@ impl AppConfig {
             CONFIG_SECTION,
             "pin_zoom_bounce_ms",
             Some(sanitize_pin_zoom_bounce_ms(self.pin_zoom_bounce_ms).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_zoom_bounce_gate",
+            Some(self.pin_zoom_bounce_gate.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_zoom_bounce_speed_ms",
+            Some(sanitize_pin_zoom_bounce_speed_ms(self.pin_zoom_bounce_speed_ms).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_zoom_bounce_power",
+            Some(sanitize_pin_zoom_bounce_power(self.pin_zoom_bounce_power).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -697,6 +713,37 @@ impl AppConfig {
             self.pin_zoom_bounce_ms = sanitize_pin_zoom_bounce_ms(value);
         } else if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "zoom_bounce_ms") {
             self.pin_zoom_bounce_ms = sanitize_pin_zoom_bounce_ms(value);
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_zoom_bounce_gate") {
+            self.pin_zoom_bounce_gate = value;
+        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_zoom_bounce_enabled") {
+            self.pin_zoom_bounce_gate = value;
+        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_bounce_gate") {
+            self.pin_zoom_bounce_gate = value;
+        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_bounce_enabled") {
+            self.pin_zoom_bounce_gate = value;
+        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "bounce_gate") {
+            self.pin_zoom_bounce_gate = value;
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pin_zoom_bounce_speed_ms") {
+            self.pin_zoom_bounce_speed_ms = sanitize_pin_zoom_bounce_speed_ms(value);
+        } else if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pin_zoom_bounce_snap_ms") {
+            self.pin_zoom_bounce_speed_ms = sanitize_pin_zoom_bounce_speed_ms(value);
+        } else if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "pin_bounce_speed_ms") {
+            self.pin_zoom_bounce_speed_ms = sanitize_pin_zoom_bounce_speed_ms(value);
+        } else if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "bounce_speed_ms") {
+            self.pin_zoom_bounce_speed_ms = sanitize_pin_zoom_bounce_speed_ms(value);
+        } else if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "bounce_ms") {
+            self.pin_zoom_bounce_speed_ms = sanitize_pin_zoom_bounce_speed_ms(value);
+        }
+        if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "pin_zoom_bounce_power") {
+            self.pin_zoom_bounce_power = sanitize_pin_zoom_bounce_power(value as f32);
+        } else if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "pin_bounce_power") {
+            self.pin_zoom_bounce_power = sanitize_pin_zoom_bounce_power(value as f32);
+        } else if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "pin_zoom_bounce_past") {
+            self.pin_zoom_bounce_power = sanitize_pin_zoom_bounce_power(value as f32);
+        } else if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "bounce_power") {
+            self.pin_zoom_bounce_power = sanitize_pin_zoom_bounce_power(value as f32);
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "webp_playback_fps") {
             if let Ok(value) = u32::try_from(value) {

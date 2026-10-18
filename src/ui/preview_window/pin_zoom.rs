@@ -71,7 +71,7 @@ const PIN_ZOOM_RELEASE_LEFT: f32 = 0.1;
 pub(super) const PIN_ZOOM_BOUNCE_SECONDS: f32 =
     crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_MS as f32 / 1000.0;
 
-/// The bounce duration in seconds, read from the configuration (or defaulting to 240 ms).
+/// The smooth return duration in seconds, read from the configuration (defaulting to 360 ms).
 pub(super) fn pin_zoom_bounce_seconds() -> f32 {
     crate::CONFIG
         .lock()
@@ -79,13 +79,30 @@ pub(super) fn pin_zoom_bounce_seconds() -> f32 {
         .unwrap_or(PIN_ZOOM_BOUNCE_SECONDS)
 }
 
+/// Whether the subtle bounce past center is enabled after the image moves home.
+pub(super) fn pin_zoom_bounce_gate() -> bool {
+    crate::CONFIG
+        .lock()
+        .map(|config| config.pin_zoom_bounce_gate)
+        .unwrap_or(crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_GATE)
+}
+
+/// How fast the image snaps back to the correct position after bouncing, in seconds.
+pub(super) fn pin_zoom_bounce_speed_seconds() -> f32 {
+    crate::CONFIG
+        .lock()
+        .map(|config| config.pin_zoom_bounce_speed_ms as f32 / 1000.0)
+        .unwrap_or(crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS as f32 / 1000.0)
+}
+
 /// How far past its place the image swings at the top of that bounce, as a share of the offset it is
-/// being brought home from: a sixth of it.
-///
-/// It is what an eye reads as a bounce rather than as a stop, and the whole of what it swings is the
-/// *image's* offset inside a window whose box never moves: the picture is never taken far off its
-/// window and the frame the fit asks for is reached exactly all the same (see `bounce_swing`).
-const PIN_ZOOM_BOUNCE_PAST: f32 = 0.15;
+/// being brought home from: read from config (defaulting to 0.04).
+pub(super) fn pin_zoom_bounce_power() -> f32 {
+    crate::CONFIG
+        .lock()
+        .map(|config| config.pin_zoom_bounce_power)
+        .unwrap_or(crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_POWER)
+}
 
 /// The least a bounce is worth taking: the pixels the image would be swung by.
 ///
@@ -315,20 +332,35 @@ pub(super) fn home_share(overhang: f32, window: f32) -> f32 {
 }
 
 /// The swing a bounce has the image at by the time `at` of it has passed, as a factor on the offset the
-/// image is being brought home from: starts at the offset (1.0), passes its place by a sixth of that offset
-/// on the *other* side of its place at the top of it (-PIN_ZOOM_BOUNCE_PAST), and smoothly settles at zero (0.0).
-///
-/// It brings the image completely home to center without ever bouncing back to its previous position.
+/// image is being brought home from:
+/// - Phase 1: for `at < move_duration`, smoothly glides from offset (1.0) to center (0.0).
+/// - Phase 2: if gated on, swings subtly past center to `-power` and snaps back to 0.0 over `bounce_speed`.
 fn bounce_swing(at: f32) -> f32 {
-    let duration = pin_zoom_bounce_seconds();
-    if at <= 0.0 || duration <= 0.0 || at >= duration {
+    let move_duration = pin_zoom_bounce_seconds();
+    if at <= 0.0 || move_duration <= 0.0 {
         return 0.0;
     }
 
-    let p = (at / duration).clamp(0.0, 1.0);
-    let turn = std::f32::consts::PI * p;
+    let gate = pin_zoom_bounce_gate();
+    let bounce_duration = pin_zoom_bounce_speed_seconds();
+    let power = pin_zoom_bounce_power();
 
-    (1.0 - p) - (1.0 - p + PIN_ZOOM_BOUNCE_PAST) * turn.sin()
+    if at < move_duration {
+        let p = (at / move_duration).clamp(0.0, 1.0);
+        let smooth = p * p * (3.0 - 2.0 * p);
+        1.0 - smooth
+    } else if gate && power > 0.0 && bounce_duration > 0.0 {
+        let t_bounce = at - move_duration;
+        if t_bounce < bounce_duration {
+            let p_bounce = (t_bounce / bounce_duration).clamp(0.0, 1.0);
+            let turn = std::f32::consts::PI * p_bounce;
+            -power * turn.sin()
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    }
 }
 
 /// The box the window ends up with after a wheel notch, and the view the picture is left with.
@@ -692,10 +724,19 @@ pub(super) fn pin_zoom_step(
 /// of it; and it is asked of the size the release is passing rather than of the size it was aimed at, so
 /// the swing is laid over the last frames of the travel that brought it there.
 fn pin_zoom_bounce(input: &PinZoomInputs, drawn: f32, elapsed: f32) -> f32 {
-    let duration = pin_zoom_bounce_seconds();
-    if duration <= 0.0 {
+    let move_duration = pin_zoom_bounce_seconds();
+    if move_duration <= 0.0 {
         return 0.0;
     }
+
+    let gate = pin_zoom_bounce_gate();
+    let bounce_duration = pin_zoom_bounce_speed_seconds();
+    let power = pin_zoom_bounce_power();
+    let total_duration = if gate && power > 0.0 && bounce_duration > 0.0 {
+        move_duration + bounce_duration
+    } else {
+        move_duration
+    };
 
     let cap = pin_zoom_cap(input);
     if input.zoom.toward > cap {
@@ -705,7 +746,7 @@ fn pin_zoom_bounce(input: &PinZoomInputs, drawn: f32, elapsed: f32) -> f32 {
     if input.zoom.bounce > 0.0 {
         let at = input.zoom.bounce + elapsed;
 
-        return if at < duration {
+        return if at < total_duration {
             at
         } else {
             0.0
@@ -721,8 +762,8 @@ fn pin_zoom_bounce(input: &PinZoomInputs, drawn: f32, elapsed: f32) -> f32 {
     // And a swing worth taking, which is a swing an eye could see: a picture sitting in the middle of its
     // window has no offset to give up, and one a hair off the middle has a hair's swing — neither is a
     // movement, and neither is worth the loop's frame cadence (see `PIN_ZOOM_SETTLED_PIXELS` for what a
-    // hair is worth, and `PIN_ZOOM_BOUNCE_PAST` for how much of an offset a swing moves).
-    let swung = input.zoom.pan.0.abs().max(input.zoom.pan.1.abs()) * (1.0 + PIN_ZOOM_BOUNCE_PAST);
+    // hair is worth, and `pin_zoom_bounce_power` for how much of an offset a swing moves).
+    let swung = input.zoom.pan.0.abs().max(input.zoom.pan.1.abs()) * (1.0 + power);
 
     if crossing && swung > PIN_ZOOM_BOUNCE_LEAST_PIXELS {
         elapsed

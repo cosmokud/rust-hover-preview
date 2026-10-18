@@ -10,7 +10,9 @@ use super::defaults::{
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_MPV_PATH, DEFAULT_NORMALIZE_VIDEO_VOLUME,
-    DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS, DEFAULT_PIN_ZOOM_BOUNCE_MS,
+    DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
+    DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER,
+    DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS,
     DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
@@ -169,6 +171,12 @@ pub struct AppConfig {
     /// How long the image inside a pinned window takes to swing back to its place once a zoom out has
     /// brought the picture within a notch of the fit, in milliseconds.
     pub pin_zoom_bounce_ms: u64,
+    /// Whether the subtle bounce past center is enabled after the image moves home.
+    pub pin_zoom_bounce_gate: bool,
+    /// How fast the image snaps back to the correct position after bouncing, in milliseconds.
+    pub pin_zoom_bounce_speed_ms: u64,
+    /// How far the bounce drifts past the correct position, as a fraction of the pan offset.
+    pub pin_zoom_bounce_power: f32,
     pub webp_playback_fps: u32,
     /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
     /// cache off, so every preview is decoded again.
@@ -698,6 +706,9 @@ impl Default for AppConfig {
             tick_ms: DEFAULT_TICK_MS,
             spinner_delay_ms: DEFAULT_SPINNER_DELAY_MS,
             pin_zoom_bounce_ms: DEFAULT_PIN_ZOOM_BOUNCE_MS,
+            pin_zoom_bounce_gate: DEFAULT_PIN_ZOOM_BOUNCE_GATE,
+            pin_zoom_bounce_speed_ms: DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS,
+            pin_zoom_bounce_power: DEFAULT_PIN_ZOOM_BOUNCE_POWER,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             image_background: DEFAULT_IMAGE_BACKGROUND,
