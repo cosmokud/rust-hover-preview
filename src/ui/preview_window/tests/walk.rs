@@ -336,7 +336,7 @@ fn sounded_folder(name: &str) -> PathBuf {
 fn a_shuffled_playlist_starts_on_the_pinned_file_and_holds_every_sound() {
     let _every_file = WalkEveryFile::set();
     let folder = sounded_folder("shuffle-pick");
-    let sounds = vec![
+    let sounds = [
         folder.join("a.mp3"),
         folder.join("b.mp3"),
         folder.join("c.mp3"),
@@ -1133,7 +1133,7 @@ fn a_shuffle_hears_every_sound_once_across_presses() {
     let _every_file = WalkEveryFile::set();
     let folder = sounded_folder("shuffle-across-presses");
     std::fs::write(folder.join("d.mp3"), vec![0u8; 8]).expect("a file a test can write");
-    let sounds = vec![
+    let sounds = [
         folder.join("a.mp3"),
         folder.join("b.mp3"),
         folder.join("c.mp3"),
@@ -1819,7 +1819,7 @@ fn a_pin_walks_its_playlist_press_after_press_through_its_own_session() {
         was
     };
     let folder = sounded_folder("press-after-press");
-    let sounds = vec![
+    let sounds = [
         folder.join("a.mp3"),
         folder.join("b.mp3"),
         folder.join("c.mp3"),
