@@ -12,9 +12,10 @@ use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetClientRect, GetWindowRect, IsIconic, IsWindow,
-    RegisterClassExW, SendMessageW, ShowWindow, SC_RESTORE, SW_MINIMIZE, SW_SHOWNOACTIVATE,
-    WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SYSCOMMAND, WNDCLASSEXW, WS_EX_APPWINDOW, WS_POPUP,
+    CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowRect, IsIconic, IsWindow,
+    IsWindowVisible, RegisterClassExW, SendMessageW, ShowWindow, GW_HWNDPREV, SC_RESTORE,
+    SW_MINIMIZE, SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SYSCOMMAND,
+    WNDCLASSEXW, WS_EX_APPWINDOW, WS_POPUP,
 };
 
 /// Register the class the stand-in is made from, once for the run.
@@ -556,6 +557,163 @@ fn a_put_away_stand_in_is_not_brought_back_by_an_activation() {
         "and the pin is left where the minimize put it"
     );
 
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    forget_the_stand_in();
+    stand_pin(previous_pin);
+}
+
+/// Whether `above` stands over `below` in the z-order right now: an ask of the desktop rather than a
+/// reading of what this app meant to ask for.
+///
+/// Safety: both handles are windows of this test's or of this app's own, and the question is a
+/// measurement of them rather than a change.
+unsafe fn stands_over(above: HWND, below: HWND) -> bool {
+    let mut walk = GetWindow(below, GW_HWNDPREV);
+    while let Ok(window) = walk {
+        if window == above {
+            return true;
+        }
+        if window.is_invalid() {
+            break;
+        }
+        walk = GetWindow(window, GW_HWNDPREV);
+    }
+
+    false
+}
+
+/// A pin the taskbar's own button brings back comes back in front of the windows that were in front
+/// of it.
+///
+/// The fault this is a regression test for: the user's own run had a pin restored from the taskbar
+/// come back behind everything — the window "should show up over/on top of all the other windows,
+/// this used the last state instead". A window that has been hidden has no place of its own left in
+/// the z-order, and the showing of it asked for `HWND_NOTOPMOST`, which does nothing at all for a
+/// window that is already ordinary: what the pin came back to was the slot it went down in, which is
+/// behind everything opened over it while it was away (see `show_pinned_window`).
+#[test]
+fn a_pin_the_button_brings_back_comes_back_in_front_of_the_windows_it_left_behind() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let before = pin_always_on_top();
+
+    register_the_stand_in_class();
+    forget_the_stand_in();
+    let _ = take_pin_command();
+
+    // The window the pin is drawn by, and the window standing in front of it — both standing where
+    // no display is, so that a run of the suite is no window of the user's and no place the hand can
+    // land in. The second is made after the first, which is what puts it in front.
+    let pin_hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            TASKBAR_OFFSCREEN,
+            TASKBAR_OFFSCREEN,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the pin")
+    };
+    PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+    let in_front = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            TASKBAR_OFFSCREEN,
+            TASKBAR_OFFSCREEN,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window in front of the pin")
+    };
+    // Safety: both windows are this test's own, and both are asked to be on the screen — an offscreen
+    // window is still one the Shell lists, which is the whole of what the z-order below is read from.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(in_front, SW_SHOWNOACTIVATE);
+    }
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "the window this test opened after the pin's is the one in front of it"
+    );
+
+    // The setting the user's own report is under: a pin that is not Always On Top.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+
+    let mut pin = overlay_pin(
+        (
+            TASKBAR_OFFSCREEN,
+            TASKBAR_OFFSCREEN,
+            TASKBAR_OFFSCREEN + 320,
+            TASKBAR_OFFSCREEN + 240,
+        ),
+        PinChrome::always(),
+    );
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+
+    // The minimize: the pin goes away into the taskbar, and its own window goes off the screen with
+    // it.
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    let stand_in = showing_taskbar_window().expect("the button the minimize leaves");
+    assert!(
+        !unsafe { IsWindowVisible(pin_hwnd).as_bool() },
+        "the pin's own window comes off the screen with the pin, and a window that is not on the \
+         screen is one the Shell has no place in the z-order for"
+    );
+
+    // The click on that button: the Shell asks the window it holds for a restore, and the window
+    // asks the pin for it (see `handle_taskbar_restore`).
+    // Safety: a message to a window of this app's own, with the numbers the Shell sends with it.
+    unsafe {
+        SendMessageW(
+            stand_in,
+            WM_SYSCOMMAND,
+            WPARAM(SC_RESTORE as usize),
+            LPARAM(0),
+        );
+    }
+    assert!(
+        matches!(take_pin_command(), Some(PinCommand::Restore)),
+        "the click on the button is the pin's own restore"
+    );
+    restore_pin();
+
+    assert!(
+        unsafe { stands_over(pin_hwnd, in_front) },
+        "a pin the button brought back is put above the windows the user had in front of it: what \
+         `HWND_NOTOPMOST` does for a window that is already ordinary is nothing at all, so the pin \
+         would be shown back into the place it went down in rather than over the other windows"
+    );
+
+    // Safety: both windows are this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(in_front);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = before;
     }
