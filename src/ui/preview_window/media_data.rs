@@ -244,7 +244,7 @@ fn fill_band(out: &mut [u8], width: u32, origin_y: u32, height: u32, flat: [u8; 
         let Some(pixels) = out.get_mut(row * stride..row * stride + stride) else {
             return;
         };
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&flat);
         }
     }

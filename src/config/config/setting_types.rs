@@ -103,7 +103,7 @@ impl PreviewScale {
             "fit" | "fit to screen" | "fit-to-screen" | "fit_to_screen" | "fittoscreen" => {
                 Some(Self::FitToScreen)
             }
-            _ => Self::reduced_fit_from_str(&normalized, sanitize).or_else(|| {
+            _ => Self::reduced_fit_from_str(normalized, sanitize).or_else(|| {
                 normalized
                     .parse::<u32>()
                     .ok()

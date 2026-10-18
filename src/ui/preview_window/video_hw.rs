@@ -430,7 +430,7 @@ pub(super) fn resolve_video_engine(
             // leaves the media engine where there is no player to hand it to. It is a rule between
             // the media engine and FFmpeg's player, so mpv is not in it even where the machine has
             // one.
-            let handed_over = pixels.map_or(true, |pixels| pixels > VIDEO_FFMPEG_ABOVE_PIXELS);
+            let handed_over = pixels.is_none_or(|pixels| pixels > VIDEO_FFMPEG_ABOVE_PIXELS);
             let prefer = if handed_over {
                 VideoEngine::Ffmpeg
             } else {
