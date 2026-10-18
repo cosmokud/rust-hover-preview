@@ -11,7 +11,7 @@ Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. 
 ## Highlights
 
 - Mouse-hover and keyboard-navigation previews in Explorer, beside the cursor or the focused item and kept on screen.
-- Press a key (SPACE by default) and a preview becomes a window of its own — captioned, movable, resizable, always on top, where it stays until you close it.
+- Press a key (SPACE by default) and a preview becomes a window of its own — captioned, movable, resizable, always on top, where it stays until you close it. A pinned picture zooms under the wheel, and a sound's card beats with the bass.
 - Supports images, videos, audios, ebooks, Office documents, design documents, text/code, archives, camera raw, vector drawings, fonts, and more.
 - Granular display scaling: Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.
 - Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
@@ -278,15 +278,18 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - **Open With** — Opens the file in whatever program Windows has registered for it.
       - **Open With...** — Asks you to pick one from the list Windows keeps of the programs that could.
       - The two hand-off buttons name themselves while the pointer rests on them; **Open With** names the program it would use.
+    - A caption the hand has narrowed past the point of saying the file's name leaves the name out, and one narrowed past ten pixels leaves the strip out altogether — a row of window buttons over the top of somebody's picture is not what the strip is for. Both come back as the window is widened.
     - Its edges resize it; what that does depends on what is inside.
       - A picture, video, or rendered page keeps its own shape.
       - A document or listing is laid out to whatever box it is given.
       - A sound's card keeps the size **Audio** names, and a video `ffplay` has is not resized at all.
     - A picture's caption and bar are drawn over the media rather than in bands around it, and fade in as the pointer arrives; only the strip under the pointer is shown.
+    - A wheel over a pinned picture zooms it: the window grows about the picture's middle to the size its scale's fit names, then the picture grows inside the window that has stopped, about the cursor. A wheel back out takes it down the way it came, and a picture the hand has carried off its window comes home over the last of the zoom with a small swing past its place. A film is not zoomed — its picture belongs to its player.
     - A pinned video carries a transport bar of its own: play/pause, a draggable seek bar, and the two clocks.
       - Where FFmpeg's player is the one playing it, a read-out bar appears instead, since that player can be told nothing.
     - A pinned sound's card carries four buttons of its own: **Previous**, **Play/Pause**, **Next**, and **Volume**.
       - `Space` holds a sound where it stood and sets it going again from there.
+      - The mark beside the name is a dot the ripples of a beat travel out from: the bass under the sound sends them, and a pause brings them home. Which band they follow is `beat_hz` in `config.ini` — `off`, or a top of band between `20 Hz` and `16 kHz` (`250 Hz` by default).
       - A click on a sound's bar takes the file to that second.
       - A right-click on the card opens the card's own menu in a panel of its own over the screen: the whole of what a pin does — the two ways out, the file's own playback, then **Shuffle**, **End of File** and **Seek**.
     - A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied.
@@ -364,7 +367,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - SVG documents and font specimens, which a browser is handed as an image, are still drawn rather than run.
       - A running page can be pointed at, clicked into and typed into; a document, a specimen and every other preview still cannot.
     - Without the engine on the machine it stays a text preview.
-  - **Image** — **Pin Mode**, and the whole of it: **Shuffle**, whether a *pinned* picture's walk takes the next file at random. A picture has no level, no end of file and nowhere in it to start, and a hover has no next file, so the shuffle is the one thing a picture answers.
+  - **Image** — **Pin Mode** and **Zoom**, and the whole of each: **Shuffle**, whether a *pinned* picture's walk takes the next file at random, and the backdrop the band a zoom leaves behind the picture is filled with.
+    - A picture has no level, no end of file and nowhere in it to start, and a hover has no next file, so the shuffle is the one thing a picture answers.
+    - **Zoom → Background** — **Black** (default), **White** or **Checkerboard**: the backdrops that fill the band a hand carries a zoomed picture off its window leaves behind it. The see-through one is not offered, since the band is the window's rather than the file's. Written as `zoom_background`.
 - **Timing**
   - **Prioritize Keyboard** — On by default.
     - The file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview.
@@ -418,7 +423,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Video** — `100%` down to `0%`, loudest first. A film's soundtrack starts at `0%`, so a hover never makes a sound the pointer did not ask for.
   - **Audio** — The same levels; a sound file starts at `10%`, and a sound at `0%` still shows its card, silently.
 - **Performance**
-  - **Cache** — What a preview may cost between hovers: `2 GB` down to `0 MB`.
+  - **Cache** — What a preview may cost between hovers: `Image (RAM)` offers `16 GB` down to `0 MB`, the three disk caches `128 GB` down to `0 MB`, and a size that is a whole gigabyte is named in it (`4 GB`, `128 GB`).
     - **`Image (RAM)`** = decoded frames kept in memory.
     - **`Document (Disk)`** = engine-drawn pages kept as temp files.
     - **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
@@ -626,6 +631,7 @@ spinner_delay_ms=250
 - `pin_mode_video_shuffle` / `pin_mode_audio_shuffle`: whether a forward step of a *pinned* walk takes a random file of the anchor's kind rather than the one beside it. Both default `false`; a step back is the file the walk came from.
 - `pin_mode_image_shuffle`: the same question asked of a *pinned* picture's walk, which has no end of file to jump from — its shuffle is the caption's buttons and the keyboard's alone. Default `false`.
 - `pin_mode_audio_seek`: where in a file a *pinned* sound starts playing — `start` (default), `remember`, `middle`, or `random`.
+- `beat_hz`: the band a sound's card's mark beats with — `off`, or a top of band in hertz between `20` (the fixed floor) and `16000`. Default `250`. A setting of `config.ini` alone; the tray has no row for it.
 - `audio_seek`: where in a file a hovered sound starts playing.
   - `remember` (default) picks it up where the last hover left it, `start` always begins at the beginning, `middle` drops it half way in, and `random` anywhere at all.
   - The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen.
@@ -634,10 +640,10 @@ spinner_delay_ms=250
 
 ### Memory and cache
 
-- `image_cache_mb`: memory for decoded image frames — one pool shared with pinned windows, so a hover sweep does not evict the frame a pin is drawn from. Default `128`, max `2048`; `0` holds nothing.
-- `document_cache_mb`: disk cache for rendered document pages. Default `256`, max `2048`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
-- `image_disk_cache_mb`: disk cache for the pictures ImageMagick developed. Default `512`, max `2048`; `0` keeps nothing between hovers but still develops the current one. Pictures live under `%TEMP%\rust-hover-preview\image`; the least recently read one is removed first, and they survive a restart.
-- `general_disk_cache_mb`: disk cache for the subtitle tracks a film's embedded ones are copied into. Default `128`, max `2048`; `0` extracts nothing, and a film whose subtitles are embedded is drawn without them. Files live under `%TEMP%\rust-hover-preview\general`, least recently used first.
+- `image_cache_mb`: memory for decoded image frames — one pool shared with pinned windows, so a hover sweep does not evict the frame a pin is drawn from. Default `128`, max `16384`; `0` holds nothing.
+- `document_cache_mb`: disk cache for rendered document pages. Default `256`, max `131072`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
+- `image_disk_cache_mb`: disk cache for the pictures ImageMagick developed. Default `512`, max `131072`; `0` keeps nothing between hovers but still develops the current one. Pictures live under `%TEMP%\rust-hover-preview\image`; the least recently read one is removed first, and they survive a restart.
+- `general_disk_cache_mb`: disk cache for the subtitle tracks a film's embedded ones are copied into. Default `128`, max `131072`; `0` extracts nothing, and a film whose subtitles are embedded is drawn without them. Files live under `%TEMP%\rust-hover-preview\general`, least recently used first.
 - `decode_budget_gb`: most memory one hover may use. Default `1`, range `0.25`–`64`. A file over the limit shows no preview.
 
 ### Performance
@@ -683,6 +689,7 @@ spinner_delay_ms=250
   - The walk is the folder the pin was taken up in and no subfolder of it, is in the order the Explorer listing is showing, wraps at both ends, and is held per folder, read on the first press rather than when the pin is taken up.
   - A file it reaches that the window cannot show is stepped over, and the walk is bounded by the folder: each other file is offered at most once, so a folder of nothing this build can read ends the walk instead of going round for ever.
   - A file holding only the old `pin_nav_file_types` seeds all three with it; a file written before any of them existed walks as the fresh defaults do.
+- `pin_zoom_bounce_ms` / `pin_zoom_bounce_gate` / `pin_zoom_bounce_speed_ms` / `pin_zoom_bounce_power`: the landing a wheel zoom out ends with — how long the image takes to swing back to its place (`100` default), whether the swing past its place is on (`true` default), how fast it snaps back (`0` default), and how far past it drifts as a share of the offset it is coming home from (`0.04` default). A hand-edited value past the ceiling is reduced to it.
 - `pin_minimize_to`: where a pin put away by the window's own **Minimize** button goes. `bubble` (default) leaves the round bubble on the desktop and keeps this app out of the taskbar; `taskbar` takes the window off the screen and shows this app's own taskbar button (titled **Rust Preview**), which brings the pin back where it stood when clicked and closes it on a right-click. Read when the button is pressed, so a change reaches the next minimize; a file written before this setting existed is read as `bubble`.
 - `pin_pause_video` / `pin_pause_audio`: whether a pin put away into its bubble or the taskbar holds what it was playing where it stands, and starts it again at the second it stopped at when the window comes back up. Both default `true`. They are two switches because a video and a sound are two different things to want quiet.
 - `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.
@@ -713,6 +720,7 @@ spinner_delay_ms=250
 - `vector_background`: `checkerboard` default, `white`, `black`, or `transparent`. Used for SVG pages and metafiles. Old `svg_background` is ignored and removed.
 - `html_background`: `white` default, `black`, or `checkerboard`, and only those three — a page is drawn on a page, so transparency is not one of the backdrops it is offered. Used for a page of HTML previewed by `render_html`, run or not; any other value reads as `white`.
 - `design_background`: `checkerboard` default, `white`, `black`, or `transparent`.
+- `zoom_background`: `black` default, `white`, or `checkerboard`, and only those three — the band a hand carries a zoomed picture off its window is the window's to fill rather than a hole to look through, since a layered window is hit-tested by the shape of its pixels. Any other value reads as `black`.
 
 ### Old or removed names
 
