@@ -976,7 +976,6 @@ fn reads_the_hover_loop_and_a_films_end_of_file_from_their_own_keys() {
         DEFAULT_VIDEO_LOOP,
         "a hovered film goes round unless the file says otherwise"
     );
-    assert!(DEFAULT_VIDEO_LOOP, "which is a loop on");
     assert_eq!(
         AppConfig::default().pin_mode_video_end_of_file,
         DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,

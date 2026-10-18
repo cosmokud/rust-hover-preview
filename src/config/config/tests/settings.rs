@@ -89,7 +89,7 @@ fn the_pin_zoom_bounce_gate_speed_and_power_are_read_from_their_own_keys() {
     ini.set(CONFIG_SECTION, "pin_zoom_bounce_power", Some("0.08".to_string()));
 
     let config = read_file(&mut ini);
-    assert_eq!(config.pin_zoom_bounce_gate, false);
+    assert!(!config.pin_zoom_bounce_gate, "the key's own false, not the default's true");
     assert_eq!(config.pin_zoom_bounce_speed_ms, 35);
     assert!((config.pin_zoom_bounce_power - 0.08).abs() < 1e-4);
 
@@ -105,7 +105,7 @@ fn the_pin_zoom_bounce_gate_speed_and_power_are_read_from_their_own_keys() {
     ini.set(CONFIG_SECTION, "bounce_power", Some("0.02".to_string()));
 
     let config = read_file(&mut ini);
-    assert_eq!(config.pin_zoom_bounce_gate, false);
+    assert!(!config.pin_zoom_bounce_gate, "the retired key's false turns the gate off too");
     assert_eq!(config.pin_zoom_bounce_speed_ms, 40);
     assert!((config.pin_zoom_bounce_power - 0.02).abs() < 1e-4);
 }

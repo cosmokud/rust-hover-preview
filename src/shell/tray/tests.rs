@@ -1529,7 +1529,7 @@ fn the_video_engine_rows_are_ids_of_their_own() {
         "a file the chosen engine cannot play is played by another one until that is turned off"
     );
     assert!(
-        DEFAULT_VIDEO_ENGINE_FALLBACK,
+        defaults.video_engine_fallback,
         "the app starts with the fallback on"
     );
 
