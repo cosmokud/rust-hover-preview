@@ -451,6 +451,12 @@ pub fn run_preview_window() {
                 0
             };
             crate::shell::key_input::publish_pin_key_owner(pin_keys_owner, pin_keys_video);
+            // And whether that pin is above every other window, which is the same question the
+            // wheel asks before it takes a notch: a topmost pin is the window under the pointer
+            // wherever the keyboard is (see `pin_owns_foreground`).
+            crate::shell::key_input::publish_pin_always_on_top(
+                pin_keys_owner != 0 && pin_always_on_top(),
+            );
 
             // The key is drained whether or not it is watched, so that a press made while the
             // feature was off is not acted on when it comes back on.
@@ -2201,6 +2207,11 @@ pub fn run_preview_window() {
                                     show_pin_taskbar();
                                 }
                                 place_pinned_siblings();
+                                // And the player is told the same thing where it is mpv's: a film
+                                // that held the topmost band for the pin's sake has to give it up
+                                // when the setting says so, or it is a topmost window over a pin
+                                // that is not (see `settle_pinned_mpv_ontop`).
+                                settle_pinned_mpv_ontop();
                                 AUDIO_CARD_DIRTY.store(true, Ordering::Release);
                                 render_layered_preview(hwnd);
                             }
@@ -2414,8 +2425,19 @@ pub fn run_preview_window() {
                 // is that it is asked of the order that is standing rather than of the strips
                 // that are up — the player *under* the pin is the answer both raisers put in,
                 // and the one this leaves alone (see `place_player_window`).
-                if pin_chrome_up() && player_stands_over_the_pin(hwnd) {
-                    raise_pinned_window(hwnd);
+                if pin_chrome_up() {
+                    // A topmost pin is put back over the film whenever the film has stood itself
+                    // back up on its band. A pin that is not Always On Top has no such fight to
+                    // win and no business being raised at all — what it owes over the film is the
+                    // *film's* place, and only when the film is not already under it (see
+                    // `raise_pinned_window`, `put_player_under_the_pin`).
+                    if pin_always_on_top() {
+                        if player_stands_over_the_pin(hwnd) {
+                            raise_pinned_window(hwnd);
+                        }
+                    } else if !player_is_under_the_pin(hwnd) {
+                        put_player_under_the_pin();
+                    }
                 }
 
                 // And the card's menu, which is a window of its own over the screen: the
@@ -3357,6 +3379,19 @@ pub fn run_preview_window() {
                         // The pin is published as up inside this, after the state it publishes
                         // is written (see `pin_window::install`).
                         install(pin);
+
+                        // The button a collapsed pin left says which file the pin is of, and the
+                        // file has just changed: a stand-in already up is not shown again by the
+                        // take-up below (`show_pinned_window` is refused for a collapsed pin), so
+                        // the name is written here or the button names the file before the step
+                        // (see `pin_taskbar::refresh_pin_taskbar_title`).
+                        pin_taskbar::refresh_pin_taskbar_title();
+
+                        // And a film adopted from a hover is told whose setting governs its window
+                        // now: the hover's topmost band is the preview's, and the pin's own
+                        // `Always On Top` is the answer from here on (see
+                        // `settle_pinned_mpv_ontop`).
+                        settle_pinned_mpv_ontop();
 
                         // A pin comes up under a pointer that may be anywhere, including inside a
                         // name being renamed, so it may take the focus but is not given it until

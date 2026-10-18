@@ -745,16 +745,24 @@ pub(super) unsafe fn toggle_pin_volume(hwnd: HWND) {
 /// Put the pin's window above the window standing in its media band, without taking the focus and
 /// without moving anything: the order the tick keeps for the player, asked the other way round for
 /// as long as a volume popup is open.
+///
+/// **A pin that is not Always On Top is not raised at all.** It is an ordinary window there, and
+/// one put over every other window on the machine the moment its chrome came up — or its volume
+/// panel, or the film beneath it was placed — is a pin that behaves like a topmost one while the
+/// setting says it is not, which is the whole of what that setting is about. What the chrome and
+/// the panel are owed is the film's place, and the film is moved instead: put directly below the
+/// pin it is out of the way of both, and the pair keeps the place the user's own clicks gave it
+/// (see `put_player_under_the_pin`).
 pub(super) unsafe fn raise_pinned_window(hwnd: HWND) {
+    if !pin_always_on_top() {
+        put_player_under_the_pin();
+        return;
+    }
+
     if let Some((window, width, height)) = pinned_window_box() {
-        let insert_after = if pin_always_on_top() {
-            HWND_TOPMOST
-        } else {
-            HWND_TOP
-        };
         let _ = SetWindowPos(
             hwnd,
-            insert_after,
+            HWND_TOPMOST,
             window.0,
             window.1,
             width,

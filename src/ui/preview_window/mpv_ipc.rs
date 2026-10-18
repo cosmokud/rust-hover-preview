@@ -236,6 +236,25 @@ pub(super) fn set_paused(pid: u32, paused: bool) -> bool {
     )
 }
 
+/// Hold mpv's own window above every other window, or let it go back into the ordinary band.
+///
+/// **It is the pin's `Pin Mode → Always On Top` asked of a player that was begun before the pin
+/// was.** A film is launched `--ontop` for the preview's sake — a hover is a window nothing may
+/// cover, and the band the pin draws over the film is this app's own pixels — and a *pin* that is
+/// not Always On Top is the opposite: a window the user may put a program in front of. A film left
+/// topmost there stands over that program and takes the clicks in the band they overlap, which is
+/// the setting doing the opposite of what it says (see `video_launch::mpv_args`).
+///
+/// A film adopted by a take-up and a setting changed under a running film are both this same ask:
+/// the player is told what the pin wants rather than begun again, which is the whole of what makes
+/// this route not FFmpeg's (see `settle_pinned_mpv_ontop`).
+pub(super) fn set_ontop(pid: u32, ontop: bool) -> bool {
+    write(
+        pid,
+        format!(r#"{{"command":["set_property","ontop",{ontop}],"async":true}}"#) + "\n",
+    )
+}
+
 /// Walk mpv's own subtitle tracks, off and round again — mpv's own word for the `T` key's step.
 pub(super) fn cycle_subtitles(pid: u32) -> bool {
     write(pid, r#"{"command":["cycle","sub"],"async":true}"#.to_string() + "\n")
@@ -400,6 +419,7 @@ mod tests {
         assert!(seek_absolute(7, 90.0));
         assert!(set_paused(7, true));
         assert!(set_paused(7, false));
+        assert!(set_ontop(7, false));
         assert!(cycle_subtitles(7));
 
         assert_eq!(
@@ -408,6 +428,7 @@ mod tests {
                 format!("{}\n", r#"{"command":["seek",90.000,"absolute"],"async":true}"#),
                 format!("{}\n", r#"{"command":["set_property","pause",true],"async":true}"#),
                 format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
+                format!("{}\n", r#"{"command":["set_property","ontop",false],"async":true}"#),
                 format!("{}\n", r#"{"command":["cycle","sub"],"async":true}"#),
             ],
             "each line names the command and its argument, and every one is async"

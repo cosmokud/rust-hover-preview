@@ -17,9 +17,9 @@
 use super::*;
 
 use windows::Win32::UI::WindowsAndMessaging::{
-    SetWindowTextW, SC_CLOSE, SC_RESTORE, SHOW_WINDOW_CMD, SW_MINIMIZE, SW_SHOWMINNOACTIVE,
-    SW_SHOWNOACTIVATE, WA_ACTIVE, WM_COMMAND, WM_QUERYOPEN, WS_CAPTION, WS_EX_APPWINDOW,
-    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
+    DestroyWindow, SetWindowTextW, SC_CLOSE, SC_RESTORE, SHOW_WINDOW_CMD, SW_MINIMIZE,
+    SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WA_ACTIVE, WM_COMMAND, WM_QUERYOPEN, WS_CAPTION,
+    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
 };
 /// The class the taskbar stand-in is created from.
 pub(super) const PIN_TASKBAR_CLASS: PCWSTR = w!("RustHoverPreviewPinTaskbar");
@@ -32,9 +32,51 @@ pub(super) static PIN_TASKBAR_HWND: AtomicIsize = AtomicIsize::new(0);
 /// picture the Shell mirrors into it (see `pin_taskbar_mirror`).
 pub(super) const TASKBAR_OFFSCREEN: i32 = -32000;
 
-/// The title the taskbar button carries. The app's own name rather than the pinned file's, since
-/// the button stands for the app that has a window put away, not for a document.
+/// The title the taskbar button carries while there is no file to name: the app's own name, which
+/// is what the button stands for until a pin has been read (see `pin_taskbar_title`).
 const TASKBAR_TITLE: PCWSTR = w!("Rust Preview");
+
+/// The name the stand-in's window carries: the pinned file's own name, so that the Shell's own
+/// label beside the hover says which file the button stands for rather than which app it belongs
+/// to. The app's own name while there is no file — a pin whose media is still being read, and a
+/// stand-in asked for by a road that has no pin of its own.
+fn pin_taskbar_title() -> Vec<u16> {
+    taskbar_title_for(pinned_path().as_deref())
+}
+
+/// The name a file gives the button, or the app's own name where there is no file to name: the
+/// file's own name rather than the path, which is what the Shell's label has room for, and what a
+/// hand reads it for.
+fn taskbar_title_for(path: Option<&Path>) -> Vec<u16> {
+    let name = path
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Rust Preview".to_string());
+
+    name.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Write the name the button is to say, and remember none of it: the title is asked for from the
+/// pin's own state every time it is written, so a file stepped onto while the stand-in is up is a
+/// file the button names after the step (see `refresh_pin_taskbar_title`).
+unsafe fn set_pin_taskbar_title(hwnd: HWND) {
+    let title = pin_taskbar_title();
+    let _ = SetWindowTextW(hwnd, PCWSTR(title.as_ptr()));
+}
+
+/// Put the pinned file's own name on the stand-in's window again, for a pin whose file changed
+/// while the button was already up — a step of the walk, which is the one road that changes what a
+/// pin is showing without taking the stand-in down.
+pub(super) fn refresh_pin_taskbar_title() {
+    let Some(hwnd) = showing_taskbar_window() else {
+        return;
+    };
+
+    // Safety: the handle is this app's own stand-in window, and a title is a string of this app's
+    // own written onto it.
+    unsafe { set_pin_taskbar_title(hwnd) };
+}
 
 /// Put the stand-in up: the app appears in the taskbar, off the screen, in whichever of its two forms
 /// the pin asks for.
@@ -49,10 +91,12 @@ pub(super) unsafe fn show_pin_taskbar() {
         return;
     };
 
-    // The title is set every time the stand-in is shown, for the reason a preview is painted
+    // The name is set every time the stand-in is shown, for the reason a preview is painted
     // before it is revealed: a window that is already up is not asked again for the name it was
-    // shown with, and a handle kept across a Shell restart is not the window it was.
-    let _ = SetWindowTextW(hwnd, TASKBAR_TITLE);
+    // shown with, and a handle kept across a Shell restart is not the window it was. What it names
+    // is the file the pin is of, so the Shell's own label beside the hover says which file the
+    // button stands for (see `pin_taskbar_title`).
+    set_pin_taskbar_title(hwnd);
 
     if pin_is_collapsed() {
         // The pin is put away, so the button is all there is of it: what a hover shows of a window
@@ -76,7 +120,7 @@ pub(super) unsafe fn show_pin_taskbar_mirroring() {
         return;
     };
 
-    let _ = SetWindowTextW(hwnd, TASKBAR_TITLE);
+    set_pin_taskbar_title(hwnd);
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 }
 
@@ -108,6 +152,26 @@ pub(super) unsafe fn hide_pin_taskbar() {
     // the pin it was for (see `pin_taskbar_mirror`).
     pin_taskbar_mirror::stop_pin_mirror();
     let _ = ShowWindow(HWND(hwnd as *mut _), SW_HIDE);
+}
+
+/// Bring the stand-in down for good, for the Shell's own Close on its button.
+///
+/// The Shell's Close is answered by ending the pin (see `pin_taskbar_proc`), and what this window
+/// owes beside that is to be *destroyed* rather than hidden. A hidden window keeps its button and
+/// its toolbar to itself, and a toolbar can neither be removed nor added a second time on the
+/// window it hangs on (see `pin_taskbar_buttons`): a closed button would come back wearing the
+/// marks of the pin that was closed and refuse the next pin's. So the window goes, with the marks
+/// it was drawn from, and the next pin makes another one — which is also what takes the button off
+/// the taskbar rather than leaving one for a window with nothing in it.
+pub(super) unsafe fn close_pin_taskbar() {
+    let hwnd = PIN_TASKBAR_HWND.swap(0, Ordering::SeqCst);
+    if hwnd == 0 {
+        return;
+    }
+
+    pin_taskbar_mirror::stop_pin_mirror();
+    pin_taskbar_buttons::forget_media_toolbar();
+    let _ = DestroyWindow(HWND(hwnd as *mut _));
 }
 
 /// Whether the stand-in is up, in either of the two forms it has: the one a pin that is on the screen
@@ -235,6 +299,10 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
                 LRESULT(0)
             }
             SC_CLOSE => {
+                // The Shell's Close, which is the pin's end and the button's own going: asking the
+                // pin to close is not enough, because what the Shell sent the ask to is this window
+                // (see `close_pin_taskbar`).
+                close_pin_taskbar();
                 ask_pin(PinCommand::Close);
                 LRESULT(0)
             }
@@ -256,9 +324,48 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
             LRESULT(0)
         }
         WM_CLOSE => {
+            // The Shell's own Close on the button, and the same two things as `SC_CLOSE` above.
+            close_pin_taskbar();
             ask_pin(PinCommand::Close);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The name as a hand reads it out of the field the Shell is given.
+    fn named(path: Option<&Path>) -> String {
+        let units = taskbar_title_for(path);
+        let end = units
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(units.len());
+        String::from_utf16_lossy(&units[..end])
+    }
+
+    /// The button names the file the pin is of, and never the folder it came out of: what the
+    /// Shell's label has room for is the name, and a path on it would be the same name cut short
+    /// for the sake of where the file happens to live.
+    #[test]
+    fn the_button_names_the_file_the_pin_is_of() {
+        assert_eq!(
+            named(Some(Path::new("films/shark tale.mp4"))),
+            "shark tale.mp4"
+        );
+        assert_eq!(
+            named(Some(Path::new(""))),
+            "Rust Preview",
+            "a path with no name of its own is no file to name"
+        );
+        assert_eq!(named(None), "Rust Preview");
+        assert_eq!(
+            taskbar_title_for(None).last(),
+            Some(&0),
+            "and the field the Shell reads is terminated"
+        );
     }
 }

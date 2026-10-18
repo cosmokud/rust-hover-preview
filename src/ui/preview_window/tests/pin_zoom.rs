@@ -683,6 +683,36 @@ fn a_wheel_notch_over_a_pin_is_counted_for_the_pin_only_while_the_pin_is_the_win
         );
     }
 
+    // A pin that is `Pin Mode → Always On Top` owns the notch from the hover alone, whichever
+    // window the keyboard is in: it stands over every other window, so the box the preview
+    // published is the box the pointer is over, and the click that gate used to need was a click
+    // a topmost pin never needed (see `publish_pin_always_on_top`).
+    let _ = wheel_input::take_pin_zoom_delta();
+    unsafe {
+        let _ = ResetEvent(preview_channel_event());
+    }
+    crate::shell::key_input::publish_pin_always_on_top(true);
+
+    let swallowed = unsafe {
+        wheel_input::wheel_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_MOUSEWHEEL as usize),
+            LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
+        )
+    };
+
+    assert_eq!(
+        wheel_input::take_pin_zoom_delta(),
+        WHEEL_DELTA,
+        "a pin that is always on top is the window the pointer is in"
+    );
+    assert_eq!(
+        swallowed,
+        LRESULT(1),
+        "and the notch is the pin's rather than what stands behind it"
+    );
+
+    crate::shell::key_input::publish_pin_always_on_top(false);
     stand_pin(None);
     stand_pin(previous);
     crate::shell::key_input::publish_pin_key_owner(0, 0);

@@ -79,6 +79,13 @@ const PIN_MEDIA_NOMINAL_SIDE: i32 = 16;
 /// same message the tray already re-adds its own icon on.
 static PIN_MEDIA_BUTTONS: Mutex<Option<PinMediaButtons>> = Mutex::new(None);
 
+/// The image list the buttons are drawn from, kept so that it can be given back with the window it
+/// was handed to (see `forget_media_toolbar`). The Shell draws a toolbar's marks from this list for
+/// as long as the toolbar lives, so it is the window's to keep and nobody else's — and the window
+/// is the stand-in's, which is created once and then never taken down except by the Shell's own
+/// Close (see `pin_taskbar::close_pin_taskbar`).
+static PIN_MEDIA_IMAGES: AtomicIsize = AtomicIsize::new(0);
+
 /// The two things the trio can be told.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct PinMediaButtons {
@@ -261,8 +268,32 @@ unsafe fn add_media_toolbar(hwnd: HWND, state: PinMediaButtons) -> bool {
     // hidden rather than wrong, which is a hover with no buttons in it and not a hover with the
     // wrong ones. What is not done is adding them again — a toolbar's buttons cannot be added
     // twice — so the answer is yes from here whatever that update said.
+    PIN_MEDIA_IMAGES.store(images.0, Ordering::SeqCst);
     push_media_buttons(hwnd, state);
     true
+}
+
+/// Give back what a toolbar was drawn from, for a stand-in being destroyed: after this the next
+/// tick adds a toolbar and a list of its own, so a window that has gone takes nothing of the marks
+/// with it and a window made later has none of the old ones.
+///
+/// Nothing is done here for an add that already refused: a list this call is the owner of is given
+/// back where it was made (see `add_media_toolbar`), and only a list the Shell took is remembered
+/// at all.
+pub(super) fn forget_media_toolbar() {
+    if let Ok(mut pushed) = PIN_MEDIA_BUTTONS.lock() {
+        *pushed = None;
+    }
+
+    let images = PIN_MEDIA_IMAGES.swap(0, Ordering::SeqCst);
+    if images != 0 {
+        // Safety: the list was made by this module, the toolbar drawn from it went with the window
+        // it was added to, and the handle is taken out of the slot in the same move — so this is
+        // the last reference there is.
+        unsafe {
+            let _ = ImageList_Destroy(HIMAGELIST(images));
+        }
+    }
 }
 
 /// Tell the Shell what the three buttons are now, answering whether it took the answer.
