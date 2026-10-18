@@ -387,9 +387,11 @@ unsafe extern "system" fn key_hook_proc(code: i32, wparam: WPARAM, lparam: LPARA
         // flag and not the counter that needs the caret asked of first: a Space released over a
         // window that is not this pin's is a release this hook is never given (see
         // `pin_toggle_held_after`).
-        let toggle_was_down = (command as usize == PIN_COMMAND_TOGGLE_PLAYBACK)
-            .then(|| PIN_KEY_DOWN.load(Ordering::Acquire))
-            .unwrap_or(false);
+        let toggle_was_down = if command as usize == PIN_COMMAND_TOGGLE_PLAYBACK {
+            PIN_KEY_DOWN.load(Ordering::Acquire)
+        } else {
+            false
+        };
         if command as usize == PIN_COMMAND_TOGGLE_PLAYBACK {
             let held = pin_toggle_held_after(command, message, owns_caret, toggle_was_down);
             if held != toggle_was_down {

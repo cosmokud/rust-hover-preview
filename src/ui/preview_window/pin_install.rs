@@ -337,10 +337,7 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
 /// and `reconcile_swap_take_up`). The later tick therefore answers the give-up, not the cover.
 pub(super) fn pinned_player_is_coming(media_type: MediaType, path: &Path) -> bool {
     media_type == MediaType::Video
-        && matches!(
-            video_route(path),
-            VideoRoute::Ffplay | VideoRoute::Mpv
-        )
+        && matches!(video_route(path), VideoRoute::Ffplay | VideoRoute::Mpv)
 }
 
 /// Whether FFmpeg's player is on this machine, the half of [`pinned_player_is_coming`] that is
@@ -726,13 +723,7 @@ impl PinLoad {
     pub(super) fn start(path: &Path, update: PinUpdate, walk: Option<PinStep>) -> Self {
         let width = (update.content.2 - update.content.0).max(1) as u32;
         let height = (update.content.3 - update.content.1).max(1) as u32;
-        let answer = pin_media_load(
-            path,
-            width,
-            height,
-            update.dpi,
-            PreviewScale::FitToScreen,
-        );
+        let answer = pin_media_load(path, width, height, update.dpi, PreviewScale::FitToScreen);
 
         PinLoad {
             path: path.to_path_buf(),
@@ -1454,9 +1445,8 @@ fn box_is_covered(
                 | MediaType::Calibre
                 | MediaType::Comic
         )
-        && held.is_some_and(|(held_width, held_height)| {
-            held_width >= width && held_height >= height
-        })
+        && held
+            .is_some_and(|(held_width, held_height)| held_width >= width && held_height >= height)
 }
 
 /// Which of the roads asked for a relayout, for the one kind of media whose answer differs and for the

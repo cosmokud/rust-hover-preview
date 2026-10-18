@@ -178,7 +178,7 @@ pub(crate) fn stale_profile_pids() -> Vec<u32> {
 fn profile_root() -> PathBuf {
     #[cfg(test)]
     {
-        return test_folder();
+        test_folder()
     }
 
     #[cfg(not(test))]

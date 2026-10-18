@@ -746,11 +746,7 @@ fn pin_zoom_bounce(input: &PinZoomInputs, drawn: f32, elapsed: f32) -> f32 {
     if input.zoom.bounce > 0.0 {
         let at = input.zoom.bounce + elapsed;
 
-        return if at < total_duration {
-            at
-        } else {
-            0.0
-        };
+        return if at < total_duration { at } else { 0.0 };
     }
 
     let last = cap * (PIN_ZOOM_PER_NOTCH - 1.0);
@@ -780,7 +776,8 @@ fn pin_zoom_bounce(input: &PinZoomInputs, drawn: f32, elapsed: f32) -> f32 {
 /// to point at or to draw, and a pin whose box is under a hand already is a *drag* rather than a zoom — a
 /// wheel notch landing in the middle of one would be two answers to the same question.
 pub(super) fn pin_zoom_view(pin: &PinnedPreview) -> Option<PinZoom> {
-    pin.zoom.filter(|_| !pin.collapsed && pin.dragging.is_none())
+    pin.zoom
+        .filter(|_| !pin.collapsed && pin.dragging.is_none())
 }
 
 /// Everything a notch is decided from, read out of the pin in one look — or nothing at all where the

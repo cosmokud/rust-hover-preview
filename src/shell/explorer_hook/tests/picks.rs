@@ -198,7 +198,7 @@ fn the_dismissal_verdict_answers_from_the_ticks_opening_pointer_read() {
         dpi: 96,
         // Some other app's window. No test has the preview window up, so the
         // identity check answers false for any handle a test can name.
-        window: HWND(1 as *mut _),
+        window: HWND(std::ptr::dangling_mut()),
     };
 
     assert!(

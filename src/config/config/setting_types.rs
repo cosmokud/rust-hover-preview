@@ -103,7 +103,7 @@ impl PreviewScale {
             "fit" | "fit to screen" | "fit-to-screen" | "fit_to_screen" | "fittoscreen" => {
                 Some(Self::FitToScreen)
             }
-            _ => Self::reduced_fit_from_str(&normalized, sanitize).or_else(|| {
+            _ => Self::reduced_fit_from_str(normalized, sanitize).or_else(|| {
                 normalized
                     .parse::<u32>()
                     .ok()
@@ -122,11 +122,7 @@ impl PreviewScale {
         let percent = normalized
             .strip_prefix("screen")
             .map(|rest| rest.trim_matches([' ', '-']))
-            .or_else(|| {
-                normalized
-                    .strip_suffix("of screen")
-                    .map(|rest| rest.trim())
-            })?;
+            .or_else(|| normalized.strip_suffix("of screen").map(|rest| rest.trim()))?;
 
         percent
             .parse::<u32>()

@@ -531,7 +531,6 @@ pub fn sanitize_audio_mark_offset_y(value: f32) -> f32 {
     }
 }
 
-
 /// The decode budget in gigabytes.
 ///
 /// A value that is not a number at all, or one that is not positive, falls back to

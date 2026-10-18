@@ -285,9 +285,7 @@ pub(super) fn video_loop_tick(playing: bool, loops: bool) -> bool {
             // process is the one that has been playing all along and no window comes down for it
             // (see `mpv_ipc`). The clock is rebased onto that second rather than taken out, so the
             // pass that follows is measured from where it actually began.
-            if video_route(&path) == VideoRoute::Mpv
-                && mpv_ipc::seek_absolute(loop_.pid, seconds)
-            {
+            if video_route(&path) == VideoRoute::Mpv && mpv_ipc::seek_absolute(loop_.pid, seconds) {
                 // **And which state the film is left in is the second line's to say, in the same
                 // breath as the seek.** A seek is a position for a player rather than a new pass —
                 // mpv keeps whatever pause it holds across one — so the state a wrap leaves is the
@@ -430,7 +428,7 @@ pub(super) fn resolve_video_engine(
             // leaves the media engine where there is no player to hand it to. It is a rule between
             // the media engine and FFmpeg's player, so mpv is not in it even where the machine has
             // one.
-            let handed_over = pixels.map_or(true, |pixels| pixels > VIDEO_FFMPEG_ABOVE_PIXELS);
+            let handed_over = pixels.is_none_or(|pixels| pixels > VIDEO_FFMPEG_ABOVE_PIXELS);
             let prefer = if handed_over {
                 VideoEngine::Ffmpeg
             } else {

@@ -1023,8 +1023,9 @@ mod tests {
             PathBuf::from("also-empty"),
         ];
 
-        let installs =
-            mpv_installs_in(folders, |program| program.parent() == Some(Path::new("has-mpv")));
+        let installs = mpv_installs_in(folders, |program| {
+            program.parent() == Some(Path::new("has-mpv"))
+        });
 
         assert_eq!(
             installs,
@@ -1057,7 +1058,10 @@ mod tests {
         ));
         let installs = vec![PathBuf::from("first"), PathBuf::from("second")];
 
-        assert!(!chosen.is_file(), "the chosen path is one that is not there");
+        assert!(
+            !chosen.is_file(),
+            "the chosen path is one that is not there"
+        );
         assert_eq!(
             resolve_mpv(Some(&chosen), &installs),
             Some(PathBuf::from("first")),

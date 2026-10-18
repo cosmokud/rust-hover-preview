@@ -309,7 +309,8 @@ pub fn play(path: &Path, width: u32, height: u32, volume: u32, picture: Picture,
         return;
     }
 
-    if let Some(session) = Session::begin(path, Some((width, height)), picture, volume, 0.0, loop_) {
+    if let Some(session) = Session::begin(path, Some((width, height)), picture, volume, 0.0, loop_)
+    {
         SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     }
 }

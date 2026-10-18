@@ -481,7 +481,9 @@ pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::config::{DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO};
+    use crate::config::config::{
+        DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
+    };
 
     /// A folder of a test's own under the temp folder, named by the test and cleared first,
     /// so two tests walking two files cannot see each other's.

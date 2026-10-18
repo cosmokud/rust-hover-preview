@@ -73,7 +73,9 @@ for a full system overview.
    ```
 
 2. Make your changes. Follow the existing code style and keep changes focused:
-   one issue per branch, and leave the formatting of code you did not touch alone.
+   one issue per branch. Leave the formatting of code you did not touch alone,
+   unless the formatting is the change itself: a whole-tree sweep is a branch of
+   its own, one `cargo fmt --all` commit with nothing else in it.
 3. Format, check, and test before you push:
 
    ```bash
