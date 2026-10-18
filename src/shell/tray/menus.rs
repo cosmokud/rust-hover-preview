@@ -547,13 +547,21 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Audio"),
     );
 
-    // The picture kind's own half, above the film's: the one question a picture answers that
+    // The picture kind's own half, above the film's: the two questions a picture answers that
     // no other kind's rows answer for it — whether a *pinned* one takes the next file of the
-    // folder at random. A picture has no level to be heard at, nothing to go round at the end
-    // of, and nowhere in it to start, so the shuffle is the whole of it: a hover has no next
-    // file, and a step back is the file before it either way (see `append_shuffle_item`). It is
-    // the only row a picture's `Pin Mode` has, the way a film's and a sound's own `Pin Mode`
-    // hold theirs.
+    // folder at random, and what fills the band beside one the wheel has taken past its window.
+    // A picture has no level to be heard at, nothing to go round at the end of, and nowhere in
+    // it to start, so those two are the whole of it: a hover has no next file, and a step back
+    // is the file before it either way (see `append_shuffle_item`).
+    //
+    // The zoom's backdrop hangs inside `Pin Mode` because a zoom is a pinned picture's — the
+    // wheel reaches a hover nowhere — and it is one submenu rather than a `Zoom` holding a
+    // `Background`, since a zoom has nothing else to list. It is a question of the window's
+    // rather than the file's: what stands behind a picture nobody has touched is the
+    // `Background → Image` setting above, while this band is what the zoom opened — so it
+    // offers the three backdrops that fill a band rather than the four a preview can be drawn
+    // over, and the paint reads it only for a picture with no transparency in it (see
+    // `pinned_band_backdrop`).
     let image_pin_mode = CreatePopupMenu().unwrap();
     append_shuffle_item(
         image_pin_mode,
@@ -561,45 +569,24 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         image_shuffle,
         DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     );
+    let zoom_background = CONFIG
+        .lock()
+        .map(|c| c.zoom_background)
+        .unwrap_or(DEFAULT_ZOOM_BACKGROUND);
+    append_background_menu(
+        image_pin_mode,
+        w!("Zoom Background"),
+        ID_TRAY_ZOOM_BACKGROUND_BASE,
+        &ZOOM_BACKGROUND_CHOICES,
+        zoom_background,
+        DEFAULT_ZOOM_BACKGROUND,
+    );
     let image_menu = CreatePopupMenu().unwrap();
     let _ = AppendMenuW(
         image_menu,
         MF_STRING | MF_POPUP,
         image_pin_mode.0 as usize,
         w!("Pin Mode"),
-    );
-
-    // And the picture's zoom: what the band beside a picture the wheel has taken past its
-    // window is filled with. It is a question of the window's rather than the file's — what
-    // stands behind a picture nobody has touched is the `Background → Image` setting above,
-    // while this band is what the zoom opened — so it hangs off the picture's own `Zoom`
-    // row rather than beside the backdrop halves, and it offers the three backdrops that
-    // fill a band rather than the four a preview can be drawn over.
-    let zoom_background = CONFIG
-        .lock()
-        .map(|c| c.zoom_background)
-        .unwrap_or(DEFAULT_ZOOM_BACKGROUND);
-    let image_zoom = CreatePopupMenu().unwrap();
-    let zoom_background_menu = CreatePopupMenu().unwrap();
-    append_background_menu(
-        zoom_background_menu,
-        w!("Background"),
-        ID_TRAY_ZOOM_BACKGROUND_BASE,
-        &ZOOM_BACKGROUND_CHOICES,
-        zoom_background,
-        DEFAULT_ZOOM_BACKGROUND,
-    );
-    let _ = AppendMenuW(
-        image_zoom,
-        MF_STRING | MF_POPUP,
-        zoom_background_menu.0 as usize,
-        w!("Background"),
-    );
-    let _ = AppendMenuW(
-        image_menu,
-        MF_STRING | MF_POPUP,
-        image_zoom.0 as usize,
-        w!("Zoom"),
     );
 
     let _ = AppendMenuW(

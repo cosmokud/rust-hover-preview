@@ -365,33 +365,39 @@ impl Drop for BandBackdrops {
     }
 }
 
-/// The band beside a picture the wheel has taken past its window is filled with the tray's own backdrop
-/// for a zoom, and every other picture over the backdrop its own kind asks for.
+/// A zoomed picture with no transparency in it draws its band over the tray's own backdrop for a zoom;
+/// a picture with a transparent pixel in it, and every picture that fills its window, over the backdrop
+/// its own kind asks for.
 ///
-/// The two are two different things to look at, and the difference between them is the whole of the
-/// setting: what stands behind a picture nobody has touched is the picture's own business — a
-/// photograph's transparency is the photograph's — while the band a hand has carried the picture off its
-/// window is the window's, the frame around a picture rather than a page behind one (see
-/// `Image → Zoom → Background` in the tray and `pinned_band_backdrop`).
+/// A picture's transparency is the picture's own business whatever the wheel has done to it, so the
+/// `Background` half's setting — `Transparent` included — stands behind the transparent pixels and the
+/// band beside them alike; the band is the window's rather than the picture's only where there is no
+/// transparency for the picture's setting to answer (see `Image → Pin Mode → Zoom Background` in the
+/// tray and `pinned_band_backdrop`).
 #[test]
-fn a_zoomed_pictures_band_is_the_zooms_backdrop_and_a_picture_that_fills_its_window_is_not() {
+fn a_zoomed_pictures_band_is_the_zooms_backdrop_until_the_picture_has_transparency() {
     let _stood = BandBackdrops::stood_at(
         TransparentBackground::Checkerboard,
         TransparentBackground::White,
     );
 
     assert_eq!(
-        pinned_band_backdrop(MediaType::StaticImage, true),
+        pinned_band_backdrop(MediaType::StaticImage, true, true),
         TransparentBackground::White,
-        "a picture the wheel has taken past its window is drawn over the zoom's own backdrop"
+        "an opaque picture the wheel has taken past its window is drawn over the zoom's own backdrop"
     );
     assert_eq!(
-        pinned_band_backdrop(MediaType::StaticImage, false),
+        pinned_band_backdrop(MediaType::StaticImage, true, false),
         TransparentBackground::Checkerboard,
-        "and a picture filling its window over the one its own kind asks for, exactly as it always was"
+        "and a picture with transparency in it over the one its own kind asks for, the width of the band included"
     );
     assert_eq!(
-        pinned_band_backdrop(MediaType::Dds, true),
+        pinned_band_backdrop(MediaType::StaticImage, false, false),
+        TransparentBackground::Checkerboard,
+        "which is the backdrop it was drawn over at the size of its window all along"
+    );
+    assert_eq!(
+        pinned_band_backdrop(MediaType::Dds, true, true),
         TransparentBackground::White,
         "and the band is the window's whatever kind of picture the window is standing on"
     );
@@ -3199,6 +3205,37 @@ fn a_backdrops_fill_leaves_the_box_the_picture_lands_on_alone() {
     assert_eq!(at(15, 5), sentinel, "to its last row and column");
     assert_eq!(at(7, 3), backdrop, "and the column it starts at is the first of the backdrop");
     assert_eq!(at(16, 3), backdrop, "as the one it stops at is the first of the backdrop after it");
+}
+
+/// A fill of a transparent backdrop writes nothing at all: the band a picture with transparency in it
+/// leaves behind is the window's own emptiness, which is what shows the desktop through a layered window
+/// and what the caller's surface already holds (see `fill_band_backdrop`).
+#[test]
+fn a_transparent_backdrop_is_left_as_the_band_already_was() {
+    let (width, height) = (8u32, 4u32);
+    let surface = DibSurface::create(width, height).expect("a band to fill");
+    let out =
+        unsafe { std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize) };
+
+    let sentinel = [7u8, 7, 7, 7];
+    for pixel in out.as_chunks_mut::<4>().0.iter_mut() {
+        *pixel = sentinel;
+    }
+
+    // A picture landing on the middle of the band, the same box the test above fills around.
+    fill_band_backdrop(
+        out,
+        width,
+        0,
+        height,
+        (2, 1, 4, 2),
+        TransparentBackground::Transparent,
+    );
+
+    assert!(
+        out.as_chunks::<4>().0.iter().all(|pixel| *pixel == sentinel),
+        "a transparent backdrop wrote over pixels the caller had already placed"
+    );
 }
 
 /// A checkerboard backdrop keeps the squares it had wherever the picture leaves it: the colour of a pixel
