@@ -227,7 +227,7 @@ pub const MAX_PIN_ZOOM_BOUNCE_MS: u64 = 10_000;
 /// Whether the subtle bounce past center is enabled after the image moves home.
 pub const DEFAULT_PIN_ZOOM_BOUNCE_GATE: bool = true;
 /// How fast the image snaps back to the correct position after bouncing, in milliseconds.
-pub const DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS: u64 = 20;
+pub const DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS: u64 = 0;
 /// The ceiling a hand-edited bounce speed is reduced to, in milliseconds.
 pub const MAX_PIN_ZOOM_BOUNCE_SPEED_MS: u64 = 5_000;
 /// How far the bounce drifts past the correct position, as a fraction of the pan offset.
