@@ -289,7 +289,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - Where FFmpeg's player is the one playing it, a read-out bar appears instead, since that player can be told nothing.
     - A pinned sound's card carries four buttons of its own: **Previous**, **Play/Pause**, **Next**, and **Volume**.
       - `Space` holds a sound where it stood and sets it going again from there.
-      - The mark beside the name is a dot the ripples of a beat travel out from: the bass under the sound sends them, and a pause brings them home. Which band they follow is `beat_hz` in `config.ini` — `off`, or a top of band between `20 Hz` and `16 kHz` (`250 Hz` by default).
+      - The mark beside the name is a dot the ripples of a beat travel out from: the bass under the sound sends them, and a pause brings them home. Which band they follow is `beat_hz` in `config.ini` — `off`, or a top of band between `20 Hz` and `16 kHz` (`250 Hz` by default). The dot is centred on the name line's own ink, and `audio_mark_offset_y` shifts it up or down from there in pixels (`0` by default, `-100` to `100`).
       - A click on a sound's bar takes the file to that second.
       - A right-click on the card opens the card's own menu in a panel of its own over the screen: the whole of what a pin does — the two ways out, the file's own playback, then **Shuffle**, **End of File** and **Seek**.
     - A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied.
@@ -632,6 +632,7 @@ spinner_delay_ms=250
 - `pin_mode_image_shuffle`: the same question asked of a *pinned* picture's walk, which has no end of file to jump from — its shuffle is the caption's buttons and the keyboard's alone. Default `false`.
 - `pin_mode_audio_seek`: where in a file a *pinned* sound starts playing — `start` (default), `remember`, `middle`, or `random`.
 - `beat_hz`: the band a sound's card's mark beats with — `off`, or a top of band in hertz between `20` (the fixed floor) and `16000`. Default `250`. A setting of `config.ini` alone; the tray has no row for it.
+- `audio_mark_offset_y`: a vertical shift in pixels for the mark beside the name — `0` default, `-100` to `100`. A file naming it `audio_mark_vertical_offset`, `audio_mark_y_offset` or `audio_mark_vertical_alignment` is read the same way.
 - `audio_seek`: where in a file a hovered sound starts playing.
   - `remember` (default) picks it up where the last hover left it, `start` always begins at the beginning, `middle` drops it half way in, and `random` anywhere at all.
   - The remembered positions are kept in a small file under `%TEMP%\rust-hover-preview\audio`, so they survive a restart; nothing is remembered while another mode is chosen.

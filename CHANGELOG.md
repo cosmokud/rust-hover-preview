@@ -8,6 +8,7 @@
 - **`Preview Settings → Image → Zoom → Background`** — what fills the band a hand carries a zoomed picture off its window leaves behind it: **Black** (default), **White** or **Checkerboard** (`zoom_background` in `config.ini`). The see-through backdrop is not offered: the band is the window's rather than the file's, and a layered window is hit-tested by the shape of its pixels, so a band left transparent is a band the hand clicks through to whatever stands under it.
 - **`beat_hz`** — the band a sound's card follows, which the mark drawn beside the name beats with: the bass under the sound sends ripples travelling out from the dot, and a pause brings them home. `off`, or a top of band between `20 Hz` (the fixed floor) and `16 kHz`; `250 Hz` by default. A setting of `config.ini` alone — the tray carries no row for it.
 - **The caches go up to `16 GB` and `128 GB`** — **Cache → Image (RAM)** offers `16 GB` at the top and the three disk caches `128 GB`; a size that is a whole number of gigabytes is named in it (`4 GB`, `128 GB`) rather than as the megabytes it is.
+- **`audio_mark_offset_y`** — a vertical shift, in pixels, for the mark beside a sound's name: it is centered on the name line's own ink and this moves it up (`-100`) or down (`100`) from there. `0` by default. A setting of `config.ini` alone, like `beat_hz`; a file naming it `audio_mark_vertical_offset`, `audio_mark_y_offset` or `audio_mark_vertical_alignment` is read the same way.
 - **`pin_zoom_bounce_ms`, `pin_zoom_bounce_gate`, `pin_zoom_bounce_speed_ms` and `pin_zoom_bounce_power`** — the landing a wheel zoom out ends with, all four in `config.ini`: how long the image takes to swing back to its place once a zoom out has brought the picture within a notch of the fit (`100 ms` by default), whether the swing past its place is on (on by default), how fast it snaps back (`0` by default), and how far past its place it drifts, as a share of the offset it is coming home from (`0.04` by default).
 
 ### Changed
@@ -22,6 +23,7 @@
 
 - **A zoom no longer jumps to the size a notch asked for** — the ask is carried out a frame at a time, nine tenths of what is left of it within a tenth of the second and the rest of it behind that, so a spin of notches is a movement the eye can follow rather than a series of steps; a notch in and a notch out leave the picture exactly where it was.
 - **A window coming down is placed about its own middle** — a picture a hand has panned sits off its window's centre, and a zoom that placed the smaller window about the picture's carried centre walked the window across the screen with the pan; the window is placed about itself, and the pan goes on moving only the picture within it.
+- **The mark beside a sound's name is centred on the name line's own ink** — the middle of the line it marks rather than the middle of the line box, so a short name and a tall one are marked at their own text; `audio_mark_offset_y` above is the hand's own nudge from there.
 
 ## [0.4.4] - 2026-10-17
 
