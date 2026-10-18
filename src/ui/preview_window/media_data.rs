@@ -18,6 +18,12 @@ pub(super) struct VideoGeometryKey {
 /// Not `Copy`, for the same reason the geometry it holds is not: the sidecar in there is a
 /// path, so every read out of the cache is a clone of the answer rather than a copy of it
 /// (see `cached_video_geometry`).
+///
+/// The measured variant is the whole answer and the other is a word, and the gap between the two
+/// is left unboxed on purpose: these facts live in a map capped at five hundred entries and are
+/// read far more often than they are written, so the bytes a box would save are paid once per
+/// entry while the allocation and the pointer chase it adds are paid on every read of the cache.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub(super) enum ProbedGeometry {
     /// The shape the probe read, and the crop the detector settled on.
