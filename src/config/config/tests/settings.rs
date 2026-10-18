@@ -41,7 +41,7 @@ fn the_pin_zoom_bounce_duration_is_read_from_its_own_key() {
     assert_eq!(
         AppConfig::default().pin_zoom_bounce_ms,
         DEFAULT_PIN_ZOOM_BOUNCE_MS,
-        "a bounce takes 360 ms unless the file says otherwise"
+        "a bounce takes 100 ms unless the file says otherwise"
     );
 
     let mut ini = Ini::new();
