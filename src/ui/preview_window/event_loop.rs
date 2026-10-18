@@ -72,6 +72,11 @@ pub fn run_preview_window() {
         // rather than into the bubble leaves this window behind, and it is the one surface of
         // this app's that is meant to be in the taskbar — an icon and a title, nothing drawn,
         // kept off the screen (see `pin_taskbar`).
+        //
+        // The icon it is registered under is what the Shell draws its taskbar button with, and a
+        // window class takes an icon once, as it registers — so this is the app's own icon rather
+        // than whatever the button would otherwise be given (see `app_icon`).
+        let taskbar_icon = crate::shell::app_icon::app_icon();
         let taskbar_class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
@@ -79,12 +84,12 @@ pub fn run_preview_window() {
             cbClsExtra: 0,
             cbWndExtra: 0,
             hInstance: hinstance.into(),
-            hIcon: taskbar_icon(),
+            hIcon: taskbar_icon,
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
             hbrBackground: Default::default(),
             lpszMenuName: PCWSTR::null(),
             lpszClassName: PIN_TASKBAR_CLASS,
-            hIconSm: taskbar_icon(),
+            hIconSm: taskbar_icon,
         };
 
         RegisterClassExW(&taskbar_class);
