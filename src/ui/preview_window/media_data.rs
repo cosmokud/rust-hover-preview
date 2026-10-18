@@ -18,6 +18,12 @@ pub(super) struct VideoGeometryKey {
 /// Not `Copy`, for the same reason the geometry it holds is not: the sidecar in there is a
 /// path, so every read out of the cache is a clone of the answer rather than a copy of it
 /// (see `cached_video_geometry`).
+///
+/// The measured variant is the whole answer and the other is a word, and the gap between the two
+/// is left unboxed on purpose: these facts live in a map capped at five hundred entries and are
+/// read far more often than they are written, so the bytes a box would save are paid once per
+/// entry while the allocation and the pointer chase it adds are paid on every read of the cache.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub(super) enum ProbedGeometry {
     /// The shape the probe read, and the crop the detector settled on.
@@ -244,7 +250,7 @@ fn fill_band(out: &mut [u8], width: u32, origin_y: u32, height: u32, flat: [u8; 
         let Some(pixels) = out.get_mut(row * stride..row * stride + stride) else {
             return;
         };
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&flat);
         }
     }
@@ -350,13 +356,9 @@ impl MediaData {
             .audio_scale
             .map(audio_options_of)
             .unwrap_or_else(current_audio_options);
-        let Some((pixels, width, height)) = audio_preview::render(
-            &card,
-            size.0.max(1),
-            size.1.max(1),
-            clock.dpi,
-            options,
-        ) else {
+        let Some((pixels, width, height)) =
+            audio_preview::render(&card, size.0.max(1), size.1.max(1), clock.dpi, options)
+        else {
             return false;
         };
 

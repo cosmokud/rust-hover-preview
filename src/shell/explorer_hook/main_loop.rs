@@ -556,9 +556,10 @@ pub fn run_explorer_hook() {
                 note_pin_click!(
                     "DISMISS press {}  win {}  published {}",
                     focus_move.clicked as u8,
-                    pointer.map_or_else(|| "none".to_string(), |tick| {
-                        window_class_of(tick.window)
-                    }),
+                    pointer.map_or_else(
+                        || "none".to_string(),
+                        |tick| { window_class_of(tick.window) }
+                    ),
                     published as u8,
                 );
             }

@@ -164,7 +164,9 @@ fn audio_facts_probe() {
     let entry = std::fs::read_dir(&list).ok();
     let paths: Vec<PathBuf> = match entry {
         Some(files) => {
-            let mut paths: Vec<_> = files.filter_map(|file| file.ok().map(|file| file.path())).collect();
+            let mut paths: Vec<_> = files
+                .filter_map(|file| file.ok().map(|file| file.path()))
+                .collect();
             paths.sort();
             paths
         }

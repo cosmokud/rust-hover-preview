@@ -340,7 +340,16 @@ pub(crate) fn measure(
         return None;
     }
     let result = TextMetrics::new(dc, dpi, options.font_scale_percent)
-        .map(|metrics| build_page(card, theme, &metrics, max_width, max_height, options.mark_offset_y))
+        .map(|metrics| {
+            build_page(
+                card,
+                theme,
+                &metrics,
+                max_width,
+                max_height,
+                options.mark_offset_y,
+            )
+        })
         .map(|page| (page.width, page.height));
     unsafe {
         let _ = DeleteDC(dc);

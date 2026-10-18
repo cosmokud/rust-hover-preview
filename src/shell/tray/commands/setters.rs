@@ -26,7 +26,7 @@ use super::super::ids::{
 };
 use super::super::submenus::{
     afk_timer_secs_at, audio_scale_at, background_at, dds_background_at, document_scale_at,
-    engine_idle_at, end_of_file_at, html_background_at, zoom_background_at,
+    end_of_file_at, engine_idle_at, html_background_at, zoom_background_at,
 };
 
 use crate::app::dialogs;

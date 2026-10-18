@@ -406,7 +406,7 @@ fn state_folder() -> Option<PathBuf> {
 
     #[cfg(test)]
     {
-        return Some(test_folder());
+        Some(test_folder())
     }
 
     #[cfg(not(test))]

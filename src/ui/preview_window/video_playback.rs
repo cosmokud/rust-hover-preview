@@ -133,7 +133,8 @@ pub(super) fn pin_video_pauses_at_the_top(path: &Path) -> bool {
 /// process id is always a multiple of four — so an odd stand-in is refused twice over.
 pub(super) enum PlayerProcess {
     /// The player this app began.
-    #[cfg_attr(test, allow(dead_code))] // The test seam notes a player instead of beginning one.
+    #[cfg_attr(test, allow(dead_code))]
+    // The test seam notes a player instead of beginning one.
     Started(Child),
     /// The player a test noted in place of beginning one.
     #[cfg(test)]
