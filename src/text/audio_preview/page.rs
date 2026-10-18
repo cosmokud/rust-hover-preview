@@ -463,8 +463,11 @@ pub(super) struct Page {
 /// The mark a card is drawn with: the dot, and the ripples a beat has stood around it.
 ///
 /// The dot is centred on the mark's own cell — half a header advance in from the card's margin,
-/// which is where the ink of the glyph it replaces stood — and the ripples are drawn from that
-/// same centre, so what a beat does is travel around the mark and never off it. The room they
+/// which is where the ink of the glyph it replaces stood — and, on the line, on the middle of the
+/// lowercase ink of the name it marks. That is the middle of the text as it is read: the tallest
+/// band a line stands in, which the line itself is centred by, sits above the letters a name is
+/// mostly made of (see `TextMetrics::x_top`). The ripples are drawn from that same centre, so what
+/// a beat does is travel around the mark and never off it. The room they
 /// have is the nearest of the three things they could reach: the two edges of the card the mark
 /// stands between and the box the name begins in, each less half a ripple's own line and a pixel
 /// of air — so the widest ripple is the widest a mark of this size can be drawn without lapping
@@ -479,10 +482,10 @@ fn mark(beat: f32, metrics: &TextMetrics, header_top: i32, name_left: i32) -> Ma
     let beat = beat.clamp(0.0, 1.0);
 
     let advance = metrics.advance[HEADER_LEVEL as usize].max(1) as f32;
-    let ink_top = metrics.ink_top[HEADER_LEVEL as usize] as f32;
-    let ink_bottom = metrics.ink_bottom[HEADER_LEVEL as usize] as f32;
+    let x_top = metrics.x_top[HEADER_LEVEL as usize] as f32;
+    let x_bottom = metrics.x_bottom[HEADER_LEVEL as usize] as f32;
     let center_x = metrics.padding as f32 + advance / 2.0;
-    let center_y = header_top as f32 + (ink_top + ink_bottom) / 2.0;
+    let center_y = header_top as f32 + (x_top + x_bottom + 1.0) / 2.0;
     let thickness = scaled(1, metrics.scale) as f32;
     let reach = (center_x
         .min(center_y)

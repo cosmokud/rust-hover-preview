@@ -223,7 +223,8 @@ fn a_beat_draws_ripples_around_the_mark() {
 
     // A beating card draws the ripples where the mark says they stand, and no closer to the dot
     // than the first of them: what a beat draws is a shape around the mark, drawn in the mark's
-    // own room — never over the name beside it and never below its own line.
+    // own room — never over the name beside it and never past the rule under the line, which is
+    // where the line's own strip ends.
     let ripples = changed(&beating);
     assert!(
         ripples.len() > 8,
@@ -233,7 +234,7 @@ fn a_beat_draws_ripples_around_the_mark() {
     assert!(
         ripples
             .iter()
-            .all(|&(x, y)| x < name_left && y < header_bottom),
+            .all(|&(x, y)| x < name_left && y < page.rule_top as usize),
         "the beat drew outside the mark's own room: the header line left of the name"
     );
     assert!(
@@ -370,6 +371,76 @@ fn a_fall_ends_on_the_mark_a_card_at_rest_draws() {
         );
         previous = out;
     }
+}
+
+/// The mark stands on the middle of the lowercase ink of the name it marks, and not on the middle
+/// of the tallest band the line itself is centred by: a name is read in its lowercase letters, and
+/// a band measured over a capital and an ascender stands above them (see `mark` and
+/// `TextMetrics::x_top`).
+#[test]
+fn the_mark_is_centred_on_the_name_lines_lowercase_ink() {
+    let (width, height) = measured_at_the_default_share(&card());
+    let page = scrolled(&card(), width, 0);
+    let (painted, width, _height) =
+        render(&card(), width, height, 96, options()).expect("a painted card");
+    let mark = page.mark.expect("a mark");
+
+    let theme = text_theme::loaded(options().theme).expect("the bundled theme");
+    let page_color = rgb(theme.background());
+    let page_ink = [
+        page_color[2],
+        page_color[1],
+        page_color[0],
+        255,
+    ];
+    let stands_on_the_page = |x: i32, y: i32| {
+        let at = (y as usize * width as usize + x as usize) * 4;
+        painted[at..at + 4] == page_ink
+    };
+
+    // The rows of ink a strip of the name line stands in, as painted.
+    let ink_rows = |left: i32, right: i32| -> Vec<i32> {
+        (page.header_top..page.header_top + page.header_height)
+            .filter(|&y| (left..right).any(|x| !stands_on_the_page(x, y)))
+            .collect()
+    };
+    let middle = |rows: &[i32]| (rows[0] + rows[rows.len() - 1] + 1) as f32 / 2.0;
+
+    // The mark's own cell, which is the name line left of where the name begins, and the 'n' of
+    // "Kind" — the name's first lowercase letter, with no ascender and no descender to carry it
+    // off the x-height.
+    let dc = unsafe { CreateCompatibleDC(None) };
+    let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+    let advance = metrics.advance[HEADER_LEVEL as usize];
+    let name_left = page.header[0].x;
+    let dot = middle(&ink_rows(0, name_left));
+    let lower = middle(&ink_rows(name_left + advance * 2, name_left + advance * 3));
+
+    assert!(
+        (dot - lower).abs() <= 1.0,
+        "the mark stands at {dot}, away from the 'n' of the name at {lower}"
+    );
+
+    // Which is not where the tallest band of the line stands: the mark would be above the letters
+    // a name is read in if it were centred on that band (see `TextMetrics::ink_top`).
+    let tallest = (page.header_top
+        + metrics.ink_top[HEADER_LEVEL as usize]
+        + page.header_top
+        + metrics.ink_bottom[HEADER_LEVEL as usize]
+        + 1) as f32
+        / 2.0;
+    assert!(
+        dot > tallest,
+        "the mark stands at {dot}, on the band the line is centred by at {tallest}"
+    );
+    assert!(
+        dot > mark.center_y - mark.radius && dot < mark.center_y + mark.radius,
+        "the mark's own dot is drawn at {} around {dot}",
+        mark.center_y,
+    );
 }
 
 /// A card with nothing to say about its length still draws, and one with no room at all is
