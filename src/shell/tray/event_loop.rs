@@ -26,7 +26,7 @@ use super::commands::{
     set_video_scale, set_video_volume, set_webview_idle, set_zoom_background,
     toggle_check_for_updates,
     toggle_engine_persistent, toggle_loop, toggle_pin_shuffle, PinShuffle,
-    toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_enabled,
+    toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_always_on_top, toggle_pin_enabled,
     toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
     toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
@@ -56,6 +56,7 @@ use super::ids::{
     ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
     ID_TRAY_MPV_BASE, MPV_COMMANDS,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
+    ID_TRAY_PIN_ALWAYS_ON_TOP,
     ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SHUFFLE, ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SHUFFLE,
     ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
     ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
@@ -198,6 +199,9 @@ unsafe extern "system" fn tray_window_proc(
                     }
                     ID_TRAY_PIN => {
                         toggle_pin_enabled();
+                    }
+                    ID_TRAY_PIN_ALWAYS_ON_TOP => {
+                        toggle_pin_always_on_top();
                     }
                     ID_TRAY_PIN_UPDATE => {
                         toggle_pin_update_enabled();

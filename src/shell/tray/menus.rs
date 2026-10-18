@@ -26,6 +26,7 @@ use super::ids::{
     ID_TRAY_IMAGE_SHUFFLE,
     ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
+    ID_TRAY_PIN_ALWAYS_ON_TOP,
     ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
     ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
     ID_TRAY_PIN_PAUSE_AUDIO,
@@ -77,7 +78,7 @@ use crate::config::config::{
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_IMAGE_SHUFFLE, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
     DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
     DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_PAUSE_AUDIO,
-    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_PREVIEW_SCALE, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
     DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
     DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TICK_MS,
@@ -141,6 +142,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // `key_input`).
     let (
         pin_enabled,
+        pin_always_on_top,
         pin_key,
         pin_minimize_to,
         pin_update,
@@ -153,6 +155,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .map(|c| {
             (
                 c.pin_enabled,
+                c.pin_always_on_top,
                 c.pin_key.clone(),
                 c.pin_minimize_to,
                 c.pin_update_enabled,
@@ -164,6 +167,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         })
         .unwrap_or((
             true,
+            DEFAULT_PIN_ALWAYS_ON_TOP,
             "space".to_string(),
             DEFAULT_PIN_MINIMIZE_TO,
             DEFAULT_PIN_UPDATE_ENABLED,
@@ -190,6 +194,17 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             },
         ID_TRAY_PIN as usize,
         PCWSTR(pin_label_wide.as_ptr()),
+    );
+    let _ = AppendMenuW(
+        pin_menu,
+        MF_STRING
+            | if pin_always_on_top {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_PIN_ALWAYS_ON_TOP as usize,
+        w!("Always On Top"),
     );
 
     // The `Update Preview` submenu: whether a pin that is up is shown the file the user picks
