@@ -241,6 +241,30 @@ fn pin_owns_caret(owner: u64, video: u64, foreground: u64) -> bool {
     owner != 0 && foreground != 0 && (foreground == owner || (video != 0 && foreground == video))
 }
 
+/// The same question asked of the published handles rather than of numbers: whether the pin is the
+/// window the user is in right now — or whether no pin is up at all.
+///
+/// Zero for both handles is the answer that is not a pin's: what is on screen is a hover preview,
+/// which is put up under the pointer and stands in front of everything, so there is no window of
+/// anybody else's for a key or a wheel notch to be taken from. A pin is the opposite — it can be
+/// sitting behind another program, which is what `Pin Mode → Always On Top` off means — and while
+/// the user is in that program, what arrives there is that program's, not the pin's.
+///
+/// It is the wheel hook's question as well as the keyboard hook's, which is why it is answered here
+/// rather than beside either of them: both run inside a low-level callback, and what neither may do
+/// there is walk the desktop to ask.
+pub(crate) fn pin_owns_foreground() -> bool {
+    let owner = PIN_KEYS_OWNER.load(Ordering::Acquire);
+    if owner == 0 {
+        return true;
+    }
+
+    // Safety: asks Windows which window is in front. It is a handle looked up, not a pointer
+    // dereferenced, and it cannot fail.
+    let foreground = unsafe { GetForegroundWindow().0 as u64 };
+    pin_owns_caret(owner, PIN_KEYS_VIDEO.load(Ordering::Acquire), foreground)
+}
+
 /// Thread running the hook's message pump, published so shutdown can wake it.
 static KEY_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
