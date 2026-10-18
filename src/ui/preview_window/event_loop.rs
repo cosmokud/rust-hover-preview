@@ -783,9 +783,9 @@ pub fn run_preview_window() {
                 // the pin is drawn by, mirrored into the stand-in by the Shell, which is a picture
                 // that moves on its own and costs nothing here until what it is a picture of
                 // changes (see `pin_taskbar_mirror`).
-                let showing = current_media_type();
-                refresh_pin_media_buttons(showing, bubble_is_playing());
-                sync_pin_mirror(showing);
+                let media_kind = current_media_type();
+                refresh_pin_media_buttons(media_kind, bubble_is_playing());
+                sync_pin_mirror(media_kind);
 
                 // What a key does to a pinned text preview, polled rather than waited for: a pin
                 // that the user has not pressed is a window nobody is in, and a window nobody is

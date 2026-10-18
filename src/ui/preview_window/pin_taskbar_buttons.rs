@@ -27,7 +27,9 @@ use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::Registry::{
     RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
 };
-use windows::Win32::UI::Controls::{ImageList_Add, ImageList_Create, HIMAGELIST, ILC_COLOR32};
+use windows::Win32::UI::Controls::{
+    ImageList_Add, ImageList_Create, ImageList_Destroy, HIMAGELIST, ILC_COLOR32,
+};
 use windows::Win32::UI::Shell::{
     ITaskbarList3, TaskbarList, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_BITMAP, THB_FLAGS,
     THB_TOOLTIP, THUMBBUTTON, THUMBBUTTONFLAGS,
@@ -224,16 +226,19 @@ unsafe fn add_media_toolbar(hwnd: HWND, state: PinMediaButtons) -> bool {
         return false;
     };
 
-    // The list is never destroyed, and must not be: the Shell reads it for as long as the toolbar
-    // is up, and the toolbar lives as long as the window it was added to, which is the run of the
-    // program (see `pin_taskbar`). Four small bitmaps for the life of the process is the same price
-    // the stand-in's window itself is, and paid once.
+    // The list is kept for as long as the buttons are drawn from it, which is the life of the
+    // stand-in's window — created once and never destroyed (see `pin_taskbar`). Four small bitmaps
+    // for the life of the process is the same price the stand-in's window itself is, and paid once.
     let images = icon_list();
     if images.is_invalid() {
         return false;
     }
 
     if list.ThumbBarSetImageList(hwnd, images).is_err() {
+        // The marks were not taken, so the list is this call's own to give back: this is the road a
+        // tick takes over and over — a window the Shell has no button for, a Shell that is
+        // restarting — and a list left behind on each of them is memory nobody will ever read.
+        let _ = ImageList_Destroy(images);
         return false;
     }
 
@@ -247,10 +252,17 @@ unsafe fn add_media_toolbar(hwnd: HWND, state: PinMediaButtons) -> bool {
         .ThumbBarAddButtons(hwnd, &media_buttons(hidden))
         .is_err()
     {
+        let _ = ImageList_Destroy(images);
         return false;
     }
 
-    push_media_buttons(hwnd, state)
+    // The buttons are the Shell's from here and the list is what they are drawn from, so the list
+    // stays and the state is asked for once more: a state the Shell would not take leaves the three
+    // hidden rather than wrong, which is a hover with no buttons in it and not a hover with the
+    // wrong ones. What is not done is adding them again — a toolbar's buttons cannot be added
+    // twice — so the answer is yes from here whatever that update said.
+    push_media_buttons(hwnd, state);
+    true
 }
 
 /// Tell the Shell what the three buttons are now, answering whether it took the answer.
