@@ -386,6 +386,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 title: &paint.title,
                 maximized: paint.maximized,
                 maximizable: paint.maximizable,
+                always_on_top: paint.always_on_top,
                 hovered: paint.hovered,
                 pressed: paint.pressed,
             };
@@ -534,6 +535,7 @@ pub(super) struct PinnedPaint {
     pub(super) maximized: bool,
     /// Whether this pin's caption offers a maximize at all (see `PinFrame`).
     pub(super) maximizable: bool,
+    pub(super) always_on_top: bool,
     pub(super) hovered: Option<pin_chrome::CaptionButton>,
     pub(super) pressed: Option<pin_chrome::CaptionButton>,
     /// What the caption's button under the pointer is saying, and which one it is — nothing,
@@ -614,6 +616,7 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
                 .unwrap_or_default(),
             maximized: pin.restore.is_some(),
             maximizable: pin.frame != PinFrame::None,
+            always_on_top: pin_always_on_top(),
             hovered: pin.hovered,
             pressed: pin.pressed,
             tooltip: pin.tooltip.shown.and_then(|button| {

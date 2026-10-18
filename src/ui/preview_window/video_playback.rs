@@ -1005,7 +1005,12 @@ pub(super) unsafe fn place_player_window(
     flags: SET_WINDOW_POS_FLAGS,
 ) {
     let (x, y, width, height) = box_;
-    let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, flags);
+    let insert_after = if pinned() && !pin_always_on_top() {
+        HWND_NOTOPMOST
+    } else {
+        HWND_TOPMOST
+    };
+    let _ = SetWindowPos(hwnd, insert_after, x, y, width, height, flags);
 
     // A raise with no pin standing is a hover's, and there is nothing to put over it.
     let re_raise = order == PlayerOrder::Raise && pinned();

@@ -43,6 +43,7 @@ fn pinned() -> Card {
             hovered: None,
             pressed: None,
             window_buttons: true,
+            always_on_top: true,
         }),
         ..card()
     }
@@ -956,10 +957,11 @@ fn the_two_window_buttons_are_answered_in_their_own_boxes() {
         "the cell the mark is drawn in answers for nothing"
     );
 
-    // The two window buttons keep their own boxes, and the card answers
+    // The three window buttons keep their own boxes, and the card answers
     // for each in its own box — wherever it stands, with no flag saying
     // whether the band it stands in is showing.
     for (control, button) in [
+        (CardControl::AlwaysOnTop, &boxes.always_on_top),
         (CardControl::Minimize, &boxes.minimize),
         (CardControl::Close, &boxes.close),
     ] {
@@ -1269,6 +1271,7 @@ fn lit(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
             hovered,
             pressed,
             window_buttons: true,
+            always_on_top: true,
         }),
         ..pinned()
     }
@@ -1313,7 +1316,7 @@ fn the_window_buttons_stand_in_the_top_corner_over_the_name_line() {
     // the margin does not have: the drawn box reaches into the name line's own
     // rows, which is where a button that size ends.
     let margin_side = metrics.padding - gap * 2;
-    for button in [&boxes.minimize, &boxes.close] {
+    for button in [&boxes.always_on_top, &boxes.minimize, &boxes.close] {
         assert_eq!(
             button.drawn.top, gap,
             "a drawn box stood back by the gap from the window's own top edge: {:?}",
@@ -1348,6 +1351,11 @@ fn the_window_buttons_stand_in_the_top_corner_over_the_name_line() {
         boxes.minimize.drawn.right,
         boxes.close.drawn.left - gap,
         "and the minimize stands beside it with the same gap between the two"
+    );
+    assert_eq!(
+        boxes.always_on_top.drawn.right,
+        boxes.minimize.drawn.left - gap,
+        "and the always_on_top stands beside minimize with the same gap between the two"
     );
 
     // The name's own box is the card's content box — the same box it is drawn
@@ -1385,6 +1393,7 @@ fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
         hovered: None,
         pressed: None,
         window_buttons: true,
+        always_on_top: true,
     });
 
     let (width, height) = measured_at_the_default_share(&named);
@@ -1505,6 +1514,7 @@ fn a_window_button_is_answered_where_its_glyph_is_and_a_little_beyond_it() {
     let between = (boxes.minimize.drawn.right + boxes.close.drawn.left) / 2;
 
     for (control, button) in [
+        (CardControl::AlwaysOnTop, &boxes.always_on_top),
         (CardControl::Minimize, &boxes.minimize),
         (CardControl::Close, &boxes.close),
     ] {
@@ -1644,6 +1654,11 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
             button.drawn
         );
     }
+    assert!(
+        holds(&resting, boxes.always_on_top.drawn, ink(accent)),
+        "an active always_on_top button is drawn in the accent: {:?}",
+        boxes.always_on_top.drawn
+    );
 
     // The one the pointer is on, and the one it holds, are drawn in the accent —
     // and the buttons beside the one the pointer is on keep the ink they had.
@@ -1666,11 +1681,15 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
     for painted in [&resting, &hovered, &held] {
         for y in 0..page.header_top {
             for x in 0..width as i32 {
-                let on_a_button = [&boxes.minimize.drawn, &boxes.close.drawn]
-                    .iter()
-                    .any(|drawn| {
-                        x >= drawn.left && x < drawn.right && y >= drawn.top && y < drawn.bottom
-                    });
+                let on_a_button = [
+                    &boxes.always_on_top.drawn,
+                    &boxes.minimize.drawn,
+                    &boxes.close.drawn,
+                ]
+                .iter()
+                .any(|drawn| {
+                    x >= drawn.left && x < drawn.right && y >= drawn.top && y < drawn.bottom
+                });
                 if on_a_button {
                     continue;
                 }

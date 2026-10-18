@@ -127,7 +127,7 @@ use crate::config::config::{
     DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
     DEFAULT_PIN_PAUSE_AUDIO,
-    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PREVIEW_SCALE_PERCENT,
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
     DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL,
@@ -236,7 +236,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SetCursor,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
     TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
-    GW_HWNDPREV, GW_OWNER, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+    GW_HWNDPREV, GW_OWNER, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
     IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG, MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC,
     PBT_APMRESUMESUSPEND,
     PBT_APMSTANDBY, PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT, SET_WINDOW_POS_FLAGS,
@@ -274,6 +274,7 @@ pub(crate) use image_cache::trim_image_cache;
 pub(crate) use media_types::PreviewMessage;
 pub(crate) use pin_bubble::PIN_BUBBLE_HWND;
 pub(crate) use pin_drag::publish_pin_media_press;
+pub(crate) use pin_lifecycle::pin_always_on_top;
 pub(crate) use pin_lifecycle::PinCommand;
 pub(crate) use pin_model::pin_is_focused;
 pub(crate) use pin_model::pin_zoom_keep_alive_try;

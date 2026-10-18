@@ -105,7 +105,9 @@ pub(super) fn pin_taskbar_is_showing() -> bool {
 /// was.
 pub(super) fn hide_minimized_pin() {
     hide_pin_bubble();
-    unsafe { hide_pin_taskbar() };
+    if pin_always_on_top() {
+        unsafe { hide_pin_taskbar() };
+    }
 }
 
 /// The stand-in's window, created once for the run.
@@ -141,6 +143,30 @@ pub(super) unsafe fn pin_taskbar_window() -> Option<HWND> {
     Some(hwnd)
 }
 
+unsafe fn handle_taskbar_restore() {
+    if pin_always_on_top() {
+        hide_pin_taskbar();
+    }
+    if pin_is_collapsed() {
+        ask_pin(PinCommand::Restore);
+    } else {
+        let preview_hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+        if !preview_hwnd.is_invalid() {
+            let _ = SetForegroundWindow(preview_hwnd);
+            let _ = SetWindowPos(
+                preview_hwnd,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE,
+            );
+            place_pinned_siblings();
+        }
+    }
+}
+
 /// The stand-in's own window procedure: the two things its taskbar button can be asked for, and
 /// nothing else, because it is a window with no surface and no content.
 ///
@@ -158,8 +184,7 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
     match msg {
         WM_SYSCOMMAND => match (wparam.0 & 0xFFF0) as u32 {
             SC_RESTORE => {
-                hide_pin_taskbar();
-                ask_pin(PinCommand::Restore);
+                handle_taskbar_restore();
                 LRESULT(0)
             }
             SC_CLOSE => {
@@ -172,16 +197,14 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
         // never may, because what it stands in for is not on the screen: the ask is answered by
         // putting the pin back and taking the stand-in away, and the button is never brought up.
         WM_QUERYOPEN => {
-            hide_pin_taskbar();
-            ask_pin(PinCommand::Restore);
+            handle_taskbar_restore();
             LRESULT(0)
         }
         WM_ACTIVATE => {
             // A click on the taskbar button may activate the window rather than ask it to
             // restore; the pin is asked for either way. A deactivation says nothing about the pin.
             if (wparam.0 & 0xFFFF) as u32 == WA_ACTIVE {
-                hide_pin_taskbar();
-                ask_pin(PinCommand::Restore);
+                handle_taskbar_restore();
             }
             LRESULT(0)
         }

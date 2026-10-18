@@ -231,6 +231,14 @@ pub(super) fn pin_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// Whether a pinned window stays always on top of other windows, as the configuration has it.
+pub fn pin_always_on_top() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_always_on_top)
+        .unwrap_or(DEFAULT_PIN_ALWAYS_ON_TOP)
+}
+
 /// Whether a pin that is up is shown the file the user picks next, as the configuration has it
 /// (see `Pin Mode → Update Preview`). It is read on both sides of the swap: by the Explorer hook
 /// before it watches for anything at all, and here before one is taken up.
@@ -436,6 +444,7 @@ impl PinWindow for Win32PinWindow {
         // is refused by the call rather than acted on.
         unsafe {
             hide_pinned_windows();
+            hide_pin_taskbar();
         }
         hide_minimized_pin();
     }
@@ -844,9 +853,14 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     }
 
     render_pinned_preview_at(hwnd, window.0, window.1);
+    let insert_after = if pin_always_on_top() {
+        HWND_TOPMOST
+    } else {
+        HWND_NOTOPMOST
+    };
     let _ = SetWindowPos(
         hwnd,
-        HWND_TOPMOST,
+        insert_after,
         window.0,
         window.1,
         width,
@@ -854,6 +868,10 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         SWP_NOACTIVATE | SWP_SHOWWINDOW,
     );
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+    if !pin_always_on_top() {
+        show_pin_taskbar();
+    }
 }
 
 /// Put the thing a pin leaves a band open for where that band is: the player's own window, or
@@ -950,6 +968,7 @@ pub(super) fn pinned_audio_chrome(paused: Option<f64>) -> Option<CardChrome> {
     Some(CardChrome {
         playing,
         volume: pin.volume.level,
+        always_on_top: pin_always_on_top(),
         hovered: pin.audio_hovered,
         pressed: pin.audio_pressed,
         window_buttons: pin.audio_window_buttons,
@@ -992,6 +1011,7 @@ pub(super) fn pinned_audio_card_box(
     let chrome = Some(CardChrome {
         playing: false,
         volume: current_audio_volume(),
+        always_on_top: pin_always_on_top(),
         hovered: None,
         pressed: None,
         window_buttons: false,
@@ -1105,9 +1125,14 @@ pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
             }
             // Moved without a raise: `SWP_NOZORDER` leaves the order alone, so the pin stays
             // over the film it was standing over and no frame puts the film over the chrome.
+            let insert_after = if pin_always_on_top() {
+                HWND_TOPMOST
+            } else {
+                HWND_NOTOPMOST
+            };
             let _ = SetWindowPos(
                 hwnd,
-                HWND_TOPMOST,
+                insert_after,
                 content.0,
                 content.1,
                 (content.2 - content.0).max(1),

@@ -149,11 +149,16 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
 /// swaps its own surface. A video that stopped rendering would be a far worse
 /// answer than a click that falls through to the desktop.
 pub(super) fn player_ex_style_for(current: isize) -> isize {
-    current
+    let mut style = current
         | WS_EX_NOACTIVATE.0 as isize
         | WS_EX_TOOLWINDOW.0 as isize
-        | WS_EX_TOPMOST.0 as isize
-        | WS_EX_TRANSPARENT.0 as isize
+        | WS_EX_TRANSPARENT.0 as isize;
+    if !pinned() || pin_always_on_top() {
+        style |= WS_EX_TOPMOST.0 as isize;
+    } else {
+        style &= !(WS_EX_TOPMOST.0 as isize);
+    }
+    style
 }
 
 /// Style and raise a player's known window.
