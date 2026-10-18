@@ -50,6 +50,12 @@ static PIN_DOWN: AtomicBool = AtomicBool::new(false);
 static PIN_KEYS_OWNER: AtomicU64 = AtomicU64::new(0);
 static PIN_KEYS_VIDEO: AtomicU64 = AtomicU64::new(0);
 
+/// Whether the standing pin is `Pin Mode → Always On Top`, published beside the two handles for
+/// the same reason: a window that is above everything is the window the pointer is over, so the
+/// notch a hand turns on it is the pin's whether or not the keyboard happens to be in it (see
+/// `pin_owns_foreground`).
+static PIN_KEYS_TOPMOST: AtomicBool = AtomicBool::new(false);
+
 /// The keys a standing pin answers, as the commands they mean.
 ///
 /// The set is the pin's own (`pinned_key_command`), read here as numbers because the hook thread
@@ -106,6 +112,17 @@ pub(crate) fn pin_key_command(vk: i32) -> Option<u8> {
 pub(crate) fn publish_pin_key_owner(owner: u64, video: u64) {
     PIN_KEYS_OWNER.store(owner, Ordering::Release);
     PIN_KEYS_VIDEO.store(video, Ordering::Release);
+}
+
+/// Tell the hooks whether the standing pin is above every other window.
+///
+/// It is published rather than asked for where it is read for the reason the two handles above
+/// are: a low-level callback may not take the configuration's lock, and every notch on the
+/// machine waits for the answer. No pin up is the same answer as a pin that is not on top —
+/// a hover preview stands in front of everything and needs no exemption (see
+/// `pin_owns_foreground`).
+pub(crate) fn publish_pin_always_on_top(always_on_top: bool) {
+    PIN_KEYS_TOPMOST.store(always_on_top, Ordering::Release);
 }
 
 /// Pin-key commands seen since this was last called, one per press, in the order pressed.
@@ -256,6 +273,15 @@ fn pin_owns_caret(owner: u64, video: u64, foreground: u64) -> bool {
 pub(crate) fn pin_owns_foreground() -> bool {
     let owner = PIN_KEYS_OWNER.load(Ordering::Acquire);
     if owner == 0 {
+        return true;
+    }
+
+    // A pin that is Always On Top is the window the pointer is in wherever the keyboard is: it
+    // stands over every other window, so the box the preview published is the box on screen and
+    // a notch turned in it is the pin's own (see `Pin Mode → Always On Top`). Without this the
+    // setting's own name was a lie for the wheel — the pin hovered, was seen, and was not
+    // scrolled until the user clicked it, which is a click a topmost window never needed.
+    if PIN_KEYS_TOPMOST.load(Ordering::Acquire) {
         return true;
     }
 

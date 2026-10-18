@@ -454,7 +454,14 @@ impl PinWindow for Win32PinWindow {
         // plain call on a handle read from the slot each was created into, with nothing this fn
         // has to be unsafe about. Both are taken down because a pin that ends must leave neither
         // behind, whichever of the two it was put away as.
+        //
+        // **Both, and not through `hide_minimized_pin` alone.** That call leaves the taskbar
+        // stand-in up for a pin that is not Always On Top, because the pin on the screen wears one
+        // too and a restore must not take it away — but this road is a pin that *ends*, and a
+        // button left behind it is a taskbar entry for a window with nothing in it, which is what
+        // a hover over it then finds (see `pin_taskbar`).
         hide_minimized_pin();
+        unsafe { hide_pin_taskbar() };
     }
 
     fn repaint(&self) {
@@ -1125,20 +1132,34 @@ pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
             }
             // Moved without a raise: `SWP_NOZORDER` leaves the order alone, so the pin stays
             // over the film it was standing over and no frame puts the film over the chrome.
-            let insert_after = if pin_always_on_top() {
-                HWND_TOPMOST
+            //
+            // **And a pin that is not Always On Top puts the film *under it* while it moves it.**
+            // The order still travels with the box — the pair keeps its place in the desktop — but
+            // the film is put directly below the pin, which is where the chrome is over it and
+            // where an mpv window adopted from a hover stops being a topmost one (see
+            // `put_player_under_the_pin`). A pin that is Always On Top keeps the old arrangement:
+            // its film holds its own band up and the pin is raised over it.
+            if pin_always_on_top() {
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    content.0,
+                    content.1,
+                    (content.2 - content.0).max(1),
+                    (content.3 - content.1).max(1),
+                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+                );
             } else {
-                HWND_NOTOPMOST
-            };
-            let _ = SetWindowPos(
-                hwnd,
-                insert_after,
-                content.0,
-                content.1,
-                (content.2 - content.0).max(1),
-                (content.3 - content.1).max(1),
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
-            );
+                let _ = SetWindowPos(
+                    hwnd,
+                    player_insert_after(),
+                    content.0,
+                    content.1,
+                    (content.2 - content.0).max(1),
+                    (content.3 - content.1).max(1),
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                );
+            }
         }
         return;
     }

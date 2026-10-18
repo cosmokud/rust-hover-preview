@@ -1961,3 +1961,71 @@ fn a_drag_posts_ffplays_pause_key_and_sends_an_mpv_player_nothing() {
 
     restore(previous_pin, previous_pid, previous_media);
 }
+
+/// The film's own window is told which band it is to hold, because the pin's setting and the
+/// player's own flag disagree the moment a hover's film is adopted: `--ontop` was for the
+/// preview's sake, and a pin that is not Always On Top is a window the user may put a program in
+/// front of. The same ask answers the setting being changed under a film that is already running,
+/// which is the whole of why it is an IPC property rather than a flag on a relaunch.
+#[test]
+fn a_pinned_mpv_film_is_told_the_pins_own_answer_about_the_topmost_band() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_image = video_process_image();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+    let before = pin_always_on_top();
+
+    // The player this app holds, named as the film on screen, and the pipe it is told on.
+    stand_pin(Some(playing_pin((100, 80, 420, 320), 0.0)));
+    note_player_process(101, MPV_IMAGE_NAME);
+    mpv_ipc::remember_pipe(101, "a-pinned-ontop-pipe", false);
+    mpv_ipc::clear_noted();
+
+    let set_top = |top: bool| {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.pin_always_on_top = top;
+        }
+    };
+
+    set_top(false);
+    settle_pinned_mpv_ontop();
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![format!(
+            "{}\n",
+            r#"{"command":["set_property","ontop",false],"async":true}"#
+        )],
+        "a pin that is not Always On Top tells its film to leave the topmost band"
+    );
+
+    set_top(true);
+    mpv_ipc::clear_noted();
+    settle_pinned_mpv_ontop();
+    assert_eq!(
+        mpv_ipc::noted_lines(),
+        vec![format!(
+            "{}\n",
+            r#"{"command":["set_property","ontop",true],"async":true}"#
+        )],
+        "and one that is tells it to hold the band the pin's chrome is raised over"
+    );
+
+    // FFmpeg's player has no opinion of its own to correct: this app places its window, so the
+    // route that is not mpv's is told nothing at all.
+    note_player_process(101, FFPLAY_IMAGE_NAME);
+    mpv_ipc::clear_noted();
+    settle_pinned_mpv_ontop();
+    assert!(
+        mpv_ipc::noted_lines().is_empty(),
+        "FFmpeg's player is placed by this app and is told nothing about bands"
+    );
+
+    set_top(before);
+    restore(previous_pin, previous_pid, previous_media);
+    note_player_process(previous_pid, previous_image);
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+}
