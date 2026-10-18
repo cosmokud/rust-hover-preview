@@ -17,8 +17,8 @@
 use super::*;
 
 use windows::Win32::UI::WindowsAndMessaging::{
-    SC_CLOSE, SC_RESTORE, SetWindowTextW, SW_SHOWMINNOACTIVE, WA_ACTIVE, WM_QUERYOPEN, WS_CAPTION,
-    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
+    SC_CLOSE, SC_RESTORE, SetWindowTextW, SW_SHOWMINNOACTIVE, WA_ACTIVE, WM_COMMAND, WM_QUERYOPEN,
+    WS_CAPTION, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
 };
 /// The class the taskbar stand-in is created from.
 pub(super) const PIN_TASKBAR_CLASS: PCWSTR = w!("RustHoverPreviewPinTaskbar");
@@ -70,12 +70,23 @@ pub(super) unsafe fn hide_pin_taskbar() {
 /// from the bubble places the window beside the bubble (see `placed_pin_box`), and a restore from
 /// the taskbar simply puts it back where it stood.
 pub(super) fn pin_taskbar_is_showing() -> bool {
+    showing_taskbar_window().is_some()
+}
+
+/// The stand-in's window where it is up, or nothing where it is not — asked by a caller that has
+/// something to give the window rather than a question about the pin, such as the media buttons a
+/// taskbar hover draws (see `pin_taskbar_buttons`).
+///
+/// A window that has never been shown is not created here: what this answers is whether there is a
+/// taskbar button, and asking must not be the thing that puts one there.
+pub(super) fn showing_taskbar_window() -> Option<HWND> {
     let hwnd = PIN_TASKBAR_HWND.load(Ordering::SeqCst);
     if hwnd == 0 {
-        return false;
+        return None;
     }
 
-    unsafe { IsWindowVisible(HWND(hwnd as *mut _)).as_bool() }
+    let hwnd = HWND(hwnd as *mut _);
+    unsafe { IsWindowVisible(hwnd).as_bool().then_some(hwnd) }
 }
 
 /// Take whichever stand-in a collapsed pin left — the round bubble, the taskbar button, or both
@@ -160,6 +171,17 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        // A press in the hover's toolbar, which the Shell sends here because it is this window's own
+        // taskbar button the hover belongs to. What each button means is the pin's own command,
+        // queued for the loop the way a press on the caption is (see `pin_taskbar_buttons`): this
+        // procedure knows which number is which button and nothing about what a walk or a hold does.
+        WM_COMMAND => {
+            if let Some(command) = pin_media_button_click(wparam) {
+                ask_pin(command);
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_SYSCOMMAND => match (wparam.0 & 0xFFF0) as u32 {
             SC_RESTORE => {
                 handle_taskbar_restore();

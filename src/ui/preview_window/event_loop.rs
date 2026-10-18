@@ -772,6 +772,14 @@ pub fn run_preview_window() {
                 settle_pinned_park();
                 settle_pending_hold();
 
+                // And what the taskbar button's own hover is offering, which is settled by the same
+                // tick for the same reason the chrome is: a pin put away into the taskbar can be
+                // walked and held from the hover, and what those buttons say is what the pin's
+                // transport is doing (see `refresh_pin_media_buttons`). Nothing is sent while the
+                // stand-in is not up, so this is two atomics and a comparison on a tick that has no
+                // taskbar button to draw.
+                refresh_pin_media_buttons(current_media_type(), bubble_is_playing());
+
                 // What a key does to a pinned text preview, polled rather than waited for: a pin
                 // that the user has not pressed is a window nobody is in, and a window nobody is
                 // in is never sent a keystroke. Ctrl+C is answered for every preview by the tick
