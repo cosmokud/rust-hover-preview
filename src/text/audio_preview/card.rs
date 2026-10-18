@@ -42,7 +42,8 @@ pub(super) const CLOCK_ADVANCES: i32 = 17;
 pub(super) const MIN_CONTENT_ADVANCES: i32 = 34;
 
 /// The size level the name is set in, which is the level an archive's header is set in — and the
-/// line the mark is drawn on, centred on the band that level's ink stands in.
+/// line the mark is drawn on, which stands on the x-height band of that level's ink rather than
+/// on the tallest band the line itself is centred by (see `super::page::mark`).
 pub(super) const HEADER_LEVEL: u8 = 3;
 
 /// The hairline under the name, and the room kept around it.
