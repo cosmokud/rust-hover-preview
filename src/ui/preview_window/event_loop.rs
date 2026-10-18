@@ -785,6 +785,15 @@ pub fn run_preview_window() {
                 // stand-in is not up, so this is two atomics and a comparison on a tick that has no
                 // taskbar button to draw.
                 //
+                // And the form the button is in, which the Shell has gestures of its own for — a
+                // second click on the button, `Win+M`, its own `Minimize` — so the pin's place is
+                // what it is read back against, once a tick: a stand-in the Shell has minimized
+                // under a pin that is on the screen is a hover frozen on the frame it was put down
+                // with, and a stand-in the Shell has taken away altogether is a button the user has
+                // lost until the app is restarted (see `keep_the_stand_in_up`). Nothing is asked of
+                // the Shell here: the window is this app's own, and both reads are of it.
+                keep_the_stand_in_up();
+
                 // The picture the hover shows is the same two facts and is asked the same way: what
                 // the pin is drawn by, mirrored into the stand-in by the Shell, which is a picture
                 // that moves on its own and costs nothing here until what it is a picture of

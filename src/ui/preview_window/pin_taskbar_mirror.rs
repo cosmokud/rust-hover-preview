@@ -214,10 +214,10 @@ unsafe fn settle_mirror(
 
 /// Move the stand-in so that its *client area* is the size the picture needs, off every display.
 ///
-/// The client area and not the window: a window of this kind wears a caption and a border outside the
-/// area a picture is drawn in, and the destination of a thumbnail is measured in that area — so a
-/// window moved to the picture's own size is a client area smaller than the picture, and a picture
-/// stretched into it is a picture of another shape.
+/// The client area and not the window, because the destination of a thumbnail is measured in that
+/// area: what the stand-in wears around it is measured here rather than assumed from its style, and
+/// the arithmetic leaves the client area the source's own shape for a borderless window — which is
+/// what the stand-in is (see `pin_taskbar::stand_in_style`).
 unsafe fn fit_mirror_window(hwnd: HWND, client: (i32, i32)) {
     let mut window = RECT::default();
     let mut area = RECT::default();
@@ -250,10 +250,21 @@ unsafe fn fit_mirror_window(hwnd: HWND, client: (i32, i32)) {
 /// window's own frame (see `place_pinned_siblings` and `render_layered_preview`).
 ///
 /// A sound has no picture to mirror, and a pin that is showing nothing yet has nothing to show.
-fn mirror_source(kind: Option<MediaType>) -> Option<HWND> {
+pub(super) fn mirror_source(kind: Option<MediaType>) -> Option<HWND> {
     match kind {
         None | Some(MediaType::Audio) => return None,
         Some(_) => {}
+    }
+
+    // A pin put away into the round bubble is a pin whose own windows are off the screen, and the
+    // bubble is what is left of it on the desktop: it is composed, it is showing the pin's own
+    // picture, and it is the only window of the pin's there is to be a picture of — so the hover of
+    // the bubble's own `To Taskbar` shows the pin rather than the desk behind it (see
+    // `pin_bubble::showing_bubble_window`).
+    if pin_is_collapsed() {
+        if let Some(bubble) = pin_bubble::showing_bubble_window() {
+            return Some(bubble);
+        }
     }
 
     let player = VIDEO_HWND.load(Ordering::SeqCst);

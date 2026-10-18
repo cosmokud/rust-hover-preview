@@ -464,7 +464,15 @@ pub(super) unsafe fn bubble_menu_hover(hwnd: HWND) -> bool {
 
 /// Put the pin away into the taskbar rather than the bubble: the bubble goes, the stand-in comes
 /// up, and the pin stays collapsed until it is brought back (see `show_pin_taskbar`).
+///
+/// The picture the hover is to hold is taken *before* the bubble goes, and the bubble is what it is
+/// taken from: the pin's own windows are off the screen behind a bubble, the bubble is the pin's
+/// picture of itself, and a frame taken after it would be a frame of nothing (see
+/// `keep_the_pin_for_the_taskbar` and `pin_taskbar_mirror::mirror_source`).
 pub(super) fn bubble_to_taskbar() {
+    unsafe {
+        keep_the_pin_for_the_taskbar();
+    }
     hide_pin_bubble();
     unsafe {
         show_pin_taskbar();
@@ -1295,6 +1303,23 @@ fn bubble_box_of(hwnd: HWND) -> Option<ScreenRegion> {
     let (x, y, ..) = window_origin(hwnd)?;
     let side = logical_px(dpi_at(x, y), PIN_BUBBLE_PIXELS).max(16);
     Some((x, y, x + side, y + side))
+}
+
+/// On the screen as a bubble, where it is: the window the pin is standing in while it is put away
+/// into the round bubble, or nothing while no bubble is up.
+///
+/// The question is the mirror's rather than the pin's — what a taskbar hover is a picture of — and
+/// it is asked of the same two facts `bubble_box_on_screen` is: a handle that was never made is not
+/// a window, and a bubble that is hidden is not on the screen to be mirrored (see
+/// `pin_taskbar_mirror`).
+pub(super) fn showing_bubble_window() -> Option<HWND> {
+    let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    if hwnd == 0 {
+        return None;
+    }
+
+    let hwnd = HWND(hwnd as *mut _);
+    unsafe { IsWindowVisible(hwnd).as_bool().then_some(hwnd) }
 }
 
 /// The bubble's window, created once for the run: a layered popup that never takes focus and is
