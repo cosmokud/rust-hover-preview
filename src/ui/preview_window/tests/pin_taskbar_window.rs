@@ -1017,3 +1017,394 @@ fn a_pin_minimized_into_the_taskbar_is_pictured_before_its_windows_go() {
     }
     stand_pin(previous_pin);
 }
+
+/// A pin drawn by a window of its own is pictured by that window, and by nothing else.
+///
+/// The fault this is a regression test for: a film's player window is off the screen on roads of its
+/// own — one that has ended, one being relaunched inside a walk, one a display change has taken down
+/// — and the pin's own window was asked next for the picture. That window is a *hole* where the film
+/// was: what a mirror of it holds is the caption and the bar around an empty band. And so is a player
+/// window this app has not cleared yet, which is a handle that is no window at all — both are
+/// registrations the Shell draws nothing into, and taking either is what takes down the registration
+/// the frame already standing in the stand-in was taken with (see `mirror_source`).
+#[test]
+fn a_pin_drawn_by_a_window_of_its_own_is_pictured_only_by_that_window() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
+
+    register_the_stand_in_class();
+    forget_the_stand_in();
+
+    // The pin's own window, up: where a picture, a page, a card and a folder's listing are drawn.
+    let pin_hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            TASKBAR_OFFSCREEN,
+            TASKBAR_OFFSCREEN,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the pin")
+    };
+    // Safety: the window is this test's own, and it is asked to be on the screen — which is what
+    // makes it a picture rather than one more window the Shell composes nothing for.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+    }
+    PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+
+    // And a player's window that is *not* on the screen, which is a player ended and begun again.
+    let player = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            TASKBAR_OFFSCREEN,
+            TASKBAR_OFFSCREEN,
+            640,
+            480,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a player's window")
+    };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+
+    assert_eq!(
+        mirror_source(Some(MediaType::Video)),
+        None,
+        "a film is pictured by its player's window, and a player that is not on the screen is no \
+         picture of a film: the pin's own band is a hole where it stood"
+    );
+    assert_eq!(
+        mirror_source(Some(MediaType::EngineSvg)),
+        None,
+        "and a document the engine draws is the same case"
+    );
+    assert_eq!(
+        mirror_source(Some(MediaType::StaticImage)),
+        Some(pin_hwnd),
+        "while a picture is drawn by the pin's own window, which is up: that *is* the picture"
+    );
+
+    // Safety: both windows are this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(player);
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    VIDEO_HWND.store(previous_video, Ordering::SeqCst);
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    forget_the_stand_in();
+    stand_pin(previous_pin);
+}
+
+/// A sound's peek is the card the pin draws for it.
+///
+/// The fault this is a regression test for: a sound was shown as nothing, deliberately — the three
+/// buttons beside the hover were taken to be the whole of what a sound put away had to offer — so the
+/// stand-in was left at the square it is created at, with no registration in it, whether the pin was
+/// on the screen or put away. The card is drawn in the pin's own window exactly as a picture is, and
+/// it is the picture the button's hover was missing: a peek of a sound is its card the way a peek of
+/// a film is the film (see `mirror_source`).
+#[test]
+fn a_sound_is_pictured_by_the_card_the_pin_draws_for_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    register_the_stand_in_class();
+    forget_the_stand_in();
+
+    // The window the card is drawn in, up: the picture a pin's own window holds for every kind that
+    // has no window of its own.
+    let card = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            TASKBAR_OFFSCREEN,
+            TASKBAR_OFFSCREEN,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the pin")
+    };
+    // Safety: the window is this test's own, and it is asked to be on the screen — a picture's source
+    // is a window the Shell is composing (see `on_the_screen`).
+    unsafe {
+        let _ = ShowWindow(card, SW_SHOWNOACTIVATE);
+    }
+    PREVIEW_HWND.store(card.0 as isize, Ordering::SeqCst);
+    let card_box = unsafe { the_client_box(card) };
+
+    // The sound the pin is showing, and the pin itself put away into the taskbar — the road the hover
+    // of a sound's button is reached by.
+    let mut sound = create_loading_media(320, 240);
+    sound.media_type = MediaType::Audio;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(sound);
+    }
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    let stand_in = the_stand_in();
+
+    assert_eq!(
+        mirror_source(Some(MediaType::Audio)),
+        Some(card),
+        "a sound's card is drawn in the pin's own window, so that window is the picture a hover is \
+         given rather than nothing at all"
+    );
+
+    // The collapse's own taking: a put-away pin's picture is taken while the window it is drawn in is
+    // still up (see `keep_the_pin_for_the_taskbar`).
+    unsafe {
+        keep_the_pin_for_the_taskbar();
+    }
+    assert_eq!(
+        unsafe { the_client_box(stand_in) },
+        card_box,
+        "and the stand-in is left the card's own box, which is the box the hover's picture is drawn \
+         in"
+    );
+
+    // Safety: the window is this test's own and the stand-in is the app's own; the handles the app
+    // holds are put back as they were.
+    unsafe {
+        let _ = DestroyWindow(card);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    forget_the_stand_in();
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    stand_pin(previous_pin);
+}
+
+/// A picture already taken is not taken down by a window that is not there any more.
+///
+/// The fault this is a regression test for: the user's own report of a button whose peek held nothing
+/// at all "in a particular order". Every road that ends the window the pin is drawn by — a film that
+/// has run out, a player killed by a swap or by a display change, a relaunch — leaves this app
+/// holding a handle to a window that is gone for a moment, and the tick settled the mirror against
+/// that handle: the registration was unregistered and the stand-in was re-sized to the square it is
+/// created at. What is left of the stand-in after that is its own surface, which this app has never
+/// painted — and the frame a collapse takes is taken off *that* surface, so a minimize in the middle
+/// of one of those roads left the button's peek empty for the rest of the run (see `sync_pin_mirror`,
+/// `mirror_source`).
+#[test]
+fn a_picture_already_taken_is_not_taken_down_by_a_window_that_is_not_there() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    register_the_stand_in_class();
+    forget_the_stand_in();
+
+    // The window the pin is drawn by, standing in the pin's band and on the screen.
+    let player = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            TASKBAR_OFFSCREEN,
+            TASKBAR_OFFSCREEN,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a player's window")
+    };
+    // Safety: the window is this test's own, and it is asked to be on the screen — which is what makes
+    // it the film's picture rather than one more window the Shell composes nothing for.
+    unsafe {
+        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
+    }
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+    let player_box = unsafe { the_client_box(player) };
+
+    // The film the pin is showing, so that every ask below is asked about the kind it is about rather
+    // than about whatever was on screen before this test (see `current_media_type`).
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    let stand_in = the_stand_in();
+    // Safety: the window is this app's own stand-in, asked only to be up — a hidden window has no
+    // taskbar button and no picture to hold (see `showing_taskbar_window`).
+    unsafe {
+        let _ = ShowWindow(stand_in, SW_SHOWNOACTIVATE);
+    }
+
+    // The picture as the tick takes it while the film is playing.
+    sync_pin_mirror(Some(MediaType::Video));
+    assert_eq!(
+        unsafe { the_client_box(stand_in) },
+        player_box,
+        "a film's picture is its player's window while that window is up"
+    );
+
+    // And the player is gone — not hidden but *destroyed*, with this app still holding the number of
+    // the window it was, which is the instant a film that has run out, a swap's own take-down and a
+    // display change all pass through.
+    // Safety: the window is this test's own and it is only asked to go away.
+    unsafe {
+        let _ = DestroyWindow(player);
+    }
+
+    sync_pin_mirror(Some(MediaType::Video));
+
+    assert_eq!(
+        unsafe { the_client_box(stand_in) },
+        player_box,
+        "a picture once taken is the picture to hold: the stand-in is left the box the frame was \
+         taken in rather than re-made for a window that is not there, which is what leaves the hover \
+         with nothing in it"
+    );
+
+    // And a minimize in the middle of that road is the same rule where it costs the most: what the
+    // collapse takes into the button is the picture standing in the stand-in, so a stand-in stripped
+    // of it is a button whose peek is empty for the rest of the run (see `keep_the_pin_for_the_taskbar`).
+    if let Some(mut pin) = take_pin_for_a_test() {
+        pin.collapsed = true;
+        stand_pin(Some(pin));
+    }
+    unsafe {
+        keep_the_pin_for_the_taskbar();
+    }
+    assert_eq!(
+        unsafe { the_client_box(stand_in) },
+        player_box,
+        "so a pin put away after the film's window went keeps the frame that was on the screen"
+    );
+
+    // Safety: the stand-in is the app's own, and the handles it holds are put back as they were.
+    forget_the_stand_in();
+    VIDEO_HWND.store(previous_video, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    stand_pin(previous_pin);
+}
+
+/// A button is not shown for a pin that is put away into its round bubble.
+///
+/// The fault this is a regression test for: `Pin Mode → Always On Top` switched off while a pin was
+/// put away into the bubble showed the stand-in — minimized, at the square it is created at, and with
+/// no registration in it — because that road shows a button without asking which of the two put the
+/// pin away. Two stand-ins stood over one pin, and the one on the taskbar held no picture of anything,
+/// since every window of the pin's was off the screen (see `show_pin_taskbar`, `a_button_is_owed`).
+#[test]
+fn a_button_is_not_shown_for_a_pin_put_away_into_its_bubble() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let before = pin_always_on_top();
+
+    register_the_stand_in_class();
+    forget_the_stand_in();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+
+    // The round bubble a collapse into the bubble leaves, standing on the screen: a window of this
+    // test's own standing in for it, since the bubble is painted by the loop's own thread.
+    let bubble = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            TASKBAR_OFFSCREEN,
+            TASKBAR_OFFSCREEN,
+            120,
+            120,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the bubble")
+    };
+    // Safety: the window is this test's own, and it is asked to be on the screen — which is what says
+    // the pin is reached by the bubble rather than by the taskbar (see `a_button_is_owed`).
+    unsafe {
+        let _ = ShowWindow(bubble, SW_SHOWNOACTIVATE);
+    }
+    PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+
+    // Safety: the road the setting's own toggle takes, which is a road into a button that knows
+    // nothing of where the pin was put away (see the `PinChanged` arm of the loop's tick).
+    unsafe {
+        show_pin_taskbar();
+    }
+
+    assert!(
+        showing_taskbar_window().is_none(),
+        "a pin put away into the bubble is reached by the bubble and not by the taskbar, so no \
+         button is owed it — and one shown anyway is a button with nothing in it, since every window \
+         of the pin's is off the screen"
+    );
+
+    // Safety: the bubble's window is this test's own and the stand-in is the app's own; the handles
+    // the app holds are put back as they were.
+    unsafe {
+        let _ = DestroyWindow(bubble);
+    }
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    forget_the_stand_in();
+    stand_pin(previous_pin);
+}
