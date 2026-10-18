@@ -64,8 +64,7 @@ pub(crate) const MENU_SHADOW_PIXELS: f32 = 2.0;
 /// the panel's own edge. To hold a fixed room instead of the
 /// left's, this is the number to change — the flyout's panel is
 /// a fixed width and keeps its own pads.
-pub(super) const MENU_PANEL_RIGHT_ROOM_PIXELS: f32 =
-    MENU_PAD_PIXELS + MENU_MARKER_ROOM_PIXELS;
+pub(super) const MENU_PANEL_RIGHT_ROOM_PIXELS: f32 = MENU_PAD_PIXELS + MENU_MARKER_ROOM_PIXELS;
 
 /// The narrowest the main menu's own panel is ever held, whatever its rows
 /// measure: the room the marks stand in and the pads on either side of it,
@@ -260,8 +259,7 @@ fn menu_main_panel_width(rows: &[MenuRow], dpi: u32, width: i32) -> i32 {
     let label = longest.unwrap_or(0);
     let marker_room = text_paint::scaled(MENU_MARKER_ROOM_PIXELS as i32, scale).max(0);
     let pad = text_paint::scaled(MENU_PAD_PIXELS as i32, scale).max(0);
-    let right_room =
-        text_paint::scaled(MENU_PANEL_RIGHT_ROOM_PIXELS as i32, scale).max(0);
+    let right_room = text_paint::scaled(MENU_PANEL_RIGHT_ROOM_PIXELS as i32, scale).max(0);
 
     (label + marker_room + pad + right_room)
         .max(text_paint::scaled(MENU_PANEL_MIN_PIXELS as i32, scale))
@@ -398,8 +396,7 @@ pub(crate) fn menu_popup_from_point(
     // arrow is carried either way, so a door points the way its
     // flyout opens whether the flyout is up or not, and the answer the
     // flyout's placement gives is the one the menu carried without it.
-    let (_menu_left, _menu_right, _flyout_left, arrow) =
-        menu_flyout_tier(&placed, width, dpi);
+    let (_menu_left, _menu_right, _flyout_left, arrow) = menu_flyout_tier(&placed, width, dpi);
 
     MenuPopup { arrow, ..placed }
 }
@@ -490,11 +487,7 @@ pub(crate) struct MenuFlyout {
 /// is narrower than the room, so where the room falls short the flyout is
 /// narrowed into the side's own room rather than the menu being moved to
 /// make the room (see `menu_flyout_from_menu`).
-fn menu_flyout_tier(
-    menu: &MenuPopup,
-    width: i32,
-    dpi: u32,
-) -> (i32, i32, i32, MenuArrow) {
+fn menu_flyout_tier(menu: &MenuPopup, width: i32, dpi: u32) -> (i32, i32, i32, MenuArrow) {
     let (panel_width, _row_height, _pad, gap) = menu_panel_sizes(width, dpi);
 
     // The room the window leaves the flyout on either side of the menu, a

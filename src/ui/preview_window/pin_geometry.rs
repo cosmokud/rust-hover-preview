@@ -248,9 +248,11 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
         _ => media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape)),
     };
     let size = match shape {
-        Some(shape) => {
-            pinned_media_box(shape, room, hover_preview_scale(&path, current_hover_scales()))
-        }
+        Some(shape) => pinned_media_box(
+            shape,
+            room,
+            hover_preview_scale(&path, current_hover_scales()),
+        ),
         // A file with no size to be read out of it — one whose measure has not come back, one
         // nothing can be read from at all, and a card, which is its own size already — has no size
         // to be given back, so the one it has is kept and only the place moves: the answer a

@@ -218,7 +218,8 @@ fn a_beat_draws_ripples_around_the_mark() {
     let dot = marked(&resting);
     assert!(!dot.is_empty(), "a card at rest is not marked at all");
     assert!(
-        dot.iter().all(|&(x, y)| distance(x, y) <= mark.radius + 1.0),
+        dot.iter()
+            .all(|&(x, y)| distance(x, y) <= mark.radius + 1.0),
         "a card at rest draws ink outside its own dot, as far out as {}",
         spread(&dot).1
     );
@@ -252,10 +253,22 @@ fn a_beat_draws_ripples_around_the_mark() {
     // They are a shape rather than a line: there is ink of them on every side of the mark.
     let (dot_x, dot_y) = (mark.center_x, mark.center_y);
     for (side, found) in [
-        ("left", ripples.iter().any(|&(x, _)| (x as f32 + 0.5) < dot_x)),
-        ("right", ripples.iter().any(|&(x, _)| (x as f32 + 0.5) > dot_x)),
-        ("above", ripples.iter().any(|&(_, y)| (y as f32 + 0.5) < dot_y)),
-        ("below", ripples.iter().any(|&(_, y)| (y as f32 + 0.5) > dot_y)),
+        (
+            "left",
+            ripples.iter().any(|&(x, _)| (x as f32 + 0.5) < dot_x),
+        ),
+        (
+            "right",
+            ripples.iter().any(|&(x, _)| (x as f32 + 0.5) > dot_x),
+        ),
+        (
+            "above",
+            ripples.iter().any(|&(_, y)| (y as f32 + 0.5) < dot_y),
+        ),
+        (
+            "below",
+            ripples.iter().any(|&(_, y)| (y as f32 + 0.5) > dot_y),
+        ),
     ] {
         assert!(found, "the ripples are not drawn to the {side} of the mark");
     }
@@ -335,8 +348,12 @@ fn a_fall_ends_on_the_mark_a_card_at_rest_draws() {
         for y in page.header_top as usize..header_bottom {
             for x in 0..name_left {
                 let index = (y * width as usize + x) * 4;
-                if [painted.0[index], painted.0[index + 1], painted.0[index + 2], painted.0[index + 3]]
-                    == color
+                if [
+                    painted.0[index],
+                    painted.0[index + 1],
+                    painted.0[index + 2],
+                    painted.0[index + 3],
+                ] == color
                 {
                     continue;
                 }
@@ -387,12 +404,7 @@ fn the_mark_is_vertically_centred_on_the_text_line() {
 
     let theme = text_theme::loaded(options().theme).expect("the bundled theme");
     let page_color = rgb(theme.background());
-    let page_ink = [
-        page_color[2],
-        page_color[1],
-        page_color[0],
-        255,
-    ];
+    let page_ink = [page_color[2], page_color[1], page_color[0], 255];
     let stands_on_the_page = |x: i32, y: i32| {
         let at = (y as usize * width as usize + x as usize) * 4;
         painted[at..at + 4] == page_ink

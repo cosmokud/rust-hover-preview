@@ -949,7 +949,11 @@ fn reads_how_a_pinned_sound_steps_and_ends_from_their_own_keys() {
     // A file from the era of the retired shuffle/loop pair seeds the end of file once: a loop
     // left on is the sound beginning again, and a loop left off is the file beside it.
     let mut legacy = Ini::new();
-    legacy.set(CONFIG_SECTION, "pin_mode_audio_loop", Some("false".to_string()));
+    legacy.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_loop",
+        Some("false".to_string()),
+    );
     assert_eq!(
         read_file(&mut legacy).pin_mode_audio_end_of_file,
         PinEndOfFile::Continue,
@@ -957,7 +961,11 @@ fn reads_how_a_pinned_sound_steps_and_ends_from_their_own_keys() {
     );
 
     let mut legacy = Ini::new();
-    legacy.set(CONFIG_SECTION, "pin_mode_audio_loop", Some("true".to_string()));
+    legacy.set(
+        CONFIG_SECTION,
+        "pin_mode_audio_loop",
+        Some("true".to_string()),
+    );
     assert_eq!(
         read_file(&mut legacy).pin_mode_audio_end_of_file,
         PinEndOfFile::Loop,
@@ -987,14 +995,29 @@ fn reads_the_hover_loop_and_a_films_end_of_file_from_their_own_keys() {
     );
 
     let mut renamed = Ini::new();
-    renamed.set(CONFIG_SECTION, "video_jump_enabled", Some("false".to_string()));
-    renamed.set(CONFIG_SECTION, "audio_jump_enabled", Some("false".to_string()));
+    renamed.set(
+        CONFIG_SECTION,
+        "video_jump_enabled",
+        Some("false".to_string()),
+    );
+    renamed.set(
+        CONFIG_SECTION,
+        "audio_jump_enabled",
+        Some("false".to_string()),
+    );
     let config = read_file(&mut renamed);
-    assert!(!config.video_loop, "the retired name of the hover's loop is still read");
+    assert!(
+        !config.video_loop,
+        "the retired name of the hover's loop is still read"
+    );
     assert!(!config.audio_loop, "and so is the sound's");
 
     let mut both = Ini::new();
-    both.set(CONFIG_SECTION, "video_jump_enabled", Some("false".to_string()));
+    both.set(
+        CONFIG_SECTION,
+        "video_jump_enabled",
+        Some("false".to_string()),
+    );
     both.set(CONFIG_SECTION, "video_loop", Some("true".to_string()));
     let config = read_file(&mut both);
     assert!(
@@ -1028,15 +1051,27 @@ fn reads_the_hover_loop_and_a_films_end_of_file_from_their_own_keys() {
 fn reads_which_files_the_pin_steps_through_from_its_own_key() {
     let mut ini = Ini::new();
     ini.set(CONFIG_SECTION, "pin_nav_audio", Some("all".to_string()));
-    ini.set(CONFIG_SECTION, "pin_nav_video", Some("category".to_string()));
-    ini.set(CONFIG_SECTION, "pin_nav_others", Some("category".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "pin_nav_video",
+        Some("category".to_string()),
+    );
+    ini.set(
+        CONFIG_SECTION,
+        "pin_nav_others",
+        Some("category".to_string()),
+    );
     let config = read_file(&mut ini);
     assert_eq!(config.pin_nav_audio, PinNavFileTypes::All);
     assert_eq!(config.pin_nav_video, PinNavFileTypes::Category);
     assert_eq!(config.pin_nav_others, PinNavFileTypes::Category);
 
     let mut unknown = Ini::new();
-    unknown.set(CONFIG_SECTION, "pin_nav_audio", Some("sideways".to_string()));
+    unknown.set(
+        CONFIG_SECTION,
+        "pin_nav_audio",
+        Some("sideways".to_string()),
+    );
     assert_eq!(
         read_file(&mut unknown).pin_nav_audio,
         DEFAULT_PIN_NAV_AUDIO,
@@ -1053,7 +1088,11 @@ fn reads_which_files_the_pin_steps_through_from_its_own_key() {
 
     // A file holding only the retired single key seeds all three with it, once.
     let mut legacy = Ini::new();
-    legacy.set(CONFIG_SECTION, "pin_nav_file_types", Some("category".to_string()));
+    legacy.set(
+        CONFIG_SECTION,
+        "pin_nav_file_types",
+        Some("category".to_string()),
+    );
     let config = read_file(&mut legacy);
     assert_eq!(config.pin_nav_video, PinNavFileTypes::Category);
     assert_eq!(config.pin_nav_audio, PinNavFileTypes::Category);
@@ -1083,7 +1122,10 @@ fn the_pin_navigation_setting_survives_a_write_and_a_read() {
     read_back
         .read(ordered_text(&config.to_ini()))
         .expect("a file this app wrote is one it can read");
-    assert_eq!(read_file(&mut read_back).pin_nav_audio, PinNavFileTypes::All);
+    assert_eq!(
+        read_file(&mut read_back).pin_nav_audio,
+        PinNavFileTypes::All
+    );
 }
 
 /// Where a pin put away by its own minimize goes is a setting of its own, read from its own
@@ -1093,11 +1135,19 @@ fn the_pin_navigation_setting_survives_a_write_and_a_read() {
 #[test]
 fn reads_where_a_put_away_pin_goes_from_its_own_key() {
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "pin_minimize_to", Some("taskbar".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "pin_minimize_to",
+        Some("taskbar".to_string()),
+    );
     assert_eq!(read_file(&mut ini).pin_minimize_to, PinMinimizeTo::Taskbar);
 
     let mut unknown = Ini::new();
-    unknown.set(CONFIG_SECTION, "pin_minimize_to", Some("sideways".to_string()));
+    unknown.set(
+        CONFIG_SECTION,
+        "pin_minimize_to",
+        Some("sideways".to_string()),
+    );
     assert_eq!(
         read_file(&mut unknown).pin_minimize_to,
         DEFAULT_PIN_MINIMIZE_TO,
@@ -1274,10 +1324,7 @@ fn a_zoomed_pictures_band_is_read_from_its_own_key() {
         "zoom_background",
         Some("transparent".to_string()),
     );
-    assert_eq!(
-        read_file(&mut ini).zoom_background,
-        DEFAULT_ZOOM_BACKGROUND
-    );
+    assert_eq!(read_file(&mut ini).zoom_background, DEFAULT_ZOOM_BACKGROUND);
 }
 
 /// A page's backdrop is a key of its own for the reason a specimen's is: the kind is one

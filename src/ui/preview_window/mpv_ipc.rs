@@ -238,7 +238,10 @@ pub(super) fn set_paused(pid: u32, paused: bool) -> bool {
 
 /// Walk mpv's own subtitle tracks, off and round again — mpv's own word for the `T` key's step.
 pub(super) fn cycle_subtitles(pid: u32) -> bool {
-    write(pid, r#"{"command":["cycle","sub"],"async":true}"#.to_string() + "\n")
+    write(
+        pid,
+        r#"{"command":["cycle","sub"],"async":true}"#.to_string() + "\n",
+    )
 }
 
 /// The JSON lines this app would have written, in order, for a test build.
@@ -309,11 +312,7 @@ mod tests {
             !set_volume(43, 40),
             "a pid this app holds no pipe for is nobody's player, so nothing is written"
         );
-        assert_eq!(
-            noted_lines().len(),
-            1,
-            "and nothing is written for it"
-        );
+        assert_eq!(noted_lines().len(), 1, "and nothing is written for it");
 
         forget_pipe(41);
         forget_pipe(43);
@@ -405,9 +404,18 @@ mod tests {
         assert_eq!(
             noted_lines(),
             vec![
-                format!("{}\n", r#"{"command":["seek",90.000,"absolute"],"async":true}"#),
-                format!("{}\n", r#"{"command":["set_property","pause",true],"async":true}"#),
-                format!("{}\n", r#"{"command":["set_property","pause",false],"async":true}"#),
+                format!(
+                    "{}\n",
+                    r#"{"command":["seek",90.000,"absolute"],"async":true}"#
+                ),
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","pause",true],"async":true}"#
+                ),
+                format!(
+                    "{}\n",
+                    r#"{"command":["set_property","pause",false],"async":true}"#
+                ),
                 format!("{}\n", r#"{"command":["cycle","sub"],"async":true}"#),
             ],
             "each line names the command and its argument, and every one is async"

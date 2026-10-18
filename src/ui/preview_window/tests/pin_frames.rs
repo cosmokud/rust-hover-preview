@@ -30,9 +30,8 @@ fn a_band_tall_enough_to_split_is_scaled_row_for_row_where_the_band_is() {
     }
 
     let surface = DibSurface::create(width, height).expect("a surface to scale into");
-    let out = unsafe {
-        std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize)
-    };
+    let out =
+        unsafe { std::slice::from_raw_parts_mut(surface.bits(), (width * height * 4) as usize) };
 
     resample_into_band(
         &media,
@@ -317,7 +316,12 @@ fn a_frame_bigger_than_its_band_is_drawn_at_the_size_it_is_drawn_at() {
             origin_y: 0,
             height,
             frame: (0, (height as i32 - 32) / 2, source_width as i32, 32),
-            exact: (0.0, ((height as i32 - 32) / 2) as f32, source_width as f32, 32.0),
+            exact: (
+                0.0,
+                ((height as i32 - 32) / 2) as f32,
+                source_width as f32,
+                32.0,
+            ),
         },
     );
 
@@ -732,8 +736,9 @@ fn a_picture_the_wheel_has_taken_past_its_window_is_drawn_where_the_zoom_says_it
         }
         unsafe { render_pinned_preview_at(hwnd, content.0, content.1) };
 
-        let bits = ensure_layered_surface(hwnd.0 as isize, window_width as u32, window_height as u32)
-            .expect("the surface the paint drew into");
+        let bits =
+            ensure_layered_surface(hwnd.0 as isize, window_width as u32, window_height as u32)
+                .expect("the surface the paint drew into");
         let surface = unsafe {
             std::slice::from_raw_parts(bits, window_width as usize * window_height as usize * 4)
         };
@@ -3091,7 +3096,11 @@ fn a_band_the_pin_wins_is_one_part_in_255_and_only_over_the_band() {
         for column in 0..width as usize {
             assert_eq!(
                 surface_pixel(&out, (width, height), row, column),
-                if in_band { &[1, 1, 1, 1] } else { &[0, 0, 0, 0] },
+                if in_band {
+                    &[1, 1, 1, 1]
+                } else {
+                    &[0, 0, 0, 0]
+                },
                 "row {row} column {column}: the band is the least a pixel can be, and every row \
                  outside it is left exactly as the window painted it"
             );
@@ -3196,15 +3205,35 @@ fn a_backdrops_fill_leaves_the_box_the_picture_lands_on_alone() {
     };
     let backdrop = [255u8, 255, 255, 255];
 
-    assert_eq!(at(8, 0), backdrop, "the rows above the picture are the backdrop");
-    assert_eq!(at(0, 3), backdrop, "and the columns before it on a row it lands on");
+    assert_eq!(
+        at(8, 0),
+        backdrop,
+        "the rows above the picture are the backdrop"
+    );
+    assert_eq!(
+        at(0, 3),
+        backdrop,
+        "and the columns before it on a row it lands on"
+    );
     assert_eq!(at(23, 3), backdrop, "and the columns after it");
     assert_eq!(at(8, 7), backdrop, "and the rows below it");
 
-    assert_eq!(at(8, 2), sentinel, "the picture's own box is left exactly as it was");
+    assert_eq!(
+        at(8, 2),
+        sentinel,
+        "the picture's own box is left exactly as it was"
+    );
     assert_eq!(at(15, 5), sentinel, "to its last row and column");
-    assert_eq!(at(7, 3), backdrop, "and the column it starts at is the first of the backdrop");
-    assert_eq!(at(16, 3), backdrop, "as the one it stops at is the first of the backdrop after it");
+    assert_eq!(
+        at(7, 3),
+        backdrop,
+        "and the column it starts at is the first of the backdrop"
+    );
+    assert_eq!(
+        at(16, 3),
+        backdrop,
+        "as the one it stops at is the first of the backdrop after it"
+    );
 }
 
 /// A fill of a transparent backdrop writes nothing at all: the band a picture with transparency in it
@@ -3233,7 +3262,10 @@ fn a_transparent_backdrop_is_left_as_the_band_already_was() {
     );
 
     assert!(
-        out.as_chunks::<4>().0.iter().all(|pixel| *pixel == sentinel),
+        out.as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == sentinel),
         "a transparent backdrop wrote over pixels the caller had already placed"
     );
 }
@@ -3268,8 +3300,24 @@ fn a_checkerboard_backdrop_keeps_its_squares_wherever_the_picture_leaves_it() {
 
     // A square is sixteen pixels, and the colours are the pair `checkerboard_color` names: the squares of
     // the band's own first row start dark and the next one along is light.
-    assert_eq!(at(16, 0), [144, 144, 144, 255], "the strip begins on the band's own second square");
-    assert_eq!(at(31, 0), [144, 144, 144, 255], "which runs to the end of its sixteen");
-    assert_eq!(at(32, 0), [224, 224, 224, 255], "and the square after it is the other colour");
-    assert_eq!(at(0, 0), [0, 0, 0, 0], "the picture's own columns were left as the caller left them");
+    assert_eq!(
+        at(16, 0),
+        [144, 144, 144, 255],
+        "the strip begins on the band's own second square"
+    );
+    assert_eq!(
+        at(31, 0),
+        [144, 144, 144, 255],
+        "which runs to the end of its sixteen"
+    );
+    assert_eq!(
+        at(32, 0),
+        [224, 224, 224, 255],
+        "and the square after it is the other colour"
+    );
+    assert_eq!(
+        at(0, 0),
+        [0, 0, 0, 0],
+        "the picture's own columns were left as the caller left them"
+    );
 }

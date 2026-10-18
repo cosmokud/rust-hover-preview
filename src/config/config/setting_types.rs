@@ -122,11 +122,7 @@ impl PreviewScale {
         let percent = normalized
             .strip_prefix("screen")
             .map(|rest| rest.trim_matches([' ', '-']))
-            .or_else(|| {
-                normalized
-                    .strip_suffix("of screen")
-                    .map(|rest| rest.trim())
-            })?;
+            .or_else(|| normalized.strip_suffix("of screen").map(|rest| rest.trim()))?;
 
         percent
             .parse::<u32>()

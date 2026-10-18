@@ -613,8 +613,8 @@ pub fn rewind_due(playing: bool, duration: Option<f64>, position: f64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::subtitle_files::VideoSubtitlesSetting;
+    use super::*;
     use std::path::PathBuf;
 
     /// The pipe name every `mpv_args` call below is handed, and the flag that name becomes — the
@@ -1787,8 +1787,7 @@ mod tests {
             "the file's whole content is the one binding"
         );
         assert_eq!(
-            MPV_PAUSE_BINDING,
-            "p cycle pause\n",
+            MPV_PAUSE_BINDING, "p cycle pause\n",
             "the key is the one the pin posts and mpv's own binding is the one that answers it \
              (see `VIDEO_PAUSE_KEY`)"
         );

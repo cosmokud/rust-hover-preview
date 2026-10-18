@@ -116,12 +116,7 @@ const SEEK_CHOICES: [AudioSeek; 4] = [
 /// pin_mode_audio_seek_label`), without the mark that menu puts on the
 /// default — the card's menu marks the one in force instead (see
 /// `menu_rows`).
-const SEEK_LABELS: [&str; 4] = [
-    "Remember",
-    "From the Start",
-    "From the Middle",
-    "Random",
-];
+const SEEK_LABELS: [&str; 4] = ["Remember", "From the Start", "From the Middle", "Random"];
 
 /// One row of the card's menu, named rather than numbered: the rows a hand counts are the
 /// rows themselves, and the number one of them sits at moves the moment another is put in
@@ -549,8 +544,8 @@ pub(super) fn refresh_pin_menu(
         true => pin.menu.seek_since.or(Some(now)),
         false => None,
     };
-    let rested_end_of_file = end_of_file_since
-        .is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
+    let rested_end_of_file =
+        end_of_file_since.is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
     let rested_seek =
         seek_since.is_some_and(|since| now.duration_since(since) >= PIN_MENU_HOVER_DELAY);
 

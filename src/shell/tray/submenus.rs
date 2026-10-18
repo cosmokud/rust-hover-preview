@@ -16,25 +16,22 @@ use super::commands::open_link;
 use super::ids::{
     EngineIdleIds, AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
     BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES,
-    ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE,
-    ID_TRAY_AUDIO_SEEK_BASE,
+    ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE,
     ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_MPV_BASE,
     ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_AUDIO_CATEGORY,
     ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL,
     ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK,
-    PIN_END_OF_FILE_CHOICES,
-    TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES, ZOOM_BACKGROUND_CHOICES,
+    PIN_END_OF_FILE_CHOICES, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES,
+    ZOOM_BACKGROUND_CHOICES,
 };
 
 use crate::app::dialogs;
 use crate::config::config::{
     AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinEndOfFile, PinMinimizeTo, PinNavFileTypes,
-    PreviewScale,
-    TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
-    DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE,
-    DEFAULT_PIN_MODE_AUDIO_SEEK,
-    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO,
-    DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
+    PreviewScale, TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
+    DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MINIMIZE_TO,
+    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS,
+    DEFAULT_PIN_NAV_VIDEO, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
@@ -223,13 +220,26 @@ fn append_pin_nav_anchor(
     let menu = unsafe { CreatePopupMenu().unwrap() };
     append_labeled_item(
         menu,
-        MF_STRING | if selected == PinNavFileTypes::All { MF_CHECKED } else { MF_UNCHECKED },
+        MF_STRING
+            | if selected == PinNavFileTypes::All {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
         all_id,
-        &default_label(pin_nav_label(PinNavFileTypes::All), default == PinNavFileTypes::All),
+        &default_label(
+            pin_nav_label(PinNavFileTypes::All),
+            default == PinNavFileTypes::All,
+        ),
     );
     append_labeled_item(
         menu,
-        MF_STRING | if selected == PinNavFileTypes::Category { MF_CHECKED } else { MF_UNCHECKED },
+        MF_STRING
+            | if selected == PinNavFileTypes::Category {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
         category_id,
         &default_label(
             pin_nav_label(PinNavFileTypes::Category),
@@ -242,7 +252,12 @@ fn append_pin_nav_anchor(
 /// The `Navigation` submenu: three anchors — Video, Audio, Others — each with its
 /// own All/Same Category pair. The walk is anchored on the first file pinned, so a
 /// video walks videos while a document walks end to end (see `nav_mode_for`).
-pub(super) fn append_pin_nav_menu(parent: HMENU, video: PinNavFileTypes, audio: PinNavFileTypes, others: PinNavFileTypes) {
+pub(super) fn append_pin_nav_menu(
+    parent: HMENU,
+    video: PinNavFileTypes,
+    audio: PinNavFileTypes,
+    others: PinNavFileTypes,
+) {
     let menu = unsafe { CreatePopupMenu().unwrap() };
     append_pin_nav_anchor(
         menu,
@@ -268,7 +283,14 @@ pub(super) fn append_pin_nav_menu(parent: HMENU, video: PinNavFileTypes, audio: 
         others,
         DEFAULT_PIN_NAV_OTHERS,
     );
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Navigation")) };
+    let _ = unsafe {
+        AppendMenuW(
+            parent,
+            MF_STRING | MF_POPUP,
+            menu.0 as usize,
+            w!("Navigation"),
+        )
+    };
 }
 
 /// What the two places a pinned window's minimize can put it are called, with the one the setting
@@ -306,7 +328,13 @@ pub(super) fn system_menu_label(version: &str) -> String {
 /// four ways the old `Volume → Audio Seek` offered, in the same order. Renamed because it
 /// sits under `Audio` now rather than under `Volume` (see `audio_seek_label`).
 pub(super) fn append_seek_menu_renamed(parent: HMENU, title: PCWSTR, seek: AudioSeek) {
-    append_seek_menu(parent, title, ID_TRAY_AUDIO_SEEK_BASE, audio_seek_label, seek);
+    append_seek_menu(
+        parent,
+        title,
+        ID_TRAY_AUDIO_SEEK_BASE,
+        audio_seek_label,
+        seek,
+    );
 }
 
 /// The `Audio → Pin Mode → Seek` submenu: where in a file a *pinned* sound starts
@@ -378,14 +406,7 @@ fn append_seek_menu(
         };
     }
 
-    let _ = unsafe {
-        AppendMenuW(
-            parent,
-            MF_STRING | MF_POPUP,
-            menu.0 as usize,
-            title,
-        )
-    };
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, title) };
 }
 
 /// What a way of starting a sound is called in a menu: the words the tray
@@ -881,7 +902,10 @@ pub(super) fn append_bitmap_scale_menu(
     // share the menu does not list is marked by nothing rather than by the wrong
     // one. The mark is over the ids the items carry, which are one run of the
     // base however the two groups and their rows are interleaved.
-    if let Some(index) = BITMAP_SCALE_CHOICES.iter().position(|choice| *choice == scale) {
+    if let Some(index) = BITMAP_SCALE_CHOICES
+        .iter()
+        .position(|choice| *choice == scale)
+    {
         let _ = unsafe {
             CheckMenuRadioItem(
                 menu,
@@ -1038,7 +1062,14 @@ pub(super) fn append_video_engine_menu(parent: HMENU) {
         };
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Video Engine")) };
+    let _ = unsafe {
+        AppendMenuW(
+            parent,
+            MF_STRING | MF_POPUP,
+            menu.0 as usize,
+            w!("Video Engine"),
+        )
+    };
 }
 
 /// What an engine row is called: the engine's name, with the one the app starts at marked.

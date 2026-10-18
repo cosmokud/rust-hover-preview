@@ -528,7 +528,11 @@ fn with_the_switch_off_a_film_that_would_be_copied_is_asked_for_nothing() {
     request_extraction(film, Some(&geometry));
 
     assert!(
-        RUNNING.lock().expect("the extraction slot").running.is_none(),
+        RUNNING
+            .lock()
+            .expect("the extraction slot")
+            .running
+            .is_none(),
         "the switch off claims no slot: the pass that would read the whole film is \
          never spawned"
     );
@@ -540,8 +544,7 @@ fn with_the_switch_off_a_film_that_would_be_copied_is_asked_for_nothing() {
 /// while the same folder is the answer itself with the switch on.
 #[test]
 fn with_the_switch_off_an_extracted_folder_is_not_an_answer() {
-    let dir =
-        std::env::temp_dir().join(format!("subtitle-gate-resolve-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("subtitle-gate-resolve-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
     let film = dir.join("episode.mkv");
     std::fs::write(&film, b"stand-in").expect("a stand-in film is writable");
@@ -579,8 +582,7 @@ fn with_the_switch_off_an_extracted_folder_is_not_an_answer() {
 /// on.
 #[test]
 fn with_the_switch_off_a_sidecar_beside_the_film_is_not_found() {
-    let dir =
-        std::env::temp_dir().join(format!("subtitle-gate-sidecar-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("subtitle-gate-sidecar-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("the scratch folder for this test is creatable");
     let film = dir.join("episode.mkv");
     std::fs::write(&film, b"stand-in").expect("a stand-in film is writable");

@@ -255,8 +255,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
             .ok()
             .and_then(|media| {
                 media.as_ref().map(|media| {
-                    !media.media_type.is_engine()
-                        && !matches!(media.media_type, MediaType::Video)
+                    !media.media_type.is_engine() && !matches!(media.media_type, MediaType::Video)
                 })
             })
             .unwrap_or(false);
@@ -815,7 +814,9 @@ pub(super) fn copy_frame_into_band(
         let start = row * out_row_bytes;
         let (Some(destination), Some(source)) = (
             out.get_mut(start + first * 4..start + last * 4),
-            bgra.get(source_row * row_bytes + source_first * 4..source_row * row_bytes + source_last * 4),
+            bgra.get(
+                source_row * row_bytes + source_first * 4..source_row * row_bytes + source_last * 4,
+            ),
         ) else {
             break;
         };
@@ -991,8 +992,10 @@ pub(super) fn resample_into_band(
     // And the source point the first column's own centre maps back to, less the half pixel the four taps
     // are taken around: the half of a destination pixel a centre sits at, and where the picture really
     // begins relative to the box the walk counts from. Everything the walk adds to it is a whole step.
-    let base_x = ((0.5 - (exact.0 - frame.0 as f32) as f64) * step_x as f64 - SAMPLE_ONE / 2.0) as i64;
-    let base_y = ((0.5 - (exact.1 - frame.1 as f32) as f64) * step_y as f64 - SAMPLE_ONE / 2.0) as i64;
+    let base_x =
+        ((0.5 - (exact.0 - frame.0 as f32) as f64) * step_x as f64 - SAMPLE_ONE / 2.0) as i64;
+    let base_y =
+        ((0.5 - (exact.1 - frame.1 as f32) as f64) * step_y as f64 - SAMPLE_ONE / 2.0) as i64;
     let rows = (band.1 as usize).min(band_height as usize);
 
     // The rows of the surface this is to write: the band's own, and never past the end of the
@@ -1011,9 +1014,7 @@ pub(super) fn resample_into_band(
     let band_rows = &mut out[first_row * out_row_bytes..last_row * out_row_bytes];
 
     std::thread::scope(|scope| {
-        for (index, rows_of_a_thread) in band_rows
-            .chunks_mut(rows_each * out_row_bytes)
-            .enumerate()
+        for (index, rows_of_a_thread) in band_rows.chunks_mut(rows_each * out_row_bytes).enumerate()
         {
             let first_row_of_a_thread = index * rows_each;
 
@@ -1051,14 +1052,8 @@ pub(super) fn resample_into_band(
                         let right_column = (left_column + 1).min(source_width as usize - 1);
                         let wx = ((sx >> 24) & 0xFF) as u32;
 
-                        let [b, g, r, a] = sample_bilinear(
-                            top,
-                            bottom,
-                            left_column * 4,
-                            right_column * 4,
-                            wx,
-                            wy,
-                        );
+                        let [b, g, r, a] =
+                            sample_bilinear(top, bottom, left_column * 4, right_column * 4, wx, wy);
 
                         if opaque {
                             pixel.copy_from_slice(&[b, g, r, a]);

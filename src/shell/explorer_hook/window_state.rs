@@ -349,10 +349,7 @@ pub(super) fn press_is_outside_the_pin_window(pressed: bool, on_pin_window: bool
 /// is not published: a collapsed pin leaves no window on screen but the
 /// bubble, the bubble carries the same menu a card does, and a press on it
 /// is answered there (see `bubble_window_is_at` and `bubble_menu_press`).
-pub(super) fn pin_menu_dismiss_ask(
-    clicked: bool,
-    tick_pointer: Option<&PointerTick>,
-) -> bool {
+pub(super) fn pin_menu_dismiss_ask(clicked: bool, tick_pointer: Option<&PointerTick>) -> bool {
     let on_the_pins_own_window = clicked
         && tick_pointer.is_some_and(|pointer| {
             preview_window_is_at(pointer.window) || bubble_window_is_at(pointer.window)

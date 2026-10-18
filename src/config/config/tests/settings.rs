@@ -45,7 +45,11 @@ fn the_pin_zoom_bounce_duration_is_read_from_its_own_key() {
     );
 
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "pin_zoom_bounce_ms", Some("480".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "pin_zoom_bounce_ms",
+        Some("480".to_string()),
+    );
 
     let config = read_file(&mut ini);
     assert_eq!(config.pin_zoom_bounce_ms, 480);
@@ -54,7 +58,10 @@ fn the_pin_zoom_bounce_duration_is_read_from_its_own_key() {
     ini.set(CONFIG_SECTION, "pin_zoom_bounce_ms", Some("0".to_string()));
 
     let config = read_file(&mut ini);
-    assert_eq!(config.pin_zoom_bounce_ms, 0, "`0` is a duration like any other");
+    assert_eq!(
+        config.pin_zoom_bounce_ms, 0,
+        "`0` is a duration like any other"
+    );
 
     let mut ini = Ini::new();
     ini.set(
@@ -79,33 +86,68 @@ fn the_pin_zoom_bounce_duration_is_read_from_its_own_key() {
 /// The bounce gate, snap-back speed, and drift power are settings of their own with fallbacks and sanitization.
 #[test]
 fn the_pin_zoom_bounce_gate_speed_and_power_are_read_from_their_own_keys() {
-    assert_eq!(AppConfig::default().pin_zoom_bounce_gate, DEFAULT_PIN_ZOOM_BOUNCE_GATE);
-    assert_eq!(AppConfig::default().pin_zoom_bounce_speed_ms, DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS);
-    assert_eq!(AppConfig::default().pin_zoom_bounce_power, DEFAULT_PIN_ZOOM_BOUNCE_POWER);
+    assert_eq!(
+        AppConfig::default().pin_zoom_bounce_gate,
+        DEFAULT_PIN_ZOOM_BOUNCE_GATE
+    );
+    assert_eq!(
+        AppConfig::default().pin_zoom_bounce_speed_ms,
+        DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS
+    );
+    assert_eq!(
+        AppConfig::default().pin_zoom_bounce_power,
+        DEFAULT_PIN_ZOOM_BOUNCE_POWER
+    );
 
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "pin_zoom_bounce_gate", Some("false".to_string()));
-    ini.set(CONFIG_SECTION, "pin_zoom_bounce_speed_ms", Some("35".to_string()));
-    ini.set(CONFIG_SECTION, "pin_zoom_bounce_power", Some("0.08".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "pin_zoom_bounce_gate",
+        Some("false".to_string()),
+    );
+    ini.set(
+        CONFIG_SECTION,
+        "pin_zoom_bounce_speed_ms",
+        Some("35".to_string()),
+    );
+    ini.set(
+        CONFIG_SECTION,
+        "pin_zoom_bounce_power",
+        Some("0.08".to_string()),
+    );
 
     let config = read_file(&mut ini);
-    assert!(!config.pin_zoom_bounce_gate, "the key's own false, not the default's true");
+    assert!(
+        !config.pin_zoom_bounce_gate,
+        "the key's own false, not the default's true"
+    );
     assert_eq!(config.pin_zoom_bounce_speed_ms, 35);
     assert!((config.pin_zoom_bounce_power - 0.08).abs() < 1e-4);
 
     // Percentage input for power: e.g. "5" -> 0.05
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "pin_zoom_bounce_power", Some("5".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "pin_zoom_bounce_power",
+        Some("5".to_string()),
+    );
     assert!((read_file(&mut ini).pin_zoom_bounce_power - 0.05).abs() < 1e-4);
 
     // Fallbacks
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "pin_zoom_bounce_enabled", Some("false".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "pin_zoom_bounce_enabled",
+        Some("false".to_string()),
+    );
     ini.set(CONFIG_SECTION, "bounce_speed_ms", Some("40".to_string()));
     ini.set(CONFIG_SECTION, "bounce_power", Some("0.02".to_string()));
 
     let config = read_file(&mut ini);
-    assert!(!config.pin_zoom_bounce_gate, "the retired key's false turns the gate off too");
+    assert!(
+        !config.pin_zoom_bounce_gate,
+        "the retired key's false turns the gate off too"
+    );
     assert_eq!(config.pin_zoom_bounce_speed_ms, 40);
     assert!((config.pin_zoom_bounce_power - 0.02).abs() < 1e-4);
 }
@@ -119,31 +161,60 @@ fn the_audio_mark_offset_y_is_read_from_its_own_key() {
     );
 
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "audio_mark_offset_y", Some("-1.5".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "audio_mark_offset_y",
+        Some("-1.5".to_string()),
+    );
     assert_eq!(read_file(&mut ini).audio_mark_offset_y, -1.5);
 
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "audio_mark_vertical_offset", Some("2.0".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "audio_mark_vertical_offset",
+        Some("2.0".to_string()),
+    );
     assert_eq!(read_file(&mut ini).audio_mark_offset_y, 2.0);
 
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "audio_mark_y_offset", Some("-3".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "audio_mark_y_offset",
+        Some("-3".to_string()),
+    );
     assert_eq!(read_file(&mut ini).audio_mark_offset_y, -3.0);
 
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "audio_mark_vertical_alignment", Some("1".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "audio_mark_vertical_alignment",
+        Some("1".to_string()),
+    );
     assert_eq!(read_file(&mut ini).audio_mark_offset_y, 1.0);
 
     // Clamping past limits
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "audio_mark_offset_y", Some("150".to_string()));
-    assert_eq!(read_file(&mut ini).audio_mark_offset_y, MAX_AUDIO_MARK_OFFSET_Y);
+    ini.set(
+        CONFIG_SECTION,
+        "audio_mark_offset_y",
+        Some("150".to_string()),
+    );
+    assert_eq!(
+        read_file(&mut ini).audio_mark_offset_y,
+        MAX_AUDIO_MARK_OFFSET_Y
+    );
 
     let mut ini = Ini::new();
-    ini.set(CONFIG_SECTION, "audio_mark_offset_y", Some("-200".to_string()));
-    assert_eq!(read_file(&mut ini).audio_mark_offset_y, MIN_AUDIO_MARK_OFFSET_Y);
+    ini.set(
+        CONFIG_SECTION,
+        "audio_mark_offset_y",
+        Some("-200".to_string()),
+    );
+    assert_eq!(
+        read_file(&mut ini).audio_mark_offset_y,
+        MIN_AUDIO_MARK_OFFSET_Y
+    );
 }
-
 
 /// The settings section is written under the headings the tray lists its menus under, in
 /// the order the tray lists them, with the keys of a heading in alphabetical order and the
