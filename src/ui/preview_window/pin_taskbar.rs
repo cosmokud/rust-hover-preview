@@ -10,16 +10,19 @@
 //! Rather than mutate the shared preview window's extended style — which would risk the hover
 //! and pin surfaces leaking into the taskbar, the very thing previews are kept out of — this is
 //! a window of its own, created once and reused, exactly as the bubble is (see `pin_bubble`).
-//! It is a plain overlapped window with an app icon and title, kept 1×1 and off the screen, and
-//! it is *shown minimized* rather than merely shown: the taskbar's own restore then reaches this
-//! window, which answers it by putting the pin back where it stood and taking itself away again.
+//! It is a borderless top-level window with an app icon and a title, kept 1×1 and off the screen,
+//! and it is *shown minimized* rather than merely shown: the taskbar's own restore then reaches this
+//! window, which answers it by putting the pin back where it stood and taking itself away again. The
+//! borderless part is not a detail: the Shell draws the button's hover from the window itself, so
+//! whatever the window wears is drawn over the pin's own frame in it (see `stand_in_style`).
 
 use super::*;
 
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, SetWindowTextW, SC_CLOSE, SC_RESTORE, SHOW_WINDOW_CMD, SW_MINIMIZE,
-    SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WA_ACTIVE, WM_COMMAND, WM_QUERYOPEN, WS_CAPTION,
-    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
+    DestroyWindow, IsIconic, IsWindow, SetWindowTextW, SC_CLOSE, SC_MINIMIZE, SC_RESTORE,
+    SHOW_WINDOW_CMD, SW_MINIMIZE, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WA_ACTIVE,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_QUERYOPEN, WS_EX_APPWINDOW, WS_MINIMIZEBOX,
+    WS_POPUP, WS_SYSMENU,
 };
 /// The class the taskbar stand-in is created from.
 pub(super) const PIN_TASKBAR_CLASS: PCWSTR = w!("RustHoverPreviewPinTaskbar");
@@ -210,24 +213,125 @@ pub(super) fn hide_minimized_pin() {
     }
 }
 
+/// The two style words the stand-in is created with, so that the window is the app's own button in
+/// the taskbar and nothing else.
+///
+/// **No caption, and that is what a hover is read for.** The Shell draws a window's hover from the
+/// window itself, frame and all, and this window's picture is the DWM thumbnail of the pin in its
+/// client area — so a caption is a native title bar drawn over the pin's own frame, which is what
+/// the hover showed before there was one (see `pin_taskbar_mirror`). A borderless popup's client
+/// area is the whole of it, so the hover is the pin and nothing of Windows around it.
+///
+/// `WS_SYSMENU` and `WS_MINIMIZEBOX` are kept for what the Shell reads them for rather than for
+/// what is drawn of them: a window with no system menu is given a taskbar button with no icon on it
+/// (see `app_icon`), and the buttons are what a minimize and a restore from the button's own menu
+/// arrive as (see `pin_taskbar_proc`). `WS_EX_APPWINDOW` is what asks for the button at all.
+fn stand_in_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
+    (WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX, WS_EX_APPWINDOW)
+}
+
+/// Whether the pin wants a taskbar button at all: on the screen with `Pin Mode → Always On Top`
+/// off — the setting whose button this stands in for — or put away into the taskbar rather than
+/// into the bubble.
+fn a_button_is_owed() -> bool {
+    if !pinned() {
+        return false;
+    }
+
+    if pin_is_collapsed() {
+        // Put away: into the taskbar, or into the round bubble. Only the taskbar's collapse leaves
+        // no bubble on the screen, and the bubble that is up is what the two are told apart by (see
+        // `collapse_pin_to`).
+        return pin_bubble::showing_bubble_window().is_none();
+    }
+
+    !pin_always_on_top()
+}
+
+/// Put the stand-in in the form the pin asks for, and make it where the Shell has taken it away.
+///
+/// A stand-in is a window the Shell has a taskbar button for, and the Shell has gestures of its own
+/// on that button: a second click, `Win+M`, the button's own `Minimize`. Every one of them
+/// minimizes or restores *this* window rather than the pin, and none of the pin's own roads runs on
+/// that account — so the form is read back here, on the tick, which is the one thing that runs
+/// whether or not a gesture of the Shell's reached this app. What a stand-in left in the wrong form
+/// costs is the picture the Shell draws the button's hover from: a minimized window is not one the
+/// Shell is composing, so a pin that is on the screen under a minimized stand-in is a hover frozen
+/// on the frame it was put down with.
+///
+/// And it is the same read that brings a button the app has lost back: a handle to a window that is
+/// not there is not a window, so the ask below makes another one — which is the whole of what the
+/// user's "the button is gone until the app is restarted" was, and what a run must not be.
+pub(super) fn keep_the_stand_in_up() {
+    if !a_button_is_owed() {
+        return;
+    }
+
+    let Some(hwnd) = showing_taskbar_window() else {
+        // No button is up at all: the pin's own place asks for one, and the form of it is the one
+        // that place asks for (see `show_pin_taskbar`).
+        //
+        // Safety: the stand-in is this app's own window, made here where the handle the run holds
+        // is one to a window that has gone.
+        unsafe { show_pin_taskbar() };
+        return;
+    };
+
+    // A pin the Shell has minimized with the rest of the desktop is a pin whose button is to stay
+    // down with it: what is owed then is the frame the Shell cached for a minimized window, and not
+    // a button standing over a desktop nobody is working in.
+    let preview = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+    if !preview.is_invalid() && unsafe { IsIconic(preview).as_bool() } {
+        return;
+    }
+
+    // Safety: asks this app's own stand-in which form it is in, which is a property rather than a
+    // change to it.
+    let minimized = unsafe { IsIconic(hwnd).as_bool() };
+    if minimized == pin_is_collapsed() {
+        return;
+    }
+
+    // Safety: the same window, asked for the form the pin's own place wants — minimized for a pin
+    // put away into the taskbar, up and mirroring for one on the screen.
+    unsafe { show_pin_taskbar() };
+}
+
 /// The stand-in's window, created once for the run.
 ///
-/// It is a plain overlapped window rather than a layered popup, and it is deliberately *not*
+/// It is a borderless top-level window rather than a layered popup — nothing about it is drawn by
+/// this app; the picture in it is the Shell's own thumbnail — and it is deliberately *not*
 /// `WS_EX_TOOLWINDOW`: that bit is what keeps every other window of this app out of the taskbar,
 /// and this is the one window whose whole purpose is to be in it. `WS_EX_APPWINDOW` states that
-/// outright rather than leaving it to the ownerless-window rule.
+/// outright rather than leaving it to the ownerless-window rule (see `stand_in_style`).
+///
+/// **A window that has gone is made again rather than handed back.** The Shell closes a taskbar
+/// button's window from its own menu, a Shell that restarts takes the window with it, and a handle
+/// kept on a window that is not there is a run whose roads that show the stand-in all show nothing:
+/// no button, no hover, and nothing to ask about either until the app is restarted.
 pub(super) unsafe fn pin_taskbar_window() -> Option<HWND> {
     let existing = PIN_TASKBAR_HWND.load(Ordering::SeqCst);
     if existing != 0 {
-        return Some(HWND(existing as *mut _));
+        let existing = HWND(existing as *mut _);
+        if IsWindow(existing).as_bool() {
+            return Some(existing);
+        }
+
+        // The window the slot holds has gone: a Shell that closed it from the button's own menu, a
+        // Shell that has restarted, or whatever took the thread that made it. It is let go of the
+        // way its own close lets go of it — marks, mirror and slot together — so that the window
+        // made below is a fresh one: a handle kept on a window that is not there is a run whose next
+        // pin has no button at all and nothing to ask about it.
+        close_pin_taskbar();
     }
 
+    let (style, ex_style) = stand_in_style();
     let hinstance = GetModuleHandleW(None).ok()?;
     let hwnd = CreateWindowExW(
-        WS_EX_APPWINDOW,
+        ex_style,
         PIN_TASKBAR_CLASS,
         TASKBAR_TITLE,
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        style,
         TASKBAR_OFFSCREEN,
         TASKBAR_OFFSCREEN,
         1,
@@ -244,24 +348,19 @@ pub(super) unsafe fn pin_taskbar_window() -> Option<HWND> {
 }
 
 unsafe fn handle_taskbar_restore() {
-    if pin_always_on_top() {
-        hide_pin_taskbar();
-    }
+    // **Nothing is hidden before the pin is asked.** A restore from the taskbar puts the pin back
+    // where it stood, and which place that is is read from whether the stand-in is up
+    // (`pin_taskbar_is_showing`, in `restore_pin`) — so a stand-in taken down here would be the one
+    // fact the pin's own restore needs, and the pin would come back beside the pointer on the
+    // taskbar instead of where the user left it. The pin's restore takes the stand-in down itself
+    // where the setting says there is to be none (see `hide_minimized_pin`).
     if pin_is_collapsed() {
         ask_pin(PinCommand::Restore);
     } else {
         let preview_hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
         if !preview_hwnd.is_invalid() {
             let _ = SetForegroundWindow(preview_hwnd);
-            let _ = SetWindowPos(
-                preview_hwnd,
-                HWND_TOP,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE,
-            );
+            let _ = SetWindowPos(preview_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             place_pinned_siblings();
         }
     }
@@ -295,6 +394,14 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
         }
         WM_SYSCOMMAND => match (wparam.0 & 0xFFF0) as u32 {
             SC_RESTORE => {
+                handle_taskbar_restore();
+                LRESULT(0)
+            }
+            // The Shell's own `Minimize` on this window, which is its button's gesture rather than
+            // the pin's: what the user asked a button for is the pin, so it is asked for here rather
+            // than left to `DefWindowProcW`, which would minimize the app's button out from under the
+            // pin and leave the hover a picture of a minimized window (see `keep_the_stand_in_up`).
+            SC_MINIMIZE => {
                 handle_taskbar_restore();
                 LRESULT(0)
             }
