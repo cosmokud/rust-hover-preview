@@ -10,11 +10,11 @@ use crate::readers::tone_map::Curve;
 
 use super::app_config::AppConfig;
 use super::defaults::{
-    parse_text_font_scale, sanitize_decode_budget_gb, sanitize_document_cache_mb,
-    sanitize_general_disk_cache_mb, sanitize_hdr_exposure, sanitize_image_cache_mb,
-    sanitize_image_disk_cache_mb, sanitize_mpv_path, sanitize_pin_zoom_bounce_ms,
-    sanitize_pin_zoom_bounce_power, sanitize_pin_zoom_bounce_speed_ms, sanitize_spinner_delay_ms,
-    sanitize_text_font_scale_percent,
+    parse_text_font_scale, sanitize_audio_mark_offset_y, sanitize_decode_budget_gb,
+    sanitize_document_cache_mb, sanitize_general_disk_cache_mb, sanitize_hdr_exposure,
+    sanitize_image_cache_mb, sanitize_image_disk_cache_mb, sanitize_mpv_path,
+    sanitize_pin_zoom_bounce_ms, sanitize_pin_zoom_bounce_power, sanitize_pin_zoom_bounce_speed_ms,
+    sanitize_spinner_delay_ms, sanitize_text_font_scale_percent,
     sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms, sanitize_ttc_face,
     sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
 };
@@ -181,6 +181,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "pin_zoom_bounce_power",
             Some(sanitize_pin_zoom_bounce_power(self.pin_zoom_bounce_power).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "audio_mark_offset_y",
+            Some(sanitize_audio_mark_offset_y(self.audio_mark_offset_y).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -744,6 +749,23 @@ impl AppConfig {
             self.pin_zoom_bounce_power = sanitize_pin_zoom_bounce_power(value as f32);
         } else if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "bounce_power") {
             self.pin_zoom_bounce_power = sanitize_pin_zoom_bounce_power(value as f32);
+        }
+        let read_mark_offset = |key: &str| -> Option<f32> {
+            ini.getfloat(CONFIG_SECTION, key)
+                .ok()
+                .flatten()
+                .map(|v| v as f32)
+                .or_else(|| {
+                    ini.get(CONFIG_SECTION, key)
+                        .and_then(|s| s.trim().parse::<f32>().ok())
+                })
+        };
+        if let Some(value) = read_mark_offset("audio_mark_offset_y")
+            .or_else(|| read_mark_offset("audio_mark_vertical_offset"))
+            .or_else(|| read_mark_offset("audio_mark_y_offset"))
+            .or_else(|| read_mark_offset("audio_mark_vertical_alignment"))
+        {
+            self.audio_mark_offset_y = sanitize_audio_mark_offset_y(value);
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "webp_playback_fps") {
             if let Ok(value) = u32::try_from(value) {

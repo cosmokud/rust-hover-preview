@@ -42,8 +42,8 @@ pub(super) const CLOCK_ADVANCES: i32 = 17;
 pub(super) const MIN_CONTENT_ADVANCES: i32 = 34;
 
 /// The size level the name is set in, which is the level an archive's header is set in — and the
-/// line the mark is drawn on, which stands on the x-height band of that level's ink rather than
-/// on the tallest band the line itself is centred by (see `super::page::mark`).
+/// line the mark is drawn on, centred on the band that level's ink stands in (see
+/// `super::page::mark`).
 pub(super) const HEADER_LEVEL: u8 = 3;
 
 /// The hairline under the name, and the room kept around it.
@@ -101,10 +101,11 @@ const NAME_ADVANCE_MS: u128 = 100;
 
 /// The options a card is built with, passed in rather than read from the configuration here so
 /// a caller's intent cannot drift from what is drawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct AudioPreviewOptions {
     pub(crate) theme: TextTheme,
     pub(crate) font_scale_percent: u32,
+    pub(crate) mark_offset_y: f32,
 }
 
 /// How one fact is drawn: the codec's name is the one fact that is not a quantity or a plain
@@ -339,7 +340,7 @@ pub(crate) fn measure(
         return None;
     }
     let result = TextMetrics::new(dc, dpi, options.font_scale_percent)
-        .map(|metrics| build_page(card, theme, &metrics, max_width, max_height))
+        .map(|metrics| build_page(card, theme, &metrics, max_width, max_height, options.mark_offset_y))
         .map(|page| (page.width, page.height));
     unsafe {
         let _ = DeleteDC(dc);
@@ -360,7 +361,7 @@ pub(crate) fn render(
 
     let surface = DibSurface::create(width, height)?;
     let metrics = TextMetrics::new(surface.dc, dpi, options.font_scale_percent)?;
-    let page = build_page(card, theme, &metrics, width, height);
+    let page = build_page(card, theme, &metrics, width, height, options.mark_offset_y);
     paint(&surface, &page, theme, metrics.scale);
 
     Some((surface.pixels(), surface.width, surface.height))

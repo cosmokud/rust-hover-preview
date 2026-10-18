@@ -110,6 +110,40 @@ fn the_pin_zoom_bounce_gate_speed_and_power_are_read_from_their_own_keys() {
     assert!((config.pin_zoom_bounce_power - 0.02).abs() < 1e-4);
 }
 
+/// The audio mark's vertical offset is read from its own key, with fallbacks and clamping.
+#[test]
+fn the_audio_mark_offset_y_is_read_from_its_own_key() {
+    assert_eq!(
+        AppConfig::default().audio_mark_offset_y,
+        DEFAULT_AUDIO_MARK_OFFSET_Y,
+    );
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "audio_mark_offset_y", Some("-1.5".to_string()));
+    assert_eq!(read_file(&mut ini).audio_mark_offset_y, -1.5);
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "audio_mark_vertical_offset", Some("2.0".to_string()));
+    assert_eq!(read_file(&mut ini).audio_mark_offset_y, 2.0);
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "audio_mark_y_offset", Some("-3".to_string()));
+    assert_eq!(read_file(&mut ini).audio_mark_offset_y, -3.0);
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "audio_mark_vertical_alignment", Some("1".to_string()));
+    assert_eq!(read_file(&mut ini).audio_mark_offset_y, 1.0);
+
+    // Clamping past limits
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "audio_mark_offset_y", Some("150".to_string()));
+    assert_eq!(read_file(&mut ini).audio_mark_offset_y, MAX_AUDIO_MARK_OFFSET_Y);
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "audio_mark_offset_y", Some("-200".to_string()));
+    assert_eq!(read_file(&mut ini).audio_mark_offset_y, MIN_AUDIO_MARK_OFFSET_Y);
+}
+
 
 /// The settings section is written under the headings the tray lists its menus under, in
 /// the order the tray lists them, with the keys of a heading in alphabetical order and the

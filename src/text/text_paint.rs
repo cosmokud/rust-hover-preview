@@ -150,8 +150,6 @@ struct LevelMetrics {
     line_height: [i32; SIZE_LEVELS],
     ink_top: [i32; SIZE_LEVELS],
     ink_bottom: [i32; SIZE_LEVELS],
-    x_top: [i32; SIZE_LEVELS],
-    x_bottom: [i32; SIZE_LEVELS],
 }
 
 static LEVEL_METRICS: Lazy<Mutex<HashMap<(u32, u32), LevelMetrics>>> =
@@ -161,11 +159,6 @@ static LEVEL_METRICS: Lazy<Mutex<HashMap<(u32, u32), LevelMetrics>>> =
 /// scale and font size. The ink rows are the rows of a line box the level's
 /// bold face fills with ink, measured as drawn rather than as the box is
 /// laid out, because a layout that centres a line centres the ink itself.
-///
-/// The rows are two bands rather than one: the tallest ink a line stands in
-/// (`ink_top`..`ink_bottom`), which a line is centred by, and the lowercase ink
-/// alone (`x_top`..`x_bottom`), whose middle is the middle of the text as it is
-/// read — the line a mark beside a name is placed on (see `audio_preview`).
 pub(crate) struct TextMetrics {
     pub(crate) scale: f32,
     pub(crate) padding: i32,
@@ -174,8 +167,6 @@ pub(crate) struct TextMetrics {
     pub(crate) line_height: [i32; SIZE_LEVELS],
     pub(crate) ink_top: [i32; SIZE_LEVELS],
     pub(crate) ink_bottom: [i32; SIZE_LEVELS],
-    pub(crate) x_top: [i32; SIZE_LEVELS],
-    pub(crate) x_bottom: [i32; SIZE_LEVELS],
 }
 
 impl TextMetrics {
@@ -202,8 +193,6 @@ impl TextMetrics {
             line_height: levels.line_height,
             ink_top: levels.ink_top,
             ink_bottom: levels.ink_bottom,
-            x_top: levels.x_top,
-            x_bottom: levels.x_bottom,
         })
     }
 
@@ -250,13 +239,6 @@ fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
     let mut line_height = [0i32; SIZE_LEVELS];
     let mut ink_top = [0i32; SIZE_LEVELS];
     let mut ink_bottom = [0i32; SIZE_LEVELS];
-    let mut x_top = [0i32; SIZE_LEVELS];
-    let mut x_bottom = [0i32; SIZE_LEVELS];
-
-    // A capital and an ascender for the band a line is centred by, and the one lowercase letter
-    // whose ink is the x-height for the band a mark beside the name is centred on.
-    let caps = [b'H' as u16, b'l' as u16];
-    let lower = [b'x' as u16];
 
     for level in 0..SIZE_LEVELS {
         let pixels = scaled(LEVEL_FONT_PIXELS[level], scale);
@@ -286,24 +268,10 @@ fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
                 line_height[level] = metrics.tmHeight
                     + metrics.tmExternalLeading
                     + scaled(LEVEL_EXTRA_LEADING[level], scale);
-                let (top, bottom) = ink_band(
-                    level as u8,
-                    scale,
-                    advance[level],
-                    line_height[level],
-                    &caps,
-                )?;
+                let (top, bottom) =
+                    bold_ink_band(level as u8, scale, advance[level], line_height[level])?;
                 ink_top[level] = top;
                 ink_bottom[level] = bottom;
-                let (top, bottom) = ink_band(
-                    level as u8,
-                    scale,
-                    advance[level],
-                    line_height[level],
-                    &lower,
-                )?;
-                x_top[level] = top;
-                x_bottom[level] = bottom;
                 keep = true;
             }
         }
@@ -318,28 +286,22 @@ fn measure_levels(dc: HDC, scale: f32) -> Option<LevelMetrics> {
         line_height,
         ink_top,
         ink_bottom,
-        x_top,
-        x_bottom,
     })
 }
 
-/// The rows of a line box that the ink of `sample` stands in: where it begins
-/// and ends, counted from the line's own top. The box around ink is not the
+/// The rows of a line box that a level's bold face fills with ink: where
+/// the ink of its tallest glyphs — a capital and an ascender — begins and
+/// ends, counted from the line's own top. The box around ink is not the
 /// ink: the leading above the glyphs and the room the descent leaves
 /// below the baseline are not ink, and a layout that centres a line
 /// centres the ink itself. The ink is measured as it is drawn, by
 /// rendering the glyphs into a bitmap and scanning the rows they stand
 /// in, because the face's own metrics say where the box is, not where
 /// the ink stands in it. The bold face is the one measured, because the
-/// name line a layout centres — and the mark it places beside it — is the
-/// bold face of its level.
-fn ink_band(
-    level: u8,
-    scale: f32,
-    advance: i32,
-    line_height: i32,
-    sample: &[u16],
-) -> Option<(i32, i32)> {
+/// name line a layout centres is the bold face of its level.
+fn bold_ink_band(level: u8, scale: f32, advance: i32, line_height: i32) -> Option<(i32, i32)> {
+    // A capital and an ascender: the tallest glyphs a line stands in.
+    let sample = [b'H' as u16, b'l' as u16];
     let width = advance * sample.len() as i32 + 2;
     // The sample is drawn a line's own height into the bitmap, so its
     // ink stands well inside it whatever the face does above its box.
@@ -368,7 +330,7 @@ fn ink_band(
         // under them is painted.
         SetBkMode(surface.dc, TRANSPARENT);
         SetTextColor(surface.dc, COLORREF(0x00FF_FFFF));
-        let drawn = TextOutW(surface.dc, 0, margin, sample).as_bool();
+        let drawn = TextOutW(surface.dc, 0, margin, &sample).as_bool();
         let _ = SelectObject(surface.dc, previous_font);
         let _ = DeleteObject(font);
 
