@@ -378,6 +378,19 @@ fn set_pin_mode_audio_seek(seek: AudioSeek) {
     }
 }
 
+/// Whether the pin that is up has the card's menu up, or nothing for a pin that is not there.
+///
+/// It is what the player's own raises are held off by while the panel is up (see `player_order`):
+/// the panel floats in a window of this app's own over the film, so a raise puts the film over it,
+/// and the panel is back only on the tick's own `render_pin_menu` — a menu that blinks wherever it
+/// overlaps the picture. The same question as `pin_volume_open`, asked of the other panel a pin
+/// floats (see `pin_menu_window`).
+pub(super) fn pin_menu_open() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.menu.open && !pin.collapsed))
+        .unwrap_or(false)
+}
+
 /// Where the card's menu floats, or nothing while it is closed: the
 /// panel anchored at the point the right-click that opened it landed,
 /// holding the rows of the page it is showing.

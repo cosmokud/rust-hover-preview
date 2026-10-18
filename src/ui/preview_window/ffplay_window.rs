@@ -173,6 +173,7 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
         pinned(),
         pin_chrome_up(),
         pin_volume_open(),
+        pin_menu_open(),
         pin_player_is_parked(),
     );
 
@@ -191,13 +192,15 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // of the pin's chrome is painted over the same band for a kind whose chrome is drawn over its
     // media, so a raise buries a showing strip the same way (see `pin_overlay_chrome`).
     //
-    // So the raise waits while the popup is up or any strip of the pin's chrome is showing, and the
-    // style does not: `WS_EX_NOACTIVATE` is what keeps the player from taking the keyboard, and that
-    // has to keep being asserted throughout, because the player's window is created without it and
-    // this is the only thing that ever puts it on (see `Bug 2`'s note over `try_apply_noactivate_style`).
-    // Nothing is asked for on the way out — the popup's closing raises the pin's own window, and a
-    // strip coming up is answered by the tick's chrome block with the same raise (see
-    // `toggle_pin_volume`, `pin_chrome_up`); the next raise through here settles the order either way.
+    // So the raise waits while the popup is up, any strip of the pin's chrome is showing, or the
+    // card's menu is up, and the style does not: `WS_EX_NOACTIVATE` is what keeps the player from
+    // taking the keyboard, and that has to keep being asserted throughout, because the player's
+    // window is created without it and this is the only thing that ever puts it on (see `Bug 2`'s
+    // note over `try_apply_noactivate_style`).
+    // Nothing is asked for on the way out — the popup's closing raises the pin's own window, a
+    // strip coming up is answered by the tick's chrome block with the same raise, and the card's
+    // menu is raised over the film by the tick's own `render_pin_menu` (see `toggle_pin_volume`,
+    // `pin_chrome_up`); the next raise through here settles the order either way.
     //
     // **And it waits while a drag is parking the window, which is the same arrangement for the same
     // reason: this is a thread of its own, asking every hundred milliseconds whether the player's
@@ -209,14 +212,15 @@ pub(super) unsafe fn apply_noactivate_to_hwnd(hwnd: HWND) -> bool {
     // window that is standing in it (see `pin_player_is_parked`).
     //
     // **What is held off here is the `Leave` answer and nothing else.** Those are the park, a strip
-    // of the pin's chrome and an open volume popup (see `pin_player_is_parked`, `pin_chrome_up`,
-    // `pin_volume_open`): a raise over either of the last two puts the film over what the user is
-    // looking at — the caption and the transport bar the pin draws into the band over the media
-    // (see the note above and `pin_overlay_chrome`). mpv's film holds its own band while they are
-    // up (`--ontop`, see `mpv_args`), the pin's own raise carries the press, and a band that has
-    // moved is placed without a raise (see `ensure_pinned_sibling_box`). A collapsed pin holds off
-    // every film alike: its band went with the window, so a raise here is a chrome-less film back
-    // over Explorer beside the bubble (see `hide_pinned_windows`).
+    // of the pin's chrome, an open volume popup and an open card's menu (see `pin_player_is_parked`,
+    // `pin_chrome_up`, `pin_volume_open`, `pin_menu_open`): a raise over any of the last three puts
+    // the film over what the user is looking at — the caption and the transport bar the pin draws
+    // into the band over the media, and the panel the card's menu floats in (see the note above and
+    // `pin_overlay_chrome`, `pin_menu_window`). mpv's film holds its own band while they are up
+    // (`--ontop`, see `mpv_args`), the pin's own raise carries the press, and a band that has moved
+    // is placed without a raise (see `ensure_pinned_sibling_box`). A collapsed pin holds off every
+    // film alike: its band went with the window, so a raise here is a chrome-less film back over
+    // Explorer beside the bubble (see `hide_pinned_windows`).
     //
     // **And a collapsed pin's film is put *away* rather than merely left unraised, which is the
     // whole of what a player begun behind a bubble costs without it.** A player is given its file
