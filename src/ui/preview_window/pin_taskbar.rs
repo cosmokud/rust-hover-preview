@@ -109,7 +109,20 @@ pub(super) fn refresh_pin_taskbar_title() {
 /// that has been put away into the taskbar is the other form — the window is minimized, and the frame
 /// the Shell cached on the way down is the last frame it was showing (see `pin_taskbar_mirror`).
 ///
+/// **And a button is shown only where one is owed.** Every road here is a road into a button for a pin
+/// that is there, but they are not all the same road: the setting's own toggle is one that cannot tell
+/// a pin put away into the taskbar from one put away into the round bubble, and the button it would
+/// show over the bubble is a button for a pin that is not in the taskbar and that holds no picture of
+/// one — every window of the pin's is off the screen. So the rule the tick reads a button back
+/// against is asked here too, and the stand-in goes down where none is owed rather than up (see
+/// `a_button_is_owed` and `keep_the_stand_in_up`).
+///
 pub(super) unsafe fn show_pin_taskbar() {
+    if !a_button_is_owed() {
+        hide_pin_taskbar();
+        return;
+    }
+
     let Some(hwnd) = pin_taskbar_window() else {
         return;
     };
