@@ -57,7 +57,7 @@ use super::submenus::{
     append_video_engine_menu, cache_size_label,
     decode_budget_label, default_label, pin_minimize_label, pin_update_label,
     remember_volume_label,
-    system_menu_label, timing_delay_menu, update_available_label,
+    system_menu_label, timing_delay_menu, update_available_label, MF_RADIOCHECK,
 };
 
 use crate::app::updates;
@@ -262,7 +262,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let minimize_flag = |candidate: PinMinimizeTo| {
         MF_STRING
             | if pin_minimize_to == candidate {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             }
@@ -427,7 +427,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         for (index, level) in VOLUME_CHOICES.iter().enumerate().rev() {
             let flags = MF_STRING
                 | if current == *level {
-                    MF_CHECKED
+                    MF_CHECKED | MF_RADIOCHECK
                 } else {
                     MF_UNCHECKED
                 };
@@ -727,7 +727,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let theme_flag = |candidate: TextTheme| {
         MF_STRING
             | if marked == candidate {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             }
@@ -784,7 +784,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let font_flag = |percent: u32| {
         MF_STRING
             | if font_scale == percent {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             }
@@ -826,7 +826,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let markdown_flag = |candidate: MarkdownMode| {
         MF_STRING
             | if markdown_mode == candidate {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             }

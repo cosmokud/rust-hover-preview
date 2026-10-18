@@ -364,14 +364,13 @@ pub(super) unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_RBUTTONDOWN => {
-            // A right-click on a pinned sound's card asks for the card's own
-            // menu, at the point it was asked for: only a sound carries one,
-            // and `open_pin_menu` answers nothing for any other kind (see
-            // `pin_shows_an_audio_card`). The menu is the preview's own, so
-            // the press does not dismiss the preview; a right-click on
-            // anything else is left to the default procedure — a hover's
-            // window has no menu, and the text preview's own opens on the
-            // release below.
+            // A right-click on a pinned window asks for the window's own menu, at
+            // the point it was asked for: a sound's card carries the card's own rows
+            // and every other kind the rows a bubble's menu holds (see
+            // `pinned_menu_paint`). The menu is the preview's own, so the press does
+            // not dismiss the preview; a right-click on anything else is left to the
+            // default procedure — a hover's window has no menu, and the text
+            // preview's own opens on the release below.
             if pinned() {
                 let (x, y) = message_point(lparam);
                 // The point on the screen, which is the window the card's menu's panels are
@@ -385,7 +384,13 @@ pub(super) unsafe extern "system" fn window_proc(
                     close_pin_menu(hwnd);
                     return LRESULT(0);
                 }
-                open_pin_menu(hwnd, menu_x, menu_y);
+                // And a row the menu is not for — a film's transport bar, the text
+                // of a pinned page — is left under the hand rather than answered
+                // here: what is there is the player's own strip or the page's own
+                // menu (see `pin_right_click_opens_menu`).
+                if pin_right_click_opens_menu(y) {
+                    open_pin_menu(hwnd, menu_x, menu_y);
+                }
                 return LRESULT(0);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -404,7 +409,14 @@ pub(super) unsafe extern "system" fn window_proc(
             // The menu is the preview's own, so it opens where it was asked for,
             // and the press that asks for it does not dismiss the preview.
             let (x, y) = message_point(lparam);
-            if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
+            // The page's own `Select All` / `Copy` menu is for the text under the hand, and
+            // opens on the release rather than the press: where the press already put the
+            // window's own menu up — on the title bar above the text — this one stays down,
+            // because two panels for one right-click is one too many (see
+            // `pin_right_click_opens_menu`).
+            if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire)
+                && !(pinned() && pin_right_click_opens_menu(y))
+            {
                 show_text_preview_menu(hwnd, x, y);
             }
             LRESULT(0)

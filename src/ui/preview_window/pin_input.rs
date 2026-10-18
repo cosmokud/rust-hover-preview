@@ -239,7 +239,13 @@ pub(super) struct PinnedTransportBar {
 
 pub(super) fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
     let pinned = pin_state()?;
-    let pin = pinned.pin()?;
+    pinned_transport_bar_of(pinned.pin()?)
+}
+
+/// The same bar asked of a pin a reader already has in hand: the readers that paint a menu are
+/// already under the state's lock, and one lock asked twice on one thread is a hang (see
+/// `pin_right_click_opens_menu`).
+pub(super) fn pinned_transport_bar_of(pin: &PinnedPreview) -> Option<PinnedTransportBar> {
     if pin.collapsed || !pin.transport_bar {
         return None;
     }
@@ -922,6 +928,19 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         render_layered_preview(hwnd);
     }
 
+    // The window's own menu, while its panel is up, and before the bands and the edges it is
+    // drawn over: a panel that reaches across the caption or the transport bar is a panel whose
+    // rows have to be answerable there too, and one asked about after them would be a row the
+    // chrome swallowed for a drag or a seek. A press the panel holds no row at is a press that has
+    // left the menu, which puts it away (see `pinned_menu_press`).
+    //
+    // It is answered on the screen rather than in the window's own coordinates, because that is
+    // where the panel is drawn: in a window of its own over the screen (see `pin_menu_window`).
+    let (menu_x, menu_y) = client_to_screen(hwnd, x, y);
+    if pinned_menu_press(hwnd, menu_x, menu_y) {
+        return true;
+    }
+
     if framed {
         let edge = {
             let Some(pinned) = pin_state() else {
@@ -962,20 +981,6 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
 
     // The transport bar, which is the strip along the bottom of a kind that plays.
     if pinned_transport_press(hwnd, x, y) {
-        return true;
-    }
-
-    // The card's menu, while its panel is up: a panel over the
-    // card is over the card's own controls too, so a press on a
-    // row is the menu's before it is the card's, and a press
-    // anywhere else is a press that has left the menu, which
-    // puts the panel away (see `pinned_menu_press`).
-    //
-    // It is answered on the screen rather than in the card's own coordinates,
-    // because that is where the panel is drawn: in a window of its own over
-    // the screen (see `pin_menu_window`).
-    let (menu_x, menu_y) = client_to_screen(hwnd, x, y);
-    if pinned_menu_press(hwnd, menu_x, menu_y) {
         return true;
     }
 

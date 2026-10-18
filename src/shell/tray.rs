@@ -101,8 +101,9 @@ use submenus::{
     pin_minimize_label,
     pin_mode_audio_seek_label,
     pin_nav_label, pin_update_label,
-    remember_volume_label, system_menu_label, update_available_label, video_engine_label,
-    zoom_background_at, MPV_LABEL_BUDGET,
+    remember_volume_label, system_menu_label, timing_delay_menu, update_available_label,
+    video_engine_label,
+    zoom_background_at, MPV_LABEL_BUDGET, MF_RADIOCHECK,
 };
 
 #[cfg(test)]
