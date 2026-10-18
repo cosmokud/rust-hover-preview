@@ -14,7 +14,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClientRect, GetWindowRect, IsIconic, IsWindow,
     RegisterClassExW, SendMessageW, ShowWindow, SC_RESTORE, SW_MINIMIZE, SW_SHOWNOACTIVATE,
-    WINDOW_EX_STYLE, WM_SYSCOMMAND, WNDCLASSEXW, WS_EX_APPWINDOW, WS_POPUP,
+    WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SYSCOMMAND, WNDCLASSEXW, WS_EX_APPWINDOW, WS_POPUP,
 };
 
 /// Register the class the stand-in is made from, once for the run.
@@ -496,6 +496,64 @@ fn a_pin_minimized_again_after_a_button_restore_goes_away_again() {
     assert!(
         unsafe { IsIconic(stand_in).as_bool() },
         "and the button goes down with it, in the form a hover holds the frozen frame in"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    forget_the_stand_in();
+    stand_pin(previous_pin);
+}
+
+/// A stand-in whose pin is put away is not brought back by an activation.
+///
+/// The fault this is a regression test for: the user's own run had the first minimize after the
+/// button had brought the pin back flash the window up over the desktop and leave it standing — the
+/// same press a second time went through. Windows hands the keyboard on to the next window when this
+/// app takes the pin's window off the screen, and the stand-in the taskbar click a moment before had
+/// activated is the window it picks; read as a click on the button it asked for the pin's own
+/// restore, behind the collapse that had just put the pin away.
+#[test]
+fn a_put_away_stand_in_is_not_brought_back_by_an_activation() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let before = pin_always_on_top();
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+
+    forget_the_stand_in();
+    let _ = take_pin_command();
+
+    // The minimize: the pin goes away into the taskbar, and the button goes down in its put-away
+    // form with it.
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    let stand_in = showing_taskbar_window().expect("the button the minimize leaves");
+    let _ = take_pin_command();
+
+    // What Windows sends that window as the pin's own window goes off the screen: the message it
+    // activates a window with, and no click on the button.
+    // Safety: a message to a window of this app's own, with the numbers the Shell sends with it.
+    unsafe {
+        SendMessageW(stand_in, WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0));
+    }
+
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "an activation of a stand-in whose pin is put away is not a click on its button, and the \
+         pin it would bring back is the one the collapse has just put away"
+    );
+    assert!(
+        pin_is_collapsed(),
+        "and the pin is left where the minimize put it"
     );
 
     if let Ok(mut config) = CONFIG.lock() {

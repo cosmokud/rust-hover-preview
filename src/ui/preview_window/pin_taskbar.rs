@@ -453,9 +453,19 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
             LRESULT(0)
         }
         WM_ACTIVATE => {
-            // A click on the taskbar button may activate the window rather than ask it to
-            // restore; the pin is asked for either way. A deactivation says nothing about the pin.
-            if (wparam.0 & 0xFFFF) as u32 == WA_ACTIVE {
+            // A click on the taskbar button may activate a stand-in that is *up* rather than ask it
+            // to restore; the pin is asked for either way. A deactivation says nothing about the
+            // pin — and neither does an activation of a stand-in whose pin is put away.
+            //
+            // **A stand-in that is put away is brought back by the Shell's own restore and by
+            // nothing else.** What carries the user's click to a window that is down is the
+            // question an iconic window is sent before it may open (`WM_QUERYOPEN`) and the button's
+            // own `Restore` (`SC_RESTORE`); an activation of a put-away stand-in is otherwise this
+            // app's own doing — a collapse takes the pin's window off the screen, Windows hands the
+            // keyboard on to the next window, and the stand-in a click a moment before had activated
+            // is the one it picks — and read as that click it asked for the pin's restore behind the
+            // collapse that had just put the pin away (see `collapse_pin_to`).
+            if (wparam.0 & 0xFFFF) as u32 == WA_ACTIVE && !pin_is_collapsed() {
                 handle_taskbar_restore();
             }
             LRESULT(0)
