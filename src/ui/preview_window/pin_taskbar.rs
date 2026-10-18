@@ -17,11 +17,9 @@
 use super::*;
 
 use windows::Win32::UI::WindowsAndMessaging::{
-    LoadImageW, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, SC_CLOSE, SC_RESTORE, SetWindowTextW,
-    SW_SHOWMINNOACTIVE, WA_ACTIVE, WM_QUERYOPEN, WS_CAPTION, WS_EX_APPWINDOW, WS_MINIMIZEBOX,
-    WS_OVERLAPPED, WS_SYSMENU, HICON,
+    SC_CLOSE, SC_RESTORE, SetWindowTextW, SW_SHOWMINNOACTIVE, WA_ACTIVE, WM_QUERYOPEN, WS_CAPTION,
+    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
 };
-
 /// The class the taskbar stand-in is created from.
 pub(super) const PIN_TASKBAR_CLASS: PCWSTR = w!("RustHoverPreviewPinTaskbar");
 
@@ -35,26 +33,6 @@ const TASKBAR_OFFSCREEN: i32 = -32000;
 /// The title the taskbar button carries. The app's own name rather than the pinned file's, since
 /// the button stands for the app that has a window put away, not for a document.
 const TASKBAR_TITLE: PCWSTR = w!("Rust Preview");
-
-/// The icon the taskbar button carries, which is the same application icon the tray uses: a
-/// stand-in for this app rather than for the file behind the pin.
-///
-/// `IDI_APPLICATION` is the ordinal the Shell keeps an application's default icon under; asking
-/// for it with `LR_SHARED` borrows the system's copy rather than owning one that would have to be
-/// destroyed.
-pub(super) unsafe fn taskbar_icon() -> HICON {
-    match LoadImageW(
-        None,
-        PCWSTR(32512 as *const u16), // IDI_APPLICATION
-        IMAGE_ICON,
-        0,
-        0,
-        LR_DEFAULTSIZE | LR_SHARED,
-    ) {
-        Ok(hicon) => HICON(hicon.0),
-        Err(_) => HICON::default(),
-    }
-}
 
 /// Put the stand-in up: the app appears in the taskbar, minimized and off the screen, and the pin
 /// stays hidden until the button is clicked.

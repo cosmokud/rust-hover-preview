@@ -93,16 +93,16 @@ use crate::shell::explorer_hook;
 use crate::{StartupTrace, RUNNING};
 use std::panic::catch_unwind;
 use std::sync::atomic::Ordering;
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::core::w;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, LoadImageW, PostQuitMessage,
-    RegisterClassExW, RegisterWindowMessageW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON,
-    IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, PostQuitMessage,
+    RegisterClassExW, RegisterWindowMessageW, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
+    MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
     WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WNDCLASSEXW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
@@ -642,44 +642,10 @@ unsafe extern "system" fn tray_window_proc(
 }
 
 unsafe fn add_tray_icon(hwnd: HWND) -> bool {
-    // Load the embedded icon resource (assets/icon.ico compiled via build.rs)
-    let hicon = if let Ok(hmodule) = GetModuleHandleW(None) {
-        let hinstance = HINSTANCE(hmodule.0);
-        match LoadImageW(
-            hinstance,
-            // `MAKEINTRESOURCEW(1)`: with the high word zero, `LoadImageW`
-            // reads this value as the ID of the resource to load rather than
-            // as the address of a name, so it is an ID here and not a pointer.
-            PCWSTR(std::ptr::without_provenance(1)),
-            IMAGE_ICON,
-            0,
-            0,
-            LR_DEFAULTSIZE | LR_SHARED,
-        ) {
-            Ok(h) => HICON(h.0),
-            Err(_) => HICON::default(),
-        }
-    } else {
-        HICON::default()
-    };
-
-    // Fallback to system icon if custom icon failed
-    let hicon = if hicon.0.is_null() {
-        match LoadImageW(
-            None,
-            PCWSTR(32512 as *const u16), // IDI_APPLICATION
-            IMAGE_ICON,
-            0,
-            0,
-            LR_DEFAULTSIZE | LR_SHARED,
-        ) {
-            Ok(h) => HICON(h.0),
-            Err(_) => HICON::default(),
-        }
-    } else {
-        hicon
-    };
-
+    // The icon the app wears: its own, loaded from the resource the build script compiles it
+    // under, with the Shell's default application icon as the fallback for a build that has
+    // none (see `app_icon`).
+    let hicon = crate::shell::app_icon::app_icon();
     let mut nid = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: hwnd,
