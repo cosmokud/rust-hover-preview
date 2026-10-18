@@ -27,6 +27,7 @@ mod ids;
 mod menus;
 mod submenus;
 
+pub(crate) use commands::toggle_pin_always_on_top;
 pub use event_loop::run_tray;
 
 // What the tests read through this module: the ids and tables each menu is built from, and the
@@ -92,8 +93,9 @@ use submenus::{
     bitmap_scale_label, cache_size_label, dds_background_at, document_scale_at,
     document_scale_label, end_of_file_label, engine_idle_at, engine_idle_label, html_background_at,
     is_mpv_row, mpv_menu_items, mpv_row_label, pin_minimize_label, pin_mode_audio_seek_label,
-    pin_nav_label, pin_update_label, remember_volume_label, system_menu_label,
-    update_available_label, video_engine_label, zoom_background_at, MPV_LABEL_BUDGET,
+    pin_nav_label, pin_update_label, remember_volume_label, system_menu_label, timing_delay_menu,
+    update_available_label, video_engine_label, zoom_background_at, MF_RADIOCHECK,
+    MPV_LABEL_BUDGET,
 };
 
 #[cfg(test)]

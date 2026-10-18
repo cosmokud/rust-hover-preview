@@ -1,3 +1,4 @@
+pub(crate) mod app_icon;
 pub(crate) mod cloud_files;
 pub(crate) mod explorer_hook;
 pub(crate) mod hook_thread;

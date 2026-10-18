@@ -7,8 +7,18 @@ use super::*;
 /// window that is being resized moves its own origin out from under a client coordinate.
 pub(super) fn cursor_screen_point() -> Option<(i32, i32)> {
     let mut point = POINT::default();
-    unsafe { GetCursorPos(&mut point) }.ok()?;
-    Some((point.x, point.y))
+    if unsafe { GetCursorPos(&mut point) }.is_ok() {
+        Some((point.x, point.y))
+    } else {
+        #[cfg(test)]
+        {
+            Some((0, 0))
+        }
+        #[cfg(not(test))]
+        {
+            None
+        }
+    }
 }
 
 /// A point in a window's own coordinates as a place on the screen: what a press on the card's
@@ -229,7 +239,13 @@ pub(super) struct PinnedTransportBar {
 
 pub(super) fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
     let pinned = pin_state()?;
-    let pin = pinned.pin()?;
+    pinned_transport_bar_of(pinned.pin()?)
+}
+
+/// The same bar asked of a pin a reader already has in hand: the readers that paint a menu are
+/// already under the state's lock, and one lock asked twice on one thread is a hang (see
+/// `pin_right_click_opens_menu`).
+pub(super) fn pinned_transport_bar_of(pin: &PinnedPreview) -> Option<PinnedTransportBar> {
     if pin.collapsed || !pin.transport_bar {
         return None;
     }
@@ -735,7 +751,20 @@ pub(super) unsafe fn toggle_pin_volume(hwnd: HWND) {
 /// Put the pin's window above the window standing in its media band, without taking the focus and
 /// without moving anything: the order the tick keeps for the player, asked the other way round for
 /// as long as a volume popup is open.
+///
+/// **A pin that is not Always On Top is not raised at all.** It is an ordinary window there, and
+/// one put over every other window on the machine the moment its chrome came up — or its volume
+/// panel, or the film beneath it was placed — is a pin that behaves like a topmost one while the
+/// setting says it is not, which is the whole of what that setting is about. What the chrome and
+/// the panel are owed is the film's place, and the film is moved instead: put directly below the
+/// pin it is out of the way of both, and the pair keeps the place the user's own clicks gave it
+/// (see `put_player_under_the_pin`).
 pub(super) unsafe fn raise_pinned_window(hwnd: HWND) {
+    if !pin_always_on_top() {
+        put_player_under_the_pin();
+        return;
+    }
+
     if let Some((window, width, height)) = pinned_window_box() {
         let _ = SetWindowPos(
             hwnd,
@@ -899,6 +928,19 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
         render_layered_preview(hwnd);
     }
 
+    // The window's own menu, while its panel is up, and before the bands and the edges it is
+    // drawn over: a panel that reaches across the caption or the transport bar is a panel whose
+    // rows have to be answerable there too, and one asked about after them would be a row the
+    // chrome swallowed for a drag or a seek. A press the panel holds no row at is a press that has
+    // left the menu, which puts it away (see `pinned_menu_press`).
+    //
+    // It is answered on the screen rather than in the window's own coordinates, because that is
+    // where the panel is drawn: in a window of its own over the screen (see `pin_menu_window`).
+    let (menu_x, menu_y) = client_to_screen(hwnd, x, y);
+    if pinned_menu_press(hwnd, menu_x, menu_y) {
+        return true;
+    }
+
     if framed {
         let edge = {
             let Some(pinned) = pin_state() else {
@@ -939,20 +981,6 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
 
     // The transport bar, which is the strip along the bottom of a kind that plays.
     if pinned_transport_press(hwnd, x, y) {
-        return true;
-    }
-
-    // The card's menu, while its panel is up: a panel over the
-    // card is over the card's own controls too, so a press on a
-    // row is the menu's before it is the card's, and a press
-    // anywhere else is a press that has left the menu, which
-    // puts the panel away (see `pinned_menu_press`).
-    //
-    // It is answered on the screen rather than in the card's own coordinates,
-    // because that is where the panel is drawn: in a window of its own over
-    // the screen (see `pin_menu_window`).
-    let (menu_x, menu_y) = client_to_screen(hwnd, x, y);
-    if pinned_menu_press(hwnd, menu_x, menu_y) {
         return true;
     }
 
@@ -1100,6 +1128,9 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
             // The panel is over this app's own card rather than over a player's window, so raising
             // the pin's window for it is harmless rather than necessary (see `toggle_pin_volume`).
             CardControl::Volume => toggle_pin_volume(hwnd),
+            CardControl::AlwaysOnTop => {
+                crate::shell::tray::toggle_pin_always_on_top();
+            }
             // The two window buttons in the top margin act on the pin rather than on the sound,
             // and are the one way out of a pinned sound that does not ask for the keyboard: the
             // minimize shrinks the pin into the bubble it leaves, and the close ends the pin, the
@@ -1181,6 +1212,9 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
 
         if still_on_it {
             match button {
+                pin_chrome::CaptionButton::AlwaysOnTop => {
+                    crate::shell::tray::toggle_pin_always_on_top();
+                }
                 pin_chrome::CaptionButton::Minimize => ask_pin(PinCommand::Minimize),
                 pin_chrome::CaptionButton::Maximize => ask_pin(PinCommand::Maximize),
                 pin_chrome::CaptionButton::Close => ask_pin(PinCommand::Close),

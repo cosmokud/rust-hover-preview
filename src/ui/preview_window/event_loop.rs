@@ -72,6 +72,11 @@ pub fn run_preview_window() {
         // rather than into the bubble leaves this window behind, and it is the one surface of
         // this app's that is meant to be in the taskbar — an icon and a title, nothing drawn,
         // kept off the screen (see `pin_taskbar`).
+        //
+        // The icon it is registered under is what the Shell draws its taskbar button with, and a
+        // window class takes an icon once, as it registers — so this is the app's own icon rather
+        // than whatever the button would otherwise be given (see `app_icon`).
+        let taskbar_icon = crate::shell::app_icon::app_icon();
         let taskbar_class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
@@ -79,12 +84,12 @@ pub fn run_preview_window() {
             cbClsExtra: 0,
             cbWndExtra: 0,
             hInstance: hinstance.into(),
-            hIcon: taskbar_icon(),
+            hIcon: taskbar_icon,
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
             hbrBackground: Default::default(),
             lpszMenuName: PCWSTR::null(),
             lpszClassName: PIN_TASKBAR_CLASS,
-            hIconSm: taskbar_icon(),
+            hIconSm: taskbar_icon,
         };
 
         RegisterClassExW(&taskbar_class);
@@ -446,6 +451,12 @@ pub fn run_preview_window() {
                 0
             };
             crate::shell::key_input::publish_pin_key_owner(pin_keys_owner, pin_keys_video);
+            // And whether that pin is above every other window, which is the same question the
+            // wheel asks before it takes a notch: a topmost pin is the window under the pointer
+            // wherever the keyboard is (see `pin_owns_foreground`).
+            crate::shell::key_input::publish_pin_always_on_top(
+                pin_keys_owner != 0 && pin_always_on_top(),
+            );
 
             // The key is drained whether or not it is watched, so that a press made while the
             // feature was off is not acted on when it comes back on.
@@ -766,6 +777,30 @@ pub fn run_preview_window() {
                 // `settle_pinned_park`).
                 settle_pinned_park();
                 settle_pending_hold();
+
+                // And what the taskbar button's own hover is offering, which is settled by the same
+                // tick for the same reason the chrome is: a pin put away into the taskbar can be
+                // walked and held from the hover, and what those buttons say is what the pin's
+                // transport is doing (see `refresh_pin_media_buttons`). Nothing is sent while the
+                // stand-in is not up, so this is two atomics and a comparison on a tick that has no
+                // taskbar button to draw.
+                //
+                // And the form the button is in, which the Shell has gestures of its own for — a
+                // second click on the button, `Win+M`, its own `Minimize` — so the pin's place is
+                // what it is read back against, once a tick: a stand-in the Shell has minimized
+                // under a pin that is on the screen is a hover frozen on the frame it was put down
+                // with, and a stand-in the Shell has taken away altogether is a button the user has
+                // lost until the app is restarted (see `keep_the_stand_in_up`). Nothing is asked of
+                // the Shell here: the window is this app's own, and both reads are of it.
+                keep_the_stand_in_up();
+
+                // The picture the hover shows is the same two facts and is asked the same way: what
+                // the pin is drawn by, mirrored into the stand-in by the Shell, which is a picture
+                // that moves on its own and costs nothing here until what it is a picture of
+                // changes (see `pin_taskbar_mirror`).
+                let media_kind = current_media_type();
+                refresh_pin_media_buttons(media_kind, bubble_is_playing());
+                sync_pin_mirror(media_kind);
 
                 // What a key does to a pinned text preview, polled rather than waited for: a pin
                 // that the user has not pressed is a window nobody is in, and a window nobody is
@@ -2159,8 +2194,40 @@ pub fn run_preview_window() {
                     // off is a window nothing would ever take down again — so it comes down the
                     // way its own close button takes it.
                     PreviewMessage::PinChanged => {
-                        if pinned() && !pin_enabled() {
-                            pin_request = Some(end_pin_state(Reason::SwitchedOff));
+                        if pinned() {
+                            if !pin_enabled() {
+                                pin_request = Some(end_pin_state(Reason::SwitchedOff));
+                            } else {
+                                let insert_after = if pin_always_on_top() {
+                                    HWND_TOPMOST
+                                } else {
+                                    HWND_NOTOPMOST
+                                };
+                                let _ = SetWindowPos(
+                                    hwnd,
+                                    insert_after,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                                );
+                                if pin_always_on_top() {
+                                    if !pin_is_collapsed() {
+                                        hide_pin_taskbar();
+                                    }
+                                } else {
+                                    show_pin_taskbar();
+                                }
+                                place_pinned_siblings();
+                                // And the player is told the same thing where it is mpv's: a film
+                                // that held the topmost band for the pin's sake has to give it up
+                                // when the setting says so, or it is a topmost window over a pin
+                                // that is not (see `settle_pinned_mpv_ontop`).
+                                settle_pinned_mpv_ontop();
+                                AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+                                render_layered_preview(hwnd);
+                            }
                         }
                     }
                     // One of the tray's two `Volume` rows was moved, and a pin up on a file of
@@ -2371,8 +2438,19 @@ pub fn run_preview_window() {
                 // is that it is asked of the order that is standing rather than of the strips
                 // that are up — the player *under* the pin is the answer both raisers put in,
                 // and the one this leaves alone (see `place_player_window`).
-                if pin_chrome_up() && player_stands_over_the_pin(hwnd) {
-                    raise_pinned_window(hwnd);
+                if pin_chrome_up() {
+                    // A topmost pin is put back over the film whenever the film has stood itself
+                    // back up on its band. A pin that is not Always On Top has no such fight to
+                    // win and no business being raised at all — what it owes over the film is the
+                    // *film's* place, and only when the film is not already under it (see
+                    // `raise_pinned_window`, `put_player_under_the_pin`).
+                    if pin_always_on_top() {
+                        if player_stands_over_the_pin(hwnd) {
+                            raise_pinned_window(hwnd);
+                        }
+                    } else if !player_is_under_the_pin(hwnd) {
+                        put_player_under_the_pin();
+                    }
                 }
 
                 // And the card's menu, which is a window of its own over the screen: the
@@ -3314,6 +3392,19 @@ pub fn run_preview_window() {
                         // The pin is published as up inside this, after the state it publishes
                         // is written (see `pin_window::install`).
                         install(pin);
+
+                        // The button a collapsed pin left says which file the pin is of, and the
+                        // file has just changed: a stand-in already up is not shown again by the
+                        // take-up below (`show_pinned_window` is refused for a collapsed pin), so
+                        // the name is written here or the button names the file before the step
+                        // (see `pin_taskbar::refresh_pin_taskbar_title`).
+                        pin_taskbar::refresh_pin_taskbar_title();
+
+                        // And a film adopted from a hover is told whose setting governs its window
+                        // now: the hover's topmost band is the preview's, and the pin's own
+                        // `Always On Top` is the answer from here on (see
+                        // `settle_pinned_mpv_ontop`).
+                        settle_pinned_mpv_ontop();
 
                         // A pin comes up under a pointer that may be anywhere, including inside a
                         // name being renamed, so it may take the focus but is not given it until

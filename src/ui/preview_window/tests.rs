@@ -233,6 +233,29 @@ impl Drop for PausePreviewSettings {
     }
 }
 
+/// Where a pin the minimize button puts away goes, stood where a test asks and put back when the
+/// guard is dropped — the house pattern (see `PausePreviewSettings`). The two picks are one group,
+/// so the guard states the whole of what a menu's disc is read from (see `PinMinimizeTo`).
+struct PinMinimizeToPutBack(PinMinimizeTo);
+
+impl PinMinimizeToPutBack {
+    fn put(target: PinMinimizeTo) -> Self {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = config.pin_minimize_to;
+        config.pin_minimize_to = target;
+
+        Self(was)
+    }
+}
+
+impl Drop for PinMinimizeToPutBack {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.pin_minimize_to = self.0;
+        }
+    }
+}
+
 /// The two switches a double-click on a pinned window answers to, stood where a test asks and put
 /// back when the guard is dropped — the house pattern (see `PausePreviewSettings`).
 ///
@@ -409,6 +432,7 @@ mod pin_resize;
 mod pin_subtitle_reload;
 mod pin_swap_ffplay_jigsaw;
 mod pin_swap_ffplay_native;
+mod pin_taskbar_window;
 mod pin_volume;
 mod pin_zoom;
 mod placement;

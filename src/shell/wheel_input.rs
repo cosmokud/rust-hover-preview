@@ -16,6 +16,14 @@
 //! It is the same hook again for a pinned picture, whose window is one nobody is in
 //! either: a notch over it is the picture being zoomed, and the count is left for the
 //! window procedure to take (see `pin_zoom_keep_alive_try`).
+//!
+//! And it is the same hook that has to *stop* there, because a region is a box on the
+//! screen and not a claim on what is in front of it: a hover preview stands over
+//! everything and is a window nothing can be above, but a pin can be behind another
+//! program — that is what `Pin Mode → Always On Top` off means — and a notch turned
+//! while the user is working in that program is that program's. So a notch belongs to
+//! this app only while a hover is up or while the pin is the window the user is in,
+//! which is the keyboard hook's own question (see `key_input::pin_owns_foreground`).
 
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
@@ -92,7 +100,11 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         let notches = (info.mouseData >> 16) as u16 as i16 as i32;
 
         if let Some(region) = crate::ui::preview_window::text_scroll_keep_alive_try() {
-            if point_in_region(info.pt, region) {
+            // The box the preview published is asked first and the window the user is in second,
+            // and in that order: the answer to the second is a call neither every wheel message on
+            // the desktop nor a notch that was never ours should be paying for (see
+            // `pin_owns_foreground`).
+            if point_in_region(info.pt, region) && crate::shell::key_input::pin_owns_foreground() {
                 // The wheel is the preview's, not Explorer's: count it for the
                 // preview thread and swallow the message so the list behind the
                 // preview does not move as well.
@@ -105,7 +117,10 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
 
         // And the same answer for a pinned picture, which is a window the keyboard is
         // not in for the same reason: a hover the user pinned is a window nobody has
-        // pressed, so Explorer would take the notch and scroll the list under it.
+        // pressed, so Explorer would take the notch and scroll the list under it — and the whole
+        // of what a pin does not get for free is the other half of that: a pin the user has not
+        // pressed is a window nobody is in, so a notch over one that is behind another program is
+        // that program's.
         //
         // The loop that reads the count is woken here as well, because the count is an
         // atomic and nothing else: a notch turned while that loop is in its own wait for a
@@ -113,7 +128,7 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // 144 Hz display and the whole of what makes a zoom start unevenly (see
         // `wake_for_a_wheel_notch`).
         if let Some(region) = crate::ui::preview_window::pin_zoom_keep_alive_try() {
-            if point_in_region(info.pt, region) {
+            if point_in_region(info.pt, region) && crate::shell::key_input::pin_owns_foreground() {
                 if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
                     PIN_ZOOM_DELTA.fetch_add(notches, Ordering::AcqRel);
                     crate::ui::preview_window::wake_for_a_wheel_notch();

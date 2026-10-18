@@ -2,7 +2,7 @@ use super::*;
 
 // What the wheel hook is handed a message as: the delta in the high word of `mouseData`, the pointer in
 // its own point, and a code that says the message is one to look at.
-use windows::Win32::Foundation::{LPARAM, POINT, WAIT_OBJECT_0, WPARAM};
+use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WAIT_OBJECT_0, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{HC_ACTION, MSLLHOOKSTRUCT, WM_MOUSEWHEEL};
 
 /// The room every one of these zooms is measured in: a display of 1000 by 800 at the origin, which is
@@ -588,7 +588,8 @@ fn a_wheel_that_asks_for_more_notches_than_any_hand_can_turn_is_answered_with_a_
 }
 
 #[test]
-fn a_wheel_notch_over_a_pin_is_counted_for_the_pin_and_wakes_the_loop_that_reads_it() {
+fn a_wheel_notch_over_a_pin_is_counted_for_the_pin_only_while_the_pin_is_the_window_the_user_is_in()
+{
     // The lock every test that reaches the pin's own state takes, and the pin this one stands for the
     // hook to find: what the hook asks is the pin's window box, which is process-wide.
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -598,6 +599,20 @@ fn a_wheel_notch_over_a_pin_is_counted_for_the_pin_and_wakes_the_loop_that_reads
 
     let content = (100, 100, 500, 400);
     stand_pin(Some(overlay_pin(content, PinChrome::always())));
+
+    // Which window the pin's keys and wheel are answered for is published by the loop once a tick,
+    // and which window the user is in is asked of Windows rather than remembered: a notch belongs to
+    // the pin only while the foreground window is the pin's own. The pin is therefore stood up as
+    // whatever window is in front here. A desktop with nothing in front has no window for a pin to
+    // be, and a test with no pin in front has nothing to ask — the caret's own arithmetic is covered
+    // in `key_input`'s tests (see `pin_owns_caret`).
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.0.is_null() {
+        stand_pin(None);
+        stand_pin(previous);
+        return;
+    }
+    crate::shell::key_input::publish_pin_key_owner(foreground.0 as u64, 0);
 
     // The count and the signal are the process's own, so both are cleared here: what is read below has
     // to be this notch's and not one left behind by a test beside this one.
@@ -645,8 +660,76 @@ fn a_wheel_notch_over_a_pin_is_counted_for_the_pin_and_wakes_the_loop_that_reads
         );
     }
 
+    // And the same notch over the same box belongs to whoever the user is working in the moment the
+    // pin is not the window they are in. A pin behind another program is the whole of what
+    // `Pin Mode → Always On Top` off asks for, and a wheel turned there is not this app's to take:
+    // it is the program in front that is being scrolled, and taking it would leave that program
+    // unscrolled and zoom a window the user cannot even see.
+    let _ = wheel_input::take_pin_zoom_delta();
+    unsafe {
+        let _ = ResetEvent(preview_channel_event());
+    }
+    crate::shell::key_input::publish_pin_key_owner((foreground.0 as u64) ^ 0x1000, 0);
+
+    let handed_on = unsafe {
+        wheel_input::wheel_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_MOUSEWHEEL as usize),
+            LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
+        )
+    };
+
+    assert_eq!(
+        wheel_input::take_pin_zoom_delta(),
+        0,
+        "a pin the user is not in does not take the wheel from the program they are working in"
+    );
+    assert_ne!(
+        handed_on,
+        LRESULT(1),
+        "and the notch is handed on rather than swallowed, so that program scrolls"
+    );
+    unsafe {
+        assert_ne!(
+            WaitForSingleObject(preview_channel_event(), 0),
+            WAIT_OBJECT_0,
+            "and the loop that would zoom the pin is not woken for a notch that is not its own"
+        );
+    }
+
+    // A pin that is `Pin Mode → Always On Top` owns the notch from the hover alone, whichever
+    // window the keyboard is in: it stands over every other window, so the box the preview
+    // published is the box the pointer is over, and the click that gate used to need was a click
+    // a topmost pin never needed (see `publish_pin_always_on_top`).
+    let _ = wheel_input::take_pin_zoom_delta();
+    unsafe {
+        let _ = ResetEvent(preview_channel_event());
+    }
+    crate::shell::key_input::publish_pin_always_on_top(true);
+
+    let swallowed = unsafe {
+        wheel_input::wheel_hook_proc(
+            HC_ACTION as i32,
+            WPARAM(WM_MOUSEWHEEL as usize),
+            LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
+        )
+    };
+
+    assert_eq!(
+        wheel_input::take_pin_zoom_delta(),
+        WHEEL_DELTA,
+        "a pin that is always on top is the window the pointer is in"
+    );
+    assert_eq!(
+        swallowed,
+        LRESULT(1),
+        "and the notch is the pin's rather than what stands behind it"
+    );
+
+    crate::shell::key_input::publish_pin_always_on_top(false);
     stand_pin(None);
     stand_pin(previous);
+    crate::shell::key_input::publish_pin_key_owner(0, 0);
 }
 
 /// A wheel that reports less than a notch per message is counted by the unit rather than by the notch:

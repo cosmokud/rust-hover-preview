@@ -434,6 +434,14 @@ impl DibSurface {
     pub(crate) fn bits(&self) -> *mut u8 {
         self.bits
     }
+
+    /// The bitmap itself, for a caller that has to hand the surface to something other than a
+    /// device context — an image list takes a bitmap rather than a DC to read an icon out of.
+    ///
+    /// It is borrowed and not given away: the surface still owns it, and deletes it when it goes.
+    pub(crate) fn bitmap(&self) -> HBITMAP {
+        self.bitmap
+    }
 }
 
 impl Drop for DibSurface {

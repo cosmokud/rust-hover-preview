@@ -79,6 +79,11 @@ impl AppConfig {
             "pin_enabled",
             Some(self.pin_enabled.to_string()),
         );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_always_on_top",
+            Some(self.pin_always_on_top.to_string()),
+        );
         ini.set(CONFIG_SECTION, "pin_key", Some(self.pin_key.clone()));
         ini.set(
             CONFIG_SECTION,
@@ -605,6 +610,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_enabled") {
             self.pin_enabled = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_always_on_top") {
+            self.pin_always_on_top = value;
         }
         // The key that pins a preview, by name, read the way the trigger key above is: a name
         // that is empty is nothing to bind. A name no key is spelled like is left to the watcher

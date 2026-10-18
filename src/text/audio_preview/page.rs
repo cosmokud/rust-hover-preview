@@ -177,7 +177,7 @@ pub(super) struct CardBoxes {
     pub(super) next: RECT,
     pub(super) volume: RECT,
     pub(super) bar: RECT,
-    /// The minimize that shrinks the pin into its bubble, and the close that ends it.
+    pub(super) always_on_top: WindowButtonBox,
     pub(super) minimize: WindowButtonBox,
     pub(super) close: WindowButtonBox,
 }
@@ -211,17 +211,21 @@ impl CardBoxes {
             CardControl::Next => self.next,
             CardControl::Seek => self.bar,
             CardControl::Volume => self.volume,
+            CardControl::AlwaysOnTop => self.always_on_top.hit,
             CardControl::Minimize => self.minimize.hit,
             CardControl::Close => self.close.hit,
         })
     }
 
-    /// Which of the two window buttons in the top margin a point is on, if either.
+    /// Which of the window buttons in the top margin a point is on, if either.
     ///
     /// Asked of the cushion each is answered against rather than of the drawn boxes,
     /// because a hand aiming at a button this small is given the room above it
     /// (see [`window_button_boxes`]).
     pub(super) fn window_button_at(&self, x: i32, y: i32) -> Option<CardControl> {
+        if holds(self.always_on_top.hit, x, y) {
+            return Some(CardControl::AlwaysOnTop);
+        }
         if holds(self.minimize.hit, x, y) {
             return Some(CardControl::Minimize);
         }
@@ -269,7 +273,7 @@ pub(super) fn control_boxes(
     let next = button(play.right + gap);
     let volume = button(right - side);
     let bar_left = next.right + gap;
-    let (minimize, close) = window_button_boxes(metrics, width as i32);
+    let (always_on_top, minimize, close) = window_button_boxes(metrics, width as i32);
 
     Some(CardBoxes {
         previous,
@@ -287,6 +291,7 @@ pub(super) fn control_boxes(
             right: (volume.left - gap).max(bar_left),
             bottom: row.top + row.height,
         },
+        always_on_top,
         minimize,
         close,
     })
@@ -377,12 +382,12 @@ pub(crate) fn window_button_band(dpi: u32, options: AudioPreviewOptions) -> i32 
 pub(super) fn window_button_boxes(
     metrics: &TextMetrics,
     width: i32,
-) -> (WindowButtonBox, WindowButtonBox) {
+) -> (WindowButtonBox, WindowButtonBox, WindowButtonBox) {
     let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
     let side = window_button_side(metrics);
 
-    // The close against the right border, and the minimize beside it with the
-    // same gap between the two of them as each has to the border.
+    // The close against the right border, the minimize beside it, and always-on-top
+    // to the left of minimize, each with the same gap and side.
     let close = RECT {
         left: (width - gap - side).max(0),
         top: gap,
@@ -393,6 +398,12 @@ pub(super) fn window_button_boxes(
         left: (close.left - gap - side).max(0),
         top: gap,
         right: (close.left - gap).max(0),
+        bottom: gap + side,
+    };
+    let always_on_top = RECT {
+        left: (minimize.left - gap - side).max(0),
+        top: gap,
+        right: (minimize.left - gap).max(0),
         bottom: gap + side,
     };
 
@@ -406,6 +417,15 @@ pub(super) fn window_button_boxes(
     let bottom = window_button_reach(metrics);
 
     (
+        WindowButtonBox {
+            drawn: always_on_top,
+            hit: RECT {
+                left: always_on_top.left,
+                top: 0,
+                right: always_on_top.right,
+                bottom,
+            },
+        },
         WindowButtonBox {
             drawn: minimize,
             hit: RECT {
@@ -1025,19 +1045,25 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         // scrolling under one from running under its mark.
         if chrome.window_buttons {
             for (control, button) in [
+                (CardControl::AlwaysOnTop, &boxes.always_on_top),
                 (CardControl::Minimize, &boxes.minimize),
                 (CardControl::Close, &boxes.close),
             ] {
                 fill_rect(surface, button.drawn, page_color);
 
                 let lit = chrome.hovered == Some(control) || chrome.pressed == Some(control);
-                paint_window_button(
-                    surface,
-                    button.drawn,
-                    control,
-                    if lit { accent } else { foreground },
-                    scale,
-                );
+                let color = if lit {
+                    accent
+                } else if control == CardControl::AlwaysOnTop {
+                    if chrome.always_on_top {
+                        accent
+                    } else {
+                        blend(foreground, page_color, 0.45)
+                    }
+                } else {
+                    foreground
+                };
+                paint_window_button(surface, button.drawn, control, color, scale);
             }
         }
     }
@@ -1080,6 +1106,19 @@ fn paint_window_button(
     let inset = side / 4.0;
 
     match control {
+        CardControl::AlwaysOnTop => {
+            let glyph = (rect.right - rect.left).max(1);
+            let span = (glyph as f32 * 0.75).round() as i32;
+            crate::text::pin_chrome::draw_pin_top(
+                buffer,
+                width,
+                (rect.left + rect.right) / 2,
+                (rect.top + rect.bottom) / 2,
+                span,
+                stroke,
+                ink,
+            );
+        }
         CardControl::Minimize => {
             stroke_segment(
                 buffer,

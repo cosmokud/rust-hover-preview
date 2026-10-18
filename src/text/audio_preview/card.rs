@@ -177,6 +177,8 @@ pub(crate) enum CardControl {
     /// The button that opens the volume popup, which is the pin's own control rather than the
     /// player's.
     Volume,
+    /// The window button that keeps the pinned window on top of other windows.
+    AlwaysOnTop,
     /// The window button that shrinks the pin into the bubble it leaves, which stands where
     /// the button did (see `pinned_minimize_box`). It is a window button rather than one of
     /// the card's own controls because what it acts on is the pin rather than the sound: it
@@ -197,6 +199,7 @@ pub(crate) struct CardChrome {
     /// The level this pin is playing at, which is what the volume button's speaker says and what
     /// the panel that opens off it is drawn at.
     pub volume: u32,
+    pub always_on_top: bool,
     pub hovered: Option<CardControl>,
     pub pressed: Option<CardControl>,
     /// Whether the three window buttons are showing, which is what the card is painted
