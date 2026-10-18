@@ -86,6 +86,14 @@ pub(in super::super) fn toggle_pin_enabled() {
     refresh_pin();
 }
 
+pub fn toggle_pin_always_on_top() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = !config.pin_always_on_top;
+        config.save();
+    }
+    refresh_pin();
+}
+
 /// Whether a pin that is up is shown the file the user picks next is a setting rather than a
 /// view of one, and it is the one switch here that changes nothing that is already on screen:
 /// the pin keeps the file it is showing until the user picks another, and what the switch says

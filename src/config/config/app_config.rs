@@ -33,7 +33,7 @@ use super::setting_types::{
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
     DEFAULT_PIN_DOUBLE_CLICK_CENTER, DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE,
     DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
-    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
     DEFAULT_TEXT_SCALE, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND,
     DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_LOOP, DEFAULT_ZOOM_BACKGROUND,
 };
@@ -66,6 +66,8 @@ pub struct AppConfig {
     /// a window of its own — captioned, movable, always on top — and previews stay
     /// quiet until that window is closed (see `pin_key`).
     pub pin_enabled: bool,
+    /// Whether a pinned window stays always on top of other windows.
+    pub pin_always_on_top: bool,
     /// The key that pins the preview on screen, by name — the same spellings the
     /// trigger key accepts, since both are read by the same table.
     pub pin_key: String,
@@ -687,6 +689,7 @@ impl Default for AppConfig {
             trigger_key_enabled: true,
             trigger_key_affect_pin_mode: DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
             pin_enabled: true,
+            pin_always_on_top: DEFAULT_PIN_ALWAYS_ON_TOP,
             pin_key: "space".to_string(),
             pin_minimize_to: DEFAULT_PIN_MINIMIZE_TO,
             pin_double_click_center: DEFAULT_PIN_DOUBLE_CLICK_CENTER,
