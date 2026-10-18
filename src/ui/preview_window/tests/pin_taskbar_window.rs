@@ -419,3 +419,142 @@ fn a_pin_restored_from_its_button_goes_back_where_it_stood() {
     forget_the_stand_in();
     stand_pin(previous_pin);
 }
+
+/// A pin minimized a second time, after its button has brought it back once, goes away again.
+///
+/// The fault this is a regression test for: the user's own run had the first minimize work — the
+/// button went down to the taskbar in its put-away form — and the minimize after the button brought
+/// the pin back did nothing at all, with the pin's window flashing where it stood rather than going
+/// away. Windows asks an iconic window whether it may be opened for the mirroring step's own
+/// showing of the stand-in as much as for the user's click on the button, and answered as the click
+/// it queued the pin's own restore behind the collapse that had just asked for it (see
+/// `ASKING_THE_STAND_IN_UP`).
+#[test]
+fn a_pin_minimized_again_after_a_button_restore_goes_away_again() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let before = pin_always_on_top();
+
+    let left_at = (100, 80, 420, 320);
+    let mut pin = overlay_pin(left_at, PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = true;
+    }
+
+    forget_the_stand_in();
+    register_the_stand_in_class();
+    let _ = take_pin_command();
+
+    // The first minimize: the pin goes away and its button stands in the taskbar, minimized.
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    let stand_in = showing_taskbar_window().expect("the button the first minimize leaves");
+    assert!(
+        unsafe { IsIconic(stand_in).as_bool() },
+        "the first minimize puts the button down in the form a hover holds the frozen frame in"
+    );
+
+    // The click on that button: the Shell asks the window to restore, and the window asks the pin.
+    // Safety: a message to a window of this app's own, with the numbers the Shell sends with it.
+    unsafe {
+        SendMessageW(
+            stand_in,
+            WM_SYSCOMMAND,
+            WPARAM(SC_RESTORE as usize),
+            LPARAM(0),
+        );
+    }
+    assert!(
+        matches!(take_pin_command(), Some(PinCommand::Restore)),
+        "the click on the button is the pin's own restore"
+    );
+    restore_pin();
+    assert!(!pin_is_collapsed(), "the button brings the pin back");
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and the restore the click asked for is the last thing left in hand"
+    );
+
+    // And the minimize the user makes next, which used to do nothing: the pin stays put away, and
+    // the stand-in's own showing for the picture leaves no restore behind it.
+    collapse_pin_to(PinMinimizeTo::Taskbar);
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "the picture taken for the hover is not a reason to bring the pin back"
+    );
+    assert!(
+        pin_is_collapsed(),
+        "the second minimize puts the pin away rather than leaving it on the screen"
+    );
+    let stand_in = showing_taskbar_window().expect("the button the second minimize owes");
+    assert!(
+        unsafe { IsIconic(stand_in).as_bool() },
+        "and the button goes down with it, in the form a hover holds the frozen frame in"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    forget_the_stand_in();
+    stand_pin(previous_pin);
+}
+
+/// A stand-in the Shell left iconic under a pin that is on the screen comes back up on the tick.
+///
+/// The setting is `Pin Mode → Always On Top` OFF, where a pin on the screen wears a button of its
+/// own: the Shell's own minimize of that button leaves it iconic, and putting it back up is the
+/// tick's repair. The repair is a showing of an iconic window, so Windows asks the window whether
+/// it may open — and answering that as the button's gesture left the window iconic for the rest of
+/// the run, with the pin's window raised for it on every tick (see `keep_the_stand_in_up`).
+#[test]
+fn a_stand_in_left_iconic_under_a_pin_on_the_screen_comes_back_up_on_the_tick() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let before = pin_always_on_top();
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+
+    forget_the_stand_in();
+    let stand_in = the_stand_in();
+    // Safety: this test's own stand-in is asked up and then minimized, which is the form the Shell
+    // leaves a button in when it minimizes one.
+    unsafe {
+        let _ = ShowWindow(stand_in, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(stand_in, SW_MINIMIZE);
+    }
+    assert!(unsafe { IsIconic(stand_in).as_bool() });
+    let _ = take_pin_command();
+
+    keep_the_stand_in_up();
+
+    assert!(
+        !unsafe { IsIconic(stand_in).as_bool() },
+        "the tick puts a button a pin on the screen wears back up, which it cannot do while the \
+         window's own question is answered as the user's click"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and a pin that is already on the screen holds nothing for the button to ask of it"
+    );
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = before;
+    }
+    forget_the_stand_in();
+    stand_pin(previous_pin);
+}
