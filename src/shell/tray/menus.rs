@@ -23,13 +23,14 @@ use super::ids::{
     ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE,
     ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE,
     ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_NORMALIZE_VIDEO_VOLUME,
-    ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_MINIMIZE_BUBBLE,
-    ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
-    ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO,
-    ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW,
-    ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME,
-    ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS,
-    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_STARTUP, ID_TRAY_TEXT_SCALE_BASE,
+    ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
+    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
+    ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
+    ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER,
+    ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD,
+    ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
+    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
+    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_STARTUP, ID_TRAY_TEXT_SCALE_BASE,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
     ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN,
@@ -49,6 +50,7 @@ use super::submenus::{
     append_seek_menu_renamed, append_shuffle_item, append_tick_menu, append_video_engine_menu,
     cache_size_label, decode_budget_label, default_label, pin_minimize_label, pin_update_label,
     remember_volume_label, system_menu_label, timing_delay_menu, update_available_label,
+    MF_RADIOCHECK,
 };
 
 use crate::app::updates;
@@ -63,8 +65,8 @@ use crate::config::config::{
     DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
     DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS,
     DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE_IDLE_SECS,
-    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SEEK,
-    DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
+    DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
     DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER,
@@ -129,6 +131,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // `key_input`).
     let (
         pin_enabled,
+        pin_always_on_top,
         pin_key,
         pin_minimize_to,
         pin_update,
@@ -141,6 +144,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .map(|c| {
             (
                 c.pin_enabled,
+                c.pin_always_on_top,
                 c.pin_key.clone(),
                 c.pin_minimize_to,
                 c.pin_update_enabled,
@@ -152,6 +156,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         })
         .unwrap_or((
             true,
+            DEFAULT_PIN_ALWAYS_ON_TOP,
             "space".to_string(),
             DEFAULT_PIN_MINIMIZE_TO,
             DEFAULT_PIN_UPDATE_ENABLED,
@@ -178,6 +183,17 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             },
         ID_TRAY_PIN as usize,
         PCWSTR(pin_label_wide.as_ptr()),
+    );
+    let _ = AppendMenuW(
+        pin_menu,
+        MF_STRING
+            | if pin_always_on_top {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_PIN_ALWAYS_ON_TOP as usize,
+        w!("Always On Top"),
     );
 
     // The `Update Preview` submenu: whether a pin that is up is shown the file the user picks
@@ -235,7 +251,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let minimize_flag = |candidate: PinMinimizeTo| {
         MF_STRING
             | if pin_minimize_to == candidate {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             }
@@ -400,7 +416,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         for (index, level) in VOLUME_CHOICES.iter().enumerate().rev() {
             let flags = MF_STRING
                 | if current == *level {
-                    MF_CHECKED
+                    MF_CHECKED | MF_RADIOCHECK
                 } else {
                     MF_UNCHECKED
                 };
@@ -692,7 +708,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let theme_flag = |candidate: TextTheme| {
         MF_STRING
             | if marked == candidate {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             }
@@ -749,7 +765,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let font_flag = |percent: u32| {
         MF_STRING
             | if font_scale == percent {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             }
@@ -791,7 +807,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let markdown_flag = |candidate: MarkdownMode| {
         MF_STRING
             | if markdown_mode == candidate {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             }

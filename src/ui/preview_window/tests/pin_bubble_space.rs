@@ -52,8 +52,8 @@ fn only_a_click_on_an_already_focused_bubble_puts_the_window_back() {
 }
 
 /// The bubble's menu holds the hold for a film or a sound, the two walks of the folder it
-/// stands in, the switch that decides what a minimize holds back, and the two ways out of any
-/// bubble.
+/// stands in, the switch that decides what a minimize holds back, the two places a minimize can
+/// put the pin, and the two ways out of any bubble.
 #[test]
 fn the_bubble_menu_holds_only_what_has_playback() {
     for kind in [MediaType::Video, MediaType::NativeVideo, MediaType::Audio] {
@@ -65,6 +65,9 @@ fn the_bubble_menu_holds_only_what_has_playback() {
                 BubbleMenuRow::PreviousFile,
                 BubbleMenuRow::Separator,
                 BubbleMenuRow::PauseOnMinimize,
+                BubbleMenuRow::Separator,
+                BubbleMenuRow::MinimizeToBubble,
+                BubbleMenuRow::MinimizeToTaskbar,
                 BubbleMenuRow::Separator,
                 BubbleMenuRow::ToTaskbar,
                 BubbleMenuRow::Close,
@@ -80,10 +83,13 @@ fn the_bubble_menu_holds_only_what_has_playback() {
                 BubbleMenuRow::NextFile,
                 BubbleMenuRow::PreviousFile,
                 BubbleMenuRow::Separator,
+                BubbleMenuRow::MinimizeToBubble,
+                BubbleMenuRow::MinimizeToTaskbar,
+                BubbleMenuRow::Separator,
                 BubbleMenuRow::ToTaskbar,
                 BubbleMenuRow::Close,
             ],
-            "a {kind:?} bubble offers no hold, only the walk and the two ways out"
+            "a {kind:?} bubble offers no hold, only the walk, the two places and the two ways out"
         );
     }
 }
@@ -124,6 +130,16 @@ fn the_bubble_menu_names_what_each_row_will_do() {
         "the switch is spelled the way the tray spells it"
     );
     assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::MinimizeToBubble, true),
+        "Minimize to Bubble",
+        "the place a minimize can put the pin is named for it"
+    );
+    assert_eq!(
+        bubble_menu_row_label(BubbleMenuRow::MinimizeToTaskbar, false),
+        "Minimize to Taskbar",
+        "and so is the other"
+    );
+    assert_eq!(
         bubble_menu_row_label(BubbleMenuRow::ToTaskbar, true),
         "To Taskbar",
         "the stand-in is the taskbar's, not the tray's"
@@ -152,6 +168,9 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
             "",
             "Pause on Minimize",
             "",
+            "Minimize to Bubble",
+            "Minimize to Taskbar",
+            "",
             "To Taskbar",
             "Close"
         ],
@@ -171,6 +190,9 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
             "",
             "Pause on Minimize",
             "",
+            "Minimize to Bubble",
+            "Minimize to Taskbar",
+            "",
             "To Taskbar",
             "Close"
         ],
@@ -183,8 +205,17 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
         .collect();
     assert_eq!(
         painted,
-        vec!["Next File", "Previous File", "", "To Taskbar", "Close"],
-        "a page's menu offers only the walk and the two ways out"
+        vec![
+            "Next File",
+            "Previous File",
+            "",
+            "Minimize to Bubble",
+            "Minimize to Taskbar",
+            "",
+            "To Taskbar",
+            "Close"
+        ],
+        "a page's menu offers only the walk, the two places and the two ways out"
     );
 }
 
@@ -198,6 +229,39 @@ fn the_bubble_menu_points_no_arrow_at_any_row() {
         popup.arrow,
         pin_chrome::MenuArrow::None,
         "no row of the bubble's menu opens anything"
+    );
+}
+
+/// The two places a minimize can put a pin are one group rather than two switches: exactly one of
+/// them carries the disc, and which one it is is the setting the tray's own `Pin Mode → Minimize`
+/// writes — so a menu opened over a pick that has just been made shows it (see `PinMinimizeTo`).
+#[test]
+fn exactly_one_of_the_two_minimize_picks_carries_the_disc() {
+    let _target = PinMinimizeToPutBack::put(PinMinimizeTo::Taskbar);
+
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Text), false);
+    let marked: Vec<&str> = rows
+        .iter()
+        .filter(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet))
+        .map(|row| row.label.as_str())
+        .collect();
+    assert_eq!(
+        marked,
+        ["Minimize to Taskbar"],
+        "the place a minimize puts the pin is the one the disc is on, and it is alone"
+    );
+
+    let _target = PinMinimizeToPutBack::put(PinMinimizeTo::Bubble);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Text), false);
+    let marked: Vec<&str> = rows
+        .iter()
+        .filter(|row| matches!(row.mark, pin_chrome::MenuMark::Bullet))
+        .map(|row| row.label.as_str())
+        .collect();
+    assert_eq!(
+        marked,
+        ["Minimize to Bubble"],
+        "and the other pick has it where the setting names the other place"
     );
 }
 

@@ -964,6 +964,9 @@ pub const DEFAULT_FOLLOW_CURSOR: bool = false;
 /// left as it is (see the `Timing → Trigger Key` submenu).
 pub const DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE: bool = false;
 
+/// Whether a pinned window stays always on top of other windows by default.
+pub const DEFAULT_PIN_ALWAYS_ON_TOP: bool = true;
+
 /// Whether a pin is shown another file while it is up unless the configuration says otherwise:
 /// a file the pointer clicks, or one the keyboard selects, becomes what the pin is showing.
 ///

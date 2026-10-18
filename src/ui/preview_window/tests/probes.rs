@@ -1501,9 +1501,11 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
 /// is asked for on every road while nothing of the pin's own is drawn over the band, and the pin
 /// is put back over the raised film in the same breath (see `place_player_window`).
 ///
-/// **A strip of the pin's chrome and the volume popup hold the raise off for mpv's film as they do
-/// for FFmpeg's**: a raise there puts the film over what the user is looking at, then the pin back
-/// over it — a two-step reorder that blinks the chrome. What keeps the film visible under them
+/// **A strip of the pin's chrome, the volume popup and the card's menu hold the raise off for mpv's
+/// film as they do for FFmpeg's**: a raise there puts the film over what the user is looking at,
+/// then the pin back over it — a two-step reorder that blinks the chrome, and one that blinks a
+/// menu's panel every time a raise lands between one of `render_pin_menu`'s raises and the next.
+/// What keeps the film visible under them
 /// instead is mpv's own window holding its band (`--ontop`), and what keeps the press the pin's is
 /// the pin's own raise; what a band that has moved still owes is the *place*, which travels without
 /// a raise (see `only_an_mpv_players_window_is_placed_with_the_pins_chrome_up`). A park is refused
@@ -1514,53 +1516,82 @@ fn a_players_window_keeps_its_click_through_style_through_a_tick_a_drag_and_a_re
 #[test]
 fn a_pinned_film_mpv_draws_is_raised_like_every_other_film() {
     assert_eq!(
-        player_order(MPV_IMAGE_NAME, true, false, false, false),
+        player_order(MPV_IMAGE_NAME, true, false, false, false, false),
         PlayerOrder::Raise,
         "an mpv pin's film is raised with nothing of the pin's own drawn over the band: the pin \
          is put back over it right after"
     );
-    for (chrome_up, volume_open, what) in [
-        (true, false, "with a strip of the pin's chrome up over it"),
-        (false, true, "with the volume popup open over it"),
+    for (chrome_up, volume_open, menu_open, what) in [
+        (
+            true,
+            false,
+            false,
+            "with a strip of the pin's chrome up over it",
+        ),
+        (false, true, false, "with the volume popup open over it"),
+        (false, false, true, "with the card's menu up over it"),
     ] {
         assert_eq!(
-            player_order(MPV_IMAGE_NAME, true, chrome_up, volume_open, false),
+            player_order(
+                MPV_IMAGE_NAME,
+                true,
+                chrome_up,
+                volume_open,
+                menu_open,
+                false
+            ),
             PlayerOrder::Leave,
             "an mpv pin's film is left exactly where it is {what}: a raise would put the film \
-             over the chrome and blink it, while mpv's own window holds the band and the pin's \
-             own raise carries the press"
+             over what the user is looking at and blink it, while mpv's own window holds the band \
+             and the pin's own raise carries the press"
         );
     }
 
     assert_eq!(
-        player_order(MPV_IMAGE_NAME, false, false, false, false),
+        player_order(MPV_IMAGE_NAME, false, false, false, false, false),
         PlayerOrder::Raise,
         "the same film on a hover is raised as it always was: a hover must keep falling through to \
          what is behind it"
     );
 
     assert_eq!(
-        player_order(FFPLAY_IMAGE_NAME, true, false, false, false),
+        player_order(FFPLAY_IMAGE_NAME, true, false, false, false, false),
         PlayerOrder::Raise,
         "an ffplay pin raises its player over the band as it always has"
     );
-    for (chrome_up, volume_open) in [(true, false), (false, true)] {
+    for (chrome_up, volume_open, menu_open, what) in [
+        (
+            true,
+            false,
+            false,
+            "while the pin's own chrome is drawn over the film",
+        ),
+        (false, true, false, "while the volume popup is open over it"),
+        (false, false, true, "while the card's menu floats over it"),
+    ] {
         assert_eq!(
-            player_order(FFPLAY_IMAGE_NAME, true, chrome_up, volume_open, false),
+            player_order(
+                FFPLAY_IMAGE_NAME,
+                true,
+                chrome_up,
+                volume_open,
+                menu_open,
+                false
+            ),
             PlayerOrder::Leave,
-            "and is left exactly where it is while the pin's own chrome is drawn over the film: on \
-             that route the band is that very window, so a raise would bury it"
+            "an ffplay pin's player is left exactly where it is {what}: on that route the band is \
+             that very window, and a raise would bury what this app is drawing there"
         );
     }
 
     assert_eq!(
-        player_order(FFPLAY_IMAGE_NAME, true, false, false, true),
+        player_order(FFPLAY_IMAGE_NAME, true, false, false, false, true),
         PlayerOrder::Leave,
         "and a film parked for a gesture is left alone: a raise here would show it back over the \
          cover the park painted"
     );
     assert_eq!(
-        player_order(MPV_IMAGE_NAME, true, false, false, true),
+        player_order(MPV_IMAGE_NAME, true, false, false, false, true),
         PlayerOrder::Leave,
         "mpv's own film included — nothing on screen is raised, and a parked band would be the \
          desktop under the pin's own pixel"
@@ -1818,6 +1849,37 @@ fn a_pinned_players_placement_puts_the_pin_back_over_it() {
         take_pin_re_raises(),
         0,
         "and nothing was placed, so nothing was put back over anything either"
+    );
+
+    // And the card's menu is a hold-off of the same kind, for a window of its own: every raise the
+    // panel gets is `render_pin_menu`'s own, and a raise here would leave the film over the panel
+    // until the next one — the blink a hand reads off the rows of the menu that stand over the
+    // picture (see `pin_menu_open`).
+    note_player_process(0, MPV_IMAGE_NAME);
+    let mut with_menu = overlay_pin(
+        content,
+        PinChrome {
+            caption: false,
+            bar: false,
+            until: None,
+        },
+    );
+    with_menu.menu.open = true;
+    stand_pin(Some(with_menu));
+    assert!(
+        !ensure_video_window_topmost(
+            content.0,
+            content.1,
+            content.2 - content.0,
+            content.3 - content.1,
+        ),
+        "the card's menu holds the film off too: a raise puts the film over the panel the user is \
+         reading"
+    );
+    assert_eq!(
+        take_pin_re_raises(),
+        0,
+        "and nothing was placed, so nothing was put back over the panel either"
     );
 
     unsafe { DestroyWindow(player).expect("the stand-in window let go of") };

@@ -231,6 +231,14 @@ pub(super) fn pin_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// Whether a pinned window stays always on top of other windows, as the configuration has it.
+pub fn pin_always_on_top() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_always_on_top)
+        .unwrap_or(DEFAULT_PIN_ALWAYS_ON_TOP)
+}
+
 /// Whether a pin that is up is shown the file the user picks next, as the configuration has it
 /// (see `Pin Mode → Update Preview`). It is read on both sides of the swap: by the Explorer hook
 /// before it watches for anything at all, and here before one is taken up.
@@ -436,6 +444,7 @@ impl PinWindow for Win32PinWindow {
         // is refused by the call rather than acted on.
         unsafe {
             hide_pinned_windows();
+            hide_pin_taskbar();
         }
         hide_minimized_pin();
     }
@@ -445,7 +454,14 @@ impl PinWindow for Win32PinWindow {
         // plain call on a handle read from the slot each was created into, with nothing this fn
         // has to be unsafe about. Both are taken down because a pin that ends must leave neither
         // behind, whichever of the two it was put away as.
+        //
+        // **Both, and not through `hide_minimized_pin` alone.** That call leaves the taskbar
+        // stand-in up for a pin that is not Always On Top, because the pin on the screen wears one
+        // too and a restore must not take it away — but this road is a pin that *ends*, and a
+        // button left behind it is a taskbar entry for a window with nothing in it, which is what
+        // a hover over it then finds (see `pin_taskbar`).
         hide_minimized_pin();
+        unsafe { hide_pin_taskbar() };
     }
 
     fn repaint(&self) {
@@ -839,21 +855,58 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         return;
     };
 
-    if !IsWindowVisible(hwnd).as_bool() {
+    // Whether the pin's window is on the screen as this is asked, which is what tells a pin standing
+    // where the user put it from one being brought back from away — and it is read before the showing
+    // below, since that is the call which puts it on the screen.
+    let on_the_screen = IsWindowVisible(hwnd).as_bool();
+    if !on_the_screen {
         let _ = MoveWindow(hwnd, window.0, window.1, width, height, false);
     }
 
     render_pinned_preview_at(hwnd, window.0, window.1);
+    // Where the setting puts it: the topmost band for a pin that is Always On Top, and the ordinary
+    // one for one that is not. The second is no raise — `HWND_NOTOPMOST` asks for the place a window
+    // already has, and a pin the user can see is standing in it — but it *is* the one thing that
+    // takes the topmost band off a window the Shell had been drawing as a hover's.
     let _ = SetWindowPos(
         hwnd,
-        HWND_TOPMOST,
+        if pin_always_on_top() {
+            HWND_TOPMOST
+        } else {
+            HWND_NOTOPMOST
+        },
         window.0,
         window.1,
         width,
         height,
         SWP_NOACTIVATE | SWP_SHOWWINDOW,
     );
+
+    // **And a window that was not on the screen is put in front, because the call above leaves it
+    // where it is.** `HWND_NOTOPMOST` asks for the place a window already has, and the place a
+    // hidden window has is the bottom of the z-order — behind every window opened over it since it
+    // went down. A pin restored from the taskbar button or from its bubble came back *behind*
+    // whatever the user had been working in, which is not the place a click on that button or on
+    // that bubble ever asked for (see `restore_pin`). The raise is its own call rather than the
+    // flag above, because the demotion is what a pin that is not Always On Top owes whatever it
+    // stands over; and it is asked for of a window that was *off* the screen only, since one that
+    // is on it is to be left exactly where the user's own clicks put it.
+    if !pin_always_on_top() && !on_the_screen {
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+    if !pin_always_on_top() {
+        show_pin_taskbar();
+    }
 }
 
 /// Put the thing a pin leaves a band open for where that band is: the player's own window, or
@@ -950,6 +1003,7 @@ pub(super) fn pinned_audio_chrome(paused: Option<f64>) -> Option<CardChrome> {
     Some(CardChrome {
         playing,
         volume: pin.volume.level,
+        always_on_top: pin_always_on_top(),
         hovered: pin.audio_hovered,
         pressed: pin.audio_pressed,
         window_buttons: pin.audio_window_buttons,
@@ -992,6 +1046,7 @@ pub(super) fn pinned_audio_card_box(
     let chrome = Some(CardChrome {
         playing: false,
         volume: current_audio_volume(),
+        always_on_top: pin_always_on_top(),
         hovered: None,
         pressed: None,
         window_buttons: false,
@@ -1105,15 +1160,34 @@ pub(super) fn ensure_pinned_sibling_box(content: ScreenRegion) {
             }
             // Moved without a raise: `SWP_NOZORDER` leaves the order alone, so the pin stays
             // over the film it was standing over and no frame puts the film over the chrome.
-            let _ = SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                content.0,
-                content.1,
-                (content.2 - content.0).max(1),
-                (content.3 - content.1).max(1),
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
-            );
+            //
+            // **And a pin that is not Always On Top puts the film *under it* while it moves it.**
+            // The order still travels with the box — the pair keeps its place in the desktop — but
+            // the film is put directly below the pin, which is where the chrome is over it and
+            // where an mpv window adopted from a hover stops being a topmost one (see
+            // `put_player_under_the_pin`). A pin that is Always On Top keeps the old arrangement:
+            // its film holds its own band up and the pin is raised over it.
+            if pin_always_on_top() {
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND_TOPMOST,
+                    content.0,
+                    content.1,
+                    (content.2 - content.0).max(1),
+                    (content.3 - content.1).max(1),
+                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+                );
+            } else {
+                let _ = SetWindowPos(
+                    hwnd,
+                    player_insert_after(),
+                    content.0,
+                    content.1,
+                    (content.2 - content.0).max(1),
+                    (content.3 - content.1).max(1),
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                );
+            }
         }
         return;
     }

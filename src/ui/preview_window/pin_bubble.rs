@@ -119,7 +119,8 @@ pub(super) fn bubble_click_restores(was_focused: bool, moved: bool) -> bool {
     was_focused && !moved
 }
 
-/// One row of the bubble's right-click menu.
+/// One row of the menu a bubble opens — the same rows a pinned window's own menu carries, and
+/// answered the same way on both wherever the two meet (see `shared_menu_row_press`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum BubbleMenuRow {
     /// Hold what is playing where it stands, or set it going again.
@@ -128,25 +129,34 @@ pub(super) enum BubbleMenuRow {
     NextFile,
     /// The file before the one pinned.
     PreviousFile,
-    /// The rule between the playback and the switch below it, and between that switch and the
-    /// two ways out of the bubble.
+    /// The rule between the walk and the settings under it, between the switch and the two picks
+    /// below it, and between those picks and the ways out of the menu.
     Separator,
     /// Whether a pin the minimize button puts away holds what it is playing where it stands: the
     /// switch the kind's own `Pin Mode` in the tray carries, on the bubble a minimize is what
     /// left here (see `pin_pause_video` and `pin_pause_audio`).
     PauseOnMinimize,
-    /// Put the pin away into the taskbar rather than the bubble.
+    /// Where a pin the minimize button puts away goes: the round bubble on the desktop. One of
+    /// the two picks a group only one of which can be in force carries (see `PinMinimizeTo`).
+    MinimizeToBubble,
+    /// And the other: the app's own stand-in in the taskbar.
+    MinimizeToTaskbar,
+    /// Put the pin away into the taskbar rather than the bubble: the stand-in the pick above
+    /// names, gone to now instead of at the next press of the minimize button — and on a bubble,
+    /// which is a pin already away, the only thing the two picks beside it can mean.
     ToTaskbar,
     /// Take the pin down.
     Close,
 }
 
 /// The rows the bubble's menu holds, from the top of the panel to the bottom: the playback of
-/// the file behind the bubble, the rule, the switch that decides what a minimize holds back,
-/// the rule again, and the two ways out of any bubble. Both the hold and the switch are only
-/// rows where the kind behind the bubble has playback for them to answer about.
+/// the file behind the bubble, the walk of the folder it stands in, the switch that decides what
+/// a minimize holds back, the two places a minimize can put the pin, and the two ways out of any
+/// bubble. The hold and the switch are rows only where the kind behind the bubble has playback
+/// for them to answer about; the two places are every menu's, because a minimize is a thing any
+/// pin has (see `bubble_pause_on_minimize` and `PinMinimizeTo`).
 pub(super) fn bubble_menu_rows(kind: Option<MediaType>) -> Vec<BubbleMenuRow> {
-    let mut rows = Vec::with_capacity(8);
+    let mut rows = Vec::with_capacity(12);
     if bubble_space_toggles(kind) {
         rows.push(BubbleMenuRow::Toggle);
     }
@@ -157,6 +167,9 @@ pub(super) fn bubble_menu_rows(kind: Option<MediaType>) -> Vec<BubbleMenuRow> {
         rows.push(BubbleMenuRow::PauseOnMinimize);
         rows.push(BubbleMenuRow::Separator);
     }
+    rows.push(BubbleMenuRow::MinimizeToBubble);
+    rows.push(BubbleMenuRow::MinimizeToTaskbar);
+    rows.push(BubbleMenuRow::Separator);
     rows.push(BubbleMenuRow::ToTaskbar);
     rows.push(BubbleMenuRow::Close);
     rows
@@ -190,10 +203,70 @@ fn toggle_pause_on_minimize(kind: Option<MediaType>) {
     }
 }
 
+/// Where a pin the minimize button puts away goes, written the way the switch above it is. The
+/// two picks are one group — a minimize leaves a pin either on the desktop as its bubble or in
+/// the app's own place in the taskbar, never both — so the setting one of them writes is also
+/// what the disc on the row is read from the next time the menu is painted (see
+/// `bubble_menu_row_mark`), and nothing on screen moves: the pin already away is left where it
+/// was put, and the answer is the next minimize's (see `pin_minimize_to`).
+fn set_pin_minimize_to(target: PinMinimizeTo) {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_minimize_to = target;
+        config.save();
+    }
+}
+
+/// What a press on one of the rows a bubble's menu and a pinned window's menu both hold does,
+/// where the two answer it the same way — which is every row but `ToTaskbar`, whose road is
+/// handed in because the two menus walk it differently: a pin already collapsed moves the bubble
+/// it left on the desktop into the app's stand-in, and one still standing puts itself away from
+/// its own window (see `bubble_menu_press` and `pin_menu`). Answers whether the panel stays up.
+///
+/// A row that picks one of two answers goes away with the pick, the way a menu a choice was made
+/// in does; the switch above them stays up with the mark it now carries, because there is
+/// nothing to pick from and the mark is the answer.
+pub(super) fn shared_menu_row_press(row: BubbleMenuRow, to_taskbar: impl FnOnce()) -> bool {
+    match row {
+        BubbleMenuRow::Toggle => {
+            ask_pin(PinCommand::TogglePlayback);
+            false
+        }
+        BubbleMenuRow::NextFile => {
+            ask_pin(PinCommand::Next);
+            false
+        }
+        BubbleMenuRow::PreviousFile => {
+            ask_pin(PinCommand::Previous);
+            false
+        }
+        BubbleMenuRow::Close => {
+            ask_pin(PinCommand::Close);
+            false
+        }
+        BubbleMenuRow::PauseOnMinimize => {
+            toggle_pause_on_minimize(current_media_type());
+            true
+        }
+        BubbleMenuRow::MinimizeToBubble => {
+            set_pin_minimize_to(PinMinimizeTo::Bubble);
+            false
+        }
+        BubbleMenuRow::MinimizeToTaskbar => {
+            set_pin_minimize_to(PinMinimizeTo::Taskbar);
+            false
+        }
+        BubbleMenuRow::ToTaskbar => {
+            to_taskbar();
+            false
+        }
+        BubbleMenuRow::Separator => true,
+    }
+}
+
 /// What a row of the bubble's menu says: the hold named for what it will do, the two walks
-/// named for the file they step to, the switch spelled the way the tray spells it, and the two
-/// ways out the same way. A rule carries nothing at all, because there is nothing on one to
-/// read.
+/// named for the file they step to, the switch spelled the way the tray spells it, the two
+/// places a minimize can put the pin under the words the panel has room for, and the two ways
+/// out the same way. A rule carries nothing at all, because there is nothing on one to read.
 pub(super) fn bubble_menu_row_label(row: BubbleMenuRow, playing: bool) -> &'static str {
     match row {
         BubbleMenuRow::Toggle if playing => "Pause",
@@ -202,38 +275,50 @@ pub(super) fn bubble_menu_row_label(row: BubbleMenuRow, playing: bool) -> &'stat
         BubbleMenuRow::PreviousFile => "Previous File",
         BubbleMenuRow::Separator => "",
         BubbleMenuRow::PauseOnMinimize => "Pause on Minimize",
+        BubbleMenuRow::MinimizeToBubble => "Minimize to Bubble",
+        BubbleMenuRow::MinimizeToTaskbar => "Minimize to Taskbar",
         BubbleMenuRow::ToTaskbar => "To Taskbar",
         BubbleMenuRow::Close => "Close",
     }
 }
 
 /// The mark a row of the bubble's menu carries: nothing anywhere, except the hairline on the
-/// rule and the check the switch stands for (see `pin_chrome::MenuMark`).
+/// rule, the check the switch stands for, and the disc on the one of the two picks that is the
+/// setting in force (see `pin_chrome::MenuMark`).
 fn bubble_menu_row_mark(
     row: BubbleMenuRow,
     pause_on_minimize: Option<bool>,
+    minimize_to: PinMinimizeTo,
 ) -> pin_chrome::MenuMark {
     match row {
         BubbleMenuRow::Separator => pin_chrome::MenuMark::Separator,
         BubbleMenuRow::PauseOnMinimize => {
             pin_chrome::MenuMark::Check(pause_on_minimize.unwrap_or(false))
         }
+        BubbleMenuRow::MinimizeToBubble if minimize_to == PinMinimizeTo::Bubble => {
+            pin_chrome::MenuMark::Bullet
+        }
+        BubbleMenuRow::MinimizeToTaskbar if minimize_to == PinMinimizeTo::Taskbar => {
+            pin_chrome::MenuMark::Bullet
+        }
         _ => pin_chrome::MenuMark::None,
     }
 }
 
 /// The rows the bubble's menu is painted with: the same panel a pinned sound's card opens, so a
-/// bubble's menu reads as the same menu (see `pin_chrome::paint_menu_popup`).
+/// bubble's menu reads as the same menu (see `pin_chrome::paint_menu_popup`) — and the same rows
+/// a pinned window's own menu is painted with (see `pin_menu::pinned_menu_paint`).
 pub(super) fn bubble_menu_chrome_rows(
     kind: Option<MediaType>,
     playing: bool,
 ) -> Vec<pin_chrome::MenuRow> {
     let pause_on_minimize = bubble_pause_on_minimize(kind);
+    let minimize_to = pin_minimize_to();
     bubble_menu_rows(kind)
         .iter()
         .map(|row| pin_chrome::MenuRow {
             label: bubble_menu_row_label(*row, playing).to_string(),
-            mark: bubble_menu_row_mark(*row, pause_on_minimize),
+            mark: bubble_menu_row_mark(*row, pause_on_minimize, minimize_to),
         })
         .collect()
 }
@@ -413,15 +498,12 @@ pub(super) unsafe fn bubble_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     }
 
     close_bubble_menu(hwnd);
-    match row {
-        Some(BubbleMenuRow::Toggle) => ask_pin(PinCommand::TogglePlayback),
-        Some(BubbleMenuRow::NextFile) => ask_pin(PinCommand::Next),
-        Some(BubbleMenuRow::PreviousFile) => ask_pin(PinCommand::Previous),
-        Some(BubbleMenuRow::ToTaskbar) => bubble_to_taskbar(),
-        Some(BubbleMenuRow::Close) => ask_pin(PinCommand::Close),
-        // A press outside both the rows and the circle is a press that has left the menu; the
-        // rule and the switch above are not rows a press reaches here with.
-        Some(BubbleMenuRow::Separator) | Some(BubbleMenuRow::PauseOnMinimize) | None => {}
+    // Every row but the taskbar's is the same row a pinned window's own menu carries, and is
+    // answered the same way there (see `shared_menu_row_press`); the rule and the switch above
+    // were answered where they were pressed, with the panel left standing.
+    // A press outside both the rows and the circle is a press that has left the menu.
+    if let Some(row) = row {
+        shared_menu_row_press(row, bubble_to_taskbar);
     }
     true
 }
@@ -464,7 +546,15 @@ pub(super) unsafe fn bubble_menu_hover(hwnd: HWND) -> bool {
 
 /// Put the pin away into the taskbar rather than the bubble: the bubble goes, the stand-in comes
 /// up, and the pin stays collapsed until it is brought back (see `show_pin_taskbar`).
+///
+/// The picture the hover is to hold is taken *before* the bubble goes, and the bubble is what it is
+/// taken from: the pin's own windows are off the screen behind a bubble, the bubble is the pin's
+/// picture of itself, and a frame taken after it would be a frame of nothing (see
+/// `keep_the_pin_for_the_taskbar` and `pin_taskbar_mirror::mirror_source`).
 pub(super) fn bubble_to_taskbar() {
+    unsafe {
+        keep_the_pin_for_the_taskbar();
+    }
     hide_pin_bubble();
     unsafe {
         show_pin_taskbar();
@@ -535,10 +625,23 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
     // stand-in leaves the app in the taskbar instead with the pin off the screen. Everything
     // above is the same either way — which is why only the last step of a collapse differs.
     unsafe {
+        if target == PinMinimizeTo::Taskbar {
+            // The button's hover keeps the pin's own picture, and a picture of a window that has been
+            // taken off the screen is a picture of nothing: what the hover is to hold is taken while
+            // the windows it is made of are still up (see `keep_the_pin_for_the_taskbar`).
+            keep_the_pin_for_the_taskbar();
+        }
+
         hide_pinned_windows();
         if target == PinMinimizeTo::Taskbar {
             show_pin_taskbar();
         } else {
+            // A pin put away into the bubble is a pin on the desktop, and the button a pin on the
+            // screen was shown in is not a button for it: what the stand-in was showing is of a window
+            // that has gone, and a pin put away into the bubble is reached by the bubble rather than by
+            // the taskbar. So the two forms of it go down together with the pin, and the taskbar is
+            // left as it was before it came up (see `pin_taskbar`).
+            hide_pin_taskbar();
             show_pin_bubble(anchor);
 
             // And the frame the bubble of a film is to show until its player is read: every player
@@ -1284,6 +1387,23 @@ fn bubble_box_of(hwnd: HWND) -> Option<ScreenRegion> {
     Some((x, y, x + side, y + side))
 }
 
+/// On the screen as a bubble, where it is: the window the pin is standing in while it is put away
+/// into the round bubble, or nothing while no bubble is up.
+///
+/// The question is the mirror's rather than the pin's — what a taskbar hover is a picture of — and
+/// it is asked of the same two facts `bubble_box_on_screen` is: a handle that was never made is not
+/// a window, and a bubble that is hidden is not on the screen to be mirrored (see
+/// `pin_taskbar_mirror`).
+pub(super) fn showing_bubble_window() -> Option<HWND> {
+    let hwnd = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    if hwnd == 0 {
+        return None;
+    }
+
+    let hwnd = HWND(hwnd as *mut _);
+    unsafe { IsWindowVisible(hwnd).as_bool().then_some(hwnd) }
+}
+
 /// The bubble's window, created once for the run: a layered popup that never takes focus and is
 /// never in the taskbar, exactly as the preview window itself is.
 pub(super) unsafe fn pin_bubble_window() -> Option<HWND> {
@@ -1586,35 +1706,37 @@ pub(super) fn bubble_art(side: u32) -> (BubbleArtOwned, pin_chrome::BubbleMark) 
     (art, mark)
 }
 
-/// Whether the media the bubble stands for is playing now.
+/// Whether the media a pin stands for is playing now, read off the pin a reader already has in
+/// hand.
 ///
 /// A film is the pin's own transport, asked the way its bar asks it (see `pin_is_playing`). A sound
 /// is the card's own question, asked the way the card asks it: neither of the two players behind a
 /// sound's card is a transport this app keeps, so the question is put to the players themselves — a
 /// process of this app's is one this app started and can see, and the engine's own is a session in
 /// this process that is read whether it is *held* rather than whether it is playing, so a sound
-/// sitting under a hold is not one a bubble claims is running (see `a_sound_is_playing`). A sound
+/// sitting under a hold is not one a menu claims is running (see `a_sound_is_playing`). A sound
 /// with neither behind it is a sound that is not playing rather than an answer that could not be
 /// given.
 ///
 /// **It is asked before the media's lock is taken and never during it**: a sound's arm reaches for
 /// that lock itself (the player process is a field of the media), and a lock a thread already holds
-/// is a stop rather than a wait (see `bubble_art`).
-pub(super) fn bubble_is_playing() -> bool {
+/// is a stop rather than a wait (see `bubble_art`). It is asked of the pin rather than looked up in
+/// the state the pin lives in for the same reason the other way round: the readers that paint a
+/// menu are already under that state's lock, and one lock asked twice on one thread is a hang (see
+/// `pinned_menu_paint`).
+pub(super) fn pin_media_is_playing(pin: &PinnedPreview) -> bool {
     match current_media_type() {
-        Some(MediaType::Video) | Some(MediaType::NativeVideo) => pin_state()
-            .and_then(|pinned| pinned.pin().map(|pin| pin_is_playing(&pin.transport)))
-            .unwrap_or(false),
-        Some(MediaType::Audio) => {
-            // The card's own question, asked the way it asks it: a player this app started is
-            // seen in the media, and the engine's own session is read whether it is *held*
-            // rather than whether it is playing, because a session asked to hold is a session
-            // that is still there and is a sound nobody can hear (see `a_sound_is_playing`
-            // and the same rule on a card's own clock).
-            a_sound_is_playing()
-        }
+        Some(MediaType::Video) | Some(MediaType::NativeVideo) => pin_is_playing(&pin.transport),
+        Some(MediaType::Audio) => a_sound_is_playing(),
         _ => false,
     }
+}
+
+/// The same question for a reader with no pin in hand: nothing is playing where there is no pin.
+pub(super) fn bubble_is_playing() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(pin_media_is_playing))
+        .unwrap_or(false)
 }
 
 /// Whether the bars a bubble is drawn with are read from sound that is moving.

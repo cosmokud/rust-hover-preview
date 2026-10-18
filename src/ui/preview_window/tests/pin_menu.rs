@@ -55,6 +55,52 @@ impl ConfigFilePutBack {
     }
 }
 
+/// The media slot stood at a kind for the length of a test and put back when the guard is
+/// dropped. A pinned window's menu holds the rows its kind has — the hold and the switch are
+/// a film's or a sound's — and the kind is read off the slot rather than off the pin (see
+/// `bubble_menu_rows`), so a test of them has to say which kind is on screen.
+struct MediaKindPutBack {
+    was: Option<MediaData>,
+}
+
+impl MediaKindPutBack {
+    fn put(kind: MediaType) -> Self {
+        let was = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let media = static_image_media(Arc::new(ImageFrame::new(vec![0u8; 4], 1, 1, 0)), kind);
+        if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+            *slot = Some(media);
+        }
+
+        Self { was }
+    }
+}
+
+impl Drop for MediaKindPutBack {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+            *slot = self.was.take();
+        }
+    }
+}
+
+/// Whether a text preview is on screen, stood where a test asks and put back when the guard is
+/// dropped: the one fact that tells a pinned page's own `Select All` / `Copy` menu from the
+/// window's, and a fact the preview loop publishes rather than a test's to leave standing (see
+/// `TEXT_PREVIEW_HOLDING`).
+struct TextHoldingPutBack(bool);
+
+impl TextHoldingPutBack {
+    fn put(holding: bool) -> Self {
+        Self(TEXT_PREVIEW_HOLDING.swap(holding, Ordering::AcqRel))
+    }
+}
+
+impl Drop for TextHoldingPutBack {
+    fn drop(&mut self) {
+        TEXT_PREVIEW_HOLDING.store(self.0, Ordering::Release);
+    }
+}
+
 /// A pin stood up for a test and whatever was there before it put
 /// back when the test is done — even when it is done by panicking —
 /// because a test that leaves a pin up is a test every test after it
@@ -86,6 +132,15 @@ impl Drop for BubblePutBack {
             *menu = None;
         }
     }
+}
+
+/// A pin showing a picture this app draws itself, big enough that a right-click on it leaves the
+/// whole of its menu's room on the screen beside it — the kind that shares its menu with a
+/// bubble, which a sound's card does not (see `pin_shows_an_audio_card`).
+fn a_picture_whose_menu_fits_the_screen() -> PinnedPreview {
+    let mut pin = PinnedPreview::for_test();
+    pin.content = (100, 100, 500, 420);
+    pin
 }
 
 /// A pin stood up for a test showing a sound's card big enough that a right-click on it
@@ -386,26 +441,306 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     );
 }
 
-/// A right-click on a pin that is not showing a sound's card opens
-/// nothing at all: the menu is the card's own, and only a sound's card
-/// carries one (see `pin_shows_an_audio_card`).
+/// A right-click on a pin that is not showing a sound's card opens the window's own menu: the
+/// same rows a bubble's menu holds, and no panel beside it, because nothing on it is a setting a
+/// flyout hangs off (see `bubble_menu_rows` and `pinned_menu_paint`).
 #[test]
-fn a_right_click_on_a_pin_that_is_not_a_sound_opens_nothing() {
+fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
     let _put_back = PutBack(take_pin_for_a_test());
-    // A framed card is not a sound's own card: the three facts the menu
-    // is gated on are settled against the kind.
-    let mut pin = sound_pin();
-    pin.frame = PinFrame::Shaped;
-    stand_pin(Some(pin));
+    let _kind = MediaKindPutBack::put(MediaType::StaticImage);
+    // A framed card is not a sound's own card: the two menus are told apart by the
+    // pin's own three facts rather than by the media's kind (see `pin_shows_an_audio_card`).
+    stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
 
     unsafe { open_pin_menu(HWND(0x1000 as *mut _), 20, 20) };
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("a pin that is not a sound opens the window's own menu")
+    };
+    let labels: Vec<&str> = paint.rows.iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "Next File",
+            "Previous File",
+            "",
+            "Minimize to Bubble",
+            "Minimize to Taskbar",
+            "",
+            "To Taskbar",
+            "Close",
+        ],
+        "the window's menu is the menu a bubble holds"
+    );
+    assert!(
+        paint.flyout.is_none(),
+        "no row of it opens a panel beside it"
+    );
+}
+
+/// A right-click opens the window's own menu everywhere on a sound's card, on the body and the
+/// title bar of a picture, and on the title bar of a pinned page — and it opens nothing on the
+/// text of the page, which keeps the `Select All` / `Copy` menu it holds on a hover, nor on the
+/// transport bar of a film, which is the player's own strip along the bottom (see
+/// `pin_right_click_opens_menu`).
+#[test]
+fn a_right_click_opens_the_menu_where_the_window_has_one() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _no_page = TextHoldingPutBack::put(false);
+
+    // A sound's card is all of it: no caption above the card and no bar under it, so
+    // every row of the window is the menu's.
+    stand_pin(Some(sound_pin()));
+    assert!(
+        pin_right_click_opens_menu(0),
+        "the first row of a sound's card is the menu's"
+    );
+    assert!(
+        pin_right_click_opens_menu(200),
+        "and so is a row well down it"
+    );
+
+    // A picture: the title bar above its media is the window's, and so is the picture under it,
+    // which is the window's own to draw.
+    let picture = PinnedPreview::for_test();
+    let caption = picture.caption;
+    stand_pin(Some(picture));
+    assert!(
+        pin_right_click_opens_menu(0),
+        "the title bar of a picture is the menu's"
+    );
+    assert!(
+        pin_right_click_opens_menu(caption + 1),
+        "and the picture under it too"
+    );
+
+    // A film's transport bar, which is the strip along the bottom of its window: the bar's own,
+    // with the picture above it the window's.
+    let mut film = PinnedPreview::for_test();
+    film.transport_bar = true;
+    film.transport_live = true;
+    stand_pin(Some(film));
+    let bar = pinned_transport_geometry().expect("a film's window carries a transport bar");
+    assert!(
+        !pin_right_click_opens_menu(bar.top),
+        "the bar's own first row is the player's"
+    );
+    assert!(
+        !pin_right_click_opens_menu(bar.top + bar.height - 1),
+        "and so is its last"
+    );
+    assert!(
+        pin_right_click_opens_menu(bar.top - 1),
+        "while the row above the bar is the window's"
+    );
+
+    // A page of text, with a text preview on screen: the text is the page's own menu's and the
+    // title bar above it is the window's.
+    let _page = TextHoldingPutBack::put(true);
+    let mut page = PinnedPreview::for_test();
+    page.caption = pinned_caption_height(96, Some(MediaType::Text));
+    let caption = page.caption;
+    stand_pin(Some(page));
+    assert!(
+        pin_right_click_opens_menu(caption - 1),
+        "the title bar of a pinned page is the menu's"
+    );
+    assert!(
+        !pin_right_click_opens_menu(caption),
+        "and the text under it is the page's own menu's"
+    );
+    assert!(
+        !pin_right_click_opens_menu(caption + 40),
+        "wherever in the text the hand is"
+    );
+}
+
+/// A press on a row a pinned window's menu shares with the bubble's leaves the ask that row
+/// leaves there: the two walks and the close the same, and the one row the two walk differently
+/// — `To Taskbar` — putting this pin away into the app's own place in the taskbar from the
+/// window it is standing in (see `shared_menu_row_press` and `PinCommand::MinimizeTo`).
+#[test]
+fn a_press_on_a_row_a_pin_shares_with_a_bubble_leaves_its_ask() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _kind = MediaKindPutBack::put(MediaType::StaticImage);
+    stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
+
+    // What each row is for, as the ask it leaves behind with the loop.
+    let asks = [
+        ("Next File", PinCommand::Next),
+        ("Previous File", PinCommand::Previous),
+        ("Close", PinCommand::Close),
+        ("To Taskbar", PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
+    ];
+
+    for (label, command) in asks {
+        with_pin(|pin| {
+            pin.menu.open = true;
+            pin.menu.point = on_screen((20, 20));
+        });
+        // The queue is emptied first, so what is read is the ask this press left.
+        take_pin_command();
+        let paint = pinned_menu_geometry().expect("the menu is up");
+        let (x, y) = menu_row_point(&paint, row_at(&paint.rows, label));
+        assert!(
+            unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+            "a hand on the {label} row is the menu's own"
+        );
+        assert_eq!(
+            take_pin_command(),
+            Some(command),
+            "the {label} row asks for what it says"
+        );
+        assert!(
+            pinned_menu_geometry().is_none(),
+            "and the menu goes away with the answer"
+        );
+    }
+}
+
+/// A press on either of the two places a minimize can put a pin writes the setting the tray's
+/// own `Pin Mode → Minimize` writes, for the pin that is up as much as for a bubble: the row is
+/// the setting's face rather than an ask, so nothing is left with the loop and the menu goes
+/// away with the pick (see `shared_menu_row_press`).
+#[test]
+fn a_press_on_a_minimize_pick_writes_the_setting_the_tray_writes() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _config_file = ConfigFilePutBack::take();
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _kind = MediaKindPutBack::put(MediaType::StaticImage);
+    let _target = PinMinimizeToPutBack::put(PinMinimizeTo::Bubble);
+    stand_pin(Some(a_picture_whose_menu_fits_the_screen()));
+
+    with_pin(|pin| {
+        pin.menu.open = true;
+        pin.menu.point = on_screen((20, 20));
+    });
+    take_pin_command();
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Minimize to Taskbar"));
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on a pick is the menu's own"
+    );
+    assert_eq!(
+        CONFIG.lock().map(|config| config.pin_minimize_to).ok(),
+        Some(PinMinimizeTo::Taskbar),
+        "the pick wrote the place the tray's own row writes"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "and nothing is left with the loop: a pick is a setting rather than an ask"
+    );
     assert!(
         pinned_menu_geometry().is_none(),
-        "a pin that is not a sound opens no menu"
+        "and the menu goes away with the pick"
+    );
+}
+
+/// The switch a pinned window's menu shares with the bubble's is turned over where it is pressed
+/// and the panel stays up with the mark it now carries — there is nothing to pick from and the
+/// mark is the answer (see `shared_menu_row_press`). A film's menu holds the switch because a
+/// film is a kind with playback for it to hold back.
+#[test]
+fn the_switch_a_pin_shares_with_a_bubble_stays_up_with_its_mark() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _switches = PausePreviewSettings::stood_at(true, false);
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _kind = MediaKindPutBack::put(MediaType::Video);
+    let mut film = a_picture_whose_menu_fits_the_screen();
+    // A film held where it stands, so that the hold row says the same thing on every machine
+    // (see `bubble_is_playing`).
+    film.transport.paused_at = Some(0.0);
+    stand_pin(Some(film));
+
+    with_pin(|pin| {
+        pin.menu.open = true;
+        pin.menu.point = on_screen((20, 20));
+    });
+    take_pin_command();
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    assert_eq!(
+        paint.rows[0].label, "Play",
+        "a held film's menu offers to set it going"
+    );
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Pause on Minimize"));
+    assert!(
+        unsafe { pinned_menu_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on the switch is the menu's own"
+    );
+    assert_eq!(
+        take_pin_command(),
+        None,
+        "a switch asks the loop for nothing at all"
+    );
+    let paint = pinned_menu_geometry().expect("the panel stays up over the switch");
+    let row = row_at(&paint.rows, "Pause on Minimize");
+    assert!(
+        matches!(paint.rows[row].mark, pin_chrome::MenuMark::Check(false)),
+        "the video's switch was on, so the press turned it off and the mark says so"
+    );
+}
+
+/// A row of the panel that reaches across the window's own title bar is the row's: the panel is
+/// over the chrome, so the press is answered the way the same row is answered lower down rather
+/// than beginning the drag a title bar begins (see `pinned_press`).
+#[test]
+fn a_press_on_a_row_over_the_title_bar_is_the_rows_own() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _kind = MediaKindPutBack::put(MediaType::StaticImage);
+    let mut pin = PinnedPreview::for_test();
+    pin.content = (0, 0, 500, 420);
+    let caption = pin.caption;
+    stand_pin(Some(pin));
+
+    with_pin(|pin| {
+        pin.menu.open = true;
+        // A panel at the window's own top-left corner, which is where a right-click in the
+        // title bar there would have put it: its first rows lie in the title bar itself.
+        pin.menu.point = (0, 0);
+    });
+    take_pin_command();
+    let paint = pinned_menu_geometry().expect("the menu is up");
+    let (x, y) = menu_row_point(&paint, row_at(&paint.rows, "Next File"));
+    assert!(
+        y < caption,
+        "the row this test presses lies in the window's own title bar"
+    );
+
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a press on a row of the panel is the menu's"
+    );
+    assert_eq!(
+        take_pin_command(),
+        Some(PinCommand::Next),
+        "the row the hand was on is the row that answered"
+    );
+    assert!(
+        pinned_menu_geometry().is_none(),
+        "and the menu went away with its answer"
     );
 }
 
@@ -1260,6 +1595,25 @@ fn flyout_row_point(flyout: &PinMenuFlyout, index: usize) -> (i32, i32) {
     )
 }
 
+/// The middle of a row of the bubble's own menu, taken from the band the panel laid the row out
+/// in — the same answer `menu_row_point` gives for a pinned window's panel (see
+/// `pin_chrome::MenuRowBand`).
+fn bubble_row_point(index: usize) -> (i32, i32) {
+    let menu = BUBBLE_MENU.lock().expect("the bubble's menu");
+    let menu = menu.as_ref().expect("the bubble's menu is up");
+    let band = menu
+        .popup
+        .bands
+        .iter()
+        .find(|band| band.answers == index)
+        .unwrap_or_else(|| panic!("the panel lays the row a hand counts {index} out in a band"));
+
+    (
+        (menu.popup.panel.left + menu.popup.panel.right) / 2,
+        band.top + band.height / 2,
+    )
+}
+
 /// Ask the chrome tick about a screen point, for the pin that is up,
 /// answering whether anything changed.
 fn tick(cursor: Option<(i32, i32)>, now: Instant) -> bool {
@@ -1609,20 +1963,7 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
         &bubble_menu_chrome_rows(Some(MediaType::Audio), true),
         "Pause on Minimize",
     );
-    let (x, y) = {
-        let menu = BUBBLE_MENU.lock().expect("the bubble's menu");
-        let menu = menu.as_ref().expect("the bubble's menu is up");
-        let band = menu
-            .popup
-            .bands
-            .iter()
-            .find(|band| band.answers == index)
-            .expect("the panel lays the switch's row out in a band");
-        (
-            (menu.popup.panel.left + menu.popup.panel.right) / 2,
-            band.top + band.height / 2,
-        )
-    };
+    let (x, y) = bubble_row_point(index);
     assert!(
         unsafe { bubble_menu_press(hwnd, x, y) },
         "a hand on the switch is the menu's own"
@@ -1640,6 +1981,65 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
     assert!(
         check,
         "and the check the panel carries is the switch it now stands for"
+    );
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// A press on one of the bubble's two minimize picks writes the setting the tray's own
+/// `Pin Mode → Minimize` writes and puts the panel away with it: the two rows are one group
+/// rather than two switches, so a press on one is a choice made and not a mark turned over (see
+/// `shared_menu_row_press`).
+#[test]
+fn a_press_on_the_bubbles_minimize_pick_writes_the_setting() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let _config_file = ConfigFilePutBack::take();
+    let _put_back = PutBack(take_pin_for_a_test());
+    let _target = PinMinimizeToPutBack::put(PinMinimizeTo::Bubble);
+    stand_pin(Some(a_sound_card_whose_menu_fits_the_screen()));
+
+    // A sound behind the bubble, which is the kind the bubble's rows are read from.
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        let mut media = create_loading_media(8, 4);
+        media.media_type = MediaType::Audio;
+        *slot = Some(media);
+    }
+
+    // The bubble's own menu up in the circle a collapsed pin left, the way the switch's own test
+    // stands it (see `open_bubble_menu`).
+    let hwnd = HWND(0x2000 as *mut _);
+    let _bubble = BubblePutBack::put(hwnd);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true);
+    let index = row_at(&rows, "Minimize to Taskbar");
+    let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
+    if let Ok(mut menu) = BUBBLE_MENU.lock() {
+        *menu = Some(BubbleMenu {
+            rows,
+            popup,
+            hover: None,
+            dpi: 96,
+        });
+    }
+
+    let (x, y) = bubble_row_point(index);
+    assert!(
+        unsafe { bubble_menu_press(hwnd, x, y) },
+        "a hand on a minimize pick is the menu's own"
+    );
+    assert_eq!(
+        CONFIG.lock().expect("the configuration").pin_minimize_to,
+        PinMinimizeTo::Taskbar,
+        "the pick wrote the place the tray's own row writes"
+    );
+    assert!(
+        !bubble_menu_is_open(),
+        "and the panel goes away with the pick, the way a menu a choice was made in does"
     );
 
     if let Ok(mut media) = CURRENT_MEDIA.lock() {

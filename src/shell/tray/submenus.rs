@@ -39,9 +39,18 @@ use crate::CONFIG;
 use std::path::{Path, PathBuf};
 use windows::core::{w, PCWSTR};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, HMENU, MENU_ITEM_FLAGS, MF_BYCOMMAND,
-    MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
+    AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, HMENU, MENU_ITEM_FLAGS, MFT_RADIOCHECK,
+    MF_BYCOMMAND, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED,
 };
+
+/// The mark a row of a menu where exactly one answer is in force carries instead of the tick:
+/// the disc every other mark in this app's own menus is (see `pin_chrome::MenuMark::Bullet`),
+/// and what says a row is a choice rather than a switch.
+///
+/// The platform names the bit as an item-*type* one while `AppendMenuW` is handed the flags',
+/// which is the two the same number.
+pub(super) const MF_RADIOCHECK: MENU_ITEM_FLAGS = MENU_ITEM_FLAGS(MFT_RADIOCHECK.0);
 
 /// One `Timing` submenu: an item per delay the setting offers, in the order the table
 /// lists them, with the delay the setting is on checked and the one it starts at marked
@@ -57,7 +66,7 @@ pub(super) fn timing_delay_menu(base_id: u16, selected_ms: u64, default_ms: u64)
     for (index, delay_ms) in TIMING_DELAY_CHOICES_MS.iter().enumerate() {
         let flags = MF_STRING
             | if *delay_ms == selected_ms {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             };
@@ -222,7 +231,7 @@ fn append_pin_nav_anchor(
         menu,
         MF_STRING
             | if selected == PinNavFileTypes::All {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             },
@@ -236,7 +245,7 @@ fn append_pin_nav_anchor(
         menu,
         MF_STRING
             | if selected == PinNavFileTypes::Category {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             },
@@ -691,7 +700,7 @@ pub(super) fn append_background_menu(
     for (index, choice) in choices.iter().enumerate() {
         let flags = MF_STRING
             | if *choice == background {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             };
@@ -791,7 +800,7 @@ pub(super) fn append_document_scale_menu(
     for (index, choice) in DOCUMENT_SCALE_CHOICES.iter().enumerate() {
         let flags = MF_STRING
             | if *choice == scale {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             };
@@ -955,7 +964,7 @@ pub(super) fn append_audio_scale_menu(
     for (index, choice) in AUDIO_SCALE_CHOICES.iter().enumerate() {
         let flags = MF_STRING
             | if *choice == scale {
-                MF_CHECKED
+                MF_CHECKED | MF_RADIOCHECK
             } else {
                 MF_UNCHECKED
             };

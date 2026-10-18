@@ -573,6 +573,15 @@ fn start_mpv_video_playback(
         video_launch::mpv_launched_without_audio(volume),
     );
 
+    // **A player begun for a pin is told the pin's own answer about the topmost band before it has
+    // drawn anything.** `--ontop` is the launch's flag for a hover's window, and a pin that is not
+    // Always On Top wants the opposite of it: asking here rather than at the launch's arguments is
+    // what keeps one command line for both, and the pipe is already remembered so the ask is on the
+    // player this app holds (see `mpv_ipc::set_ontop`).
+    if pinned() && !pin_always_on_top() {
+        let _ = mpv_ipc::set_ontop(child.id(), false);
+    }
+
     // **mpv picks its own tracks, so "was it asked for subtitles" is the honest answer here** —
     // and it is the answer the take-up is asked for: a pin adopts a hover's player rather than
     // beginning one of its own, and this list is what says whether the player it adopted is
@@ -924,13 +933,13 @@ fn note_pin_re_raise() {
 /// read off — rather than off the media, which is a fact about the file on screen and not about
 /// whose window stands in its band.
 ///
-/// The raise is held off for the same reasons it always was: a strip of the pin's chrome or the
-/// volume popup is drawn where the film is, and a film parked for a gesture is deliberately not on
-/// screen. `parked` is asked here for the monitor, which nobody can hold off from outside; the
-/// placement road is the one road that must put a parked window back, so it asks this with no park
-/// (see `unpark_player_window`).
+/// The raise is held off for the same reasons it always was: a strip of the pin's chrome, the
+/// volume popup or the card's menu is drawn where the film is, and a film parked for a gesture is
+/// deliberately not on screen. `parked` is asked here for the monitor, which nobody can hold off
+/// from outside; the placement road is the one road that must put a parked window back, so it asks
+/// this with no park (see `unpark_player_window`).
 ///
-/// **The two hold-offs stand for mpv's film as they do for FFmpeg's.** A raise put over the pin
+/// **The hold-offs stand for mpv's film as they do for FFmpeg's.** A raise put over the pin
 /// covers the caption and the transport bar the pin draws into the band over the media (see
 /// `pin_overlay_chrome`), then the pin is put back over the film — a two-step reorder per tick,
 /// per monitor pass and per drag move, which is the blink the chrome was seen doing. What keeps
@@ -939,6 +948,12 @@ fn note_pin_re_raise() {
 /// own raise, which the chrome block and the volume arm already do (see `event_loop`). What the
 /// film still owes a band that has moved is the *place*, and that travels without a raise (see
 /// `ensure_pinned_sibling_box`).
+///
+/// **And the card's menu is a hold-off of the same kind, for a window of its own** (see
+/// `pin_menu_window`): the panel is drawn over the film, and every raise it gets is
+/// `render_pin_menu`'s own (see `event_loop`, `open_pin_menu`). A raise of the film is therefore
+/// the film over the panel for as long as the next tick takes — a panel that blinks wherever it
+/// overlaps the picture, which is where a hand reads it (see `pin_menu_open`).
 ///
 /// The media engine's route never reaches a placement at all: its band is painted into this app's
 /// own window and it begins no player, so there is no window of somebody else's in the band for
@@ -949,14 +964,16 @@ pub(super) fn player_order(
     _pinned: bool,
     chrome_up: bool,
     volume_open: bool,
+    menu_open: bool,
     parked: bool,
 ) -> PlayerOrder {
-    // A park, a strip of the pin's chrome and the volume popup are all refused for every window
-    // there is: a parked film is not on screen to be raised, and on either route a raise over the
-    // chrome or the popup puts the film over what the user is looking at. mpv's film holds its
-    // own band (`--ontop`) while the pin's own raise carries the press, and a band that has moved
-    // is placed without a raise (see the note above and `ensure_pinned_sibling_box`).
-    let order = if parked || chrome_up || volume_open {
+    // A park, a strip of the pin's chrome, the volume popup and the card's menu are all refused for
+    // every window there is: a parked film is not on screen to be raised, and on any of the other
+    // routes a raise puts the film over what this app is drawing — the caption and the bar in the
+    // pin's own rows, and the panel of a card's menu in a window of its own over them. mpv's film
+    // holds its own band (`--ontop`) while the pin's own raise carries the press, and a band that
+    // has moved is placed without a raise (see the note above and `ensure_pinned_sibling_box`).
+    let order = if parked || chrome_up || volume_open || menu_open {
         PlayerOrder::Leave
     } else {
         PlayerOrder::Raise
@@ -991,9 +1008,11 @@ pub(super) fn player_order(
 /// what answers for the pin standing over it.
 ///
 /// **A `Leave` never reaches here** — both raisers refuse it before asking (see `player_order`) —
-/// so the pin is not re-raised for a park, and the two hold-offs a `Leave` stands for are answered
-/// where they are caused: a strip of the pin's chrome and an open volume popup each come with a
-/// raise of the pin's own window (see `event_loop`'s chrome block, `toggle_pin_volume`). Nor is a
+/// so the pin is not re-raised for a park, and the three hold-offs a `Leave` stands for are
+/// answered where they are caused: a strip of the pin's chrome and an open volume popup each come
+/// with a raise of the pin's own window (see `event_loop`'s chrome block, `toggle_pin_volume`), and
+/// an open card's menu is a window of its own that the tick raises over the film every tick (see
+/// `render_pin_menu`). Nor is a
 /// hover's placement followed by one, because a hover has no pin to put over anything. What is
 /// left is the pin being put back exactly where a pinned film was raised.
 ///
@@ -1006,10 +1025,12 @@ pub(super) unsafe fn place_player_window(
     flags: SET_WINDOW_POS_FLAGS,
 ) {
     let (x, y, width, height) = box_;
-    let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, flags);
+    let _ = SetWindowPos(hwnd, player_insert_after(), x, y, width, height, flags);
 
-    // A raise with no pin standing is a hover's, and there is nothing to put over it.
-    let re_raise = order == PlayerOrder::Raise && pinned();
+    // A raise with no pin standing is a hover's, and there is nothing to put over it — and a pin
+    // that is not Always On Top is raised over nothing at all: the film was just put *below* it,
+    // which is the whole of the order that pair owes (see `player_insert_after`).
+    let re_raise = order == PlayerOrder::Raise && pinned() && pin_always_on_top();
 
     #[cfg(test)]
     if re_raise {
@@ -1019,6 +1040,104 @@ pub(super) unsafe fn place_player_window(
     if re_raise {
         raise_pinned_window(HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _));
     }
+}
+
+/// What a player's window is put under: the pin's own window while the pin is not Always On Top,
+/// and the topmost band everywhere else.
+///
+/// **The pin's handle rather than a z-order command, because the pin is not to move.** With the
+/// setting off the pin is an ordinary window, and one raised above all the others every time its
+/// chrome came up — or every time a film was placed — is a window that is in front of whatever the
+/// user is working in without ever having been asked to be, which is the setting saying the
+/// opposite of what it did. What the chrome is owed is the *film's* place, and the film is the half
+/// of the pair that may be given one: placed directly below the pin it is seen through the band and
+/// drawn over by the caption and the bar, and the pair keeps exactly the place in the z-order the
+/// user's own clicks gave it. That an insert-after handle that is not topmost also takes the window
+/// *out* of the topmost band is the other half of it, and is what turns a film adopted from a
+/// hover — whose window wore that band for the preview's sake — into an ordinary window again.
+pub(super) fn player_insert_after() -> HWND {
+    if !pinned() || pin_always_on_top() {
+        return HWND_TOPMOST;
+    }
+
+    let pin = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+    if pin.is_invalid() {
+        // A pin that has no window of its own yet has nothing for the film to go under: it is
+        // put in the ordinary band, which is where it was going to be anyway.
+        HWND_NOTOPMOST
+    } else {
+        pin
+    }
+}
+
+/// Put a pinned film directly below the pin's own window, so the caption and the transport bar
+/// are drawn over the picture and neither window is raised above the program the user is working
+/// in.
+///
+/// **This is the whole of what raising a pin that is not Always On Top means** (see
+/// `raise_pinned_window`): the pin has no fight to win and no business being raised, and the film
+/// is the window that may be moved to give the chrome its place.
+pub(super) unsafe fn put_player_under_the_pin() {
+    let player = HWND(VIDEO_HWND.load(Ordering::SeqCst) as *mut _);
+    if player.is_invalid() || !IsWindow(player).as_bool() {
+        return;
+    }
+
+    let pin = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
+    if pin.is_invalid() || pin == player {
+        return;
+    }
+
+    // Safety: the handle is a player this app started — or the window the engine draws into — and
+    // the place it is put is a z-order position under this app's own window, with neither window
+    // moved or sized. A window that has since gone is refused by the call rather than acted on.
+    let _ = SetWindowPos(
+        player,
+        pin,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+}
+
+/// Whether the player's window is already directly below the pin's, which is the answer that keeps
+/// the tick from asking the Shell for an order it already has.
+///
+/// A pin with no player's window of its own — a picture, a page, the engine's own rows — has
+/// nothing out of place to report: the answer is yes.
+pub(super) unsafe fn player_is_under_the_pin(pin: HWND) -> bool {
+    let player = HWND(VIDEO_HWND.load(Ordering::SeqCst) as *mut _);
+    if player.is_invalid() {
+        return true;
+    }
+
+    GetWindow(player, GW_HWNDPREV).is_ok_and(|above| above == pin)
+}
+
+/// Tell a pinned mpv film whether its own window is to hold the topmost band, which is the pin's
+/// setting rather than the player's own.
+///
+/// A film is launched `--ontop` because a hover is a window nothing may cover, and a film *adopted*
+/// by a pin keeps what it was begun with — so a pin that is not Always On Top would go on standing
+/// over the program the user is working in, taking the clicks in the band they overlap, while the
+/// setting says it should not. The same ask answers a setting changed under a film that is already
+/// running.
+///
+/// Nothing is asked where no mpv is the film on screen: FFmpeg's player is placed by this app and
+/// has no opinion of its own to correct (see `mpv_ipc::set_ontop`).
+pub(super) fn settle_pinned_mpv_ontop() {
+    if !pinned() {
+        return;
+    }
+
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if pid == 0 || video_process_image() != MPV_IMAGE_NAME {
+        return;
+    }
+
+    let _ = mpv_ipc::set_ontop(pid, pin_always_on_top());
 }
 
 /// Put the ffplay window where it belongs and on top of everything, re-discovering and re-asserting
@@ -1069,8 +1188,9 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         return false;
     }
     // What is to be done with the window, from the one answer both of the places that put one
-    // somewhere read: everything held off — the pin's own chrome or popup — is nothing this road
-    // places, and a raise puts the pin back over the film it raised (see `place_player_window`).
+    // somewhere read: everything held off — the pin's own chrome, its popup or its menu — is
+    // nothing this road places, and a raise puts the pin back over the film it raised (see
+    // `place_player_window`).
     //
     // The park is deliberately not asked of it here: this is the road that must put a parked
     // window back (see `unpark_player_window`), so the park is the callers' refusal and the
@@ -1080,6 +1200,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         pinned(),
         pin_chrome_up(),
         pin_volume_open(),
+        pin_menu_open(),
         false,
     );
     if order == PlayerOrder::Leave {

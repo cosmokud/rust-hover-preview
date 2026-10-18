@@ -1704,3 +1704,36 @@ fn mpv_labels_keep_the_tail_and_shorten_from_the_front() {
         "the two installs' labels differ, which is what the submenu is for"
     );
 }
+
+/// A submenu whose rows are answers of which exactly one is in force marks the row the setting
+/// is on with the disc rather than the tick — the rows are one group rather than a switch
+/// apiece, and the mark is what says so — while a row the setting is not on carries no mark at
+/// all, which is what tells a group of picks from a column of switches (see `MF_RADIOCHECK`).
+#[test]
+fn a_group_of_picks_marks_its_answer_with_the_disc() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DestroyMenu, GetMenuState, MF_BYCOMMAND, MF_CHECKED,
+    };
+
+    let menu = timing_delay_menu(
+        ID_TRAY_DELAY_BASE,
+        TIMING_DELAY_CHOICES_MS[1],
+        TIMING_DELAY_CHOICES_MS[0],
+    );
+
+    let marked = unsafe { GetMenuState(menu, (ID_TRAY_DELAY_BASE + 1) as u32, MF_BYCOMMAND) };
+    assert_eq!(
+        marked & (MF_CHECKED.0 | MF_RADIOCHECK.0),
+        MF_CHECKED.0 | MF_RADIOCHECK.0,
+        "the delay the setting is on is checked, and it is marked with the disc"
+    );
+
+    let unmarked = unsafe { GetMenuState(menu, ID_TRAY_DELAY_BASE as u32, MF_BYCOMMAND) };
+    assert_eq!(
+        unmarked & (MF_CHECKED.0 | MF_RADIOCHECK.0),
+        0,
+        "and a delay the setting is not on carries no mark at all"
+    );
+
+    let _ = unsafe { DestroyMenu(menu) };
+}

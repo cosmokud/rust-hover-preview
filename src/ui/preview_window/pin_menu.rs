@@ -1,11 +1,14 @@
-//! The menu a pinned sound's card opens from a right-click on its
-//! window: the state of it, the rows it holds, and what a press
-//! on one of them does.
+//! The menu a pinned window opens from a right-click on it: the state of
+//! it, the rows it holds, and what a press on one of them does.
 //!
-//! The menu is the card's own rather than the tray's, so its rows are
-//! read out of the same settings the tray's own `Pin Mode` submenus
-//! write, and its panel is drawn by `pin_chrome` rather than by the
-//! menu the shell draws: a menu that floats over the media is a panel
+//! A sound's card holds a menu of its own — the two ways out of the pin,
+//! the playback of the file in it, and the settings it plays by, two of them
+//! behind flyouts — while every other kind holds the same rows a bubble's
+//! menu holds, down to the two places a minimize can put the pin (see
+//! `bubble_menu_rows`). Both are the window's own rather than the tray's, so
+//! their rows are read out of the same settings the tray's own `Pin Mode`
+//! submenus write, and their panels are drawn by `pin_chrome` rather than by
+//! the menu the shell draws: a menu that floats over the media is a panel
 //! a hand reads and then does something about, and it is drawn the way
 //! this window draws its own panels (see `pin_chrome::menu`).
 
@@ -370,6 +373,19 @@ fn set_pin_mode_audio_seek(seek: AudioSeek) {
     }
 }
 
+/// Whether the pin that is up has the card's menu up, or nothing for a pin that is not there.
+///
+/// It is what the player's own raises are held off by while the panel is up (see `player_order`):
+/// the panel floats in a window of this app's own over the film, so a raise puts the film over it,
+/// and the panel is back only on the tick's own `render_pin_menu` — a menu that blinks wherever it
+/// overlaps the picture. The same question as `pin_volume_open`, asked of the other panel a pin
+/// floats (see `pin_menu_window`).
+pub(super) fn pin_menu_open() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.menu.open && !pin.collapsed))
+        .unwrap_or(false)
+}
+
 /// Where the card's menu floats, or nothing while it is closed: the
 /// panel anchored at the point the right-click that opened it landed,
 /// holding the rows of the page it is showing.
@@ -381,7 +397,7 @@ pub(super) fn pinned_menu_geometry() -> Option<PinMenuPaint> {
     let pinned = pin_state()?;
     let pin = pinned.pin()?;
 
-    pin.menu.open.then(|| pinned_menu_paint(pin)).flatten()
+    pin.menu.open.then(|| pinned_menu_paint(pin))
 }
 
 /// The menu as it is painted: the rows the main
@@ -393,15 +409,22 @@ pub(super) fn pinned_menu_geometry() -> Option<PinMenuPaint> {
 /// screen, and held inside the display's own work area by the placement (see
 /// `pin_chrome::menu_popup_from_point`), so a panel opened on a hand near an edge is
 /// a panel a hand can still reach.
-fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
-    if !pin_shows_an_audio_card(pin) {
-        return None;
-    }
-
-    let rows = menu_rows();
+fn pinned_menu_paint(pin: &PinnedPreview) -> PinMenuPaint {
+    // The rows the pin's menu is the face of: a sound's card holds its own — the two ways out of
+    // the pin, the playback of the file in it, and the settings it plays by — while every other
+    // kind holds the rows a bubble's menu holds, which is the same menu under the same press
+    // (see `bubble_menu_chrome_rows`).
+    let card = pin_shows_an_audio_card(pin);
+    let rows = match card {
+        true => menu_rows(),
+        false => bubble_menu_chrome_rows(current_media_type(), pin_media_is_playing(pin)),
+    };
     // The End of File row's flyout where it is up, else the Seek row's: only one flyout is
-    // ever up, so the one that is up is the panel's (see `refresh_pin_menu`).
-    let choices = if pin.menu.end_of_file {
+    // ever up, so the one that is up is the panel's, and both hang off rows only a sound's
+    // card carries (see `refresh_pin_menu`).
+    let choices = if !card {
+        None
+    } else if pin.menu.end_of_file {
         Some(end_of_file_rows())
     } else if pin.menu.seek {
         Some(seek_rows())
@@ -468,13 +491,13 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> Option<PinMenuPaint> {
         ),
     };
 
-    Some(PinMenuPaint {
+    PinMenuPaint {
         popup,
         rows,
         hover: pin.menu.hover_main,
         flyout,
         dpi: pin.dpi,
-    })
+    }
 }
 
 /// Ask the card's menu about the pointer, on the tick that already drives
@@ -507,9 +530,7 @@ pub(super) fn refresh_pin_menu(
         return false;
     }
 
-    let Some(paint) = pinned_menu_paint(pin) else {
-        return false;
-    };
+    let paint = pinned_menu_paint(pin);
 
     let at = cursor;
 
@@ -588,17 +609,14 @@ pub(super) fn refresh_pin_menu(
     changed
 }
 
-/// A press on a pinned window with the card's menu up, answering whether
-/// it was the menu's: a press on a door row opens its flyout beside the menu
-/// and the panel stays up to hold it, a press on the `Shuffle` row turns the
-/// check it carries over and leaves the panel up to show it, a row
-/// of a flyout is the choice the pin plays by from then on and the
-/// whole menu goes away with it — while a press anywhere else is a press
-/// that has left the menu, which puts both panels away.
+/// A press on a pinned window with its menu up, answering whether it was the
+/// menu's: a press on a row is that row's own and the menu answers it, while a
+/// press anywhere else is a press that has left the panel, which puts the menu away.
 ///
-/// The rows a hand counts are what a press is answered against, by name rather than by
-/// number (see `row_of`); there is no rule inside
-/// either flyout, so its first row is its first choice (see `pin_chrome::menu_row_at`).
+/// Which rows a press is answered against is the pin's own answer as much as the
+/// panel's is: a sound's card holds the card's menu, with its two doors and their
+/// flyouts (see `card_menu_press`), while every other kind holds the rows it shares
+/// with a bubble (see `shared_menu_press`).
 ///
 /// Nothing is held, because a menu is a thing a
 /// hand reads rather than a thing it carries: the press is answered
@@ -617,6 +635,46 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
         return false;
     };
 
+    // Which menu the pin's own is, asked of the pin's own three facts rather than of the media's
+    // kind, because those are what the rows were built from at the paint (see
+    // `pin_shows_an_audio_card`).
+    let card = pin_state()
+        .and_then(|pinned| pinned.pin().map(pin_shows_an_audio_card))
+        .unwrap_or(false);
+    let stays_up = match card {
+        true => card_menu_press(&paint, x, y),
+        false => shared_menu_press(&paint, x, y),
+    };
+
+    if !stays_up {
+        with_pin(|pin| pin.menu.open = false);
+        // The menu held the pointer while it was up, so it lets it go
+        // with it: a window still holding the pointer after its menu is
+        // gone is a window every click on the desktop is delivered to
+        // instead of whatever the click was aimed at.
+        release_pin_capture(hwnd);
+    }
+    render_layered_preview(hwnd);
+    // And the window the menu was drawn in goes away with the panels that were
+    // answered, or is painted again where a row left it standing — a flyout
+    // opened, a check turned over (see `render_pin_menu`).
+    render_pin_menu();
+
+    true
+}
+
+/// What a press on a row of the card's own menu means: a press on a door row opens its flyout
+/// beside the menu and the panel stays up to hold it, a press on the `Shuffle` row turns the
+/// check it carries over and leaves the panel up to show it, a row of a flyout is the choice
+/// the pin plays by from then on and the whole menu goes away with it — while a press anywhere
+/// else is a press that has left the menu, which puts both panels away.
+///
+/// The rows a hand counts are what a press is answered against, by name rather than by
+/// number (see `row_of`); there is no rule inside
+/// either flyout, so its first row is its first choice (see `pin_chrome::menu_row_at`).
+///
+/// Answers whether the panel stays up.
+unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
     // The row the press landed on, if it landed on one: each panel's own
     // rows are what a press is answered against, and the pad around them
     // and everywhere outside both panels is not a row (see
@@ -624,7 +682,7 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     let pressed = pin_chrome::menu_row_at(&paint.popup, x, y)
         .and_then(|index| PIN_MENU_ROWS.get(index).copied());
 
-    let stays_up = match pressed {
+    match pressed {
         // The door the end-of-file choices come through: a press on it opens its flyout
         // beside the menu and the menu stays up, its rows still showing — the same doors the
         // hover opens, for a hand that has come to press rather than wait. Opening one puts
@@ -713,32 +771,45 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
             // a hand that has left the menu.
             None => false,
         },
-    };
-
-    if !stays_up {
-        with_pin(|pin| pin.menu.open = false);
-        // The menu held the pointer while it was up, so it lets it go
-        // with it: a window still holding the pointer after its menu is
-        // gone is a window every click on the desktop is delivered to
-        // instead of whatever the click was aimed at.
-        release_pin_capture(hwnd);
     }
-    render_layered_preview(hwnd);
-    // And the window the menu was drawn in goes away with the panels that were
-    // answered, or is painted again where a row left it standing — a flyout
-    // opened, a check turned over (see `render_pin_menu`).
-    render_pin_menu();
+}
 
-    true
+/// What a press on the menu a pinned window shares with the bubble means: the rows a bubble's
+/// menu holds, answered the same way on both menus wherever the two meet (see
+/// `shared_menu_row_press`) — with the one row the two walk differently, `To Taskbar`, putting
+/// this pin away into the app's own place in the taskbar from the window it is standing in,
+/// which is where the pin's own minimize button can put it (see `PinCommand::MinimizeTo`).
+///
+/// No row of this menu opens a flyout, so the panel is the whole of what a press is answered
+/// against and a press outside it has left the menu (see `pinned_menu_paint`).
+///
+/// Answers whether the panel stays up.
+unsafe fn shared_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
+    // The rows the panel was painted from are the rows a press is answered against, read the
+    // way the paint reads them so that an index into the panel is an index into the pin's own
+    // rows (see `bubble_menu_rows`).
+    let pressed = pin_chrome::menu_row_at(&paint.popup, x, y)
+        .and_then(|index| bubble_menu_rows(current_media_type()).get(index).copied());
+
+    match pressed {
+        Some(row) => shared_menu_row_press(row, || {
+            ask_pin(PinCommand::MinimizeTo(PinMinimizeTo::Taskbar))
+        }),
+        // A press anywhere else is a press outside the panel, which puts the menu away: the
+        // panel is over the window, and a hand that has come for what is under it is a hand
+        // that has left the menu.
+        None => false,
+    }
 }
 
 /// The card's menu put up by a right-click on the pin's window, at the
 /// point the right-click landed: a second right-click while the panel is
 /// up moves it to the new point rather than putting it away.
 ///
-/// It is the pin's own menu and only a sound's card carries one, so a
-/// right-click on a pin showing anything else opens nothing at all (see
-/// `pin_shows_an_audio_card`).
+/// Whether the point a right-click landed at is one the menu opens for is not
+/// asked here but of the caller, which is the one that knows the window it landed
+/// in: a point on a film's transport bar or on the text of a pinned page belongs to
+/// the player or to the page (see `pin_right_click_opens_menu`).
 ///
 /// A menu put up is put up on its main page, both
 /// flyouts put away: a hand that opens the menu has
@@ -748,13 +819,6 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
 /// window, which is the window the panel is placed against and the window
 /// the press on it is answered in (see `pin_menu_window`).
 pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
-    let audio = pin_state()
-        .and_then(|pinned| pinned.pin().map(pin_shows_an_audio_card))
-        .unwrap_or(false);
-    if !audio {
-        return;
-    }
-
     with_pin(|pin| {
         pin.menu.open = true;
         pin.menu.end_of_file = false;
@@ -774,6 +838,45 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
     let _ = SetCapture(hwnd);
     render_layered_preview(hwnd);
     render_pin_menu();
+}
+
+/// Whether a right-click in row `y` of a pinned window is the window's own menu's to open, in the
+/// window's own coordinates.
+///
+/// The question is a row's rather than a point's because the two strips that are not the menu's
+/// are as wide as the window: a kind that plays has the player's own bar along the bottom, where
+/// a right-click is the bar's, and a pinned page of text keeps the `Select All` / `Copy` menu it
+/// holds on a hover for the text under the hand, so only the chrome above the text opens this one
+/// (see `pinned_transport_geometry` and `TEXT_PREVIEW_HOLDING`).
+///
+/// A sound's card is the one kind with neither a bar nor a caption — the card is all of it, its
+/// own title and controls drawn inside it — so every row of it is the menu's, which is where the
+/// menu came from (see `pin_shows_an_audio_card`).
+///
+/// A kind whose media is a window of somebody else's — FFmpeg's player, the browser an engine page
+/// is drawn by — never sends the band's right-clicks here at all: the window standing in the band
+/// takes them, and the caption above it is the way to this menu.
+pub(super) fn pin_right_click_opens_menu(y: i32) -> bool {
+    let Some(pinned) = pin_state() else {
+        return false;
+    };
+    let Some(pin) = pinned.pin() else {
+        return false;
+    };
+
+    if pin_shows_an_audio_card(pin) {
+        return true;
+    }
+
+    // The bar a film plays by, which is the strip along the bottom of its window: the same band a
+    // press is asked about, read off the pin already in hand rather than through
+    // `pinned_transport_geometry`, which would take this very state's lock again (see
+    // `pinned_transport_press`).
+    if pinned_transport_bar_of(pin).is_some_and(|bar| bar.wanted && y >= bar.top) {
+        return false;
+    }
+
+    !(y >= pin.caption && TEXT_PREVIEW_HOLDING.load(Ordering::Acquire))
 }
 
 /// Whether the card's menu is up: what an outside press is answered against

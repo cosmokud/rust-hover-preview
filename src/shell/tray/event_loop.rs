@@ -25,13 +25,13 @@ use super::commands::{
     set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
     set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
     set_zoom_background, toggle_check_for_updates, toggle_engine_persistent, toggle_loop,
-    toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_enabled,
-    toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_shuffle, toggle_pin_update_enabled,
-    toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
-    toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
-    toggle_render_html, toggle_startup, toggle_trigger_key_affect_pin_mode,
-    toggle_trigger_key_enabled, toggle_video_engine_fallback, toggle_video_hw_accel,
-    toggle_video_subtitles, PinShuffle,
+    toggle_normalize_video_volume, toggle_normalize_volume, toggle_pin_always_on_top,
+    toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_shuffle,
+    toggle_pin_update_enabled, toggle_pin_update_on_hover, toggle_preview_enabled,
+    toggle_preview_type, toggle_prioritize_keyboard, toggle_remember_audio_volume,
+    toggle_remember_video_volume, toggle_render_html, toggle_startup,
+    toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
+    toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
@@ -52,24 +52,24 @@ use super::ids::{
     ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
     ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
     ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME,
-    ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_MINIMIZE_BUBBLE,
-    ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
-    ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
-    ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_AUDIO_CATEGORY, ID_TRAY_PIN_NAV_OTHERS_ALL,
-    ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_NAV_VIDEO_CATEGORY,
-    ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER,
-    ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD,
-    ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
-    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
-    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_STARTUP, ID_TRAY_TEXT_SCALE_BASE,
-    ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
-    ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
-    ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN,
-    ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS, ID_TRAY_TYPE_IMAGES,
-    ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS, ID_TRAY_UPDATE,
-    ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE, ID_TRAY_VIDEO_ENGINE_BASE,
-    ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_LOOP,
-    ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
+    ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
+    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
+    ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
+    ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE, ID_TRAY_PIN_NAV_AUDIO_ALL,
+    ID_TRAY_PIN_NAV_AUDIO_CATEGORY, ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY,
+    ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_PIN_PAUSE_AUDIO,
+    ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_POSITION_BEST,
+    ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE,
+    ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML,
+    ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE,
+    ID_TRAY_STARTUP, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK,
+    ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE, ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE,
+    ID_TRAY_TRIGGER_ENABLE, ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO,
+    ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS,
+    ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
+    ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
+    ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
+    ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
     IMAGE_CACHE_SIZE_CHOICES_MB, MPV_COMMANDS, PIN_END_OF_FILE_CHOICES, TASKBAR_CREATED,
     TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND, VIDEO_ENGINE_CHOICES,
@@ -87,18 +87,17 @@ use crate::shell::explorer_hook;
 use crate::{StartupTrace, RUNNING};
 use std::panic::catch_unwind;
 use std::sync::atomic::Ordering;
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::core::w;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, LoadImageW, PostQuitMessage,
-    RegisterClassExW, RegisterWindowMessageW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HICON,
-    IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
-    WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, PostQuitMessage,
+    RegisterClassExW, RegisterWindowMessageW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, MSG,
+    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
+    WM_POWERBROADCAST, WM_RBUTTONUP, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 /// The one function every message the tray window gets arrives in. It is `extern "system"`,
@@ -193,6 +192,9 @@ unsafe extern "system" fn tray_window_proc(
                     }
                     ID_TRAY_PIN => {
                         toggle_pin_enabled();
+                    }
+                    ID_TRAY_PIN_ALWAYS_ON_TOP => {
+                        toggle_pin_always_on_top();
                     }
                     ID_TRAY_PIN_UPDATE => {
                         toggle_pin_update_enabled();
@@ -633,44 +635,10 @@ unsafe extern "system" fn tray_window_proc(
 }
 
 unsafe fn add_tray_icon(hwnd: HWND) -> bool {
-    // Load the embedded icon resource (assets/icon.ico compiled via build.rs)
-    let hicon = if let Ok(hmodule) = GetModuleHandleW(None) {
-        let hinstance = HINSTANCE(hmodule.0);
-        match LoadImageW(
-            hinstance,
-            // `MAKEINTRESOURCEW(1)`: with the high word zero, `LoadImageW`
-            // reads this value as the ID of the resource to load rather than
-            // as the address of a name, so it is an ID here and not a pointer.
-            PCWSTR(std::ptr::without_provenance(1)),
-            IMAGE_ICON,
-            0,
-            0,
-            LR_DEFAULTSIZE | LR_SHARED,
-        ) {
-            Ok(h) => HICON(h.0),
-            Err(_) => HICON::default(),
-        }
-    } else {
-        HICON::default()
-    };
-
-    // Fallback to system icon if custom icon failed
-    let hicon = if hicon.0.is_null() {
-        match LoadImageW(
-            None,
-            PCWSTR(32512 as *const u16), // IDI_APPLICATION
-            IMAGE_ICON,
-            0,
-            0,
-            LR_DEFAULTSIZE | LR_SHARED,
-        ) {
-            Ok(h) => HICON(h.0),
-            Err(_) => HICON::default(),
-        }
-    } else {
-        hicon
-    };
-
+    // The icon the app wears: its own, loaded from the resource the build script compiles it
+    // under, with the Shell's default application icon as the fallback for a build that has
+    // none (see `app_icon`).
+    let hicon = crate::shell::app_icon::app_icon();
     let mut nid = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: hwnd,
