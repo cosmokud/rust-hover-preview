@@ -778,7 +778,14 @@ pub fn run_preview_window() {
                 // transport is doing (see `refresh_pin_media_buttons`). Nothing is sent while the
                 // stand-in is not up, so this is two atomics and a comparison on a tick that has no
                 // taskbar button to draw.
-                refresh_pin_media_buttons(current_media_type(), bubble_is_playing());
+                //
+                // The picture the hover shows is the same two facts and is asked the same way: what
+                // the pin is drawn by, mirrored into the stand-in by the Shell, which is a picture
+                // that moves on its own and costs nothing here until what it is a picture of
+                // changes (see `pin_taskbar_mirror`).
+                let showing = current_media_type();
+                refresh_pin_media_buttons(showing, bubble_is_playing());
+                sync_pin_mirror(showing);
 
                 // What a key does to a pinned text preview, polled rather than waited for: a pin
                 // that the user has not pressed is a window nobody is in, and a window nobody is

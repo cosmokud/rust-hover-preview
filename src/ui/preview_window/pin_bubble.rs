@@ -535,10 +535,23 @@ pub(super) fn collapse_pin_to(target: PinMinimizeTo) {
     // stand-in leaves the app in the taskbar instead with the pin off the screen. Everything
     // above is the same either way — which is why only the last step of a collapse differs.
     unsafe {
+        if target == PinMinimizeTo::Taskbar {
+            // The button's hover keeps the pin's own picture, and a picture of a window that has been
+            // taken off the screen is a picture of nothing: what the hover is to hold is taken while
+            // the windows it is made of are still up (see `keep_the_pin_for_the_taskbar`).
+            keep_the_pin_for_the_taskbar();
+        }
+
         hide_pinned_windows();
         if target == PinMinimizeTo::Taskbar {
             show_pin_taskbar();
         } else {
+            // A pin put away into the bubble is a pin on the desktop, and the button a pin on the
+            // screen was shown in is not a button for it: what the stand-in was showing is of a window
+            // that has gone, and a pin put away into the bubble is reached by the bubble rather than by
+            // the taskbar. So the two forms of it go down together with the pin, and the taskbar is
+            // left as it was before it came up (see `pin_taskbar`).
+            hide_pin_taskbar();
             show_pin_bubble(anchor);
 
             // And the frame the bubble of a film is to show until its player is read: every player
