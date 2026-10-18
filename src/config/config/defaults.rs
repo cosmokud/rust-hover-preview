@@ -221,9 +221,21 @@ pub const DEFAULT_SPINNER_DELAY_MS: u64 = 250;
 pub const MAX_SPINNER_DELAY_MS: u64 = 10_000;
 /// How long the image inside a pinned window takes to swing back to its place once a zoom out has
 /// brought the picture within a notch of the fit, in milliseconds.
-pub const DEFAULT_PIN_ZOOM_BOUNCE_MS: u64 = 240;
+pub const DEFAULT_PIN_ZOOM_BOUNCE_MS: u64 = 360;
 /// The ceiling a hand-edited bounce duration is reduced to, in milliseconds.
 pub const MAX_PIN_ZOOM_BOUNCE_MS: u64 = 10_000;
+/// Whether the subtle bounce past center is enabled after the image moves home.
+pub const DEFAULT_PIN_ZOOM_BOUNCE_GATE: bool = true;
+/// How fast the image snaps back to the correct position after bouncing, in milliseconds.
+pub const DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS: u64 = 20;
+/// The ceiling a hand-edited bounce speed is reduced to, in milliseconds.
+pub const MAX_PIN_ZOOM_BOUNCE_SPEED_MS: u64 = 5_000;
+/// How far the bounce drifts past the correct position, as a fraction of the pan offset.
+pub const DEFAULT_PIN_ZOOM_BOUNCE_POWER: f32 = 0.04;
+/// The minimum bounce drift power factor.
+pub const MIN_PIN_ZOOM_BOUNCE_POWER: f32 = 0.0;
+/// The maximum bounce drift power factor.
+pub const MAX_PIN_ZOOM_BOUNCE_POWER: f32 = 1.0;
 
 /// Memory the decoded-image cache may hold. A preview is decoded at the size the
 /// layout asked for, so this is a ceiling on retained pixels rather than on
@@ -488,6 +500,20 @@ pub fn sanitize_spinner_delay_ms(value: u64) -> u64 {
 /// The duration a pinned image bounce takes to swing back to place, in milliseconds.
 pub fn sanitize_pin_zoom_bounce_ms(value: u64) -> u64 {
     value.min(MAX_PIN_ZOOM_BOUNCE_MS)
+}
+
+/// The speed a pinned image bounce takes to snap back, in milliseconds.
+pub fn sanitize_pin_zoom_bounce_speed_ms(value: u64) -> u64 {
+    value.min(MAX_PIN_ZOOM_BOUNCE_SPEED_MS)
+}
+
+/// The power / drift share a pinned image bounce moves past the correct position.
+pub fn sanitize_pin_zoom_bounce_power(value: f32) -> f32 {
+    if !value.is_finite() || value < 0.0 {
+        return 0.0;
+    }
+    let factor = if value > 1.0 { value / 100.0 } else { value };
+    factor.clamp(MIN_PIN_ZOOM_BOUNCE_POWER, MAX_PIN_ZOOM_BOUNCE_POWER)
 }
 
 
