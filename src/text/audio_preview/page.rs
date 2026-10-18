@@ -463,10 +463,9 @@ pub(super) struct Page {
 /// The mark a card is drawn with: the dot, and the ripples a beat has stood around it.
 ///
 /// The dot is centred on the mark's own cell — half a header advance in from the card's margin,
-/// which is where the ink of the glyph it replaces stood — and, on the line, on the middle of the
-/// lowercase ink of the name it marks. That is the middle of the text as it is read: the tallest
-/// band a line stands in, which the line itself is centred by, sits above the letters a name is
-/// mostly made of (see `TextMetrics::x_top`). The ripples are drawn from that same centre, so what
+/// which is where the ink of the glyph it replaces stood — and, on the line, on the vertical
+/// middle of the text line it marks (`ink_top` to `ink_bottom`), shifted by any configured
+/// `offset_y`. The ripples are drawn from that same centre, so what
 /// a beat does is travel around the mark and never off it. The room they
 /// have is the nearest of the three things they could reach: the two edges of the card the mark
 /// stands between and the box the name begins in, each less half a ripple's own line and a pixel
@@ -478,14 +477,20 @@ pub(super) struct Page {
 /// bass that drops pulls it back in, taking the ripples behind it under the dot one at a time —
 /// the same travel the single ring made, drawn as the ripple it was always meant to be (see
 /// `Card::beat`).
-fn mark(beat: f32, metrics: &TextMetrics, header_top: i32, name_left: i32) -> Mark {
+fn mark(
+    beat: f32,
+    metrics: &TextMetrics,
+    header_top: i32,
+    name_left: i32,
+    offset_y: f32,
+) -> Mark {
     let beat = beat.clamp(0.0, 1.0);
 
     let advance = metrics.advance[HEADER_LEVEL as usize].max(1) as f32;
-    let x_top = metrics.x_top[HEADER_LEVEL as usize] as f32;
-    let x_bottom = metrics.x_bottom[HEADER_LEVEL as usize] as f32;
+    let ink_top = metrics.ink_top[HEADER_LEVEL as usize] as f32;
+    let ink_bottom = metrics.ink_bottom[HEADER_LEVEL as usize] as f32;
     let center_x = metrics.padding as f32 + advance / 2.0;
-    let center_y = header_top as f32 + (x_top + x_bottom + 1.0) / 2.0;
+    let center_y = header_top as f32 + (ink_top + ink_bottom + 1.0) / 2.0 + offset_y;
     let thickness = scaled(1, metrics.scale) as f32;
     let reach = (center_x
         .min(center_y)
@@ -525,6 +530,7 @@ pub(super) fn build_page(
     metrics: &TextMetrics,
     box_width: u32,
     box_height: u32,
+    mark_offset_y: f32,
 ) -> Page {
     let header_advance = metrics.advance[HEADER_LEVEL as usize].max(1);
     let body_advance = metrics.advance[BODY_LEVEL as usize].max(1);
@@ -633,7 +639,7 @@ pub(super) fn build_page(
         },
         boxes,
         chrome: card.controls,
-        mark: Some(mark(card.beat, metrics, header_top, name_left)),
+        mark: Some(mark(card.beat, metrics, header_top, name_left, mark_offset_y)),
         width,
         // The height is the card's own: the name line, the rule, the facts line
         // and the bar, with the card's own margin under it — content-driven at

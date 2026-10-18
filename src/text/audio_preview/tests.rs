@@ -66,7 +66,7 @@ fn scrolled_at(card: &Card, width: u32, offset: i32, options: AudioPreviewOption
     let mut card = card.clone();
     card.name_offset = offset;
 
-    let page = build_page(&card, theme, &metrics, width, width);
+    let page = build_page(&card, theme, &metrics, width, width, options.mark_offset_y);
     unsafe {
         let _ = DeleteDC(dc);
     }
@@ -78,6 +78,7 @@ fn options() -> AudioPreviewOptions {
     AudioPreviewOptions {
         theme: TextTheme::Dark,
         font_scale_percent: 125,
+        mark_offset_y: 0.0,
     }
 }
 
@@ -89,6 +90,7 @@ fn options_at(font_scale_percent: u32) -> AudioPreviewOptions {
     AudioPreviewOptions {
         theme: TextTheme::Dark,
         font_scale_percent,
+        mark_offset_y: 0.0,
     }
 }
 
@@ -373,12 +375,10 @@ fn a_fall_ends_on_the_mark_a_card_at_rest_draws() {
     }
 }
 
-/// The mark stands on the middle of the lowercase ink of the name it marks, and not on the middle
-/// of the tallest band the line itself is centred by: a name is read in its lowercase letters, and
-/// a band measured over a capital and an ascender stands above them (see `mark` and
-/// `TextMetrics::x_top`).
+/// The mark stands on the vertical middle of the text line it marks (`ink_top` to `ink_bottom`),
+/// and moves when configured with an offset (see `mark` and `config.ini`).
 #[test]
-fn the_mark_is_centred_on_the_name_lines_lowercase_ink() {
+fn the_mark_is_vertically_centred_on_the_text_line() {
     let (width, height) = measured_at_the_default_share(&card());
     let page = scrolled(&card(), width, 0);
     let (painted, width, _height) =
@@ -406,41 +406,36 @@ fn the_mark_is_centred_on_the_name_lines_lowercase_ink() {
     };
     let middle = |rows: &[i32]| (rows[0] + rows[rows.len() - 1] + 1) as f32 / 2.0;
 
-    // The mark's own cell, which is the name line left of where the name begins, and the 'n' of
-    // "Kind" — the name's first lowercase letter, with no ascender and no descender to carry it
-    // off the x-height.
     let dc = unsafe { CreateCompatibleDC(None) };
     let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
     unsafe {
         let _ = DeleteDC(dc);
     }
-    let advance = metrics.advance[HEADER_LEVEL as usize];
     let name_left = page.header[0].x;
     let dot = middle(&ink_rows(0, name_left));
-    let lower = middle(&ink_rows(name_left + advance * 2, name_left + advance * 3));
-
-    assert!(
-        (dot - lower).abs() <= 1.0,
-        "the mark stands at {dot}, away from the 'n' of the name at {lower}"
-    );
-
-    // Which is not where the tallest band of the line stands: the mark would be above the letters
-    // a name is read in if it were centred on that band (see `TextMetrics::ink_top`).
-    let tallest = (page.header_top
+    let text_mid = (page.header_top
         + metrics.ink_top[HEADER_LEVEL as usize]
         + page.header_top
         + metrics.ink_bottom[HEADER_LEVEL as usize]
         + 1) as f32
         / 2.0;
+
     assert!(
-        dot > tallest,
-        "the mark stands at {dot}, on the band the line is centred by at {tallest}"
+        (dot - text_mid).abs() <= 1.0,
+        "the mark stands at {dot}, away from the text line centre at {text_mid}"
     );
     assert!(
         dot > mark.center_y - mark.radius && dot < mark.center_y + mark.radius,
         "the mark's own dot is drawn at {} around {dot}",
         mark.center_y,
     );
+
+    // With a vertical offset configured, the mark shifts accordingly
+    let mut shifted_opts = options();
+    shifted_opts.mark_offset_y = 3.0;
+    let page_shifted = scrolled_at(&card(), width, 0, shifted_opts);
+    let mark_shifted = page_shifted.mark.expect("a mark");
+    assert_eq!(mark_shifted.center_y, mark.center_y + 3.0);
 }
 
 /// A card with nothing to say about its length still draws, and one with no room at all is

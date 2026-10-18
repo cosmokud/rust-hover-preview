@@ -110,10 +110,12 @@ pub(super) fn current_audio_options() -> AudioPreviewOptions {
         .map(|cfg| AudioPreviewOptions {
             theme: cfg.theme,
             font_scale_percent: audio_font_scale_percent(cfg.audio_scale),
+            mark_offset_y: cfg.audio_mark_offset_y,
         })
         .unwrap_or(AudioPreviewOptions {
             theme: TextTheme::Light,
             font_scale_percent: audio_font_scale_percent(DEFAULT_AUDIO_SCALE),
+            mark_offset_y: crate::config::config::DEFAULT_AUDIO_MARK_OFFSET_Y,
         })
 }
 
@@ -143,6 +145,10 @@ pub(super) fn audio_options_of(scale: PreviewScale) -> AudioPreviewOptions {
     AudioPreviewOptions {
         theme: current_audio_theme(),
         font_scale_percent: audio_font_scale_percent(scale),
+        mark_offset_y: CONFIG
+            .lock()
+            .map(|cfg| cfg.audio_mark_offset_y)
+            .unwrap_or(crate::config::config::DEFAULT_AUDIO_MARK_OFFSET_Y),
     }
 }
 
