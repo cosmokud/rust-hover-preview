@@ -237,29 +237,59 @@ pub(super) fn hold_video_window_frame() -> bool {
     // SAFETY: `hwnd` came out of `video_window_for`, which settles `IsWindow` on the handle it
     // publishes, and `RECT` is this frame's own. `GetWindowRect` reports rather than faults for
     // a window that is on its way out, which is what a player ending under a drag is.
-    let (width, height) = unsafe {
+    unsafe {
         if GetWindowRect(hwnd, &mut rect).is_err() {
             return false;
         }
-        (
-            (rect.right - rect.left).max(0) as u32,
-            (rect.bottom - rect.top).max(0) as u32,
-        )
-    };
+    }
 
     // A player begun with `-noborder` has no frame of its own around the picture, so the window's
     // rect is the picture's — and the band is that rect, which is what makes this the frame of the
     // band rather than of something near it.
-    if width == 0 || height == 0 {
-        return false;
-    }
-
-    let Some(surface) = DibSurface::create(width, height) else {
+    let Some((mut pixels, width, height)) = screen_pixels(rect) else {
         return false;
     };
 
-    let wanted = width as usize * height as usize * 4;
-    // SAFETY: the surface is this frame's own, of `width` by `height` pixels, and the screen DC is
+    // GDI writes colour and not alpha, and a layered window is composited from premultiplied
+    // coverage: this frame is opaque everywhere because a player's window has nothing behind
+    // it to be transparent over.
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel[3] = 255;
+    }
+
+    if let Ok(mut held) = HELD_VIDEO_FRAME.lock() {
+        *held = Some(HeldVideoFrame {
+            pixels,
+            width,
+            height,
+        });
+    }
+
+    true
+}
+
+/// The pixels the desktop is showing in a screen rectangle, or nothing where there is no picture to
+/// take.
+///
+/// It is read off the desktop with `BitBlt` rather than asked of a window with `PrintWindow`, and the
+/// reason is what is being taken: a picture the user is looking at is read where it is. A window that
+/// draws through D3D — which FFmpeg's player does whenever the decoder is hardware-accelerated, which
+/// a page's own window does, and which a layered window like a preview does whatever it holds —
+/// answers `PrintWindow` with a black rectangle or with nothing, and that is the one thing a picture
+/// of a pin cannot be (see `hold_video_window_frame`, `take_the_pin_picture`).
+///
+/// GDI writes colour and not alpha, since the desktop has nothing behind it to be transparent over: a
+/// caller that composites these pixels premultiplied has to fill it in.
+pub(super) fn screen_pixels(area: RECT) -> Option<(Vec<u8>, u32, u32)> {
+    let width = (area.right - area.left).max(0) as u32;
+    let height = (area.bottom - area.top).max(0) as u32;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let surface = DibSurface::create(width, height)?;
+
+    // SAFETY: the surface is this call's own, of `width` by `height` pixels, and the screen DC is
     // released on the way out of the block whatever `BitBlt` answers.
     unsafe {
         let screen = windows::Win32::Graphics::Gdi::GetDC(HWND(std::ptr::null_mut()));
@@ -270,8 +300,8 @@ pub(super) fn hold_video_window_frame() -> bool {
             width as i32,
             height as i32,
             screen,
-            rect.left,
-            rect.top,
+            area.left,
+            area.top,
             SRCCOPY,
         )
         .is_ok();
@@ -280,27 +310,14 @@ pub(super) fn hold_video_window_frame() -> bool {
         let _ = GdiFlush();
 
         if !copied {
-            return false;
+            return None;
         }
 
-        let mut pixels = std::slice::from_raw_parts(surface.bits(), wanted).to_vec();
-        // GDI writes colour and not alpha, and a layered window is composited from premultiplied
-        // coverage: this frame is opaque everywhere because a player's window has nothing behind
-        // it to be transparent over.
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            pixel[3] = 255;
-        }
-
-        if let Ok(mut held) = HELD_VIDEO_FRAME.lock() {
-            *held = Some(HeldVideoFrame {
-                pixels,
-                width,
-                height,
-            });
-        }
+        let pixels =
+            std::slice::from_raw_parts(surface.bits(), width as usize * height as usize * 4)
+                .to_vec();
+        Some((pixels, width, height))
     }
-
-    true
 }
 
 /// How many windows keep a surface of their own: the preview — pinned or not — the bubble,

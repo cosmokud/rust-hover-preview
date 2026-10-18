@@ -9,13 +9,15 @@
 
 use super::*;
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::DwmFlush;
+use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, GetDC, ReleaseDC};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClientRect, GetWindow, GetWindowRect, IsIconic, IsWindow,
     IsWindowVisible, RegisterClassExW, SendMessageW, ShowWindow, GW_HWNDPREV, SC_RESTORE,
     SW_MINIMIZE, SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_SYSCOMMAND,
-    WNDCLASSEXW, WS_EX_APPWINDOW, WS_POPUP,
+    WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// Register the class the stand-in is made from, once for the run.
@@ -1205,6 +1207,248 @@ fn a_sound_is_pictured_by_the_card_the_pin_draws_for_it() {
     }
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     forget_the_stand_in();
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    stand_pin(previous_pin);
+}
+
+/// The colour a test paints a window so that what the button holds can be told from a window with
+/// nothing in it.
+const A_COLOUR_OF_ITS_OWN: COLORREF = COLORREF(0x0020_C040);
+
+/// Where a test stands the window a pin's picture is taken of: on the desk and away from its corner,
+/// so that a picture read off the wrong place is read as the wrong colour rather than as a
+/// coincidence.
+const A_BOX_ON_THE_DESK: (i32, i32) = (30, 40);
+
+/// Fill a window's client area with a colour of its own: what a picture read off the desktop is read
+/// for, since a window that paints nothing is not a picture of anything.
+///
+/// Safety: the window is the caller's own, and painting it is a change to it that the caller is the
+/// one asking for.
+unsafe fn fill_the_window(hwnd: HWND, colour: COLORREF) {
+    let mut client = RECT::default();
+    let _ = GetClientRect(hwnd, &mut client);
+    let dc = GetDC(hwnd);
+    let brush = CreateSolidBrush(colour);
+    FillRect(dc, &client, brush);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
+    let _ = ReleaseDC(hwnd, dc);
+}
+
+/// The colour a picture is holding at a point, as the app's own `COLORREF` colour: the three bytes a
+/// picture read off the desktop is made of, in the order a colour is written in.
+fn the_colour_in(pixels: &[u8], width: u32, x: u32, y: u32) -> u32 {
+    let at = ((y * width + x) * 4) as usize;
+    pixels[at + 2] as u32 | (pixels[at + 1] as u32) << 8 | (pixels[at] as u32) << 16
+}
+
+/// A pin put away into the taskbar holds a picture of its own, taken while its windows are still up.
+///
+/// The fault this is a regression test for: the user's own report of a put-away pin whose hover held
+/// "a windows PE icon stretched like crazy depending on the pin mode aspect ratio" for every kind of
+/// pin, while the same pin's hover was its live self as long as the pin was up. What the Shell holds of
+/// a window that has gone down is a still of the window's own rows, and a stand-in whose only content
+/// is a mirror of another window has none of its own: the mirror is composed *over* the stand-in while
+/// it is up, and it goes with the window's going down. So the button's still has to be a picture of the
+/// pin's own — one taken while the pin's windows are still on the screen to read it off (see
+/// `take_the_pin_picture`), and handed over when the Shell asks for it (see
+/// `answer_the_thumbnail_request`).
+#[test]
+fn a_pin_put_away_holds_the_picture_taken_while_its_windows_are_up() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    register_the_stand_in_class();
+    forget_the_stand_in();
+
+    // The window the pin is drawn by — mpv's, for the user's setting — on the screen at a size and in
+    // a colour of its own, and above whatever else is standing where it is: a picture of a pin is a
+    // picture of what the desktop is showing where that window is, so a test that read one back
+    // through anything else would be reading the desk rather than the pin.
+    let player = unsafe {
+        CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            A_BOX_ON_THE_DESK.0,
+            A_BOX_ON_THE_DESK.1,
+            64,
+            48,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a player's window")
+    };
+    // Safety: the window is this test's own, and it is asked to be on the screen — a window the Shell
+    // composes nothing for is no picture at all (see `mirror_source`) — and to be painted, since a
+    // window that paints nothing is not what a picture of the pin is read for.
+    unsafe {
+        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
+        fill_the_window(player, A_COLOUR_OF_ITS_OWN);
+    }
+    let _ = unsafe { DwmFlush() };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+    let player_box = unsafe { the_client_box(player) };
+
+    // The film the pin is showing — the kind whose picture is its player's own window — and the pin
+    // put away with no bubble standing in its place (see `current_media_type`, `mirror_source`).
+    let mut video = create_loading_media(player_box.0 as u32, player_box.1 as u32);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+    PIN_BUBBLE_HWND.store(0, Ordering::SeqCst);
+
+    let mut pin = overlay_pin((100, 80, 164, 128), PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    let stand_in = the_stand_in();
+
+    // The collapse's own taking, while the window the pin is drawn by is still up (see
+    // `keep_the_pin_for_the_taskbar`).
+    unsafe {
+        keep_the_pin_for_the_taskbar();
+    }
+    assert_eq!(
+        unsafe { the_client_box(stand_in) },
+        player_box,
+        "the picture is the player's window, so the stand-in is left that window's own box"
+    );
+
+    let (pixels, width, height) =
+        the_pin_picture().expect("a pin put away into the taskbar holds a picture of its own");
+    assert_eq!(
+        (width, height),
+        (player_box.0 as u32, player_box.1 as u32),
+        "and it is taken of the window the mirror is of, at that window's own size"
+    );
+    assert_eq!(
+        the_colour_in(&pixels, width, 0, 0),
+        A_COLOUR_OF_ITS_OWN.0,
+        "and it is that window's own colour: what a put-away button's hover holds is the pin, rather \
+         than the icon the Shell falls back on for a window with no still of its own"
+    );
+
+    // And the window it was taken of goes with the collapse, which is the road every put-away pin
+    // leaves it by (see `collapse_pin_to`, `hide_pinned_windows`).
+    unsafe {
+        hide_pinned_windows();
+        keep_the_pin_for_the_taskbar();
+    }
+    let (held, ..) = the_pin_picture().expect("the picture the button already holds");
+    assert_eq!(
+        held, pixels,
+        "a picture once taken is the picture the button keeps: nothing of the pin is on the screen \
+         any more to take another of"
+    );
+
+    // Safety: the window is this test's own and the stand-in is the app's own; the handles the app
+    // holds are put back as they were.
+    unsafe {
+        let _ = DestroyWindow(player);
+    }
+    forget_the_stand_in();
+    VIDEO_HWND.store(previous_video, Ordering::SeqCst);
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    stand_pin(previous_pin);
+}
+
+/// A button made again holds no picture of the pin the button before it belonged to.
+///
+/// The road this is a regression test for: the Shell's own `Close` takes the stand-in's window down
+/// with the pin (see `close_pin_taskbar`, `pin_taskbar_window`), and the next pin makes another one —
+/// while the picture the button holds is this app's own and not the window's, so a picture kept past
+/// the window it was handed for is a new pin's button showing the file the pin before it was of.
+#[test]
+fn a_button_made_again_holds_no_picture_of_the_pin_the_button_before_belonged_to() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    register_the_stand_in_class();
+    forget_the_stand_in();
+
+    // The window the pin is drawn by, on the screen and painted: what a picture of it is taken of.
+    let player = unsafe {
+        CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            A_BOX_ON_THE_DESK.0,
+            A_BOX_ON_THE_DESK.1,
+            64,
+            48,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a player's window")
+    };
+    // Safety: the window is this test's own, asked to be on the screen and painted — the two things
+    // that make it the picture the button of a film pin is taken of.
+    unsafe {
+        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
+        fill_the_window(player, A_COLOUR_OF_ITS_OWN);
+    }
+    let _ = unsafe { DwmFlush() };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+
+    let mut video = create_loading_media(64, 48);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+    PIN_BUBBLE_HWND.store(0, Ordering::SeqCst);
+
+    let mut pin = overlay_pin((100, 80, 164, 128), PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    the_stand_in();
+
+    // The picture the button of this pin holds, taken the way a collapse takes it.
+    unsafe {
+        keep_the_pin_for_the_taskbar();
+    }
+    assert!(
+        the_pin_picture().is_some(),
+        "the button of a pin put away holds the pin's own picture"
+    );
+
+    // And the Shell's own Close takes the button down with the pin, which is the only road that
+    // clears the picture with the window it was taken for (see `close_pin_taskbar`).
+    forget_the_stand_in();
+    assert!(
+        the_pin_picture().is_none(),
+        "a button made again holds no picture of the pin the button before it belonged to"
+    );
+
+    // Safety: the window is this test's own; the handles the app holds are put back as they were.
+    unsafe {
+        let _ = DestroyWindow(player);
+    }
+    VIDEO_HWND.store(previous_video, Ordering::SeqCst);
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
     }

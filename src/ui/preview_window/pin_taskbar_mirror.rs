@@ -29,15 +29,27 @@
 //! a page or a card turns out to be a hover with nothing in it, the fallback is to draw the pin's
 //! own surface into the stand-in instead of mirroring it — the surface is already a DIB this app
 //! owns (see `DibSurface::bitmap` and `render_layered_preview`), so no mirror is needed for it.
+//!
+//! **And a hover of a *minimized* window is not a mirror at all.** What the Shell holds of a window
+//! that has gone down is a still of the window's own rows — the last thing the app drew — and a mirror
+//! this app registered *into* the stand-in is no part of those rows: it is composed over them while
+//! the window is up, and it goes with the window's going down. The stand-in therefore *supplies* that
+//! still itself: it is made wearing `DWMWA_HAS_ICONIC_BITMAP` (see `pin_taskbar`), and when the Shell
+//! asks for the thumbnail of a button that is down, the pin's own picture is handed over — a picture
+//! taken off the desktop while the pin's windows were still on the screen (see `take_the_pin_picture`,
+//! `answer_the_thumbnail_request`). What the Shell holds otherwise is its own default for a window
+//! with nothing of its own: the window's icon, stretched into whatever box the stand-in was sized to,
+//! which is what a put-away pin's hover showed for every kind of pin.
 
 use super::*;
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Dwm::{
-    DwmFlush, DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
-    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY,
-    DWM_TNP_VISIBLE,
+    DwmFlush, DwmInvalidateIconicBitmaps, DwmRegisterThumbnail, DwmSetIconicThumbnail,
+    DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES,
+    DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
+use windows::Win32::Graphics::Gdi::{SetBrushOrgEx, SetStretchBltMode, StretchBlt, HALFTONE};
 use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow, IsWindowVisible};
 
 /// How large a mirrored pin may be on its longest side.
@@ -163,19 +175,246 @@ pub(super) fn stop_pin_mirror() {
     *mirror = PinMirror::NOTHING;
 }
 
-/// Keep the pin in its taskbar button: give the hover the picture it is to hold *before* the windows
-/// it is a picture of are taken off the screen.
+/// Keep the pin in its taskbar button: take the picture the button is to hold *before* the windows it
+/// is a picture of are taken off the screen.
 ///
 /// The whole of this function is where it is called from, which is the collapse into the taskbar
-/// before the pin's windows go (see `collapse_pin_to`). What a hover shows of a window that has been
-/// put away is the frame the Shell cached as the button's window was minimized, and that frame is
-/// composed of windows that are about to be hidden — so the picture is taken while there is still
-/// one to take, and the composition is waited for rather than raced: the Shell draws a thumbnail on
-/// its own clock, and this is the one moment the app cannot wait for the next tick.
+/// before the pin's windows go (see `collapse_pin_to`): a picture of a window that has been taken off
+/// the screen is a picture of nothing, so it is taken while there is still one to take.
 pub(super) unsafe fn keep_the_pin_for_the_taskbar() {
     pin_taskbar::show_pin_taskbar_mirroring();
     sync_pin_mirror(current_media_type());
+    take_the_pin_picture();
     let _ = DwmFlush();
+}
+
+/// The picture the button holds of a pin that is put away: what the Shell's still of that button is
+/// made of.
+///
+/// It is a picture of this app's own rather than a mirror, because the Shell draws the hover of a
+/// window that is *down* from the bitmap the app hands it rather than from the window's composition —
+/// and a mirror is composed over the stand-in rather than in it (see this module's header).
+struct PinPicture {
+    /// The picture, as the desktop was showing it (see `screen_pixels`).
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+/// The one picture the button holds: taken where a pin is put away, and handed to the Shell when it
+/// asks what the button of a window that is down looks like.
+///
+/// Behind a lock rather than a thread-local because the two ends of it are not the same thread by
+/// construction: one is the collapse, and the other is a message from the Shell's own clock.
+static PIN_PICTURE: Mutex<Option<PinPicture>> = Mutex::new(None);
+
+/// Take the pin's picture, while there is still a window of the pin's on the screen to take it of.
+///
+/// **This is what the hover of a put-away pin needs and never had.** What the Shell holds of a window
+/// that has gone down is its own default for a window with nothing of its own — the window's icon,
+/// stretched into the box the stand-in was sized to — because a stand-in whose only content is a
+/// mirror of another window has no still of its own: the mirror is composed over it while it is up and
+/// goes with the window's going down. The picture taken here is what the Shell is handed instead,
+/// every time it asks (see `answer_the_thumbnail_request`).
+///
+/// It is taken of the same window the mirror is of, and at the same moment: while a pin is being put
+/// away and its own windows are still on the screen to be read (see `keep_the_pin_for_the_taskbar`). A
+/// window of the pin's that is not drawn where it stands — a player on its way out, a preview a
+/// display change has taken down, a window the Shell has minimized — is no picture at all, and the
+/// picture already taken is the one to hold, which is the rule the mirror itself keeps (see
+/// `sync_pin_mirror`).
+pub(super) fn take_the_pin_picture() {
+    let Some(source) = mirror_source(current_media_type()) else {
+        return;
+    };
+
+    // Safety: the window came out of `mirror_source`, which settles `IsWindow` on the handle it
+    // answers with, and what is asked of it is where its client area stands on the screen — a
+    // question about the window rather than a change to it.
+    let Some(area) = (unsafe { client_area_on_the_screen(source) }) else {
+        return;
+    };
+
+    let Some((pixels, width, height)) = screen_pixels(area) else {
+        return;
+    };
+
+    if let Ok(mut picture) = PIN_PICTURE.lock() {
+        *picture = Some(PinPicture {
+            pixels,
+            width,
+            height,
+        });
+    }
+
+    // The Shell keeps the bitmap it was last handed, and it does not know that this one is of another
+    // file: it is told that its stills are out of date, and it asks for this one the next time a button
+    // of this window is looked at.
+    let Some(hwnd) = pin_taskbar::showing_taskbar_window() else {
+        return;
+    };
+
+    // Safety: the window is this app's own stand-in, and what is asked of it is a renewal of its own
+    // stills rather than a change to what it is showing.
+    let _ = unsafe { DwmInvalidateIconicBitmaps(hwnd) };
+}
+
+/// Give the picture up: there is no pin left whose button could hold it.
+///
+/// It is the button going that asks for this and not the pin: a window made again for the next pin is
+/// a button the picture of the pin before it must not be handed for (see `close_pin_taskbar`,
+/// `pin_taskbar_window`).
+pub(super) fn forget_the_pin_picture() {
+    if let Ok(mut picture) = PIN_PICTURE.lock() {
+        *picture = None;
+    }
+}
+
+/// Answer the Shell's ask for the still of a button that is down, with the pin's own picture.
+///
+/// The Shell asks only while it is showing an *iconic* representation of the stand-in — which is every
+/// moment a pin is put away into the taskbar — and it asks because the window told it there would be a
+/// bitmap to be had (see `pin_taskbar`'s `pin_taskbar_window`). The box it asked in is `requested`: a
+/// bitmap past either side of it is refused outright, and a bitmap it is never given leaves the button
+/// with the Shell's own default, which is the window's icon (see `take_the_pin_picture`).
+///
+/// Safety: the window is this app's own stand-in, asked from its own window procedure.
+pub(super) unsafe fn answer_the_thumbnail_request(hwnd: HWND, requested: (i32, i32)) {
+    let Ok(picture) = PIN_PICTURE.lock() else {
+        return;
+    };
+    let Some(picture) = picture.as_ref() else {
+        return;
+    };
+
+    let Some((width, height)) = thumbnail_size(requested, (picture.width, picture.height)) else {
+        return;
+    };
+    let Some(bitmap) = thumbnail_bitmap(picture, width, height) else {
+        return;
+    };
+
+    // Safety: the bitmap is this call's own, made for this ask, and the window is the stand-in the ask
+    // arrived at. The Shell copies what it is given, so the bitmap goes with this call's own surface
+    // rather than being kept (see `DibSurface`).
+    let _ = DwmSetIconicThumbnail(hwnd, bitmap.bitmap(), 0);
+}
+
+/// What the button holds, for a test asking which picture a put-away pin's button is showing.
+#[cfg(test)]
+pub(super) fn the_pin_picture() -> Option<(Vec<u8>, u32, u32)> {
+    let picture = PIN_PICTURE.lock().ok()?;
+    let picture = picture.as_ref()?;
+    Some((picture.pixels.clone(), picture.width, picture.height))
+}
+
+/// The box a thumbnail is made in: the picture's own shape, brought inside the box the Shell asked
+/// for and never past it.
+///
+/// A picture already smaller than the ask is handed over at its own size, since the Shell draws what
+/// it is given into the room it has. Nothing is ever made larger: the Shell refuses a thumbnail with a
+/// dimension past the box it asked in.
+fn thumbnail_size(requested: (i32, i32), picture: (u32, u32)) -> Option<(u32, u32)> {
+    let (asked_width, asked_height) = requested;
+    if asked_width <= 0 || asked_height <= 0 {
+        return None;
+    }
+
+    let (asked_width, asked_height) = (asked_width as u32, asked_height as u32);
+    let (width, height) = (picture.0.max(1), picture.1.max(1));
+    if width <= asked_width && height <= asked_height {
+        return Some((width, height));
+    }
+
+    let share = (asked_width as f32 / width as f32).min(asked_height as f32 / height as f32);
+    let scaled = |side: u32| (side as f32 * share) as u32;
+    Some((scaled(width).max(1), scaled(height).max(1)))
+}
+
+/// The bitmap a picture is handed over in: the picture scaled into `width` x `height`, opaque
+/// everywhere.
+///
+/// What the Shell is handed is a bitmap of this app's own making, which the Shell copies, so it goes
+/// with this call's own surface rather than being kept (see `DibSurface`).
+fn thumbnail_bitmap(picture: &PinPicture, width: u32, height: u32) -> Option<DibSurface> {
+    let source = DibSurface::create(picture.width, picture.height)?;
+
+    // Safety: the surface was made by this call, of the picture's own size, and nothing else has a
+    // pointer to what is behind it.
+    unsafe {
+        std::ptr::copy_nonoverlapping(picture.pixels.as_ptr(), source.bits(), picture.pixels.len());
+    }
+
+    let target = DibSurface::create(width, height)?;
+    // Safety: both surfaces were made by this call, and what is asked of the device contexts is a
+    // scaling copy between them.
+    unsafe {
+        // GDI's own filtering rather than a nearest-neighbour copy: a picture taken of a display's
+        // worth of pixels is brought down to a box a few hundred wide, and a hover is read at a
+        // glance. The brush origin travels with the mode: halftone measures the destination from it.
+        let _ = SetStretchBltMode(target.dc, HALFTONE);
+        let _ = SetBrushOrgEx(target.dc, 0, 0, None);
+        if !StretchBlt(
+            target.dc,
+            0,
+            0,
+            width as i32,
+            height as i32,
+            source.dc,
+            0,
+            0,
+            picture.width as i32,
+            picture.height as i32,
+            SRCCOPY,
+        )
+        .as_bool()
+        {
+            return None;
+        }
+
+        // GDI writes colour and not alpha, and what the Shell composites is premultiplied: a peek of a
+        // window is opaque everywhere, which is what a picture read off the desktop is (see
+        // `screen_pixels`).
+        let rows =
+            std::slice::from_raw_parts_mut(target.bits(), width as usize * height as usize * 4);
+        for pixel in rows.as_chunks_mut::<4>().0 {
+            pixel[3] = 255;
+        }
+    }
+
+    Some(target)
+}
+
+/// Where a window's client area stands on the screen, or nothing for a window with no area to be a
+/// picture of.
+///
+/// The *client* area rather than the window's own rect, because that is what the mirror is of: what a
+/// player's window wears around the picture is not the pin (see `settle_mirror`). A window the Shell
+/// has minimized answers with no area at all, which is the answer that keeps the picture already
+/// taken — a minimized window is not drawn where it stands, so nothing read off the desk there would
+/// be the pin.
+unsafe fn client_area_on_the_screen(hwnd: HWND) -> Option<RECT> {
+    let mut area = RECT::default();
+    GetClientRect(hwnd, &mut area).ok()?;
+    let (width, height) = (area.right - area.left, area.bottom - area.top);
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+
+    let mut origin = POINT {
+        x: area.left,
+        y: area.top,
+    };
+    if !ClientToScreen(hwnd, &mut origin).as_bool() {
+        return None;
+    }
+
+    Some(RECT {
+        left: origin.x,
+        top: origin.y,
+        right: origin.x + width,
+        bottom: origin.y + height,
+    })
 }
 
 /// Register the mirror of a window in the stand-in's client area, taking down the registration this
