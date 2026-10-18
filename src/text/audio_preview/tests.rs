@@ -66,7 +66,7 @@ fn scrolled_at(card: &Card, width: u32, offset: i32, options: AudioPreviewOption
     let mut card = card.clone();
     card.name_offset = offset;
 
-    let page = build_page(&card, theme, &metrics, width, width);
+    let page = build_page(&card, theme, &metrics, width, width, options.mark_offset_y);
     unsafe {
         let _ = DeleteDC(dc);
     }
@@ -78,6 +78,7 @@ fn options() -> AudioPreviewOptions {
     AudioPreviewOptions {
         theme: TextTheme::Dark,
         font_scale_percent: 125,
+        mark_offset_y: 0.0,
     }
 }
 
@@ -89,6 +90,7 @@ fn options_at(font_scale_percent: u32) -> AudioPreviewOptions {
     AudioPreviewOptions {
         theme: TextTheme::Dark,
         font_scale_percent,
+        mark_offset_y: 0.0,
     }
 }
 
@@ -223,7 +225,8 @@ fn a_beat_draws_ripples_around_the_mark() {
 
     // A beating card draws the ripples where the mark says they stand, and no closer to the dot
     // than the first of them: what a beat draws is a shape around the mark, drawn in the mark's
-    // own room — never over the name beside it and never below its own line.
+    // own room — never over the name beside it and never past the rule under the line, which is
+    // where the line's own strip ends.
     let ripples = changed(&beating);
     assert!(
         ripples.len() > 8,
@@ -233,7 +236,7 @@ fn a_beat_draws_ripples_around_the_mark() {
     assert!(
         ripples
             .iter()
-            .all(|&(x, y)| x < name_left && y < header_bottom),
+            .all(|&(x, y)| x < name_left && y < page.rule_top as usize),
         "the beat drew outside the mark's own room: the header line left of the name"
     );
     assert!(
@@ -370,6 +373,69 @@ fn a_fall_ends_on_the_mark_a_card_at_rest_draws() {
         );
         previous = out;
     }
+}
+
+/// The mark stands on the vertical middle of the text line it marks (`ink_top` to `ink_bottom`),
+/// and moves when configured with an offset (see `mark` and `config.ini`).
+#[test]
+fn the_mark_is_vertically_centred_on_the_text_line() {
+    let (width, height) = measured_at_the_default_share(&card());
+    let page = scrolled(&card(), width, 0);
+    let (painted, width, _height) =
+        render(&card(), width, height, 96, options()).expect("a painted card");
+    let mark = page.mark.expect("a mark");
+
+    let theme = text_theme::loaded(options().theme).expect("the bundled theme");
+    let page_color = rgb(theme.background());
+    let page_ink = [
+        page_color[2],
+        page_color[1],
+        page_color[0],
+        255,
+    ];
+    let stands_on_the_page = |x: i32, y: i32| {
+        let at = (y as usize * width as usize + x as usize) * 4;
+        painted[at..at + 4] == page_ink
+    };
+
+    // The rows of ink a strip of the name line stands in, as painted.
+    let ink_rows = |left: i32, right: i32| -> Vec<i32> {
+        (page.header_top..page.header_top + page.header_height)
+            .filter(|&y| (left..right).any(|x| !stands_on_the_page(x, y)))
+            .collect()
+    };
+    let middle = |rows: &[i32]| (rows[0] + rows[rows.len() - 1] + 1) as f32 / 2.0;
+
+    let dc = unsafe { CreateCompatibleDC(None) };
+    let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+    let name_left = page.header[0].x;
+    let dot = middle(&ink_rows(0, name_left));
+    let text_mid = (page.header_top
+        + metrics.ink_top[HEADER_LEVEL as usize]
+        + page.header_top
+        + metrics.ink_bottom[HEADER_LEVEL as usize]
+        + 1) as f32
+        / 2.0;
+
+    assert!(
+        (dot - text_mid).abs() <= 1.0,
+        "the mark stands at {dot}, away from the text line centre at {text_mid}"
+    );
+    assert!(
+        dot > mark.center_y - mark.radius && dot < mark.center_y + mark.radius,
+        "the mark's own dot is drawn at {} around {dot}",
+        mark.center_y,
+    );
+
+    // With a vertical offset configured, the mark shifts accordingly
+    let mut shifted_opts = options();
+    shifted_opts.mark_offset_y = 3.0;
+    let page_shifted = scrolled_at(&card(), width, 0, shifted_opts);
+    let mark_shifted = page_shifted.mark.expect("a mark");
+    assert_eq!(mark_shifted.center_y, mark.center_y + 3.0);
 }
 
 /// A card with nothing to say about its length still draws, and one with no room at all is

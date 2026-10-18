@@ -237,6 +237,12 @@ pub const MIN_PIN_ZOOM_BOUNCE_POWER: f32 = 0.0;
 /// The maximum bounce drift power factor.
 pub const MAX_PIN_ZOOM_BOUNCE_POWER: f32 = 1.0;
 
+/// The vertical pixel offset for the audio preview card mark beside the filename.
+pub const DEFAULT_AUDIO_MARK_OFFSET_Y: f32 = 0.0;
+/// The range a hand-edited audio mark vertical offset is clamped to, in pixels.
+pub const MIN_AUDIO_MARK_OFFSET_Y: f32 = -100.0;
+pub const MAX_AUDIO_MARK_OFFSET_Y: f32 = 100.0;
+
 /// Memory the decoded-image cache may hold. A preview is decoded at the size the
 /// layout asked for, so this is a ceiling on retained pixels rather than on
 /// files: how many images fit depends entirely on how large they are shown.
@@ -514,6 +520,15 @@ pub fn sanitize_pin_zoom_bounce_power(value: f32) -> f32 {
     }
     let factor = if value > 1.0 { value / 100.0 } else { value };
     factor.clamp(MIN_PIN_ZOOM_BOUNCE_POWER, MAX_PIN_ZOOM_BOUNCE_POWER)
+}
+
+/// The vertical pixel offset for the audio preview card mark beside the filename.
+pub fn sanitize_audio_mark_offset_y(value: f32) -> f32 {
+    if !value.is_finite() {
+        DEFAULT_AUDIO_MARK_OFFSET_Y
+    } else {
+        value.clamp(MIN_AUDIO_MARK_OFFSET_Y, MAX_AUDIO_MARK_OFFSET_Y)
+    }
 }
 
 
