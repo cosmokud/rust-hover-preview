@@ -1,5 +1,5 @@
-use super::*;
 use super::environment::user_data_folder;
+use super::*;
 
 /// The page the engine is pointed at is what makes a document the size of the window
 /// it was given: the document goes in an image, and an image is scaled to its box

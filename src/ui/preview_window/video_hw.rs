@@ -285,9 +285,7 @@ pub(super) fn video_loop_tick(playing: bool, loops: bool) -> bool {
             // process is the one that has been playing all along and no window comes down for it
             // (see `mpv_ipc`). The clock is rebased onto that second rather than taken out, so the
             // pass that follows is measured from where it actually began.
-            if video_route(&path) == VideoRoute::Mpv
-                && mpv_ipc::seek_absolute(loop_.pid, seconds)
-            {
+            if video_route(&path) == VideoRoute::Mpv && mpv_ipc::seek_absolute(loop_.pid, seconds) {
                 // **And which state the film is left in is the second line's to say, in the same
                 // breath as the seek.** A seek is a position for a player rather than a new pass —
                 // mpv keeps whatever pause it holds across one — so the state a wrap leaves is the

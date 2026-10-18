@@ -329,8 +329,11 @@ pub(super) const ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE: u16 = 1579;
 /// list them: stop there, go round the same file, or step on to the next one — which the
 /// kind's own `Shuffle` row decides between the file beside it and a random one of the same
 /// kind.
-pub(super) const PIN_END_OF_FILE_CHOICES: [PinEndOfFile; 3] =
-    [PinEndOfFile::Pause, PinEndOfFile::Loop, PinEndOfFile::Continue];
+pub(super) const PIN_END_OF_FILE_CHOICES: [PinEndOfFile; 3] = [
+    PinEndOfFile::Pause,
+    PinEndOfFile::Loop,
+    PinEndOfFile::Continue,
+];
 /// The two rows inside the `System` submenu, beside the one that opens the config file:
 /// the first puts every setting back at what this build recommends and leaves the extension
 /// lists alone, the second puts the lists back and leaves every other setting alone.

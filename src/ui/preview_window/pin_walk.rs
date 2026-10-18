@@ -364,8 +364,7 @@ pub(super) fn take_pin_pick(
             .is_some_and(|step| pin_navigation::same_file(&step.at, &path));
     let mut step = walk.take();
     if step.as_ref().is_some_and(|step| {
-        !pin_navigation::same_file(&step.at, &path)
-            && !pin_navigation::same_folder(&step.at, &path)
+        !pin_navigation::same_file(&step.at, &path) && !pin_navigation::same_folder(&step.at, &path)
     }) {
         step = None;
     }
@@ -528,7 +527,8 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             if let Some(folder) = at.parent() {
                 pin_navigation::forget_folder(folder);
             }
-            let list = pin_navigation::list_for(at, anchor, config).unwrap_or_else(|| empty.clone());
+            let list =
+                pin_navigation::list_for(at, anchor, config).unwrap_or_else(|| empty.clone());
 
             // Whether steps along this walk follow a shuffled playlist or the folder's own
             // order: the pin's own shuffle says so — the audio one for a walk anchored on a
@@ -537,15 +537,18 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             // question of the anchor's own list of the `config.ini` the walk was asked with,
             // so it is answered here once rather than on every step.
             let (shuffle, pool): (bool, Vec<PathBuf>) = match anchor {
-                Some(NavCategory::Audio) if config.pin_mode_audio_shuffle => {
-                    (true, kind_of_the_list(&list, |path| lists::AUDIO.claims(path, config)))
-                }
-                Some(NavCategory::Video) if config.pin_mode_video_shuffle => {
-                    (true, kind_of_the_list(&list, |path| lists::VIDEO.claims(path, config)))
-                }
-                Some(NavCategory::Images) if config.pin_mode_image_shuffle => {
-                    (true, kind_of_the_list(&list, |path| lists::IMAGE.claims(path, config)))
-                }
+                Some(NavCategory::Audio) if config.pin_mode_audio_shuffle => (
+                    true,
+                    kind_of_the_list(&list, |path| lists::AUDIO.claims(path, config)),
+                ),
+                Some(NavCategory::Video) if config.pin_mode_video_shuffle => (
+                    true,
+                    kind_of_the_list(&list, |path| lists::VIDEO.claims(path, config)),
+                ),
+                Some(NavCategory::Images) if config.pin_mode_image_shuffle => (
+                    true,
+                    kind_of_the_list(&list, |path| lists::IMAGE.claims(path, config)),
+                ),
                 _ => (false, Vec::new()),
             };
             // The playlist: the folder's own order where the walk is linear, so an addition
@@ -1080,8 +1083,7 @@ pub(super) fn carry_open_with_to(at: ScreenRegion, before: Vec<isize>) {
 
         // No window of this press's after a while, and none watched: the dialog in front is
         // the live one, if it is still where the system put it.
-        if fresh_empty && watch.is_empty() && now.duration_since(start) >= OPEN_WITH_APPEAR_WAIT
-        {
+        if fresh_empty && watch.is_empty() && now.duration_since(start) >= OPEN_WITH_APPEAR_WAIT {
             if let Some(hwnd) = foreground_open_with_dialog() {
                 if carry_open_with_window(hwnd, at) {
                     last_move = Some(now);
@@ -1167,16 +1169,29 @@ fn carry_open_with_window(hwnd: HWND, at: ScreenRegion) -> bool {
 /// display the pin is standing on so a pin half off a display's edge still leaves a list that
 /// is wholly on it.
 fn open_with_spot(at: ScreenRegion, size: (i32, i32)) -> (i32, i32) {
-    let middle = ((at.0.saturating_add(at.2)) / 2, (at.1.saturating_add(at.3)) / 2);
+    let middle = (
+        (at.0.saturating_add(at.2)) / 2,
+        (at.1.saturating_add(at.3)) / 2,
+    );
     open_with_spot_in(work_area_at(middle.0, middle.1), middle, size)
 }
 
 /// The arithmetic of `open_with_spot` over an explicit room, which is what the test below holds:
 /// the middle centred and then clamped, so a box smaller than the room is centred and a box
 /// the room cannot hold at full size is pushed wholly onto it rather than hung off its edge.
-pub(super) fn open_with_spot_in(bounds: ScreenBounds, middle: (i32, i32), size: (i32, i32)) -> (i32, i32) {
-    let left = middle.0.saturating_sub(size.0 / 2).clamp(bounds.left, bounds.right.saturating_sub(size.0).max(bounds.left));
-    let top = middle.1.saturating_sub(size.1 / 2).clamp(bounds.top, bounds.bottom.saturating_sub(size.1).max(bounds.top));
+pub(super) fn open_with_spot_in(
+    bounds: ScreenBounds,
+    middle: (i32, i32),
+    size: (i32, i32),
+) -> (i32, i32) {
+    let left = middle.0.saturating_sub(size.0 / 2).clamp(
+        bounds.left,
+        bounds.right.saturating_sub(size.0).max(bounds.left),
+    );
+    let top = middle.1.saturating_sub(size.1 / 2).clamp(
+        bounds.top,
+        bounds.bottom.saturating_sub(size.1).max(bounds.top),
+    );
     (left, top)
 }
 
@@ -1190,7 +1205,8 @@ fn on_primary_display(x: i32, y: i32) -> bool {
 /// Whether a point is inside a display's room, which is what `on_primary_display` asks of the
 /// primary one — and what the test below holds without a screen attached.
 pub(super) fn centre_on_display(point: (i32, i32), bounds: ScreenBounds) -> bool {
-    point.0 >= bounds.left && point.0 < bounds.right && point.1 >= bounds.top && point.1 < bounds.bottom
+    point.0 >= bounds.left
+        && point.0 < bounds.right
+        && point.1 >= bounds.top
+        && point.1 < bounds.bottom
 }
-
-

@@ -224,8 +224,20 @@ fn a_notch_inside_the_window_never_pulls_a_picture_it_was_covering_off_one() {
     // picture that goes on covering its window. The notches are turned one at a time because that is
     // the shape a hand turns them in: the window grows with the picture a frame at a time, so the
     // notch that takes the picture past the cap is a notch the window has already nearly reached.
-    for pointer in [(300, 250), (699, 549), (300, 549), (699, 250), (500, 400), (400, 300)] {
-        let mut plan = zoomed(a_picture(), PinZoom::filling(a_picture()), 1.0, Some(pointer));
+    for pointer in [
+        (300, 250),
+        (699, 549),
+        (300, 549),
+        (699, 250),
+        (500, 400),
+        (400, 300),
+    ] {
+        let mut plan = zoomed(
+            a_picture(),
+            PinZoom::filling(a_picture()),
+            1.0,
+            Some(pointer),
+        );
 
         for _ in 0..11 {
             plan = zoomed(plan.content, plan.zoom, 1.0, Some(pointer));
@@ -331,10 +343,7 @@ fn a_travel_over_the_backdrop_keeps_the_point_of_the_picture_under_its_anchor() 
         (anchor.0 - left) as f32 / zoom.drawn.0
     };
 
-    let mut zoom = PinZoom {
-        toward,
-        ..carried
-    };
+    let mut zoom = PinZoom { toward, ..carried };
     let before = under_the_anchor(&zoom);
     assert!(
         before < -0.1,
@@ -558,7 +567,12 @@ fn a_wheel_that_asks_for_more_notches_than_any_hand_can_turn_is_answered_with_a_
     // limit" still owes is a number the placement can add to, and it is asked here at both ends —
     // the ceiling and the floor are the only two counts this function is not free on.
     let window = (0, 0, 1000, 800);
-    let huge = zoomed(window, PinZoom::filling(window), i32::MAX as f32, Some((500, 400)));
+    let huge = zoomed(
+        window,
+        PinZoom::filling(window),
+        i32::MAX as f32,
+        Some((500, 400)),
+    );
     assert_eq!(huge.zoom.drawn.0, PIN_ZOOM_CEILING);
     assert!(
         huge.zoom.picture_box((1000, 800)).2 < i32::MAX,
@@ -776,7 +790,10 @@ fn a_wheels_ask_is_released_over_the_frames_that_follow_it() {
     while released != toward {
         released = pin_zoom_release(released, toward, 0.016);
         frames += 1;
-        assert!(frames < 120, "a travel of two seconds is not a travel: {released}");
+        assert!(
+            frames < 120,
+            "a travel of two seconds is not a travel: {released}"
+        );
     }
     assert!(
         frames > 3,
@@ -962,8 +979,7 @@ fn intermediate_zoom_out_does_not_bounce_and_zoom_out_to_fit_clamps_and_bounces_
 
     // Walk the travel to 1090.9:
     while zoom.drawn.0 != zoom.toward {
-        let plan = pin_zoom_step(&asking(zoom), 0.016, &display())
-            .expect("frame in flight");
+        let plan = pin_zoom_step(&asking(zoom), 0.016, &display()).expect("frame in flight");
         zoom = plan.zoom;
         assert_eq!(
             zoom.bounce, 0.0,
@@ -1006,7 +1022,10 @@ fn intermediate_zoom_out_does_not_bounce_and_zoom_out_to_fit_clamps_and_bounces_
         assert!(frames < 240, "a travel and its bounce are not forever");
     }
 
-    assert!(saw_bounce, "the bounce triggered when heading home to the fit");
+    assert!(
+        saw_bounce,
+        "the bounce triggered when heading home to the fit"
+    );
     assert!(swang > 4.0, "the bounce swung past center: {swang} pixels");
     assert_eq!(zoom.bounce, 0.0, "bounce finished");
     assert_eq!(zoom.pan, (0.0, 0.0), "pan came home completely to zero");
@@ -1230,15 +1249,8 @@ fn a_frame_of_a_travel_is_the_wheels_ask_released_and_not_the_ask_itself() {
         pointer: Some((500, 400)),
     };
 
-    let step = pin_zoom_step(
-        &asking(PinZoom {
-            toward,
-            ..settled
-        }),
-        0.007,
-        &display(),
-    )
-    .expect("a picture on its way to a size is a frame to take");
+    let step = pin_zoom_step(&asking(PinZoom { toward, ..settled }), 0.007, &display())
+        .expect("a picture on its way to a size is a frame to take");
 
     // A frame of seven milliseconds releases 1 - 0.1^0.07 of what is left of the ask — 14.89 pixels of
     // this notch's hundred, which is where the picture is drawn.
@@ -1247,7 +1259,10 @@ fn a_frame_of_a_travel_is_the_wheels_ask_released_and_not_the_ask_itself() {
         "a frame releases a seventh of what is left of the ask: {} of 1014.89",
         step.zoom.drawn.0
     );
-    assert_eq!(step.zoom.toward, toward, "the ask is where the wheel put it");
+    assert_eq!(
+        step.zoom.toward, toward,
+        "the ask is where the wheel put it"
+    );
 }
 
 /// A travel of a picture the window has stopped growing for leaves the window exactly where it is and
@@ -1270,15 +1285,8 @@ fn a_travel_past_the_cap_leaves_the_window_where_it_is() {
         pointer: Some((500, 400)),
     };
 
-    let step = pin_zoom_step(
-        &asking(PinZoom {
-            toward,
-            ..cap.zoom
-        }),
-        0.016,
-        &display(),
-    )
-    .expect("a picture on its way to a size is a frame to take");
+    let step = pin_zoom_step(&asking(PinZoom { toward, ..cap.zoom }), 0.016, &display())
+        .expect("a picture on its way to a size is a frame to take");
 
     assert_eq!(
         step.content, stopped,
@@ -1330,10 +1338,7 @@ fn a_travel_past_the_cap_keeps_the_point_of_the_picture_under_its_anchor() {
         (anchor.0 - centre) as f32 / zoom.drawn.0
     };
 
-    let mut zoom = PinZoom {
-        toward,
-        ..cap.zoom
-    };
+    let mut zoom = PinZoom { toward, ..cap.zoom };
     let before = under_the_anchor(&zoom);
     let mut frames = 0;
 
@@ -1388,10 +1393,7 @@ fn a_travel_keeps_the_point_of_the_picture_under_the_wheel_where_it_is_drawn() {
         let (left, _, drawn_width, _) = cap.zoom.picture_place((width, height));
         let share = (anchor.0 as f32 - left) / drawn_width;
 
-        let mut zoom = PinZoom {
-            toward,
-            ..cap.zoom
-        };
+        let mut zoom = PinZoom { toward, ..cap.zoom };
         let mut frames = 0;
 
         while let Some(plan) = pin_zoom_step(&asking(zoom), 0.016, &display()) {

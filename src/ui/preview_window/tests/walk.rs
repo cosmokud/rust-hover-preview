@@ -357,7 +357,10 @@ fn a_shuffled_playlist_starts_on_the_pinned_file_and_holds_every_sound() {
         panic!("a walk is always answered");
     };
 
-    assert!(walk.shuffle, "the walk shuffles when the pin's shuffle is on");
+    assert!(
+        walk.shuffle,
+        "the walk shuffles when the pin's shuffle is on"
+    );
     assert_eq!(
         walk.order.first(),
         Some(&pinned),
@@ -365,8 +368,11 @@ fn a_shuffled_playlist_starts_on_the_pinned_file_and_holds_every_sound() {
     );
     let mut rest = walk.order[1..].to_vec();
     rest.sort();
-    let mut expected: Vec<PathBuf> =
-        sounds.iter().filter(|sound| *sound != &pinned).cloned().collect();
+    let mut expected: Vec<PathBuf> = sounds
+        .iter()
+        .filter(|sound| *sound != &pinned)
+        .cloned()
+        .collect();
     expected.sort();
     assert_eq!(
         rest, expected,
@@ -375,15 +381,14 @@ fn a_shuffled_playlist_starts_on_the_pinned_file_and_holds_every_sound() {
 
     // And the first step lands on the file after it: a sound of the folder, and never the
     // file on screen.
-    let landed = walk.step().expect("a playlist of three has one to step onto");
+    let landed = walk
+        .step()
+        .expect("a playlist of three has one to step onto");
     assert!(
         sounds.contains(&landed),
         "a shuffled step lands on a sound of the folder: {landed:?}"
     );
-    assert_ne!(
-        landed, pinned,
-        "and never on the file the pin is showing"
-    );
+    assert_ne!(landed, pinned, "and never on the file the pin is showing");
 }
 
 /// A playlist of only the file the pin is showing has nowhere to shuffle to: there is no
@@ -443,7 +448,10 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
         panic!("a walk is always answered");
     };
 
-    assert!(walk.shuffle, "the walk shuffles when the pin's shuffle is on");
+    assert!(
+        walk.shuffle,
+        "the walk shuffles when the pin's shuffle is on"
+    );
     let mut rest = walk.order[1..].to_vec();
     rest.sort();
     assert_eq!(
@@ -470,7 +478,10 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
     let Some(PinPlanned::Walk(walk)) = answer else {
         panic!("a walk is always answered");
     };
-    assert!(!walk.shuffle, "and the walk does not shuffle with the shuffle off");
+    assert!(
+        !walk.shuffle,
+        "and the walk does not shuffle with the shuffle off"
+    );
     assert_eq!(
         walk.order,
         vec![
@@ -936,7 +947,12 @@ fn the_pin_arc_leaves_the_band_it_is_drawn_over_except_where_it_is() {
 /// where the system centred it.
 #[test]
 fn the_open_with_list_is_carried_onto_the_pin_s_box() {
-    let room = ScreenBounds { left: 3440, top: -2160, right: 5360, bottom: -1080 };
+    let room = ScreenBounds {
+        left: 3440,
+        top: -2160,
+        right: 5360,
+        bottom: -1080,
+    };
     let pin = (3500, -2000, 4000, -1500);
 
     assert_eq!(
@@ -951,16 +967,32 @@ fn the_open_with_list_is_carried_onto_the_pin_s_box() {
 /// still on the primary display, where the system centres it.
 #[test]
 fn the_open_with_carry_leaves_a_moved_list_where_it_is() {
-    let room = ScreenBounds { left: 3440, top: -2160, right: 5360, bottom: -1080 };
-    let primary = ScreenBounds { left: 0, top: 0, right: 3440, bottom: 1440 };
+    let room = ScreenBounds {
+        left: 3440,
+        top: -2160,
+        right: 5360,
+        bottom: -1080,
+    };
+    let primary = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 3440,
+        bottom: 1440,
+    };
 
     assert_eq!(
         open_with_spot_in(room, (3400, -1100), (448, 624)),
         (3440, -1704),
         "clamped onto the pin's display rather than off its edge"
     );
-    assert!(centre_on_display((1720, 720), primary), "still where the system put it");
-    assert!(!centre_on_display((4400, -1620), primary), "carried by the user stays carried");
+    assert!(
+        centre_on_display((1720, 720), primary),
+        "still where the system put it"
+    );
+    assert!(
+        !centre_on_display((4400, -1620), primary),
+        "carried by the user stays carried"
+    );
 }
 
 /// A shuffled walk hears every sound once before any repeats: each step is the next file
@@ -993,7 +1025,9 @@ fn a_shuffled_walk_hears_every_sound_once_before_repeating() {
     assert_ne!(first, at, "the file on screen is not a step");
     assert_ne!(second, at, "neither the first time nor the second");
 
-    let third = walk.step().expect("a spent playlist is respawned, not ended");
+    let third = walk
+        .step()
+        .expect("a spent playlist is respawned, not ended");
     assert!(sounds.contains(&third), "still only sounds");
     assert_ne!(third, second, "respawned from the file it stands on");
     assert_eq!(
@@ -1036,7 +1070,10 @@ fn a_walk_is_anchored_on_the_first_file_pinned() {
         panic!("a walk is always answered");
     };
     assert!(
-        sound_walk.order.iter().all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
+        sound_walk
+            .order
+            .iter()
+            .all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
         "anchored on a sound, the walk is sounds only: {:?}",
         sound_walk.order
     );
@@ -1052,8 +1089,14 @@ fn a_walk_is_anchored_on_the_first_file_pinned() {
         panic!("a walk is always answered");
     };
     assert!(
-        other_walk.order.iter().any(|path| path.extension().is_some_and(|ext| ext == "mp3"))
-            && other_walk.order.iter().any(|path| path.extension().is_some_and(|ext| ext == "png")),
+        other_walk
+            .order
+            .iter()
+            .any(|path| path.extension().is_some_and(|ext| ext == "mp3"))
+            && other_walk
+                .order
+                .iter()
+                .any(|path| path.extension().is_some_and(|ext| ext == "png")),
         "anchored elsewhere, the walk is end to end: {:?}",
         other_walk.order
     );
@@ -1150,7 +1193,9 @@ fn a_shuffle_hears_every_sound_once_across_presses() {
     // One permutation is the file the pin started on first and the pool after it — so that
     // many steps, and not one more.
     for _ in 0..sounds.len() - 1 {
-        let at = held.as_ref().map_or_else(|| folder.join("a.mp3"), |walk| walk.at.clone());
+        let at = held
+            .as_ref()
+            .map_or_else(|| folder.join("a.mp3"), |walk| walk.at.clone());
         let answer = answer_pin_job(&PinJob::Walk {
             at,
             step: 1,
@@ -1177,7 +1222,11 @@ fn a_shuffle_hears_every_sound_once_across_presses() {
         heard.len(),
         "every sound is heard once before any of them is heard again: {heard:?}"
     );
-    assert_eq!(distinct.len(), sounds.len() - 1, "and the permutation is the whole pool");
+    assert_eq!(
+        distinct.len(),
+        sounds.len() - 1,
+        "and the permutation is the whole pool"
+    );
     assert!(
         !heard.contains(&folder.join("a.mp3")),
         "the file the pin started on is not one of them: it is already showing"
@@ -1207,8 +1256,11 @@ fn a_shuffle_hears_every_sound_once_across_presses() {
     );
     let mut rest = again.order[1..].to_vec();
     rest.sort();
-    let mut expected: Vec<PathBuf> =
-        sounds.iter().filter(|sound| *sound != &again.from).cloned().collect();
+    let mut expected: Vec<PathBuf> = sounds
+        .iter()
+        .filter(|sound| *sound != &again.from)
+        .cloned()
+        .collect();
     expected.sort();
     assert_eq!(rest, expected);
 }
@@ -1238,7 +1290,11 @@ fn a_step_back_is_the_file_it_came_from_and_forward_returns_to_it() {
         panic!("a walk is always answered");
     };
     let landed = first_walk.at.clone();
-    assert_ne!(landed, folder.join("a.mp3"), "a shuffle does not step onto the screen");
+    assert_ne!(
+        landed,
+        folder.join("a.mp3"),
+        "a shuffle does not step onto the screen"
+    );
     assert_eq!(
         first_walk.order.first(),
         Some(&folder.join("a.mp3")),
@@ -1283,10 +1339,7 @@ fn a_step_back_is_the_file_it_came_from_and_forward_returns_to_it() {
         forward_walk.at, landed,
         "a step forward lands on the file it was interrupted on"
     );
-    assert_eq!(
-        forward_walk.order, order,
-        "along the same playlist still"
-    );
+    assert_eq!(forward_walk.order, order, "along the same playlist still");
 }
 
 /// A file that could not be shown is stepped over onto the next file of the playlist: the
@@ -1312,8 +1365,7 @@ fn a_file_that_could_not_be_shown_is_stepped_over_onto_the_next_file() {
 
     let stepped_over = walk.step_over().expect("a file beside it to step onto");
     assert_eq!(
-        stepped_over,
-        sounds[2],
+        stepped_over, sounds[2],
         "the walk carries on to the next file of the playlist"
     );
     assert_eq!(walk.missed, 1, "and the miss is counted");
@@ -1372,7 +1424,10 @@ fn a_press_asks_with_the_walk_the_pin_is_standing_on() {
     };
     stand_pin_walk(Some(held.clone()));
 
-    assert!(ask_pin_walk(folder.join("a.mp3"), 1, held.anchor), "the press is asked");
+    assert!(
+        ask_pin_walk(folder.join("a.mp3"), 1, held.anchor),
+        "the press is asked"
+    );
     let job = PIN_JOBS
         .0
         .lock()
@@ -1384,12 +1439,18 @@ fn a_press_asks_with_the_walk_the_pin_is_standing_on() {
     };
     assert_eq!(at, folder.join("a.mp3"));
     let session = session.expect("the walk the pin is standing on comes with the question");
-    assert_eq!(session.order, held.order, "with the playlist it is standing on");
+    assert_eq!(
+        session.order, held.order,
+        "with the playlist it is standing on"
+    );
 
     // And a question asked while the file the last press landed on is still being read
     // carries the same playlist: the step re-anchors to the file on screen in the order,
     // so it is a step of the same walk rather than the start of another.
-    assert!(ask_pin_walk(folder.join("b.mp3"), 1, held.anchor), "the press is asked");
+    assert!(
+        ask_pin_walk(folder.join("b.mp3"), 1, held.anchor),
+        "the press is asked"
+    );
     let job = PIN_JOBS
         .0
         .lock()
@@ -1458,8 +1519,7 @@ fn a_playlist_an_answer_made_goes_onto_the_pin_without_moving_it() {
         "the answered playlist is the one the next press steps, so it cannot start another"
     );
     assert_eq!(
-        held.at,
-        sounds[0],
+        held.at, sounds[0],
         "and the pin has not moved: the file is still being read"
     );
 
@@ -1541,7 +1601,10 @@ fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
             true,
             anchor,
         );
-        assert!(request.is_none(), "a walk press asks the planner, not for an end");
+        assert!(
+            request.is_none(),
+            "a walk press asks the planner, not for an end"
+        );
         assert!(wait.is_some(), "and the pin waits on the folder read");
     };
 
@@ -1551,11 +1614,21 @@ fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
     pin.path = folder.join("a.png");
     stand_pin(Some(pin));
     press(None);
-    let Some(PinJob::Walk { at, step, anchor, config, .. }) = take_job() else {
+    let Some(PinJob::Walk {
+        at,
+        step,
+        anchor,
+        config,
+        ..
+    }) = take_job()
+    else {
         panic!("a key press asks the planner for a walk");
     };
     assert_eq!(at, folder.join("a.png"));
-    assert_eq!(anchor, None, "a first press anchors on the file it stands on");
+    assert_eq!(
+        anchor, None,
+        "a first press anchors on the file it stands on"
+    );
     let job = PinJob::Walk {
         at,
         step,
@@ -1566,7 +1639,10 @@ fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
     let Some(PinPlanned::Walk(first_walk)) = answer_pin_job(&job) else {
         panic!("a walk is always answered");
     };
-    assert!(first_walk.anchor.is_some(), "and the answer keeps the anchor");
+    assert!(
+        first_walk.anchor.is_some(),
+        "and the answer keeps the anchor"
+    );
     assert_eq!(
         first_walk.at,
         folder.join("b.mp3"),
@@ -1608,12 +1684,12 @@ fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
     );
 
     if let Ok(mut config) = CONFIG.lock() {
-        config.pin_nav_video = was.0.0;
-        config.pin_nav_audio = was.0.1;
-        config.pin_nav_others = was.0.2;
-        config.pin_mode_audio_shuffle = was.1.0;
-        config.pin_mode_image_shuffle = was.1.1;
-        config.pin_mode_video_shuffle = was.1.2;
+        config.pin_nav_video = was.0 .0;
+        config.pin_nav_audio = was.0 .1;
+        config.pin_nav_others = was.0 .2;
+        config.pin_mode_audio_shuffle = was.1 .0;
+        config.pin_mode_image_shuffle = was.1 .1;
+        config.pin_mode_video_shuffle = was.1 .2;
     }
     stand_pin(previous_pin);
 }
@@ -1639,7 +1715,10 @@ fn a_press_after_a_sound_keeps_a_sound_anchor_sounds_only() {
         panic!("a walk is always answered");
     };
     assert!(
-        first_walk.order.iter().all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
+        first_walk
+            .order
+            .iter()
+            .all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
         "anchored on a sound, the first press walks sounds only: {:?}",
         first_walk.order
     );
@@ -1655,7 +1734,10 @@ fn a_press_after_a_sound_keeps_a_sound_anchor_sounds_only() {
         panic!("a walk is always answered");
     };
     assert!(
-        second_walk.order.iter().all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
+        second_walk
+            .order
+            .iter()
+            .all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
         "anchored on a sound, the second press still walks sounds only: {:?}",
         second_walk.order
     );
@@ -1733,16 +1815,18 @@ fn a_pick_retried_after_its_box_lands_carries_the_parked_walk() {
         panic!("a file the user named is taken up");
     };
     assert_eq!(path, order[2]);
-    assert!(step.is_some(), "a listing pick moves the pointer, not the playlist");
+    assert!(
+        step.is_some(),
+        "a listing pick moves the pointer, not the playlist"
+    );
     assert!(user_named);
 
     // But a file the user named in another folder drops it, so the walk that follows there
     // is anchored on the picked file.
     let mut walk = parked();
-    let elsewhere = folder.join(".." ).join("elsewhere").join("z.mp3");
+    let elsewhere = folder.join("..").join("elsewhere").join("z.mp3");
     let mut named = Some(elsewhere.clone());
-    let Some((path, step, _)) =
-        take_pin_pick(&mut named, &mut None, &mut None, &mut walk, false)
+    let Some((path, step, _)) = take_pin_pick(&mut named, &mut None, &mut None, &mut walk, false)
     else {
         panic!("a file the user named is taken up");
     };
@@ -1783,7 +1867,10 @@ fn installing_a_pick_in_the_walks_folder_keeps_the_playlist() {
     // A file the user named in the same folder installs with the playlist it joins.
     let installed = install_walk(held(), None, &order[2]);
     let walk = installed.expect("the playlist rides behind a listing pick");
-    assert_eq!(walk.order, order, "the next press steps this order, not a fresh draw");
+    assert_eq!(
+        walk.order, order,
+        "the next press steps this order, not a fresh draw"
+    );
 
     // Anywhere else starts fresh.
     let elsewhere = PathBuf::from("C:\\elsewhere\\z.mp3");
@@ -1837,10 +1924,7 @@ fn a_pin_walks_its_playlist_press_after_press_through_its_own_session() {
     let press = |step: i32| -> PinStep {
         let at = pinned_path().expect("the pin is standing somewhere");
         let anchor = pin_walk_anchor(&None);
-        assert!(
-            ask_pin_walk(at.clone(), step, anchor),
-            "the press is asked"
-        );
+        assert!(ask_pin_walk(at.clone(), step, anchor), "the press is asked");
         let job = PIN_JOBS
             .0
             .lock()
@@ -1852,9 +1936,13 @@ fn a_pin_walks_its_playlist_press_after_press_through_its_own_session() {
         };
         assert_eq!(walk.from(), at, "the answer is to the press that asked");
         pin_walk_synced_its_playlist(&walk);
-        let Some((path, step_walk, _)) =
-            take_pin_pick(&mut None, &mut None, &mut None, &mut Some(walk.clone()), false)
-        else {
+        let Some((path, step_walk, _)) = take_pin_pick(
+            &mut None,
+            &mut None,
+            &mut None,
+            &mut Some(walk.clone()),
+            false,
+        ) else {
             panic!("the walk's own step is the pick");
         };
         assert_eq!(path, walk.at);
@@ -1902,7 +1990,10 @@ fn a_pin_walks_its_playlist_press_after_press_through_its_own_session() {
     // The pick arm installs with no walk of its own where nothing was parked: the install
     // keeps the playlist the picked file joins.
     let installed = install_walk(held, step_walk, &path);
-    assert!(installed.is_some(), "the playlist rides behind a listing pick");
+    assert!(
+        installed.is_some(),
+        "the playlist rides behind a listing pick"
+    );
     stand_pin_walk(installed);
     if let Some(mut state) = pin_state() {
         if let Some(pin) = state.pin_mut() {
@@ -1981,7 +2072,10 @@ fn a_pin_taken_up_again_on_its_own_file_keeps_the_walk() {
 
     let held = pin_state().and_then(|state| state.walk().cloned());
     let held = held.expect("the playlist the pin was navigating survives its own take-up");
-    assert_eq!(held.order, order, "and it is the same playlist, not another draw");
+    assert_eq!(
+        held.order, order,
+        "and it is the same playlist, not another draw"
+    );
     assert_eq!(held.at, order[1], "standing where the install left it");
 
     // A take-up on a file in another folder is where a walk starts fresh.
@@ -1989,7 +2083,9 @@ fn a_pin_taken_up_again_on_its_own_file_keeps_the_walk() {
     elsewhere.path = PathBuf::from("C:\\elsewhere\\z.mp3");
     install(elsewhere);
     assert!(
-        pin_state().and_then(|state| state.walk().cloned()).is_none(),
+        pin_state()
+            .and_then(|state| state.walk().cloned())
+            .is_none(),
         "a take-up in another folder has nothing behind it to carry"
     );
 
@@ -2039,7 +2135,10 @@ fn throwing_the_shuffle_off_walks_the_folders_own_order() {
     let Some(PinPlanned::Walk(linear)) = second else {
         panic!("a walk is always answered");
     };
-    assert!(!linear.shuffle, "the walk stops shuffling with the shuffle off");
+    assert!(
+        !linear.shuffle,
+        "the walk stops shuffling with the shuffle off"
+    );
     assert_eq!(
         linear.order, sounds,
         "and walks the folder's own order instead of the playlist still in hand"
@@ -2066,8 +2165,11 @@ fn throwing_the_shuffle_off_walks_the_folders_own_order() {
     );
     let mut rest = reshuffled.order[1..].to_vec();
     rest.sort();
-    let mut expected: Vec<PathBuf> =
-        sounds.iter().filter(|sound| *sound != &linear.at).cloned().collect();
+    let mut expected: Vec<PathBuf> = sounds
+        .iter()
+        .filter(|sound| *sound != &linear.at)
+        .cloned()
+        .collect();
     expected.sort();
     assert_eq!(rest, expected, "and holds every other sound after it");
 }

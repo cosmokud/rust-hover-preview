@@ -17,9 +17,9 @@
 use super::*;
 
 use windows::Win32::UI::WindowsAndMessaging::{
-    LoadImageW, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, SC_CLOSE, SC_RESTORE, SetWindowTextW,
+    LoadImageW, SetWindowTextW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, SC_CLOSE, SC_RESTORE,
     SW_SHOWMINNOACTIVE, WA_ACTIVE, WM_QUERYOPEN, WS_CAPTION, WS_EX_APPWINDOW, WS_MINIMIZEBOX,
-    WS_OVERLAPPED, WS_SYSMENU, HICON,
+    WS_OVERLAPPED, WS_SYSMENU,
 };
 
 /// The class the taskbar stand-in is created from.

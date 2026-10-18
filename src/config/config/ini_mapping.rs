@@ -20,10 +20,9 @@ use super::defaults::{
 };
 use super::setting_types::{
     sanitize_afk_timer_secs, sanitize_dds_background, sanitize_html_background,
-    sanitize_zoom_background, AudioSeek,
-    AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile, PinMinimizeTo,
-    PinNavFileTypes,
-    PreviewScale, TextTheme, TransparentBackground, TriggerKeyMode, VideoEngine,
+    sanitize_zoom_background, AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine,
+    PinEndOfFile, PinMinimizeTo, PinNavFileTypes, PreviewScale, TextTheme, TransparentBackground,
+    TriggerKeyMode, VideoEngine,
 };
 
 impl AppConfig {
@@ -247,11 +246,7 @@ impl AppConfig {
             "audio_seek",
             Some(self.audio_seek.as_str().to_string()),
         );
-        ini.set(
-            CONFIG_SECTION,
-            "beat_hz",
-            Some(self.beat_hz.as_str()),
-        );
+        ini.set(CONFIG_SECTION, "beat_hz", Some(self.beat_hz.as_str()));
         ini.set(
             CONFIG_SECTION,
             "pin_mode_audio_seek",
@@ -451,11 +446,7 @@ impl AppConfig {
             Some(self.video_engine_fallback.to_string()),
         );
         // The one setting that holds a path: written as it stands, trimmed on the way back in.
-        ini.set(
-            CONFIG_SECTION,
-            "mpv_path",
-            Some(self.mpv_path.clone()),
-        );
+        ini.set(CONFIG_SECTION, "mpv_path", Some(self.mpv_path.clone()));
         ini.set(
             CONFIG_SECTION,
             "video_subtitles",
@@ -721,7 +712,8 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_zoom_bounce_gate") {
             self.pin_zoom_bounce_gate = value;
-        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_zoom_bounce_enabled") {
+        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_zoom_bounce_enabled")
+        {
             self.pin_zoom_bounce_gate = value;
         } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_bounce_gate") {
             self.pin_zoom_bounce_gate = value;

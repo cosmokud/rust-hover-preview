@@ -356,13 +356,9 @@ impl MediaData {
             .audio_scale
             .map(audio_options_of)
             .unwrap_or_else(current_audio_options);
-        let Some((pixels, width, height)) = audio_preview::render(
-            &card,
-            size.0.max(1),
-            size.1.max(1),
-            clock.dpi,
-            options,
-        ) else {
+        let Some((pixels, width, height)) =
+            audio_preview::render(&card, size.0.max(1), size.1.max(1), clock.dpi, options)
+        else {
             return false;
         };
 

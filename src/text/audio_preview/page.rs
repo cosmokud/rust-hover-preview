@@ -477,13 +477,7 @@ pub(super) struct Page {
 /// bass that drops pulls it back in, taking the ripples behind it under the dot one at a time —
 /// the same travel the single ring made, drawn as the ripple it was always meant to be (see
 /// `Card::beat`).
-fn mark(
-    beat: f32,
-    metrics: &TextMetrics,
-    header_top: i32,
-    name_left: i32,
-    offset_y: f32,
-) -> Mark {
+fn mark(beat: f32, metrics: &TextMetrics, header_top: i32, name_left: i32, offset_y: f32) -> Mark {
     let beat = beat.clamp(0.0, 1.0);
 
     let advance = metrics.advance[HEADER_LEVEL as usize].max(1) as f32;
@@ -492,12 +486,8 @@ fn mark(
     let center_x = metrics.padding as f32 + advance / 2.0;
     let center_y = header_top as f32 + (ink_top + ink_bottom + 1.0) / 2.0 + offset_y;
     let thickness = scaled(1, metrics.scale) as f32;
-    let reach = (center_x
-        .min(center_y)
-        .min(name_left as f32 - center_x)
-        - thickness / 2.0
-        - 1.0)
-        .max(0.0);
+    let reach =
+        (center_x.min(center_y).min(name_left as f32 - center_x) - thickness / 2.0 - 1.0).max(0.0);
     let radius = reach * MARK_DOT_SHARE;
 
     // The train a beat sends out: the front ripple travels the whole room and the ones behind it
@@ -639,7 +629,13 @@ pub(super) fn build_page(
         },
         boxes,
         chrome: card.controls,
-        mark: Some(mark(card.beat, metrics, header_top, name_left, mark_offset_y)),
+        mark: Some(mark(
+            card.beat,
+            metrics,
+            header_top,
+            name_left,
+            mark_offset_y,
+        )),
         width,
         // The height is the card's own: the name line, the rule, the facts line
         // and the bar, with the card's own margin under it — content-driven at
@@ -1103,8 +1099,24 @@ fn paint_window_button(
             let from_y = rect.top as f32 + inset + 0.5;
             let to_x = rect.right as f32 - inset - 1.0 + 0.5;
             let to_y = rect.bottom as f32 - inset - 1.0 + 0.5;
-            stroke_segment(buffer, width, (from_x, from_y), (to_x, to_y), stroke, ink, 1.0);
-            stroke_segment(buffer, width, (from_x, to_y), (to_x, from_y), stroke, ink, 1.0);
+            stroke_segment(
+                buffer,
+                width,
+                (from_x, from_y),
+                (to_x, to_y),
+                stroke,
+                ink,
+                1.0,
+            );
+            stroke_segment(
+                buffer,
+                width,
+                (from_x, to_y),
+                (to_x, from_y),
+                stroke,
+                ink,
+                1.0,
+            );
         }
         // The row's controls are drawn by the caption's own glyph machinery, at a
         // size a button this small cannot hold (see `paint_card_control`).

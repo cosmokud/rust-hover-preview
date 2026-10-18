@@ -242,21 +242,22 @@ fn a_tone_over_the_settings_band_moves_no_pulse() {
     // setting and nothing under another: fifteen hundred hertz stands well past the top of the
     // default band and under the top of the widest one the app offers, and a band that is off
     // is no pulse whatever the window holds.
-    let inside =
-        audio_meter::readings(&tone(100.0, RATE, WINDOW), RATE, DEFAULT_BEAT_HZ.top()).1;
+    let inside = audio_meter::readings(&tone(100.0, RATE, WINDOW), RATE, DEFAULT_BEAT_HZ.top()).1;
     assert!(
         inside > 0.9,
         "a bass tone under the default top read as {inside:.3}"
     );
 
-    let over =
-        audio_meter::readings(&tone(1_500.0, RATE, WINDOW), RATE, DEFAULT_BEAT_HZ.top()).1;
+    let over = audio_meter::readings(&tone(1_500.0, RATE, WINDOW), RATE, DEFAULT_BEAT_HZ.top()).1;
     assert_eq!(over, 0.0, "a tone above the default top moved the pulse");
 
     // The same tone is the pulse where the band reaches it, which is what makes the line above
     // a reading of the band and not of the tone.
     let kept = audio_meter::readings(&tone(1_500.0, RATE, WINDOW), RATE, Some(16_000)).1;
-    assert!(kept > 0.9, "a tone under a band that reaches it read as {kept:.3}");
+    assert!(
+        kept > 0.9,
+        "a tone under a band that reaches it read as {kept:.3}"
+    );
 
     let off = audio_meter::readings(&tone(100.0, RATE, WINDOW), RATE, None).1;
     assert_eq!(off, 0.0, "a band that is off read a pulse");

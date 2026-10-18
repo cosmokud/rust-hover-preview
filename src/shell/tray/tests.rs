@@ -1091,7 +1091,10 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
     // choices it is as wide as, and a row of its own is one id wide.
     let mut others: Vec<(u16, u16)> = vec![
         // The scale ranges, each as wide as the shares its submenu lists.
-        (ID_TRAY_SCALE_BASE, ID_TRAY_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16),
+        (
+            ID_TRAY_SCALE_BASE,
+            ID_TRAY_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16,
+        ),
         (
             ID_TRAY_VIDEO_SCALE_BASE,
             ID_TRAY_VIDEO_SCALE_BASE + BITMAP_SCALE_CHOICES.len() as u16,
@@ -1131,7 +1134,10 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_ZOOM_BACKGROUND_BASE + ZOOM_BACKGROUND_CHOICES.len() as u16,
         ),
         // The ways of keeping a preview off the item it is about.
-        (ID_TRAY_AVOID_BASE, ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16),
+        (
+            ID_TRAY_AVOID_BASE,
+            ID_TRAY_AVOID_BASE + AVOID_CHOICES.len() as u16,
+        ),
         // The engine-idle times, one range apiece.
         (
             ID_TRAY_ENGINE_IDLE_BASE,
@@ -1175,14 +1181,20 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_SETTLING_DELAY_BASE,
             ID_TRAY_SETTLING_DELAY_BASE + TIMING_DELAY_CHOICES_MS.len() as u16,
         ),
-        (ID_TRAY_TICK_BASE, ID_TRAY_TICK_BASE + TICK_CHOICES_MS.len() as u16),
+        (
+            ID_TRAY_TICK_BASE,
+            ID_TRAY_TICK_BASE + TICK_CHOICES_MS.len() as u16,
+        ),
         // The away times, the persistent toggles above them, and the
         // theme folder's own items up to where the cache sizes begin.
         (
             ID_TRAY_AFK_TIMER_BASE,
             ID_TRAY_AFK_TIMER_BASE + AFK_TIMER_CHOICES_SECS.len() as u16,
         ),
-        (ID_TRAY_ENGINE_PERSISTENT_BASE, ID_TRAY_ENGINE_PERSISTENT_BASE + 3),
+        (
+            ID_TRAY_ENGINE_PERSISTENT_BASE,
+            ID_TRAY_ENGINE_PERSISTENT_BASE + 3,
+        ),
         (ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_IMAGE_CACHE_BASE),
         // The codec rows, wider than the list is long.
         (ID_TRAY_CODEC_BASE, ID_TRAY_CODEC_BASE + CODEC_COMMANDS),

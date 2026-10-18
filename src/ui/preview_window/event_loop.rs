@@ -1243,7 +1243,11 @@ pub fn run_preview_window() {
                         // the third thing a card can be moving by: read from the band the setting
                         // names, and not at all where it is `off` (see `sound_playing`,
                         // `current_beat_hz` and `audio_meter::output_beat`).
-                        let beat_hz = if sound_playing { current_beat_hz() } else { None };
+                        let beat_hz = if sound_playing {
+                            current_beat_hz()
+                        } else {
+                            None
+                        };
                         // A mark a stop left mid-beat is the fourth thing a card can be moving
                         // by: with nothing playing and nothing to read, the ripples are drawn by
                         // the fall until they are home, which is a second or so and then nothing
@@ -3679,8 +3683,10 @@ pub fn run_preview_window() {
                                     // remembering a track of its own (see `next_subtitle`).
                                     None,
                                 );
-                                let pid =
-                                    video_process.as_ref().map(|player| player.id()).unwrap_or(0);
+                                let pid = video_process
+                                    .as_ref()
+                                    .map(|player| player.id())
+                                    .unwrap_or(0);
 
                                 current_video_path = Some(path.clone());
                                 video_pos = (pos_x, pos_y, media_width, media_height);
