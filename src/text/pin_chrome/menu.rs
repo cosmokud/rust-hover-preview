@@ -748,6 +748,7 @@ pub(crate) fn menu_row_at(popup: &MenuPopup, x: i32, y: i32) -> Option<usize> {
 /// the pointer is and what the wash is drawn from (see `refresh_pin_menu`). It
 /// is the row a hand counts that is handed over here, and the bands the panel
 /// carries are what turns it into the band to wash (see `menu_row_at`).
+#[allow(clippy::too_many_arguments)] // Each one is a distinct fact about the paint, and a struct of them would be a type for one call.
 pub(crate) fn paint_menu_popup(
     buffer: &mut [u8],
     width: i32,
