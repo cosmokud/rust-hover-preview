@@ -71,7 +71,7 @@ const PIN_ZOOM_RELEASE_LEFT: f32 = 0.1;
 pub(super) const PIN_ZOOM_BOUNCE_SECONDS: f32 =
     crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_MS as f32 / 1000.0;
 
-/// The smooth return duration in seconds, read from the configuration (defaulting to 360 ms).
+/// The smooth return duration in seconds, read from the configuration (defaulting to 100 ms).
 pub(super) fn pin_zoom_bounce_seconds() -> f32 {
     crate::CONFIG
         .lock()

@@ -221,7 +221,7 @@ pub const DEFAULT_SPINNER_DELAY_MS: u64 = 250;
 pub const MAX_SPINNER_DELAY_MS: u64 = 10_000;
 /// How long the image inside a pinned window takes to swing back to its place once a zoom out has
 /// brought the picture within a notch of the fit, in milliseconds.
-pub const DEFAULT_PIN_ZOOM_BOUNCE_MS: u64 = 360;
+pub const DEFAULT_PIN_ZOOM_BOUNCE_MS: u64 = 100;
 /// The ceiling a hand-edited bounce duration is reduced to, in milliseconds.
 pub const MAX_PIN_ZOOM_BOUNCE_MS: u64 = 10_000;
 /// Whether the subtle bounce past center is enabled after the image moves home.
