@@ -36,7 +36,7 @@ use windows::Win32::Graphics::Dwm::{
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY,
     DWM_TNP_VISIBLE,
 };
-use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindowVisible};
 
 /// How large a mirrored pin may be on its longest side.
 ///
@@ -91,6 +91,17 @@ pub(super) fn sync_pin_mirror(kind: Option<MediaType>) {
     };
 
     let source = mirror_source(kind);
+
+    // **A pin put away is pictured once, and by the collapse.** Every window the pin's picture could
+    // be taken from after that is off the screen — the collapse puts them all away — and the Shell
+    // composes nothing for a window that is not on the screen, so settling again takes the
+    // registration the collapse took down, re-sizes the stand-in for a picture that is not there, and
+    // leaves the hover with the stand-in's own rows to show. What the collapse took is the whole of
+    // the picture there is (see `keep_the_pin_for_the_taskbar`, `mirror_source`).
+    if source.is_none() && pin_is_collapsed() {
+        return;
+    }
+
     let handle = source.map_or(0, |window| window.0 as isize);
 
     // Safety: the handle is a window this app is showing the pin in — its own, its player's, or the
@@ -249,6 +260,16 @@ unsafe fn fit_mirror_window(hwnd: HWND, client: (i32, i32)) {
 /// the preview window: a picture, a page, a card, and a film the media engine decodes into this
 /// window's own frame (see `place_pinned_siblings` and `render_layered_preview`).
 ///
+/// **And a pin put away is answered by a window that is on the screen, and by nothing else.** The
+/// bubble a collapse leaves is the picture of a pin that is *put away* — it is composed, it is
+/// showing the pin's own picture, and it is why the hover the bubble's own `To Taskbar` belongs to
+/// shows the pin rather than the desk behind it (see `pin_bubble::showing_bubble_window`). The
+/// pin's own windows are a picture for the one instant they are still up, which is the instant the
+/// collapse takes it (see `keep_the_pin_for_the_taskbar`), and not after: the collapse hides them,
+/// and the Shell composes nothing for a window that is not on the screen — so a thumbnail of one is
+/// a registration the Shell draws nothing into, and asking for it takes down the registration the
+/// picture was taken with (see `sync_pin_mirror`).
+///
 /// A sound has no picture to mirror, and a pin that is showing nothing yet has nothing to show.
 pub(super) fn mirror_source(kind: Option<MediaType>) -> Option<HWND> {
     match kind {
@@ -256,11 +277,6 @@ pub(super) fn mirror_source(kind: Option<MediaType>) -> Option<HWND> {
         Some(_) => {}
     }
 
-    // A pin put away into the round bubble is a pin whose own windows are off the screen, and the
-    // bubble is what is left of it on the desktop: it is composed, it is showing the pin's own
-    // picture, and it is the only window of the pin's there is to be a picture of — so the hover of
-    // the bubble's own `To Taskbar` shows the pin rather than the desk behind it (see
-    // `pin_bubble::showing_bubble_window`).
     if pin_is_collapsed() {
         if let Some(bubble) = pin_bubble::showing_bubble_window() {
             return Some(bubble);
@@ -268,17 +284,25 @@ pub(super) fn mirror_source(kind: Option<MediaType>) -> Option<HWND> {
     }
 
     let player = VIDEO_HWND.load(Ordering::SeqCst);
-    if player != 0 {
-        return Some(HWND(player as *mut _));
-    }
-
     let document = webview_preview::showing_hwnd();
-    if document != 0 {
-        return Some(HWND(document as *mut _));
+    let preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let window = if player != 0 {
+        HWND(player as *mut _)
+    } else if document != 0 {
+        HWND(document as *mut _)
+    } else if preview != 0 {
+        HWND(preview as *mut _)
+    } else {
+        return None;
+    };
+
+    // A pin put away has nothing of its own left on the screen but the bubble above, and that is not
+    // up: what a window that went down with the collapse is a picture of is nothing.
+    if pin_is_collapsed() && !unsafe { IsWindowVisible(window).as_bool() } {
+        return None;
     }
 
-    let preview = PREVIEW_HWND.load(Ordering::SeqCst);
-    (preview != 0).then_some(HWND(preview as *mut _))
+    Some(window)
 }
 
 /// The size the stand-in's client area is wanted at for a source's own size: the source's shape,

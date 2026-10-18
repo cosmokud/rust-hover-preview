@@ -558,3 +558,246 @@ fn a_stand_in_left_iconic_under_a_pin_on_the_screen_comes_back_up_on_the_tick() 
     forget_the_stand_in();
     stand_pin(previous_pin);
 }
+
+/// The client box of a window, which is the box the Shell draws a taskbar hover's picture in.
+///
+/// Safety: the handle is a window of this app's own or of the test's, and the question is a
+/// measurement of it rather than a change to it.
+unsafe fn the_client_box(hwnd: HWND) -> (i32, i32) {
+    let mut client = RECT::default();
+    let _ = GetClientRect(hwnd, &mut client);
+    (client.right - client.left, client.bottom - client.top)
+}
+
+/// A pin put away into the taskbar keeps the picture its collapse took, and is never pictured by a
+/// window that is not on the screen.
+///
+/// The fault this is a regression test for: the road that puts a pin away into the taskbar takes the
+/// pin's picture *while the bubble is still up* and then puts the pin's own windows away behind it —
+/// but the tick went on settling the mirror afterwards, and what it found for a pin the player draws
+/// was that player's own *hidden* window. The Shell composes nothing for a window that is not on the
+/// screen, so the stand-in was re-registered and re-sized for a picture that was not there, the
+/// registration the collapse had taken was dropped with it — and the hover it belonged to was left
+/// showing the stand-in's own rows, which this app has never painted.
+#[test]
+fn a_pin_put_away_keeps_the_picture_its_collapse_took() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
+
+    register_the_stand_in_class();
+
+    // The bubble a collapse leaves, standing on the screen at the circle's own size: what the mirror
+    // is taken of while the pin is being put away (see `showing_bubble_window`).
+    let bubble = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            44,
+            44,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a window for the bubble")
+    };
+    // Safety: the window is this test's own, and it is asked to be on the screen: a bubble the
+    // mirror is taken of is one the Shell is composing (see `showing_bubble_window`).
+    unsafe {
+        let _ = ShowWindow(bubble, SW_SHOWNOACTIVATE);
+    }
+    PIN_BUBBLE_HWND.store(bubble.0 as isize, Ordering::SeqCst);
+    let bubble_box = unsafe { the_client_box(bubble) };
+
+    // The window the pin is drawn by — mpv's, for the user's setting — already put away behind the
+    // bubble by the collapse, which is what the pin's own windows are while it is a bubble. A window
+    // of this test's own stands in for it: what matters is that it is not on the screen.
+    let player = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a player's window")
+    };
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+
+    // A pin put away into the taskbar, with the stand-in the button belongs to up.
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    forget_the_stand_in();
+    let stand_in = the_stand_in();
+    // Safety: the window is this app's own stand-in, asked only to be up — a hidden window has no
+    // taskbar button and no picture to hold (see `showing_taskbar_window`).
+    unsafe {
+        let _ = ShowWindow(stand_in, SW_SHOWNOACTIVATE);
+    }
+
+    // The collapse's own taking: the picture is the bubble's, and the stand-in is given its box.
+    sync_pin_mirror(Some(MediaType::Video));
+    assert_eq!(
+        unsafe { the_client_box(stand_in) },
+        bubble_box,
+        "the picture a collapse takes is the bubble and no other window, so the stand-in is the \
+         bubble's own box"
+    );
+
+    // And the bubble goes with the collapse's next breath (see `bubble_to_taskbar`).
+    hide_pin_bubble();
+
+    // What the tick asks a moment later: nothing of the pin is on the screen any more, so there is
+    // no window left to take a picture of and the picture already taken is the one to hold.
+    assert_eq!(
+        mirror_source(Some(MediaType::Video)),
+        None,
+        "a pin put away has no window on the screen left to be pictured by"
+    );
+    sync_pin_mirror(Some(MediaType::Video));
+    assert_eq!(
+        unsafe { the_client_box(stand_in) },
+        bubble_box,
+        "and the stand-in is left the box the frame the hover holds was taken in, rather than one \
+         re-made for a window the Shell composes nothing for"
+    );
+
+    // Safety: the two windows are this test's own and the stand-in is the app's own; the handles the
+    // app holds are put back as they were.
+    unsafe {
+        let _ = DestroyWindow(player);
+        let _ = DestroyWindow(bubble);
+    }
+    VIDEO_HWND.store(previous_video, Ordering::SeqCst);
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    forget_the_stand_in();
+    stand_pin(previous_pin);
+}
+/// The picture a minimize into the taskbar takes is taken of a window that is still up.
+///
+/// The other half of the rule above, and the road that has no bubble in it: a pin put away by its
+/// minimize button is pictured by the window it is drawn by, and the collapse takes that picture
+/// *before* it puts that window away — the pin is marked away first and its windows are hidden after
+/// (see `collapse_pin_to`). A rule that looked for a window on the screen only once the collapse had
+/// finished would find none and never size the stand-in for a picture at all, so the hover would fall
+/// back on the stand-in's own rows.
+#[test]
+fn a_pin_minimized_into_the_taskbar_is_pictured_before_its_windows_go() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_video = VIDEO_HWND.load(Ordering::SeqCst);
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let _ = take_pin_command();
+
+    register_the_stand_in_class();
+
+    // The window the pin is drawn by — mpv's, for the user's setting — standing in the pin's band and
+    // on the screen, which is what the collapse finds it as (see `keep_the_pin_for_the_taskbar`).
+    let player = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            320,
+            240,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a player's window")
+    };
+    // Safety: the window is this test's own, and it is asked to be on the screen: a player's window is
+    // a picture of the pin while it is showing, and the collapse takes the picture before it hides it.
+    unsafe {
+        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
+    }
+    VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
+    let player_box = unsafe { the_client_box(player) };
+
+    // The film the pin is showing, which is the media the collapse asks its picture of.
+    let mut video = create_loading_media(320, 240);
+    video.media_type = MediaType::Video;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(video);
+    }
+
+    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    forget_the_stand_in();
+    let stand_in = the_stand_in();
+
+    // The moment the collapse takes its picture in: the pin is already marked away — every road that
+    // takes one sets that first — and its own windows are still up, because the collapse puts them
+    // away after (see `collapse_pin_to`, `hide_pinned_windows`).
+    if let Some(mut pin) = take_pin_for_a_test() {
+        pin.collapsed = true;
+        stand_pin(Some(pin));
+    }
+    unsafe {
+        keep_the_pin_for_the_taskbar();
+    }
+    assert_eq!(
+        unsafe { the_client_box(stand_in) },
+        player_box,
+        "a pin put away is pictured while its own window is still up, so the stand-in is left that \
+         window's box"
+    );
+
+    // And once the window has gone down with the collapse there is nothing left to take a picture of,
+    // so the picture already taken is the one to hold (see `a_pin_put_away_keeps_the_picture_its_collapse_took`).
+    unsafe {
+        hide_pinned_windows();
+    }
+    assert!(
+        !unsafe { IsWindowVisible(player).as_bool() },
+        "the collapse puts the window the picture was taken of away"
+    );
+    assert_eq!(
+        mirror_source(Some(MediaType::Video)),
+        None,
+        "and there is no window of the pin's left on the screen to picture"
+    );
+    sync_pin_mirror(Some(MediaType::Video));
+    assert_eq!(
+        unsafe { the_client_box(stand_in) },
+        player_box,
+        "so the stand-in is left the box the frame the hover holds was taken in"
+    );
+
+    // Safety: the window is this test's own and the stand-in is the app's own; the handles the app
+    // holds are put back as they were.
+    unsafe {
+        let _ = DestroyWindow(player);
+    }
+    VIDEO_HWND.store(previous_video, Ordering::SeqCst);
+    forget_the_stand_in();
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+    stand_pin(previous_pin);
+}
