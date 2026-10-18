@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.5] - 2026-10-18
+
+### Added
+
+- **A wheel zooms a pinned picture.** Over a pinned picture — a still, an animation, a texture, a developed picture, a design, a drawing, or a page (a PDF, a comic's plate, a book's, a page Office, the render engine or Calibre drew) — the wheel is the pin's: the window grows about the picture's centre until it reaches the size **Fit to Screen** would give it, and the picture then grows inside the window that has stopped, about the cursor over it. A wheel back out takes it down the way it came, and the last of it lands with a small swing past its place. A film is the one refusal: its picture belongs to a player's window rather than to the pin. A picture zoomed past the box it is drawn at is the file laid out again at that size — a page is rasterized at it — so the zoom is sharp as the source allows rather than a stretched copy of the last frame.
+- **`Preview Settings → Image → Zoom → Background`** — what fills the band a hand carries a zoomed picture off its window leaves behind it: **Black** (default), **White** or **Checkerboard** (`zoom_background` in `config.ini`). The see-through backdrop is not offered: the band is the window's rather than the file's, and a layered window is hit-tested by the shape of its pixels, so a band left transparent is a band the hand clicks through to whatever stands under it.
+- **`beat_hz`** — the band a sound's card follows, which the mark drawn beside the name beats with: the bass under the sound sends ripples travelling out from the dot, and a pause brings them home. `off`, or a top of band between `20 Hz` (the fixed floor) and `16 kHz`; `250 Hz` by default. A setting of `config.ini` alone — the tray carries no row for it.
+- **The caches go up to `16 GB` and `128 GB`** — **Cache → Image (RAM)** offers `16 GB` at the top and the three disk caches `128 GB`; a size that is a whole number of gigabytes is named in it (`4 GB`, `128 GB`) rather than as the megabytes it is.
+- **`pin_zoom_bounce_ms`, `pin_zoom_bounce_gate`, `pin_zoom_bounce_speed_ms` and `pin_zoom_bounce_power`** — the landing a wheel zoom out ends with, all four in `config.ini`: how long the image takes to swing back to its place once a zoom out has brought the picture within a notch of the fit (`100 ms` by default), whether the swing past its place is on (on by default), how fast it snaps back (`0` by default), and how far past its place it drifts, as a share of the offset it is coming home from (`0.04` by default).
+
+### Changed
+
+- **A wheel over a pinned picture is the pin's, not Explorer's** — the low-level wheel hook counts the notch for the pin and swallows the message, and the preview loop is woken where it stands: a notch counted while the loop waited for a pin used to be read at the end of the wait, which measured 62 ms — four frames of a 144 Hz display, and the whole of what made a zoom start unevenly.
+- **A zoom's travel is paced by the compositor rather than by a sleep** — `DwmFlush` answers "when is the next frame" with the display's own period (6.94 ms on a 144 Hz one) instead of the loop's timer-paced wait, so a zoom moves at the rate the screen can show it, on a machine that takes its frames twice as often as well as one that does not.
+- **A caption narrowed past the point of naming the file gives the name up** — and one narrowed past ten pixels gives the strip itself up, rather than drawing a row of window buttons over the top of somebody's picture. Both come back as the window is widened.
+- **What earlier versions left on disk is taken by the installer rather than at every start** — the folders older builds cached their pages in, the video log one of them wrote for every hover, and the update check's leftover time and fetched installer are removed once, by the installer's own pre-install step; a start now sweeps only what a render ended mid-flight left in the temp folder and the browser profiles of the runs that are gone.
+- **Version bumped** — `0.4.5` in `Cargo.toml` and `Cargo.lock`.
+
+### Fixed
+
+- **A zoom no longer jumps to the size a notch asked for** — the ask is carried out a frame at a time, nine tenths of what is left of it within a tenth of the second and the rest of it behind that, so a spin of notches is a movement the eye can follow rather than a series of steps; a notch in and a notch out leave the picture exactly where it was.
+- **A window coming down is placed about its own middle** — a picture a hand has panned sits off its window's centre, and a zoom that placed the smaller window about the picture's carried centre walked the window across the screen with the pan; the window is placed about itself, and the pan goes on moving only the picture within it.
+
 ## [0.4.4] - 2026-10-17
 
 ### Added
