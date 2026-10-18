@@ -5,8 +5,8 @@ use crate::formats::lists;
 use crate::readers::tone_map::Curve;
 
 use super::defaults::{
-    DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_VOLUME,
-    DEFAULT_CHECK_FOR_UPDATES,
+    DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_MARK_OFFSET_Y,
+    DEFAULT_AUDIO_VOLUME, DEFAULT_CHECK_FOR_UPDATES,
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_LIBREOFFICE_IDLE_SECS, DEFAULT_MPV_PATH, DEFAULT_NORMALIZE_VIDEO_VOLUME,
@@ -177,6 +177,8 @@ pub struct AppConfig {
     pub pin_zoom_bounce_speed_ms: u64,
     /// How far the bounce drifts past the correct position, as a fraction of the pan offset.
     pub pin_zoom_bounce_power: f32,
+    /// Vertical pixel alignment offset for the audio preview mark beside the filename.
+    pub audio_mark_offset_y: f32,
     pub webp_playback_fps: u32,
     /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
     /// cache off, so every preview is decoded again.
@@ -709,6 +711,7 @@ impl Default for AppConfig {
             pin_zoom_bounce_gate: DEFAULT_PIN_ZOOM_BOUNCE_GATE,
             pin_zoom_bounce_speed_ms: DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS,
             pin_zoom_bounce_power: DEFAULT_PIN_ZOOM_BOUNCE_POWER,
+            audio_mark_offset_y: DEFAULT_AUDIO_MARK_OFFSET_Y,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             image_background: DEFAULT_IMAGE_BACKGROUND,
