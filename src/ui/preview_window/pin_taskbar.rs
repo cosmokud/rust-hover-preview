@@ -18,11 +18,15 @@
 
 use super::*;
 
+use windows::Win32::Foundation::BOOL;
+use windows::Win32::Graphics::Dwm::{
+    DwmSetWindowAttribute, DWMWA_FORCE_ICONIC_REPRESENTATION, DWMWA_HAS_ICONIC_BITMAP,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, IsIconic, IsWindow, SetWindowTextW, SC_CLOSE, SC_MINIMIZE, SC_RESTORE,
     SHOW_WINDOW_CMD, SW_MINIMIZE, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WA_ACTIVE,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_QUERYOPEN, WS_EX_APPWINDOW, WS_MINIMIZEBOX,
-    WS_POPUP, WS_SYSMENU,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_DWMSENDICONICTHUMBNAIL, WM_QUERYOPEN,
+    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 /// The class the taskbar stand-in is created from.
 pub(super) const PIN_TASKBAR_CLASS: PCWSTR = w!("RustHoverPreviewPinTaskbar");
@@ -139,11 +143,36 @@ pub(super) unsafe fn show_pin_taskbar() {
         // that has gone down is the frame the Shell cached on the way down, and the frame it caches
         // is the one the window was last showing — so it is minimized here rather than hidden, and
         // what it was last showing it keeps (see `pin_taskbar_mirror`).
+        //
+        // And the still of it is the app's own picture rather than whatever the Shell would compose
+        // itself, which for a window that is off every display is nothing (see
+        // `the_buttons_still_is_the_apps_own`).
+        the_buttons_still_is_the_apps_own(hwnd, true);
         ask_the_stand_in(hwnd, minimized_form(hwnd));
         return;
     }
 
     show_pin_taskbar_mirroring();
+}
+
+/// Tell the Shell whether the stills of this button are the bitmap this app supplies, or the
+/// window's own composition.
+///
+/// **It is the app's own only while the pin is put away.** A window the Shell is showing a button for
+/// is drawn from its own composition unless it is asked to be drawn from a bitmap instead, and for a
+/// put-away pin that composition is nothing at all — the stand-in is off every display, so its rows
+/// are whatever the Shell's surface for it last had — while the bitmap is the pin (see
+/// `pin_taskbar_mirror`). A pin that is *on the screen* is the other way about: its hover is the live
+/// picture of the pin, and forcing the bitmap on it would freeze the film the user is watching in the
+/// button.
+unsafe fn the_buttons_still_is_the_apps_own(hwnd: HWND, the_apps_own: bool) {
+    let forced = BOOL(the_apps_own as i32);
+    let _ = DwmSetWindowAttribute(
+        hwnd,
+        DWMWA_FORCE_ICONIC_REPRESENTATION,
+        &forced as *const BOOL as *const core::ffi::c_void,
+        std::mem::size_of::<BOOL>() as u32,
+    );
 }
 
 /// Put the stand-in up in the form that shows the pin: off the screen, and *shown* — a window the
@@ -157,6 +186,10 @@ pub(super) unsafe fn show_pin_taskbar_mirroring() {
     };
 
     set_pin_taskbar_title(hwnd);
+    // A pin that is on the screen is mirrored rather than supplied: what its button's hover shows is
+    // the Shell's drawing of the pin as it is, moving with the film (see
+    // `the_buttons_still_is_the_apps_own`).
+    the_buttons_still_is_the_apps_own(hwnd, false);
     ask_the_stand_in(hwnd, SW_SHOWNOACTIVATE);
 }
 
@@ -206,6 +239,7 @@ pub(super) unsafe fn close_pin_taskbar() {
     }
 
     pin_taskbar_mirror::stop_pin_mirror();
+    pin_taskbar_mirror::forget_the_pin_picture();
     pin_taskbar_buttons::forget_media_toolbar();
     let _ = DestroyWindow(HWND(hwnd as *mut _));
 }
@@ -377,6 +411,21 @@ pub(super) unsafe fn pin_taskbar_window() -> Option<HWND> {
     .ok()?;
 
     PIN_TASKBAR_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
+    // And the Shell is told that this window will supply the still its button's hover is drawn of, so
+    // that a put-away pin's button holds the pin rather than the icon the Shell falls back on for a
+    // window with no still of its own (see `pin_taskbar_mirror`). It is set once, where the window is
+    // made: what the still *is* is answered when the Shell asks for it, since that is the only moment
+    // the app is asked to supply one, and whether the Shell is to use it at all is read from where the
+    // pin is (see `the_buttons_still_is_the_apps_own`).
+    let supplies_its_own_still = BOOL(1);
+    let _ = DwmSetWindowAttribute(
+        hwnd,
+        DWMWA_HAS_ICONIC_BITMAP,
+        &supplies_its_own_still as *const BOOL as *const core::ffi::c_void,
+        std::mem::size_of::<BOOL>() as u32,
+    );
+
     Some(hwnd)
 }
 
@@ -448,6 +497,16 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         },
+        // The Shell's ask for the still of a button that is down — its own thumbnail of the window it
+        // falls back on otherwise is the window's icon — answered with the pin's own picture (see
+        // `pin_taskbar_mirror`'s `answer_the_thumbnail_request`). The high word of `lparam` is the
+        // widest thumbnail the Shell will take and the low word is the tallest.
+        WM_DWMSENDICONICTHUMBNAIL => {
+            let asked = lparam.0 as u32;
+            let requested = ((asked >> 16) as i32, (asked & 0xFFFF) as i32);
+            pin_taskbar_mirror::answer_the_thumbnail_request(hwnd, requested);
+            LRESULT(0)
+        }
         // The Shell asks an iconized window whether it may be opened before it opens it; this one
         // never may, because what it stands in for is not on the screen: the ask is answered by
         // putting the pin back and taking the stand-in away, and the button is never brought up.
