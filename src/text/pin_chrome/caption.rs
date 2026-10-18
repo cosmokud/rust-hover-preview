@@ -14,7 +14,7 @@
 //! is a panel over the media below the strip, and the window owns where it goes (see `bubble`).
 
 use super::primitives::{
-    caption_style, draw_chevron, draw_cross, draw_open_with, draw_open_with_list, fill_box,
+    caption_style, draw_chevron, draw_cross, draw_open_with, draw_open_with_list, draw_pin_top, fill_box,
     measure_text, stroke_box, surface_pixels, ChromePalette, GLYPH_PIXELS, GLYPH_STROKE_PIXELS,
 };
 use crate::text::text_paint::{self, DibSurface};
@@ -89,6 +89,8 @@ pub(crate) enum CaptionButton {
     /// way into a second program when the default is the wrong one — the button beside it can
     /// only ever reach the one the Shell has already chosen.
     OpenWithList,
+    /// Keep the pinned window on top of all other windows.
+    AlwaysOnTop,
     Minimize,
     Maximize,
     Close,
@@ -114,6 +116,7 @@ pub(crate) struct Caption<'a> {
     /// size, so there is no larger box to give it and the button would be one that does nothing
     /// (see `pin_frame`).
     pub(crate) maximizable: bool,
+    pub(crate) always_on_top: bool,
     pub(crate) hovered: Option<CaptionButton>,
     pub(crate) pressed: Option<CaptionButton>,
 }
@@ -140,12 +143,17 @@ pub(crate) fn button_boxes(
 ) -> Vec<CaptionButtonBox> {
     let kinds: &[CaptionButton] = if maximizable {
         &[
+            CaptionButton::AlwaysOnTop,
             CaptionButton::Minimize,
             CaptionButton::Maximize,
             CaptionButton::Close,
         ]
     } else {
-        &[CaptionButton::Minimize, CaptionButton::Close]
+        &[
+            CaptionButton::AlwaysOnTop,
+            CaptionButton::Minimize,
+            CaptionButton::Close,
+        ]
     };
 
     // Measured off the window's group alone, so the walk beside it can be any width at all and
@@ -404,6 +412,7 @@ pub(crate) fn paint_caption(
             title: caption.title.to_string(),
             maximized: caption.maximized,
             maximizable: caption.maximizable,
+            always_on_top: caption.always_on_top,
             hovered: caption.hovered,
             pressed: caption.pressed,
             background: palette.background,
@@ -432,6 +441,7 @@ struct CaptionStrip {
     title: String,
     maximized: bool,
     maximizable: bool,
+    always_on_top: bool,
     hovered: Option<CaptionButton>,
     pressed: Option<CaptionButton>,
     background: [u8; 3],
@@ -465,6 +475,7 @@ impl CaptionStrip {
             && self.title == caption.title
             && self.maximized == caption.maximized
             && self.maximizable == caption.maximizable
+            && self.always_on_top == caption.always_on_top
             && self.hovered == caption.hovered
             && self.pressed == caption.pressed
             && self.background == palette.background
@@ -484,7 +495,16 @@ fn paint_button(
     let pressed = caption.pressed == Some(button.kind);
     let hovered = caption.hovered == Some(button.kind);
 
-    if pressed || hovered {
+    if button.kind == CaptionButton::AlwaysOnTop && caption.always_on_top {
+        let wash = if pressed {
+            palette.hover(0.18)
+        } else if hovered {
+            palette.hover(0.15)
+        } else {
+            palette.hover(0.10)
+        };
+        text_paint::fill_rect(surface, button.rect, wash);
+    } else if pressed || hovered {
         // The close button is washed with the red Windows washes it with, whichever theme is
         // in use: it is the one button whose meaning does not depend on the palette. The
         // other two are washed with the theme's own background moved a step toward its text.
@@ -505,6 +525,8 @@ fn paint_button(
 
     let ink = if button.kind == CaptionButton::Close && (pressed || hovered) {
         [255, 255, 255]
+    } else if button.kind == CaptionButton::AlwaysOnTop && !caption.always_on_top && !pressed && !hovered {
+        text_paint::blend(palette.foreground, palette.background, 0.45)
     } else {
         palette.foreground
     };
@@ -545,6 +567,9 @@ pub(super) fn paint_glyph(
         }
         CaptionButton::OpenWithList => {
             draw_open_with_list(buffer, width, center_x, center_y, glyph, stroke, ink)
+        }
+        CaptionButton::AlwaysOnTop => {
+            draw_pin_top(buffer, width, center_x, center_y, glyph, stroke, ink)
         }
         CaptionButton::Minimize => {
             let top = center_y;

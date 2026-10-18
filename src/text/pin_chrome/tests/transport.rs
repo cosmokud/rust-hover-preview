@@ -85,23 +85,24 @@ fn the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them() {
 
     // The walk comes first in the run and the window's three after it, because the
     // window's are the ones against the right edge and the walk hangs off them.
-    assert_eq!(buttons.len(), 7);
+    assert_eq!(buttons.len(), 8);
     assert_eq!(buttons[0].kind, CaptionButton::Previous);
     assert_eq!(buttons[1].kind, CaptionButton::Next);
     assert_eq!(buttons[2].kind, CaptionButton::OpenWith);
     assert_eq!(buttons[3].kind, CaptionButton::OpenWithList);
-    assert_eq!(buttons[4].kind, CaptionButton::Minimize);
-    assert_eq!(buttons[5].kind, CaptionButton::Maximize);
-    assert_eq!(buttons[6].kind, CaptionButton::Close);
+    assert_eq!(buttons[4].kind, CaptionButton::AlwaysOnTop);
+    assert_eq!(buttons[5].kind, CaptionButton::Minimize);
+    assert_eq!(buttons[6].kind, CaptionButton::Maximize);
+    assert_eq!(buttons[7].kind, CaptionButton::Close);
     for pair in buttons.windows(2) {
         assert!(pair[0].rect.left < pair[1].rect.left);
     }
-    assert_eq!(buttons[6].rect.right, 600);
+    assert_eq!(buttons[7].rect.right, 600);
 
-    // The window's three keep the widths and the places they have always had: 46 pixels
+    // The window's four keep the widths and the places they have always had: 46 pixels
     // each at 100%, packed to 600, which is what a hand has been reaching for on every
     // window it has ever had.
-    for (index, left) in [462, 508, 554].into_iter().enumerate() {
+    for (index, left) in [416, 462, 508, 554].into_iter().enumerate() {
         assert_eq!(
             buttons[index + 4].rect,
             RECT {
@@ -126,7 +127,7 @@ fn the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them() {
     }
 
     // And a point is on the button it looks like it is on, or on none of them.
-    let close = buttons[6].rect;
+    let close = buttons[7].rect;
     assert_eq!(
         button_at(close.left + 1, 5, 600, 30, 96, true),
         Some(CaptionButton::Close)

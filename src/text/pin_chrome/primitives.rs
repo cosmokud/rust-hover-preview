@@ -725,6 +725,33 @@ pub(super) fn draw_open_with(
     stroke_segment(buffer, width, tip, point(1.0, -1.0 / 3.0), edge, color, 1.0);
 }
 
+/// A ceiling bar and an upward-pointing arrow: always on top mark.
+pub(crate) fn draw_pin_top(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: i32,
+    center_y: i32,
+    span: i32,
+    thickness: f32,
+    color: [u8; 3],
+) {
+    let edge = thickness.round().max(1.0);
+    let half = ((span as f32 / 2.0) - edge / 2.0).max(0.0);
+    let (middle_x, middle_y) = (center_x as f32 + 0.5, center_y as f32 + 0.5);
+    let point = |x: f32, y: f32| (middle_x + x * half, middle_y + y * half);
+
+    // Top horizontal bar
+    stroke_segment(buffer, width, point(-0.80, -0.80), point(0.80, -0.80), edge, color, 1.0);
+
+    // Arrow pointing up toward the bar
+    let tip = point(0.0, -0.44);
+    stroke_segment(buffer, width, tip, point(-0.48, 0.0), edge, color, 1.0);
+    stroke_segment(buffer, width, tip, point(0.48, 0.0), edge, color, 1.0);
+
+    // Vertical stem of the arrow
+    stroke_segment(buffer, width, point(0.0, -0.25), point(0.0, 0.80), edge, color, 1.0);
+}
+
 /// A list of rows above a chevron pointing down: the file handed to a program named out loud.
 ///
 /// It is not the hand-off mark beside it with a mark added, and the difference is the whole of

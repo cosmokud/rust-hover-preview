@@ -2155,8 +2155,35 @@ pub fn run_preview_window() {
                     // off is a window nothing would ever take down again — so it comes down the
                     // way its own close button takes it.
                     PreviewMessage::PinChanged => {
-                        if pinned() && !pin_enabled() {
-                            pin_request = Some(end_pin_state(Reason::SwitchedOff));
+                        if pinned() {
+                            if !pin_enabled() {
+                                pin_request = Some(end_pin_state(Reason::SwitchedOff));
+                            } else {
+                                let insert_after = if pin_always_on_top() {
+                                    HWND_TOPMOST
+                                } else {
+                                    HWND_NOTOPMOST
+                                };
+                                let _ = SetWindowPos(
+                                    hwnd,
+                                    insert_after,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                                );
+                                if pin_always_on_top() {
+                                    if !pin_is_collapsed() {
+                                        hide_pin_taskbar();
+                                    }
+                                } else {
+                                    show_pin_taskbar();
+                                }
+                                place_pinned_siblings();
+                                AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+                                render_layered_preview(hwnd);
+                            }
                         }
                     }
                     // One of the tray's two `Volume` rows was moved, and a pin up on a file of

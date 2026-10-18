@@ -142,7 +142,7 @@ fn a_real_font_cuts_the_name_where_the_measured_width_runs_out() {
 #[test]
 fn every_button_of_a_caption_is_the_one_under_the_pointer() {
     let buttons = button_boxes(600, 30, 96, true);
-    assert_eq!(buttons.len(), 7);
+    assert_eq!(buttons.len(), 8);
 
     for button in &buttons {
         let middle_x = (button.rect.left + button.rect.right) / 2;
@@ -181,11 +181,12 @@ fn a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons() {
     // The buttons are 46 wide either way here — 200 / 3 is 66, and the width is the
     // smaller of the two — so the walk's own four would need 7 * 46 = 322 of a strip
     // 200 wide, and the strip is the window's alone.
-    assert_eq!(narrow.len(), 3);
-    assert_eq!(narrow[0].kind, CaptionButton::Minimize);
-    assert_eq!(narrow[1].kind, CaptionButton::Maximize);
-    assert_eq!(narrow[2].kind, CaptionButton::Close);
-    assert_eq!(narrow[2].rect.right, 200);
+    assert_eq!(narrow.len(), 4);
+    assert_eq!(narrow[0].kind, CaptionButton::AlwaysOnTop);
+    assert_eq!(narrow[1].kind, CaptionButton::Minimize);
+    assert_eq!(narrow[2].kind, CaptionButton::Maximize);
+    assert_eq!(narrow[3].kind, CaptionButton::Close);
+    assert_eq!(narrow[3].rect.right, 200);
 
     // And the pointer agrees with the painter about what is there.
     for button in &narrow {
@@ -218,13 +219,14 @@ fn a_caption_without_a_maximize_keeps_the_close_button_where_it_was() {
     let three = button_boxes(600, 30, 96, true);
     let two = button_boxes(600, 30, 96, false);
 
-    assert_eq!(two.len(), 6);
+    assert_eq!(two.len(), 7);
     assert_eq!(two[0].kind, CaptionButton::Previous);
     assert_eq!(two[1].kind, CaptionButton::Next);
     assert_eq!(two[2].kind, CaptionButton::OpenWith);
     assert_eq!(two[3].kind, CaptionButton::OpenWithList);
-    assert_eq!(two[4].kind, CaptionButton::Minimize);
-    assert_eq!(two[5].kind, CaptionButton::Close);
+    assert_eq!(two[4].kind, CaptionButton::AlwaysOnTop);
+    assert_eq!(two[5].kind, CaptionButton::Minimize);
+    assert_eq!(two[6].kind, CaptionButton::Close);
 
     let close = three
         .iter()
@@ -237,11 +239,12 @@ fn a_caption_without_a_maximize_keeps_the_close_button_where_it_was() {
         .expect("a minimize button")
         .rect;
 
-    assert_eq!(two[5].rect.left, close.left);
-    assert_eq!(two[5].rect.right, close.right);
+    assert_eq!(two[6].rect.left, close.left);
+    assert_eq!(two[6].rect.right, close.right);
+    assert_eq!(two[5].rect.right, two[6].rect.left);
     assert_eq!(two[4].rect.right, two[5].rect.left);
     assert_eq!(
-        two[4].rect.right - two[4].rect.left,
+        two[5].rect.right - two[5].rect.left,
         minimize.right - minimize.left
     );
 
@@ -294,6 +297,7 @@ fn a_caption_is_opaque_everywhere_it_is_painted() {
             title,
             maximized: false,
             maximizable: true,
+            always_on_top: true,
             hovered: Some(CaptionButton::OpenWith),
             pressed: None,
         };
@@ -345,6 +349,7 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
         title: "Readme.md",
         maximized: false,
         maximizable: true,
+        always_on_top: true,
         hovered: Some(CaptionButton::OpenWith),
         pressed: None,
     };
@@ -419,6 +424,15 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
             &palette,
             &Caption {
                 maximized: true,
+                ..caption
+            },
+            96,
+        ),
+        (
+            "always on top toggled",
+            &palette,
+            &Caption {
+                always_on_top: false,
                 ..caption
             },
             96,
@@ -892,18 +906,18 @@ fn the_chevrons_arms_carry_a_share_of_the_ink() {
 fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
     // Buttons are 46 logical pixels at 100% and the padding at either end of the name is 12, so a
     // caption's room for its name is its width less the buttons it carries and less those 24. A
-    // caption wide enough for the pin's own walk carries seven buttons — the walk's four packed beside
-    // the window's three — and one too narrow drops the walk whole, which is why the room is not
+    // caption wide enough for the pin's own walk carries eight buttons — the walk's four packed beside
+    // the window's four — and one too narrow drops the walk whole, which is why the room is not
     // simply the width less a fixed number (see `button_boxes`).
     assert_eq!(
         title_room(600, 96, true),
-        600 - 7 * 46 - 24,
+        600 - 8 * 46 - 24,
         "a caption wide enough carries the walk as well"
     );
     assert_eq!(
-        title_room(200, 96, true),
-        200 - 3 * 46 - 24,
-        "and one too narrow for it carries the window's three alone"
+        title_room(240, 96, true),
+        240 - 4 * 46 - 24,
+        "and one too narrow for it carries the window's four alone"
     );
 
     // The three steps, at a width each of them is still worth taking at and one it is not.
@@ -912,26 +926,26 @@ fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
         "a wide caption says the name of what is pinned"
     );
     assert!(
-        !title_fits(200, 96, true) && caption_fits(200, 96, true),
-        "a narrow one gives the name up and keeps the strip: 200 less 162 is 38, which is room for          the ellipsis and not for a name"
+        !title_fits(240, 96, true) && caption_fits(240, 96, true),
+        "a narrow one gives the name up and keeps the strip: 240 less 208 is 32, which is room for the ellipsis and not for a name"
     );
     assert!(
-        !title_fits(170, 96, true) && !caption_fits(170, 96, true),
-        "and one too narrow even for the ellipsis gives itself up, because a row of window buttons          over the top of somebody's picture is not worth the band of the picture"
+        !title_fits(210, 96, true) && !caption_fits(210, 96, true),
+        "and one too narrow even for the ellipsis gives itself up, because a row of window buttons over the top of somebody's picture is not worth the band of the picture"
     );
 
-    // A pin with nothing to maximize carries two window buttons rather than three, so it has a button's
-    // width more to say a name in: at 350 the caption with a maximize has given its name up and the one
+    // A pin with nothing to maximize carries three window buttons rather than four, so it has a button's
+    // width more to say a name in: at 390 the caption with a maximize has given its name up and the one
     // without has not.
     assert!(
-        !title_fits(350, 96, true) && title_fits(350, 96, false),
+        !title_fits(390, 96, true) && title_fits(390, 96, false),
         "a caption's room is measured against the buttons it is actually carrying"
     );
 
     // And the whole rule is the display's own scale, because every width it is asked about is: a
     // caption on a display at 200% needs twice the room for the same name, and the window it is on is
     // measured in the same doubled pixels.
-    assert!(!title_fits(200, 96, true) && !title_fits(400, 192, true));
-    assert!(caption_fits(200, 96, true) && caption_fits(400, 192, true));
-    assert!(!caption_fits(170, 96, true) && !caption_fits(340, 192, true));
+    assert!(!title_fits(240, 96, true) && !title_fits(480, 192, true));
+    assert!(caption_fits(240, 96, true) && caption_fits(480, 192, true));
+    assert!(!caption_fits(210, 96, true) && !caption_fits(420, 192, true));
 }

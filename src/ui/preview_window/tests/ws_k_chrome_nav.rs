@@ -391,6 +391,49 @@ fn every_caption_button_asks_its_command_on_a_press_and_a_release() {
     restore(previous_pin, previous_pid, previous_media);
 }
 
+#[test]
+fn the_always_on_top_caption_button_toggles_pin_always_on_top() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    stand_pin(Some(wide_banded_video_pin((100, 80, 420, 320), 30.0)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    take_gesture_snapshot();
+    take_pin_command();
+
+    let (x, y) = a_caption_button_point(pin_chrome::CaptionButton::AlwaysOnTop);
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on AlwaysOnTop is the caption's to act on"
+    );
+    assert_eq!(
+        the_pressed_button(),
+        Some(pin_chrome::CaptionButton::AlwaysOnTop),
+        "so the press armed it, and took the capture with it"
+    );
+
+    let before = pin_always_on_top();
+    let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
+    assert!(
+        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "so the release is the caption's own to answer"
+    );
+    assert_eq!(pin_always_on_top(), !before, "AlwaysOnTop was toggled");
+    assert_eq!(the_pressed_button(), None, "and the button was let go of");
+
+    // Toggle back to restore initial state
+    assert!(unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) });
+    assert!(unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) });
+    assert_eq!(pin_always_on_top(), before, "restored to original state");
+
+    restore(previous_pin, previous_pid, previous_media);
+}
+
 /// K2 AT THE CAPTION, for the restore-down: a maximized pin remembers the box it had,
 /// and the caption draws a restore glyph where it drew the maximize — the same button,
 /// so the restore-down is dead or alive with the maximize rather than beside it.

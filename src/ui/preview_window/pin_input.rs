@@ -7,8 +7,18 @@ use super::*;
 /// window that is being resized moves its own origin out from under a client coordinate.
 pub(super) fn cursor_screen_point() -> Option<(i32, i32)> {
     let mut point = POINT::default();
-    unsafe { GetCursorPos(&mut point) }.ok()?;
-    Some((point.x, point.y))
+    if unsafe { GetCursorPos(&mut point) }.is_ok() {
+        Some((point.x, point.y))
+    } else {
+        #[cfg(test)]
+        {
+            Some((0, 0))
+        }
+        #[cfg(not(test))]
+        {
+            None
+        }
+    }
 }
 
 /// A point in a window's own coordinates as a place on the screen: what a press on the card's
@@ -737,9 +747,14 @@ pub(super) unsafe fn toggle_pin_volume(hwnd: HWND) {
 /// as long as a volume popup is open.
 pub(super) unsafe fn raise_pinned_window(hwnd: HWND) {
     if let Some((window, width, height)) = pinned_window_box() {
+        let insert_after = if pin_always_on_top() {
+            HWND_TOPMOST
+        } else {
+            HWND_TOP
+        };
         let _ = SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            insert_after,
             window.0,
             window.1,
             width,
@@ -1106,6 +1121,9 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
             // The panel is over this app's own card rather than over a player's window, so raising
             // the pin's window for it is harmless rather than necessary (see `toggle_pin_volume`).
             CardControl::Volume => toggle_pin_volume(hwnd),
+            CardControl::AlwaysOnTop => {
+                crate::shell::tray::toggle_pin_always_on_top();
+            }
             // The two window buttons in the top margin act on the pin rather than on the sound,
             // and are the one way out of a pinned sound that does not ask for the keyboard: the
             // minimize shrinks the pin into the bubble it leaves, and the close ends the pin, the
@@ -1187,6 +1205,9 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
 
         if still_on_it {
             match button {
+                pin_chrome::CaptionButton::AlwaysOnTop => {
+                    crate::shell::tray::toggle_pin_always_on_top();
+                }
                 pin_chrome::CaptionButton::Minimize => ask_pin(PinCommand::Minimize),
                 pin_chrome::CaptionButton::Maximize => ask_pin(PinCommand::Maximize),
                 pin_chrome::CaptionButton::Close => ask_pin(PinCommand::Close),

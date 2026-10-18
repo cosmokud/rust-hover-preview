@@ -12,7 +12,8 @@ use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, DispatchMessageW, GetMessageW, GetWindowLongPtrW, KillTimer, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE, HWND_TOPMOST, MSG,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE, HWND_NOTOPMOST,
+    HWND_TOPMOST, MSG,
     SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
 };
 
@@ -356,10 +357,17 @@ impl Host {
     /// preview that appeared over a window being named would put the caret somewhere else
     /// than where it was.
     pub(super) fn put_window(&self, area: Area) {
+        let insert_after = if crate::ui::preview_window::pinned()
+            && !crate::ui::preview_window::pin_always_on_top()
+        {
+            HWND_NOTOPMOST
+        } else {
+            HWND_TOPMOST
+        };
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,
-                HWND_TOPMOST,
+                insert_after,
                 area.x,
                 area.y,
                 area.width,

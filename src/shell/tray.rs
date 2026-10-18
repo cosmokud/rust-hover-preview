@@ -27,6 +27,7 @@ mod ids;
 mod menus;
 mod submenus;
 
+pub(crate) use commands::toggle_pin_always_on_top;
 pub use event_loop::run_tray;
 
 // What the tests read through this module: the ids and tables each menu is built from, and the

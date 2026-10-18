@@ -424,6 +424,7 @@ fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
             hovered: None,
             pressed: None,
             window_buttons: false,
+            always_on_top: true,
         }),
     )
     .expect("a card with its controls on it");
@@ -561,6 +562,7 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
                 hovered: None,
                 pressed: None,
                 window_buttons: false,
+                always_on_top: true,
             }),
         }),
         PinRelayoutRoad::TakeUp,
@@ -630,6 +632,7 @@ fn a_repaint_keeps_the_frame_it_was_painted_at() {
         hovered: None,
         pressed: None,
         window_buttons: true,
+        always_on_top: true,
     });
     assert!(
         media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome, 0.0),
@@ -861,6 +864,7 @@ fn a_repaint_still_follows_the_theme_setting() {
         hovered: None,
         pressed: None,
         window_buttons: true,
+        always_on_top: true,
     });
     assert!(
         media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome, 0.0),
@@ -1036,6 +1040,7 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
         hovered: None,
         pressed: None,
         window_buttons: true,
+        always_on_top: true,
     });
     let size = (width + 120, height + 60);
     assert!(
@@ -1641,7 +1646,11 @@ fn a_sounds_window_buttons_are_answered_over_the_margin_they_stand_in() {
     pin.audio_window_buttons = true;
     let (width, _) = pin.window_size();
 
-    for control in [CardControl::Minimize, CardControl::Close] {
+    for control in [
+        CardControl::AlwaysOnTop,
+        CardControl::Minimize,
+        CardControl::Close,
+    ] {
         let box_ = audio_preview::control_box(
             control,
             width as u32,
@@ -1749,6 +1758,48 @@ fn a_sounds_window_buttons_ask_the_pin_for_its_two_ways_out() {
         );
         assert_eq!(the_pressed_control(), None, "and the button is let go of");
     }
+
+    stand_pin(previous_pin);
+}
+
+#[test]
+fn a_sounds_always_on_top_button_toggles_pin_always_on_top() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pin = take_pin_for_a_test();
+    forget_pin_park_swap();
+    forget_video_frame();
+    take_gesture_snapshot();
+
+    let mut shown = sound_pin();
+    shown.audio_window_buttons = true;
+    stand_pin(Some(shown));
+
+    let (x, y) = a_sound_window_button_point(&sound_pin(), CardControl::AlwaysOnTop);
+    assert!(
+        unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) },
+        "a hand on AlwaysOnTop is the card's to act on"
+    );
+    assert_eq!(
+        the_pressed_control(),
+        Some(CardControl::AlwaysOnTop),
+        "so the press armed it"
+    );
+
+    let before = pin_always_on_top();
+    let window = CapturingWindow::around(RecordedPinWindow::new(0x1000));
+    assert!(
+        unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
+        "the release triggers AlwaysOnTop toggle"
+    );
+    assert_eq!(pin_always_on_top(), !before, "AlwaysOnTop state was toggled");
+    assert_eq!(the_pressed_control(), None, "and the button is let go of");
+
+    // Toggle back to restore initial state
+    assert!(unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) });
+    assert!(unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) });
+    assert_eq!(pin_always_on_top(), before, "restored to original state");
 
     stand_pin(previous_pin);
 }
