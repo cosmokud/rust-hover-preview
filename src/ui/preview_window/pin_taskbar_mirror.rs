@@ -267,7 +267,7 @@ fn mirror_source(kind: Option<MediaType>) -> Option<HWND> {
     }
 
     let preview = PREVIEW_HWND.load(Ordering::SeqCst);
-    (preview != 0).then(|| HWND(preview as *mut _))
+    (preview != 0).then_some(HWND(preview as *mut _))
 }
 
 /// The size the stand-in's client area is wanted at for a source's own size: the source's shape,

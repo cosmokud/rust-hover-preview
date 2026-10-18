@@ -9,7 +9,7 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::HINSTANCE;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, LoadImageW, HICON,
+    LoadImageW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED,
 };
 
 /// The application's own icon, or the system's application icon where the resource cannot be

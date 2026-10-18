@@ -29,8 +29,8 @@ use windows::Win32::System::Registry::{
 };
 use windows::Win32::UI::Controls::{ImageList_Add, ImageList_Create, HIMAGELIST, ILC_COLOR32};
 use windows::Win32::UI::Shell::{
-    ITaskbarList3, THBF_ENABLED, THBF_HIDDEN, TaskbarList, THB_BITMAP, THB_FLAGS, THB_TOOLTIP,
-    THBN_CLICKED, THUMBBUTTON, THUMBBUTTONFLAGS,
+    ITaskbarList3, TaskbarList, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_BITMAP, THB_FLAGS,
+    THB_TOOLTIP, THUMBBUTTON, THUMBBUTTONFLAGS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, HICON, SM_CXSMICON};
 
@@ -151,7 +151,9 @@ pub(super) fn pin_media_button_click(wparam: WPARAM) -> Option<PinCommand> {
     let id = (wparam.0 & 0xFFFF) as u32;
     let notice = (wparam.0 >> 16) as u32;
 
-    (notice == THBN_CLICKED).then(|| pin_media_button_command(id)).flatten()
+    (notice == THBN_CLICKED)
+        .then(|| pin_media_button_command(id))
+        .flatten()
 }
 
 /// The three buttons as the Shell reads them, in the order they are drawn.
@@ -241,7 +243,10 @@ unsafe fn add_media_toolbar(hwnd: HWND, state: PinMediaButtons) -> bool {
         showing: false,
         ..state
     };
-    if list.ThumbBarAddButtons(hwnd, &media_buttons(hidden)).is_err() {
+    if list
+        .ThumbBarAddButtons(hwnd, &media_buttons(hidden))
+        .is_err()
+    {
         return false;
     }
 
@@ -505,10 +510,7 @@ mod tests {
                 button.szTip.iter().any(|unit| *unit != 0),
                 "every button says what it is"
             );
-            assert!(
-                button.szTip.contains(&0),
-                "and what it says is terminated"
-            );
+            assert!(button.szTip.contains(&0), "and what it says is terminated");
         }
 
         let going = media_buttons(PinMediaButtons {
