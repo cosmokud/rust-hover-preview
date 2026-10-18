@@ -152,7 +152,7 @@ pub(super) const HTML_BACKGROUND_CHOICES: [TransparentBackground; 3] = [
 /// rather than kept as a value the menu has no item for (see `sanitize_dds_background`).
 pub(super) const DDS_BACKGROUND_CHOICES: [TransparentBackground; 2] =
     [TransparentBackground::Black, TransparentBackground::White];
-/// The backdrops the `Zoom → Background` half offers, which are three of the four rather
+/// The backdrops the `Pin Mode → Zoom Background` half offers, which are three of the four rather
 /// than all of them: what fills the band beside a picture the wheel has taken past its
 /// window is never a hole in the desktop, because a layered window is hit-tested by the
 /// shape of its pixels — a band left transparent would be a band the hand clicks through to
@@ -304,7 +304,7 @@ pub(super) const ID_TRAY_AUDIO_SHUFFLE: u16 = 1044;
 /// walk has no end of file to jump from, so its shuffle is the caption's buttons and the
 /// keyboard's alone. It sits beside the other two, in the same slack.
 pub(super) const ID_TRAY_IMAGE_SHUFFLE: u16 = 1045;
-/// The `Preview Settings → Image → Zoom → Background` submenu: one command per backdrop the
+/// The `Preview Settings → Image → Pin Mode → Zoom Background` submenu: one command per backdrop the
 /// band beside a zoomed picture can be filled with, in the order it lists them.
 ///
 /// It is a base plus the position a choice was listed at rather than a name of its own, the

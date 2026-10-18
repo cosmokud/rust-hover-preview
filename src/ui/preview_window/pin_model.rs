@@ -296,11 +296,12 @@ pub(super) fn preview_background(kind: MediaType) -> TransparentBackground {
 /// things to look at. What stands behind the transparency of a picture nobody has touched is the
 /// picture's own business, and it is answered by the `Background` submenu; what fills the band beside a
 /// picture that has been taken past its window is the window's, and it is answered by
-/// `Image → Zoom → Background` (see the tray's own menu for the two).
+/// `Image → Pin Mode → Zoom Background` (see the tray's own menu for the two).
 ///
 /// It is deliberately *not* read for anything else: a hover's picture and a pinned picture at the size
 /// of its window are composited over the backdrop the file's kind asks for, exactly as they always
-/// were, and the only band this fills is the one a zoom opened.
+/// were, and the only band this fills is the one a zoom opened — and not even that one once the
+/// picture has transparency in it (see `pinned_band_backdrop`).
 pub(super) fn zoom_background() -> TransparentBackground {
     CONFIG
         .lock()
@@ -309,13 +310,26 @@ pub(super) fn zoom_background() -> TransparentBackground {
 }
 
 /// What the band of a *pinned* picture is filled with: the tray's own backdrop for a zoom when the
-/// picture has been taken past its window, and the one the file's kind asks for otherwise.
+/// picture has been taken past its window and has no transparency in it, and the one the file's kind
+/// asks for otherwise.
+///
+/// The transparency is what decides it. A picture with a transparent pixel in it is a picture the
+/// `Background` half's setting is about — that setting is what stands behind the picture's own
+/// transparency at any size — so a zoom leaves it to answer and takes the same backdrop for the band
+/// beside the picture, `Transparent` included: a picture meant to show the desktop through it keeps
+/// showing it when the wheel takes it off its window, band and all. An opaque picture has no such
+/// question to ask, and the band beside it is the window's rather than the picture's, which is what
+/// `Zoom Background` is for (`Image → Pin Mode → Zoom Background`).
 ///
 /// It is the whole of what tells the two apart, and it is a function rather than two lines at the paint
 /// so that the rule can be asked without a window: the paint is one call away from a layered surface,
 /// and what stands behind a picture is a question about the picture (see `zoom_background`).
-pub(super) fn pinned_band_backdrop(kind: MediaType, zoomed: bool) -> TransparentBackground {
-    if zoomed {
+pub(super) fn pinned_band_backdrop(
+    kind: MediaType,
+    zoomed: bool,
+    opaque: bool,
+) -> TransparentBackground {
+    if zoomed && opaque {
         zoom_background()
     } else {
         preview_background(kind)

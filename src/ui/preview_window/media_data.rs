@@ -207,9 +207,11 @@ fn fill_backdrop_span(
 
     // Premultiplied by an alpha of 255, which is the pixel's own colour: the backdrop of a band this
     // app fills for itself is opaque where the picture over it is not, or the press the fill exists for
-    // would fall through it (see `fill_band_hit_testable`).
+    // would fall through it (see `fill_band_hit_testable`). The one backdrop that is not opaque is left
+    // as the caller left the band — the emptiness above, which a layered window shows the desktop
+    // through — and not written as the black the colour table would make of it.
     let (b, g, r) = match background {
-        TransparentBackground::Transparent => (0, 0, 0),
+        TransparentBackground::Transparent => return,
         TransparentBackground::Black => (0, 0, 0),
         TransparentBackground::White => (255, 255, 255),
         TransparentBackground::Checkerboard => {
