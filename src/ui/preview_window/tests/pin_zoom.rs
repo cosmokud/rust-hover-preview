@@ -896,6 +896,10 @@ fn the_image_swings_past_its_place_and_comes_back() {
     // Where the fit would put the picture at the size it stands at: the middle, with what it overhangs
     // by hanging off both sides alike.
     let home = |zoom: &PinZoom| (1000.0 - zoom.drawn.0) / 2.0;
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.pin_zoom_bounce_speed_ms = 20;
+    }
+
     let mut swang = 0.0f32;
     let mut frames = 0;
 
@@ -924,6 +928,10 @@ fn the_image_swings_past_its_place_and_comes_back() {
         (home(&zoom) - zoom.picture_box((1000, 800)).0 as f32).abs() < 2.0,
         "so it comes to rest in the place the fit would put it"
     );
+
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.pin_zoom_bounce_speed_ms = crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS;
+    }
 }
 
 /// An intermediate zoom out that leaves the image oversized neither bounces nor gives up its pan:
@@ -978,6 +986,10 @@ fn intermediate_zoom_out_does_not_bounce_and_zoom_out_to_fit_clamps_and_bounces_
     );
     zoom.toward = fit_toward;
 
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.pin_zoom_bounce_speed_ms = 20;
+    }
+
     let mut swang = 0.0f32;
     let mut saw_bounce = false;
     let mut frames = 0;
@@ -1003,6 +1015,10 @@ fn intermediate_zoom_out_does_not_bounce_and_zoom_out_to_fit_clamps_and_bounces_
         (0, 0, 1000, 800),
         "the image settled cleanly at fit to screen without bouncing back"
     );
+
+    if let Ok(mut config) = crate::CONFIG.lock() {
+        config.pin_zoom_bounce_speed_ms = crate::config::config::DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS;
+    }
 }
 
 #[test]
