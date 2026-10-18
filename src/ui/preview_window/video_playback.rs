@@ -932,13 +932,13 @@ fn note_pin_re_raise() {
 /// read off — rather than off the media, which is a fact about the file on screen and not about
 /// whose window stands in its band.
 ///
-/// The raise is held off for the same reasons it always was: a strip of the pin's chrome or the
-/// volume popup is drawn where the film is, and a film parked for a gesture is deliberately not on
-/// screen. `parked` is asked here for the monitor, which nobody can hold off from outside; the
-/// placement road is the one road that must put a parked window back, so it asks this with no park
-/// (see `unpark_player_window`).
+/// The raise is held off for the same reasons it always was: a strip of the pin's chrome, the
+/// volume popup or the card's menu is drawn where the film is, and a film parked for a gesture is
+/// deliberately not on screen. `parked` is asked here for the monitor, which nobody can hold off
+/// from outside; the placement road is the one road that must put a parked window back, so it asks
+/// this with no park (see `unpark_player_window`).
 ///
-/// **The two hold-offs stand for mpv's film as they do for FFmpeg's.** A raise put over the pin
+/// **The hold-offs stand for mpv's film as they do for FFmpeg's.** A raise put over the pin
 /// covers the caption and the transport bar the pin draws into the band over the media (see
 /// `pin_overlay_chrome`), then the pin is put back over the film — a two-step reorder per tick,
 /// per monitor pass and per drag move, which is the blink the chrome was seen doing. What keeps
@@ -947,6 +947,12 @@ fn note_pin_re_raise() {
 /// own raise, which the chrome block and the volume arm already do (see `event_loop`). What the
 /// film still owes a band that has moved is the *place*, and that travels without a raise (see
 /// `ensure_pinned_sibling_box`).
+///
+/// **And the card's menu is a hold-off of the same kind, for a window of its own** (see
+/// `pin_menu_window`): the panel is drawn over the film, and every raise it gets is
+/// `render_pin_menu`'s own (see `event_loop`, `open_pin_menu`). A raise of the film is therefore
+/// the film over the panel for as long as the next tick takes — a panel that blinks wherever it
+/// overlaps the picture, which is where a hand reads it (see `pin_menu_open`).
 ///
 /// The media engine's route never reaches a placement at all: its band is painted into this app's
 /// own window and it begins no player, so there is no window of somebody else's in the band for
@@ -957,14 +963,16 @@ pub(super) fn player_order(
     _pinned: bool,
     chrome_up: bool,
     volume_open: bool,
+    menu_open: bool,
     parked: bool,
 ) -> PlayerOrder {
-    // A park, a strip of the pin's chrome and the volume popup are all refused for every window
-    // there is: a parked film is not on screen to be raised, and on either route a raise over the
-    // chrome or the popup puts the film over what the user is looking at. mpv's film holds its
-    // own band (`--ontop`) while the pin's own raise carries the press, and a band that has moved
-    // is placed without a raise (see the note above and `ensure_pinned_sibling_box`).
-    let order = if parked || chrome_up || volume_open {
+    // A park, a strip of the pin's chrome, the volume popup and the card's menu are all refused for
+    // every window there is: a parked film is not on screen to be raised, and on any of the other
+    // routes a raise puts the film over what this app is drawing — the caption and the bar in the
+    // pin's own rows, and the panel of a card's menu in a window of its own over them. mpv's film
+    // holds its own band (`--ontop`) while the pin's own raise carries the press, and a band that
+    // has moved is placed without a raise (see the note above and `ensure_pinned_sibling_box`).
+    let order = if parked || chrome_up || volume_open || menu_open {
         PlayerOrder::Leave
     } else {
         PlayerOrder::Raise
@@ -999,9 +1007,11 @@ pub(super) fn player_order(
 /// what answers for the pin standing over it.
 ///
 /// **A `Leave` never reaches here** — both raisers refuse it before asking (see `player_order`) —
-/// so the pin is not re-raised for a park, and the two hold-offs a `Leave` stands for are answered
-/// where they are caused: a strip of the pin's chrome and an open volume popup each come with a
-/// raise of the pin's own window (see `event_loop`'s chrome block, `toggle_pin_volume`). Nor is a
+/// so the pin is not re-raised for a park, and the three hold-offs a `Leave` stands for are
+/// answered where they are caused: a strip of the pin's chrome and an open volume popup each come
+/// with a raise of the pin's own window (see `event_loop`'s chrome block, `toggle_pin_volume`), and
+/// an open card's menu is a window of its own that the tick raises over the film every tick (see
+/// `render_pin_menu`). Nor is a
 /// hover's placement followed by one, because a hover has no pin to put over anything. What is
 /// left is the pin being put back exactly where a pinned film was raised.
 ///
@@ -1177,8 +1187,9 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         return false;
     }
     // What is to be done with the window, from the one answer both of the places that put one
-    // somewhere read: everything held off — the pin's own chrome or popup — is nothing this road
-    // places, and a raise puts the pin back over the film it raised (see `place_player_window`).
+    // somewhere read: everything held off — the pin's own chrome, its popup or its menu — is
+    // nothing this road places, and a raise puts the pin back over the film it raised (see
+    // `place_player_window`).
     //
     // The park is deliberately not asked of it here: this is the road that must put a parked
     // window back (see `unpark_player_window`), so the park is the callers' refusal and the
@@ -1188,6 +1199,7 @@ pub(super) fn ensure_video_window_topmost(x: i32, y: i32, width: i32, height: i3
         pinned(),
         pin_chrome_up(),
         pin_volume_open(),
+        pin_menu_open(),
         false,
     );
     if order == PlayerOrder::Leave {
