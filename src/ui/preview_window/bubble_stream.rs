@@ -296,7 +296,7 @@ fn start(wanted: Wanted) -> Stream {
         if let Ok(mut noted) = NOTED_STREAMS.lock() {
             noted.push((wanted.key.path.clone(), wanted.at, wanted.key.side));
         }
-        return Stream::Refused(wanted.key);
+        Stream::Refused(wanted.key)
     }
 
     #[cfg(not(test))]
