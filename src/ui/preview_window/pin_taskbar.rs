@@ -30,6 +30,26 @@ pub(super) const PIN_TASKBAR_CLASS: PCWSTR = w!("RustHoverPreviewPinTaskbar");
 /// The stand-in's window, or zero while it has never been shown.
 pub(super) static PIN_TASKBAR_HWND: AtomicIsize = AtomicIsize::new(0);
 
+/// Whether this app is asking its own stand-in for a form right now.
+///
+/// Windows asks an iconic window whether it may be opened — `WM_QUERYOPEN` — for the app's own
+/// `ShowWindow` calls as much as for the Shell's gesture on the taskbar button, and the two are
+/// told apart by nothing else: the same question arrives either way, from inside the call. What
+/// this flag is for is answering the first as "yes, come up" and the second as the pin's own
+/// restore (see `pin_taskbar_proc`).
+static ASKING_THE_STAND_IN_UP: AtomicBool = AtomicBool::new(false);
+
+/// Ask the stand-in for a form, saying that anything arriving during the ask is this app's own.
+///
+/// A stand-in that is iconic is *not* shown by `ShowWindow` alone: the call asks the window whether
+/// it may open first, and an answer of "no" leaves it iconic — which is how the mirroring step got
+/// no picture to take (see `show_pin_taskbar_mirroring`).
+unsafe fn ask_the_stand_in(hwnd: HWND, form: SHOW_WINDOW_CMD) {
+    ASKING_THE_STAND_IN_UP.store(true, Ordering::SeqCst);
+    let _ = ShowWindow(hwnd, form);
+    ASKING_THE_STAND_IN_UP.store(false, Ordering::SeqCst);
+}
+
 /// Where the stand-in is kept: far enough off every display that even a momentary un-minimize
 /// cannot put a window on screen. It is never meant to be seen — only its taskbar button is, and the
 /// picture the Shell mirrors into it (see `pin_taskbar_mirror`).
@@ -106,7 +126,7 @@ pub(super) unsafe fn show_pin_taskbar() {
         // that has gone down is the frame the Shell cached on the way down, and the frame it caches
         // is the one the window was last showing — so it is minimized here rather than hidden, and
         // what it was last showing it keeps (see `pin_taskbar_mirror`).
-        let _ = ShowWindow(hwnd, minimized_form(hwnd));
+        ask_the_stand_in(hwnd, minimized_form(hwnd));
         return;
     }
 
@@ -124,7 +144,7 @@ pub(super) unsafe fn show_pin_taskbar_mirroring() {
     };
 
     set_pin_taskbar_title(hwnd);
-    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    ask_the_stand_in(hwnd, SW_SHOWNOACTIVATE);
 }
 
 /// How a stand-in is taken down to its put-away form: minimized, whichever state of up it is in.
@@ -418,7 +438,17 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
         // The Shell asks an iconized window whether it may be opened before it opens it; this one
         // never may, because what it stands in for is not on the screen: the ask is answered by
         // putting the pin back and taking the stand-in away, and the button is never brought up.
+        //
+        // **Except when this app is the one asking.** The question arrives for the mirroring step's
+        // own showing of a put-away stand-in as much as for the user's click, and answered as the
+        // click it asked the pin back out of the taskbar it had just been put into — which is what
+        // left every minimize after a restore doing nothing at all: the window stayed iconic and
+        // composed nothing, so the picture could not be taken, and the restore the query queued put
+        // the pin back on the screen (see `ASKING_THE_STAND_IN_UP`).
         WM_QUERYOPEN => {
+            if ASKING_THE_STAND_IN_UP.load(Ordering::SeqCst) {
+                return LRESULT(1);
+            }
             handle_taskbar_restore();
             LRESULT(0)
         }
