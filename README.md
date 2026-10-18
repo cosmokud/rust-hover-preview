@@ -367,9 +367,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - SVG documents and font specimens, which a browser is handed as an image, are still drawn rather than run.
       - A running page can be pointed at, clicked into and typed into; a document, a specimen and every other preview still cannot.
     - Without the engine on the machine it stays a text preview.
-  - **Image** — **Pin Mode** and **Zoom**, and the whole of each: **Shuffle**, whether a *pinned* picture's walk takes the next file at random, and the backdrop the band a zoom leaves behind the picture is filled with.
+  - **Image** — **Pin Mode**, and the whole of it: **Shuffle**, whether a *pinned* picture's walk takes the next file at random, and **Zoom Background**, the backdrop the band a zoom leaves behind the picture is filled with.
     - A picture has no level, no end of file and nowhere in it to start, and a hover has no next file, so the shuffle is the one thing a picture answers.
-    - **Zoom → Background** — **Black** (default), **White** or **Checkerboard**: the backdrops that fill the band a hand carries a zoomed picture off its window leaves behind it. The see-through one is not offered, since the band is the window's rather than the file's. Written as `zoom_background`.
+    - **Pin Mode → Zoom Background** — **Black** (default), **White** or **Checkerboard**: the backdrops that fill the band a hand carries a zoomed picture off its window leaves behind it. The see-through one is not offered, since the band is the window's rather than the file's. Written as `zoom_background`. A picture with a transparent pixel in it keeps what **Background → Image** asks for instead — see-through included — so one meant to show the desktop through it keeps doing so at any size, zoom or not.
 - **Timing**
   - **Prioritize Keyboard** — On by default.
     - The file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview.
@@ -721,7 +721,7 @@ spinner_delay_ms=250
 - `vector_background`: `checkerboard` default, `white`, `black`, or `transparent`. Used for SVG pages and metafiles. Old `svg_background` is ignored and removed.
 - `html_background`: `white` default, `black`, or `checkerboard`, and only those three — a page is drawn on a page, so transparency is not one of the backdrops it is offered. Used for a page of HTML previewed by `render_html`, run or not; any other value reads as `white`.
 - `design_background`: `checkerboard` default, `white`, `black`, or `transparent`.
-- `zoom_background`: `black` default, `white`, or `checkerboard`, and only those three — the band a hand carries a zoomed picture off its window is the window's to fill rather than a hole to look through, since a layered window is hit-tested by the shape of its pixels. Any other value reads as `black`.
+- `zoom_background`: `black` default, `white`, or `checkerboard`, and only those three — the band a hand carries a zoomed picture off its window is the window's to fill rather than a hole to look through, since a layered window is hit-tested by the shape of its pixels. Asked of a zoomed picture with no transparency in it: a picture with a transparent pixel keeps its own kind's backdrop (`image_background` — **Background → Image**), see-through included. Any other value reads as `black`.
 
 ### Old or removed names
 
