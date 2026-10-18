@@ -249,7 +249,7 @@ unsafe extern "system" fn tray_window_proc(
                         set_image_background(cmd - ID_TRAY_IMAGE_BACKGROUND_BASE)
                     }
                     // And the band beside a zoomed picture's own backdrop, which is the
-                    // picture's `Zoom → Background` half rather than one of the `Background`
+                    // picture's `Pin Mode → Zoom Background` half rather than one of the `Background`
                     // submenu's: it is three wide, and its range sits in the slack between
                     // the picture's `Shuffle` row and the theme items.
                     cmd if (ID_TRAY_ZOOM_BACKGROUND_BASE
