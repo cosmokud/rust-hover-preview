@@ -631,6 +631,7 @@ pub fn run_preview_window() {
                     || pin_held_pick.is_some();
 
                 if let Some(walk) = pin_command_request(
+                    hwnd,
                     &mut pin_request,
                     &mut pin_walk_wait,
                     &mut audio_started,
@@ -2034,6 +2035,19 @@ pub fn run_preview_window() {
                         scroll_text_preview(hwnd, first_line);
                     }
                 }
+            }
+
+            // And a selection drag carried past the edge of the box keeps selecting: the page is
+            // taken a step the way the drag left by, and the selection grows to the line at the
+            // edge it came back with (see `step_text_drag_selection`).
+            step_text_drag_selection(hwnd);
+
+            // And a notch turned with `Ctrl` held over a pinned page is that page's own size: the
+            // page is laid out again at the step the notches have reached, in the box it already has
+            // (see `step_pinned_text_size`).
+            let size_delta = wheel_input::take_text_size_delta();
+            if size_delta != 0 {
+                step_pinned_text_size(hwnd, size_delta.signum());
             }
 
             // And a notch over a pinned picture is the picture being zoomed: the same hook swallowed it

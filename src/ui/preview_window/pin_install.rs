@@ -1546,15 +1546,17 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     true
 }
 
-/// Carry where a page of text was up to — the line its frame starts at and what was selected —
-/// from the media being replaced onto the one that replaces it.
+/// Carry where a page of text was up to — the line its frame starts at, what was selected, and the
+/// size the reader put it to — from the media being replaced onto the one that replaces it.
 ///
 /// A pinned text preview is laid out again whenever its window is given another box, and a box is
 /// what the document is wrapped for: without this, resizing the window of a document someone is
 /// reading would put them back at the top of it. The two positions survive being carried because
-/// they are places in the document rather than points on the screen (see `Selection`), and the
-/// rest of the state — the lines, the scrollbar, what can be reached — belongs to the box the new
-/// media was laid out in.
+/// they are places in the document rather than points on the screen (see `Selection`), and the size
+/// is carried because it is the reader's own rather than the file's — the next file of a walk is
+/// drawn at it too, and only closing the pin gives it up (see `step_pinned_text_size`). The rest of
+/// the state — the lines, the scrollbar, what can be reached — belongs to the box the new media was
+/// laid out in.
 ///
 /// It takes the lock itself and is called *before* the one above is taken, for the reason the
 /// deadlock in `pin_media_is_alive` is written down as: a lock this thread already holds is not a
@@ -1574,6 +1576,7 @@ pub(super) fn keep_text_place(media: MediaData) -> MediaData {
     if let Some(state) = media.text_state.as_mut() {
         state.first_line = old.first_line;
         state.selection = old.selection;
+        state.options.font_scale_percent = old.options.font_scale_percent;
     }
     media
 }

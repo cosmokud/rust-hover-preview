@@ -54,13 +54,40 @@ pub(super) const KEY_REPEAT: isize = 1 << 30;
 pub(super) fn pinned_key_command(vk: i32) -> Option<PinCommand> {
     // The keys are the virtual-key codes of the message's `wParam`, which are constants
     // rather than patterns, so the two directions are told apart by guards rather than by
-    // arms: `VK_LEFT` and `VK_UP` both mean back, and `VK_RIGHT` and `VK_DOWN` both mean on.
-    if vk == VK_LEFT.0 as i32 || vk == VK_UP.0 as i32 {
+    // arms: `VK_LEFT` is back and `VK_RIGHT` is on, and the two the page shares with them are
+    // their own commands because a page has somewhere for them to go (see `PinCommand::PageBack`).
+    if vk == VK_LEFT.0 as i32 {
         return Some(PinCommand::Previous);
     }
 
-    if vk == VK_RIGHT.0 as i32 || vk == VK_DOWN.0 as i32 {
+    if vk == VK_RIGHT.0 as i32 {
         return Some(PinCommand::Next);
+    }
+
+    // An up arrow or a `PageUp` is a screenful back where the window holds a page of text and the
+    // previous file where it holds anything else, which is the same question a Space is: what the
+    // key means is the file in the window's answer rather than this mapping's (see
+    // `pin_command_request`).
+    if vk == VK_UP.0 as i32 || vk == VK_PRIOR.0 as i32 {
+        return Some(PinCommand::PageBack);
+    }
+
+    if vk == VK_DOWN.0 as i32 || vk == VK_NEXT.0 as i32 {
+        return Some(PinCommand::PageOn);
+    }
+
+    if vk == VK_HOME.0 as i32 {
+        return Some(PinCommand::PageTop);
+    }
+
+    if vk == VK_END.0 as i32 {
+        return Some(PinCommand::PageBottom);
+    }
+
+    // `F3` is the key the system has used for "find the next one" since before this app: a user who
+    // has looked for a word in anything else presses the key they already know (see `PinCommand::FindNext`).
+    if vk == VK_F3.0 as i32 {
+        return Some(PinCommand::FindNext);
     }
 
     if vk == VK_ESCAPE.0 as i32 {
@@ -101,6 +128,11 @@ pub(super) fn hook_pin_key_command(command: u8) -> Option<PinCommand> {
         2 => Some(PinCommand::Close),
         3 => Some(PinCommand::TogglePlayback),
         4 => Some(PinCommand::NextSubtitle),
+        5 => Some(PinCommand::PageBack),
+        6 => Some(PinCommand::PageOn),
+        7 => Some(PinCommand::PageTop),
+        8 => Some(PinCommand::PageBottom),
+        9 => Some(PinCommand::FindNext),
         _ => None,
     }
 }
@@ -384,12 +416,12 @@ pub(super) unsafe extern "system" fn window_proc(
                     close_pin_menu(hwnd);
                     return LRESULT(0);
                 }
-                // And a row the menu is not for — a film's transport bar, the text
-                // of a pinned page — is left under the hand rather than answered
-                // here: what is there is the player's own strip or the page's own
-                // menu (see `pin_right_click_opens_menu`).
-                if pin_right_click_opens_menu(y) {
-                    open_pin_menu(hwnd, menu_x, menu_y);
+                // And a row the menu is not for — a film's transport bar — is left under the hand
+                // rather than answered here: what is there is the player's own strip (see
+                // `pin_right_click_page`). A right-click in the text of a pinned page is the
+                // window's own, with the page's two commands above its rows.
+                if let Some(page) = pin_right_click_page(y) {
+                    open_pin_menu(hwnd, menu_x, menu_y, page);
                 }
                 return LRESULT(0);
             }
@@ -409,14 +441,11 @@ pub(super) unsafe extern "system" fn window_proc(
             // The menu is the preview's own, so it opens where it was asked for,
             // and the press that asks for it does not dismiss the preview.
             let (x, y) = message_point(lparam);
-            // The page's own `Select All` / `Copy` menu is for the text under the hand, and
-            // opens on the release rather than the press: where the press already put the
-            // window's own menu up — on the title bar above the text — this one stays down,
-            // because two panels for one right-click is one too many (see
-            // `pin_right_click_opens_menu`).
-            if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire)
-                && !(pinned() && pin_right_click_opens_menu(y))
-            {
+            // A page's own `Select All` / `Copy` menu is for a text preview with no window
+            // around it, and opens on the release rather than the press: a pinned page asks
+            // the window's own menu for the same rows and the ones under them, and that menu
+            // is already up from the press (see `pin_right_click_page`).
+            if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) && !pinned() {
                 show_text_preview_menu(hwnd, x, y);
             }
             LRESULT(0)

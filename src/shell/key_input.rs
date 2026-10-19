@@ -63,25 +63,31 @@ static PIN_KEYS_TOPMOST: AtomicBool = AtomicBool::new(false);
 /// two must be kept in step: a key listed in one and not the other is a key this app acts on and
 /// also passes on, which is a double action rather than a missing one.
 ///
-/// `VK_LEFT`/`VK_UP` are the same command and `VK_RIGHT`/`VK_DOWN` the same one, which is the pin's
-/// own arrangement and not a coincidence: in a window with a film in it, up and down have nowhere
-/// to go, so they walk the list with left and right rather than doing nothing.
-pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 7] = [
+/// `VK_RIGHT`/`VK_DOWN` used to be the same command and `VK_LEFT`/`VK_UP` the other, which was
+/// right while a pin only ever held a file: an up arrow had nowhere to walk to. A pin that holds a
+/// page of text has somewhere for the two of them to go, and which of the two a window means is
+/// asked where the file is known rather than here (see `PinCommand::PageBack`).
+pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 12] = [
     (0x25, 0), // VK_LEFT  -> Previous
-    (0x26, 0), // VK_UP    -> Previous
     (0x27, 1), // VK_RIGHT -> Next
-    (0x28, 1), // VK_DOWN  -> Next
     (0x1B, 2), // VK_ESCAPE -> Close
     (0x20, 3), // VK_SPACE -> TogglePlayback
     (0x54, 4), // VK_T     -> NextSubtitle
+    (0x26, 5), // VK_UP    -> PageBack
+    (0x21, 5), // VK_PRIOR  -> PageBack
+    (0x28, 6), // VK_DOWN  -> PageOn
+    (0x22, 6), // VK_NEXT   -> PageOn
+    (0x24, 7), // VK_HOME  -> PageTop
+    (0x23, 8), // VK_END   -> PageBottom
+    (0x72, 9), // VK_F3    -> FindNext
 ];
 
 /// How many commands `PIN_KEY_COMMANDS` names, which is how many counters are kept for them.
 ///
-/// Named rather than written as the `5` of an array length so that a command added to the table
+/// Named rather than written as the `10` of an array length so that a command added to the table
 /// above is a command this count has to be told about, rather than a command whose presses are
 /// counted into a counter that was never reserved for it.
-const PIN_COMMAND_COUNT: usize = 5;
+const PIN_COMMAND_COUNT: usize = 10;
 
 /// The command that means `PinCommand::TogglePlayback`, which is the one row of
 /// `PIN_KEY_COMMANDS` whose repeats are not commands.
@@ -131,6 +137,11 @@ pub(crate) fn publish_pin_always_on_top(always_on_top: bool) {
 /// command travels the same path a press of the pin's own caption button does: it is queued, and
 /// the loop acts on it (see `ask_pin`).
 static PIN_KEY_PRESSES: [AtomicU32; PIN_COMMAND_COUNT] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
     AtomicU32::new(0),
     AtomicU32::new(0),
     AtomicU32::new(0),
@@ -512,14 +523,14 @@ mod tests {
         );
         assert_eq!(
             pin_key_command(0x26),
-            Some(0),
-            "VK_UP is the previous file too"
+            Some(5),
+            "VK_UP takes a page back, and a window with no page in it walks the folder for it"
         );
         assert_eq!(pin_key_command(0x27), Some(1), "VK_RIGHT is the next file");
         assert_eq!(
             pin_key_command(0x28),
-            Some(1),
-            "VK_DOWN is the next file too"
+            Some(6),
+            "VK_DOWN takes a page on, and the same window walks on for it"
         );
         assert_eq!(pin_key_command(0x1B), Some(2), "VK_ESCAPE closes the pin");
         assert_eq!(
@@ -531,6 +542,27 @@ mod tests {
             pin_key_command(0x54),
             Some(4),
             "VK_T is the next subtitle track"
+        );
+        assert_eq!(
+            pin_key_command(0x21),
+            Some(5),
+            "VK_PRIOR is VK_UP's command, because both take a page of text back"
+        );
+        assert_eq!(pin_key_command(0x22), Some(6), "and VK_NEXT is VK_DOWN's");
+        assert_eq!(
+            pin_key_command(0x24),
+            Some(7),
+            "VK_HOME is the beginning of the page in the window"
+        );
+        assert_eq!(
+            pin_key_command(0x23),
+            Some(8),
+            "and VK_END is the last screenful of it"
+        );
+        assert_eq!(
+            pin_key_command(0x72),
+            Some(9),
+            "VK_F3 takes the page to the next place its selection appears"
         );
 
         // A key this app does not answer is passed on untouched, or the hook would eat a letter of a

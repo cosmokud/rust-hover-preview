@@ -3,6 +3,8 @@
 
 use super::*;
 
+use crate::shell::tray::FONT_SIZE_CHOICES;
+
 /// The item the hover on screen is about, as the box the view draws it in: the
 /// hook's own answer about the pointer, published with every look at the item under
 /// it and withdrawn with the window.
@@ -546,6 +548,32 @@ pub fn text_scroll_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
         return None;
     }
 
+    text_region_try()
+}
+
+/// The same region, without the question of whether the page can scroll: a `Ctrl` and a wheel
+/// resizes a page rather than moving it, and a page short enough to fit its box is exactly one a
+/// reader has a reason to enlarge (see `text_size_after_notches`).
+///
+/// Nothing is widened by asking it this way: a page that fits its box has no scroll to give
+/// Explorer, so the wheel over one is not a scroll anybody is losing. It is answered for a pin
+/// alone, because a hover that fits its box is a preview the pointer has not settled on and one
+/// Explorer's wheel still scrolls the list under — and for a *page* alone, because the region a pin
+/// publishes is its whole window whatever it shows, and a `Ctrl` and a wheel over a pinned picture
+/// is that picture being zoomed (see `pin_zoom_keep_alive_try`).
+///
+/// Whether this app is in the pin at all is asked of two published answers rather than the lock,
+/// and asked first: a notch over a pinned picture — a picture's wheel is its zoom, and not this —
+/// is the case this must not pay a lock for (see `wheel_hook_proc`).
+pub fn text_size_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
+    if !pinned() || !TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
+        return None;
+    }
+
+    text_region_try()
+}
+
+fn text_region_try() -> Option<(i32, i32, i32, i32)> {
     POINTER_HOLD_REGIONS
         .try_lock()
         .ok()
@@ -584,10 +612,18 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
         return;
     }
 
-    // A selection is a range of the frame that is on screen, so it is dropped
-    // rather than left pointing at lines that have moved.
+    // What is selected is kept exactly as it is: a selection is a place in the document, so the
+    // frame that comes back draws the same text somewhere else rather than the selection having
+    // to be moved to where the text went (see `Selection`).
+    let selection = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.text_state.as_ref())
+            .and_then(|state| state.selection)
+    });
+
     let Some(frame) =
-        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, None)
+        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
     else {
         return;
     };
@@ -609,7 +645,190 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
             state.visible_lines = frame.visible_lines;
             state.scrollbar = frame.scrollbar;
             state.lines = frame.lines;
-            state.selection = None;
+            state.selection = selection;
+        }
+    }
+
+    render_layered_preview(hwnd);
+}
+
+/// The line one of the pin's own page keys asks the page on screen to be taken to, or nothing at
+/// all when the pin holds no page — which is what tells an up arrow meant for the page from one
+/// meant for the folder (see `pin_command_request`).
+///
+/// The page is asked for its own numbers rather than told where it is: what a screenful is is the
+/// box the page is drawn in, and where its ends are is what it can reach (see
+/// `TextPreviewState::page_lines`). Nothing is drawn here: the line is handed back to the tick that
+/// answered the key, which draws it the way it draws the wheel's own scroll.
+pub(super) fn text_scroll_line(command: PinCommand) -> Option<usize> {
+    // What the last paint said was on screen is asked before the media is, and it is the whole
+    // answer to whether there is a page: a pin whose page is being replaced this tick is still a pin
+    // holding one — and a page whose turn of the page walked the folder would be the up arrow the
+    // page took with it coming out as another file.
+    if !TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let media = CURRENT_MEDIA.lock().ok()?;
+    let state = media.as_ref().and_then(|media| media.text_state.as_ref())?;
+
+    let step = state.page_lines();
+    match command {
+        PinCommand::PageBack => Some(state.scrolled_by(-step)),
+        PinCommand::PageOn => Some(state.scrolled_by(step)),
+        PinCommand::PageTop => Some(0),
+        PinCommand::PageBottom => Some(state.max_first_line()),
+        _ => None,
+    }
+}
+
+/// Lines a tick of a selection drag carried past the edge of the box moves the page: a screenful
+/// every two seconds at the tick the preview loop runs at, which is a speed a hand can stop.
+const TEXT_DRAG_LINES_PER_TICK: i64 = 3;
+
+/// Where a selection drag that has left the box asks the page to go, and the point the selection is
+/// grown to afterwards — or nothing while the pointer is inside the box or no drag is running.
+///
+/// The point comes back past the edge the pointer left rather than where the pointer is: the frame
+/// that comes back is the page a few lines on (or back), and the nearest line to a point just
+/// outside it is the line at its edge. That is what makes the selection grow with the scroll —
+/// growing it to the pointer's own line first would leave the far end standing still while the text
+/// moved under it (see `position_in` and `step_text_drag_selection`).
+pub(super) fn text_drag_step() -> Option<(usize, (i32, i32))> {
+    let Ok(media) = CURRENT_MEDIA.lock() else {
+        return None;
+    };
+    let state = media.as_ref().and_then(|media| media.text_state.as_ref())?;
+    if !state.selecting {
+        return None;
+    }
+
+    let (x, y) = state.drag_pointer?;
+    let (step, edge) = if y < 0 {
+        (-TEXT_DRAG_LINES_PER_TICK, -1)
+    } else if y >= state.height as i32 {
+        (TEXT_DRAG_LINES_PER_TICK, state.height as i32 + 1)
+    } else {
+        return None;
+    };
+
+    Some((state.scrolled_by(step), (x, edge)))
+}
+
+/// Follow a selection drag that has been carried past the edge of the box: the page is taken a step
+/// in the direction the drag left by, and the selection is grown to the line at the edge it came
+/// back with, so a range longer than the box shows can be made with the pointer alone.
+///
+/// Nothing is drawn where the page cannot move any further: the scroll itself is a no-op at either
+/// end of the document, and a selection grown to the edge line of the frame that is already on
+/// screen has nowhere left to grow to.
+pub(super) unsafe fn step_text_drag_selection(hwnd: HWND) {
+    let Some((line, point)) = text_drag_step() else {
+        return;
+    };
+
+    scroll_text_preview(hwnd, line);
+
+    if extend_text_selection(point.0, point.1) == Some(true) {
+        repaint_text_preview(hwnd);
+    }
+}
+
+/// The size a pinned page is drawn at after a wheel has been turned over it with `Ctrl` held: the
+/// steps the tray's own `Text Size` offers, walked one per notch — so the sizes a reader can reach in
+/// a pin are the sizes the tray lists, and a size hand-edited into `config.ini` between two of them
+/// steps to the next one in the direction the wheel was turned.
+///
+/// Nothing moves past either end of the list: the largest step is the largest page and the smallest
+/// is the smallest, and a notch that has nowhere to go leaves the size it found rather than taking
+/// the page to the other end of the scale.
+pub(super) fn text_size_after_notches(current: u32, notches: i32) -> u32 {
+    let steps = || FONT_SIZE_CHOICES.iter().map(|(percent, _)| *percent);
+    let mut size = current;
+
+    for _ in 0..notches.abs() {
+        size = if notches > 0 {
+            steps()
+                .filter(|percent| *percent > size)
+                .min()
+                .unwrap_or(size)
+        } else {
+            steps()
+                .filter(|percent| *percent < size)
+                .max()
+                .unwrap_or(size)
+        };
+    }
+
+    size
+}
+
+/// Draw the pinned page again at a step of its own text size, keeping its box, its place in the
+/// document and what is selected in it.
+///
+/// The size is the pin's own rather than the file's or the configuration's: it is held in the page's
+/// state for as long as the pin lives, and it is the one thing a reader who has zoomed into a page
+/// does not expect to have to do again on the next file of a walk (see `keep_text_place`).
+///
+/// One step is taken per tick that any notch arrived in rather than per whole notch: a high-
+/// resolution wheel reports less than a notch per message, and a count truncated to whole notches is
+/// most of its travel thrown away.
+pub(super) unsafe fn step_pinned_text_size(hwnd: HWND, notches: i32) {
+    let Some((path, options, dpi, width, height, first_line, selection)) =
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media.as_ref().and_then(|media| {
+                media.text_state.as_ref().map(|state| {
+                    (
+                        state.path.clone(),
+                        state.options,
+                        state.dpi,
+                        state.width,
+                        state.height,
+                        state.first_line,
+                        state.selection,
+                    )
+                })
+            })
+        })
+    else {
+        return;
+    };
+
+    let percent = text_size_after_notches(options.font_scale_percent, notches);
+    if percent == options.font_scale_percent {
+        return;
+    }
+
+    // Nothing is laid out while the lock is held: the render is a screenful of text, and the lock is
+    // the one a paint takes (see `scroll_text_preview`).
+    let options = TextPreviewOptions {
+        font_scale_percent: percent,
+        ..options
+    };
+    let Some(frame) =
+        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
+    else {
+        return;
+    };
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        let Some(media) = media.as_mut() else {
+            return;
+        };
+
+        // The hover may have moved on while this page was drawn.
+        if media.text_state.as_ref().map(|state| &state.path) != Some(&path) {
+            return;
+        }
+
+        media.frames[0] = Arc::new(ImageFrame::new(frame.pixels, frame.width, frame.height, 0));
+
+        if let Some(state) = media.text_state.as_mut() {
+            state.options = options;
+            state.first_line = frame.first_line;
+            state.visible_lines = frame.visible_lines;
+            state.scrollbar = frame.scrollbar;
+            state.lines = frame.lines;
         }
     }
 

@@ -17,6 +17,10 @@
 //! either: a notch over it is the picture being zoomed, and the count is left for the
 //! window procedure to take (see `pin_zoom_keep_alive_try`).
 //!
+//! And for a pinned page, where the notch is its own text size rather than its place:
+//! a `Ctrl` held over one steps the size, and a page short enough to fit its box is
+//! resized even though it has no scroll to give (see `text_size_keep_alive_try`).
+//!
 //! And it is the same hook that has to *stop* there, because a region is a box on the
 //! screen and not a claim on what is in front of it: a hover preview stands over
 //! everything and is a window nothing can be above, but a pin can be behind another
@@ -27,6 +31,7 @@
 
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEHWHEEL, WM_MOUSEWHEEL,
 };
@@ -43,6 +48,11 @@ static TEXT_SCROLL_DELTA: AtomicI32 = AtomicI32::new(0);
 /// to only where the pointer is inside the box the pin published.
 static PIN_ZOOM_DELTA: AtomicI32 = AtomicI32::new(0);
 
+/// Wheel notches handed to a pinned page's own text size, on the same terms again: a notch turned
+/// over a page with `Ctrl` held is how large that page is drawn rather than where it is (see
+/// `text_size_after_notches`).
+static PIN_TEXT_SIZE_DELTA: AtomicI32 = AtomicI32::new(0);
+
 /// Thread running the hook's message pump, published so shutdown can wake it.
 static WHEEL_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
@@ -55,6 +65,19 @@ pub fn wheel_tick_count() -> u64 {
 /// wheel units (120 to a notch).
 pub fn take_text_scroll_delta() -> i32 {
     TEXT_SCROLL_DELTA.swap(0, Ordering::AcqRel)
+}
+
+/// Wheel notches a pinned page has been given for its own text size since this was last called, in
+/// wheel units (120 to a notch). Signed, up being larger.
+pub fn take_text_size_delta() -> i32 {
+    PIN_TEXT_SIZE_DELTA.swap(0, Ordering::AcqRel)
+}
+
+/// Whether `Ctrl` is held, asked of the keyboard rather than read from the message: a wheel message
+/// carries no modifiers of its own, and this is a read of one number where a low-level callback may
+/// do nothing else (see `wheel_hook_proc`).
+fn control_is_down() -> bool {
+    unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0 }
 }
 
 /// Wheel notches a pinned picture has been given since this was last called, in wheel
@@ -107,11 +130,32 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
             if point_in_region(info.pt, region) && crate::shell::key_input::pin_owns_foreground() {
                 // The wheel is the preview's, not Explorer's: count it for the
                 // preview thread and swallow the message so the list behind the
-                // preview does not move as well.
+                // preview does not move as well. `Ctrl` held makes it the page's own size rather
+                // than its place, which is the one grip a reader has on how large a pinned page is
+                // drawn (see `PIN_TEXT_SIZE_DELTA`).
                 if wparam.0 == WM_MOUSEWHEEL as usize {
-                    TEXT_SCROLL_DELTA.fetch_add(notches, Ordering::AcqRel);
+                    if control_is_down() {
+                        PIN_TEXT_SIZE_DELTA.fetch_add(notches, Ordering::AcqRel);
+                    } else {
+                        TEXT_SCROLL_DELTA.fetch_add(notches, Ordering::AcqRel);
+                    }
                 }
                 return LRESULT(1);
+            }
+        }
+
+        // And the page's size for a page with no scroll to give: one that fits its box is a page
+        // the branch above never reaches, because there is no scroll there for Explorer to lose —
+        // so a `Ctrl` and a wheel over one is asked for here instead (see
+        // `text_size_keep_alive_try`).
+        if wparam.0 == WM_MOUSEWHEEL as usize && control_is_down() {
+            if let Some(region) = crate::ui::preview_window::text_size_keep_alive_try() {
+                if point_in_region(info.pt, region)
+                    && crate::shell::key_input::pin_owns_foreground()
+                {
+                    PIN_TEXT_SIZE_DELTA.fetch_add(notches, Ordering::AcqRel);
+                    return LRESULT(1);
+                }
             }
         }
 

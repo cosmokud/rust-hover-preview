@@ -26,6 +26,9 @@ use super::*;
 pub(super) struct PinMenu {
     /// Whether the panel is up.
     pub(super) open: bool,
+    /// Which page of the menu the panel holds: the chrome's own rows, or the two commands a
+    /// pinned page of text stands above them (see `PinMenuPage`).
+    pub(super) page: PinMenuPage,
     /// Whether the End of File row's flyout is up beside the menu, rather than the menu
     /// holding its rows alone. Only one flyout is ever up: opening one puts
     /// the other away (see `refresh_pin_menu`).
@@ -53,6 +56,29 @@ pub(super) struct PinMenu {
     /// pointer leaves the row, so that a hand only passing over it
     /// opens nothing (see `refresh_pin_menu`).
     pub(super) seek_since: Option<Instant>,
+}
+
+/// Which page a right-click asks a pinned window's own menu for: the rows its chrome holds, or —
+/// over the text of a pinned page — those rows under the page's own two commands, so the text can
+/// be selected and copied without the window's menu being a page away.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PinMenuPage {
+    /// The window's own rows, which is what a right-click on the title bar asks for.
+    #[default]
+    Chrome,
+    /// A pinned page's text, whose own `Select All` and `Copy` stand above the window's rows.
+    Text,
+}
+
+impl PinMenuPage {
+    /// How many of the panel's rows are the page's own, above the rows the pin shares with the
+    /// bubble.
+    fn own_rows(self) -> usize {
+        match self {
+            PinMenuPage::Chrome => 0,
+            PinMenuPage::Text => TEXT_MENU_ROWS.len(),
+        }
+    }
 }
 
 /// What a repaint draws the card's menu from: the
@@ -93,6 +119,80 @@ pub(super) struct PinMenuFlyout {
     pub(super) rows: Vec<pin_chrome::MenuRow>,
     /// The row of the flyout the pointer is over, for its wash.
     pub(super) hover: Option<usize>,
+}
+
+/// What a pinned page's own page of the menu offers above the window's rows: the whole frame
+/// selected, what is selected put on the clipboard, and the next place it appears — the same three
+/// commands a hover's own text menu holds the first two of (see `show_text_preview_menu`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextMenuRow {
+    SelectAll,
+    Copy,
+    /// The page taken to the next place what is selected appears in it, which is the one find a
+    /// window nobody may type in can offer: the selection is the query (see `find_next`).
+    FindNext,
+    /// The rule between the page's own commands and the window's rows under them.
+    Separator,
+}
+
+/// The rows a pinned page's own page of the menu holds, from the top of the panel down, above the
+/// rows the pin shares with the bubble.
+const TEXT_MENU_ROWS: [TextMenuRow; 4] = [
+    TextMenuRow::SelectAll,
+    TextMenuRow::Copy,
+    TextMenuRow::FindNext,
+    TextMenuRow::Separator,
+];
+
+impl TextMenuRow {
+    /// What the row is written as: a command's own name, and nothing at all on a rule.
+    fn label(self) -> &'static str {
+        match self {
+            TextMenuRow::SelectAll => "Select All",
+            TextMenuRow::Copy => "Copy",
+            TextMenuRow::FindNext => "Find Next",
+            TextMenuRow::Separator => "",
+        }
+    }
+
+    /// The mark the row carries: a command is a row that answers on the spot, and a rule carries
+    /// the hairline between the two groups (see `pin_chrome::MenuMark`).
+    fn mark(self) -> pin_chrome::MenuMark {
+        match self {
+            TextMenuRow::Separator => pin_chrome::MenuMark::Separator,
+            TextMenuRow::SelectAll | TextMenuRow::Copy | TextMenuRow::FindNext => {
+                pin_chrome::MenuMark::None
+            }
+        }
+    }
+}
+
+/// The rows a pinned page's own page of the menu holds, above the rows the pin shares with the
+/// bubble.
+fn text_menu_rows() -> Vec<pin_chrome::MenuRow> {
+    TEXT_MENU_ROWS
+        .iter()
+        .map(|row| pin_chrome::MenuRow {
+            label: row.label().to_string(),
+            mark: row.mark(),
+        })
+        .collect()
+}
+
+/// What a press on one of a pinned page's own rows asks, answering whether the panel stays up:
+/// every command answers and goes away the way a menu a command was chosen in does, while a rule is
+/// not a row a hand answers at all.
+unsafe fn text_menu_row_press(hwnd: HWND, row: TextMenuRow) -> bool {
+    match row {
+        TextMenuRow::SelectAll => select_all_text_preview(hwnd),
+        TextMenuRow::Copy => {
+            copy_text_preview(hwnd);
+        }
+        TextMenuRow::FindNext => find_next_in_text_preview(hwnd),
+        TextMenuRow::Separator => return true,
+    }
+
+    false
 }
 
 /// How long the pointer rests on a row that opens a flyout before it opens:
@@ -417,7 +517,19 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> PinMenuPaint {
     let card = pin_shows_an_audio_card(pin);
     let rows = match card {
         true => menu_rows(),
-        false => bubble_menu_chrome_rows(current_media_type(), pin_media_is_playing(pin)),
+        // A right-click in the text of a pinned page holds the page's own two commands above the
+        // rows the pin shares with the bubble (see `PinMenuPage::Text`).
+        false => {
+            let mut rows = match pin.menu.page {
+                PinMenuPage::Chrome => Vec::new(),
+                PinMenuPage::Text => text_menu_rows(),
+            };
+            rows.extend(bubble_menu_chrome_rows(
+                current_media_type(),
+                pin_media_is_playing(pin),
+            ));
+            rows
+        }
     };
     // The End of File row's flyout where it is up, else the Seek row's: only one flyout is
     // ever up, so the one that is up is the panel's, and both hang off rows only a sound's
@@ -643,7 +755,7 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
         .unwrap_or(false);
     let stays_up = match card {
         true => card_menu_press(&paint, x, y),
-        false => shared_menu_press(&paint, x, y),
+        false => shared_menu_press(hwnd, &paint, x, y),
     };
 
     if !stays_up {
@@ -784,11 +896,26 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
 /// against and a press outside it has left the menu (see `pinned_menu_paint`).
 ///
 /// Answers whether the panel stays up.
-unsafe fn shared_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
+unsafe fn shared_menu_press(hwnd: HWND, paint: &PinMenuPaint, x: i32, y: i32) -> bool {
+    let page = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.menu.page))
+        .unwrap_or_default();
+
+    // The page's own rows stand above the ones the pin shares with the bubble, so a press on one
+    // of them is the page's own and is answered before the shared rows are counted from the top
+    // of the panel (see `PinMenuPage::own_rows`).
+    let pressed_row = pin_chrome::menu_row_at(&paint.popup, x, y);
+    if let Some(row) = pressed_row.and_then(|index| TEXT_MENU_ROWS.get(index)) {
+        if page == PinMenuPage::Text {
+            return text_menu_row_press(hwnd, *row);
+        }
+    }
+
     // The rows the panel was painted from are the rows a press is answered against, read the
     // way the paint reads them so that an index into the panel is an index into the pin's own
     // rows (see `bubble_menu_rows`).
-    let pressed = pin_chrome::menu_row_at(&paint.popup, x, y)
+    let pressed = pressed_row
+        .and_then(|index| index.checked_sub(page.own_rows()))
         .and_then(|index| bubble_menu_rows(current_media_type()).get(index).copied());
 
     match pressed {
@@ -806,21 +933,22 @@ unsafe fn shared_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
 /// point the right-click landed: a second right-click while the panel is
 /// up moves it to the new point rather than putting it away.
 ///
-/// Whether the point a right-click landed at is one the menu opens for is not
-/// asked here but of the caller, which is the one that knows the window it landed
-/// in: a point on a film's transport bar or on the text of a pinned page belongs to
-/// the player or to the page (see `pin_right_click_opens_menu`).
+/// Whether the point a right-click landed at is one the menu opens for, and which of its pages it
+/// asks for, is not asked here but of the caller, which is the one that knows the window it landed
+/// in: a point on a film's transport bar belongs to the player, and one on the text of a pinned
+/// page asks for the page's own rows above the window's (see `pin_right_click_page`).
 ///
-/// A menu put up is put up on its main page, both
-/// flyouts put away: a hand that opens the menu has
+/// A menu put up is put up on the page the caller names and on its main rows alone,
+/// both flyouts put away: a hand that opens the menu has
 /// come for the choices, and they are one row away.
 ///
 /// `x` and `y` are a place on the screen rather than in the card's own
 /// window, which is the window the panel is placed against and the window
 /// the press on it is answered in (see `pin_menu_window`).
-pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
+pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32, page: PinMenuPage) {
     with_pin(|pin| {
         pin.menu.open = true;
+        pin.menu.page = page;
         pin.menu.end_of_file = false;
         pin.menu.seek = false;
         pin.menu.point = (x, y);
@@ -840,14 +968,17 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
     render_pin_menu();
 }
 
-/// Whether a right-click in row `y` of a pinned window is the window's own menu's to open, in the
-/// window's own coordinates.
+/// Which page of the window's own menu, if any, a right-click in row `y` of a pinned window asks
+/// for, in the window's own coordinates.
 ///
 /// The question is a row's rather than a point's because the two strips that are not the menu's
 /// are as wide as the window: a kind that plays has the player's own bar along the bottom, where
-/// a right-click is the bar's, and a pinned page of text keeps the `Select All` / `Copy` menu it
-/// holds on a hover for the text under the hand, so only the chrome above the text opens this one
-/// (see `pinned_transport_geometry` and `TEXT_PREVIEW_HOLDING`).
+/// a right-click is the bar's (see `pinned_transport_geometry`).
+///
+/// A pinned page of text is the one kind whose media is the window's to answer for: a right-click
+/// in it opens the menu's text page — the page's own `Select All` and `Copy` above the window's
+/// rows — rather than the menu the text holds on a hover, which is the page's own only while
+/// there is no window around it (see `PinMenuPage`).
 ///
 /// A sound's card is the one kind with neither a bar nor a caption — the card is all of it, its
 /// own title and controls drawn inside it — so every row of it is the menu's, which is where the
@@ -856,16 +987,12 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32) {
 /// A kind whose media is a window of somebody else's — FFmpeg's player, the browser an engine page
 /// is drawn by — never sends the band's right-clicks here at all: the window standing in the band
 /// takes them, and the caption above it is the way to this menu.
-pub(super) fn pin_right_click_opens_menu(y: i32) -> bool {
-    let Some(pinned) = pin_state() else {
-        return false;
-    };
-    let Some(pin) = pinned.pin() else {
-        return false;
-    };
+pub(super) fn pin_right_click_page(y: i32) -> Option<PinMenuPage> {
+    let pinned = pin_state()?;
+    let pin = pinned.pin()?;
 
     if pin_shows_an_audio_card(pin) {
-        return true;
+        return Some(PinMenuPage::Chrome);
     }
 
     // The bar a film plays by, which is the strip along the bottom of its window: the same band a
@@ -873,10 +1000,16 @@ pub(super) fn pin_right_click_opens_menu(y: i32) -> bool {
     // `pinned_transport_geometry`, which would take this very state's lock again (see
     // `pinned_transport_press`).
     if pinned_transport_bar_of(pin).is_some_and(|bar| bar.wanted && y >= bar.top) {
-        return false;
+        return None;
     }
 
-    !(y >= pin.caption && TEXT_PREVIEW_HOLDING.load(Ordering::Acquire))
+    // The text under the chrome: a right-click there is the page's own, with the window's rows
+    // under its two commands rather than a menu of its own.
+    if y >= pin.caption && TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
+        return Some(PinMenuPage::Text);
+    }
+
+    Some(PinMenuPage::Chrome)
 }
 
 /// Whether the card's menu is up: what an outside press is answered against
