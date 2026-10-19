@@ -109,22 +109,22 @@ pub struct TextFrame {
     pub lines: Vec<FrameLine>,
 }
 
-/// Where a point falls in painted lines: the line under it and the character
-/// within that line.
-///
-/// A point between two lines takes the nearer one, and a point past the end of a
-/// line takes the nearest end of it, so a drag that runs off the text still selects
-/// the line it was on rather than losing it.
-pub fn position_in(lines: &[FrameLine], x: i32, y: i32) -> (usize, usize) {
-    let Some((line_index, line)) = lines.iter().enumerate().min_by_key(|(_, line)| {
+/// The line of painted text nearest a point, by its middle.
+fn nearest_line(lines: &[FrameLine], y: i32) -> Option<(usize, &FrameLine)> {
+    lines.iter().enumerate().min_by_key(|(_, line)| {
         let middle = line.top + line.height / 2;
         (middle - y).abs()
-    }) else {
-        return (0, 0);
-    };
+    })
+}
 
+/// Where a point falls inside one painted line: the character boundary nearest it, which is the
+/// caret a press places, and the character whose cell the point is actually in, which is the one a
+/// word is taken around. The two differ in the right half of a cell, where the caret sits after a
+/// character the point is still on.
+fn point_in_line(line: &FrameLine, x: i32) -> (usize, usize) {
     let mut characters = 0usize;
-    let mut closest = 0usize;
+    let mut caret = 0usize;
+    let mut character = 0usize;
     let mut closest_distance = i32::MAX;
 
     for run in &line.runs {
@@ -133,17 +133,93 @@ pub fn position_in(lines: &[FrameLine], x: i32, y: i32) -> (usize, usize) {
             continue;
         }
         let advance = (run.width as f32 / count as f32).max(1.0);
-        let within = (((x - run.x) as f32 / advance).round() as i32).clamp(0, count);
-        let edge = run.x + (within as f32 * advance).round() as i32;
+        let within = (x - run.x) as f32 / advance;
+        let boundary = (within.round() as i32).clamp(0, count);
+        let edge = run.x + (boundary as f32 * advance).round() as i32;
         let distance = (edge - x).abs();
         if distance < closest_distance {
             closest_distance = distance;
-            closest = characters + within as usize;
+            caret = characters + boundary as usize;
+            character = characters + (within.floor() as i32).clamp(0, count - 1) as usize;
         }
         characters += count as usize;
     }
 
-    (line_index, closest)
+    (caret, character)
+}
+
+/// Where a point falls in painted lines: the line under it and the character
+/// within that line.
+///
+/// A point between two lines takes the nearer one, and a point past the end of a
+/// line takes the nearest end of it, so a drag that runs off the text still selects
+/// the line it was on rather than losing it.
+pub fn position_in(lines: &[FrameLine], x: i32, y: i32) -> (usize, usize) {
+    let Some((line_index, line)) = nearest_line(lines, y) else {
+        return (0, 0);
+    };
+
+    (line_index, point_in_line(line, x).0)
+}
+
+/// The kind of character a double click takes a run of: a word is letters, digits and the
+/// underscore, a gap is space, and everything else — a bracket, a punctuation mark — is a run of
+/// its own, so a double click takes the whole `->` or `==` and not just one of its marks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunKind {
+    Word,
+    Space,
+    Other,
+}
+
+fn run_kind(character: char) -> RunKind {
+    if character.is_alphanumeric() || character == '_' {
+        RunKind::Word
+    } else if character.is_whitespace() {
+        RunKind::Space
+    } else {
+        RunKind::Other
+    }
+}
+
+/// The word a point on painted lines is in, as the range a double click selects: the run of the
+/// point's own kind of character, taken from the character the point is on rather than from the
+/// caret beside it, so a press on the right half of a letter still takes the word that letter is
+/// in.
+///
+/// A line with nothing on it has no word to take, and the range comes back empty there.
+pub fn word_in(lines: &[FrameLine], x: i32, y: i32) -> Selection {
+    let Some((line_index, line)) = nearest_line(lines, y) else {
+        return Selection {
+            anchor: (0, 0),
+            caret: (0, 0),
+        };
+    };
+
+    let (_, at) = point_in_line(line, x);
+    let characters: Vec<char> = line.runs.iter().flat_map(|run| run.text.chars()).collect();
+    let Some(&character) = characters.get(at) else {
+        return Selection {
+            anchor: (line_index, 0),
+            caret: (line_index, 0),
+        };
+    };
+
+    let kind = run_kind(character);
+    let before = characters[..at]
+        .iter()
+        .rev()
+        .take_while(|character| run_kind(**character) == kind)
+        .count();
+    let after = characters[at + 1..]
+        .iter()
+        .take_while(|character| run_kind(**character) == kind)
+        .count();
+
+    Selection {
+        anchor: (line_index, at - before),
+        caret: (line_index, at + 1 + after),
+    }
 }
 
 /// The text of painted lines, either everything they show or the part a selection

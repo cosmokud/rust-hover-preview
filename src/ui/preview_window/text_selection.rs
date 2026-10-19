@@ -1,5 +1,5 @@
-//! A selection made in a text preview: the press and drag that mark it, what it covers, and
-//! the two ways it is taken out again - put on the clipboard, or all of it at once.
+//! A selection made in a text preview: the press, drag and double press that mark it, and the two
+//! ways it is taken out again - put on the clipboard, or all of it at once.
 
 use super::*;
 
@@ -18,15 +18,29 @@ pub(super) fn begin_text_selection(x: i32, y: i32) -> bool {
         return false;
     }
 
-    // A press with no drag behind it is an empty selection, which is what clears
-    // whatever was selected before; a press with Shift held moves the far end of what is
+    // A second press inside the time and box the machine reads a double click in takes the word
+    // under the hand; a press with no drag behind it is an empty selection, which is what clears
+    // whatever was selected before; and a press with Shift held moves the far end of what is
     // already selected instead, so a range can be grown a click at a time.
+    let now = Instant::now();
+    let double = state
+        .last_press
+        .is_some_and(|(then, at)| within_double_click(then, at, now, (x, y)));
+    state.last_press = Some((now, (x, y)));
+
     let at = text_preview::position_in(&state.lines, x, y);
-    state.selection = Some(text_preview::Selection {
-        anchor: anchor_for_press(state.selection, shift_is_down(), at),
-        caret: at,
+    state.selection = Some(if double {
+        text_preview::word_in(&state.lines, x, y)
+    } else {
+        text_preview::Selection {
+            anchor: anchor_for_press(state.selection, shift_is_down(), at),
+            caret: at,
+        }
     });
-    state.selecting = true;
+    // What a double click took is the selection the hand asked for rather than the start of a
+    // drag: arming one would let the first small move of the hand cut the word down to the
+    // character it had reached.
+    state.selecting = !double;
     true
 }
 
@@ -201,9 +215,15 @@ pub(super) unsafe fn copy_text_preview(hwnd: HWND) -> bool {
 /// read the way the rest of the app reads the keys that belong to it, by asking
 /// whether Ctrl is down and C has been pressed since the last time this was asked.
 /// Nothing is read at all unless there is a selection, so a Ctrl+C meant for
-/// something else is left alone.
+/// something else is left alone — and a pinned preview that is not the window the
+/// user is in is skipped for the same reason, since a chord read from the keyboard is
+/// otherwise a chord pressed in whatever window is in front (see `pin_is_focused`).
 pub(super) fn text_preview_copy_requested() -> bool {
     if !has_text_selection() {
+        return false;
+    }
+
+    if pinned() && !pin_is_focused() {
         return false;
     }
 
@@ -221,9 +241,12 @@ pub(super) fn text_preview_copy_requested() -> bool {
 /// has not pressed is a window nobody is in, and a window nobody is in is never sent a
 /// keystroke. It is answered for a pin alone — a pinned text preview is a window the user put
 /// there to work in, and full mode gave it the selection this makes use of, while a hover is a
-/// preview being read and not typed at.
+/// preview being read and not typed at — and only while that pin is the window the user is in:
+/// the chord is read from the keyboard's own state rather than received as a message, so a
+/// Ctrl+A pressed in another window is otherwise read as one meant for a pin standing behind it
+/// (see `pin_is_focused`).
 pub(super) fn pinned_select_all_requested() -> bool {
-    if !pinned() || !has_text_document() {
+    if !pin_is_focused() || !has_text_document() {
         return false;
     }
 
