@@ -588,9 +588,12 @@ pub(super) struct TextPreviewState {
     /// grown by whole runs of characters while this is set, and by the character under the hand
     /// otherwise (see `begin_text_selection` and `extend_word_selection`).
     pub(super) word_drag: Option<text_preview::Selection>,
-    /// When and where the pointer last pressed on the page, which is what the press after it is
-    /// read against as a double click (see `begin_text_selection`).
-    pub(super) last_press: Option<(Instant, (i32, i32))>,
+    /// When and where the pointer last pressed on the page, and how many presses of that place have
+    /// run together into the gesture they are read as: one press is a caret where it landed, the
+    /// second is the word under it, and the third is the whole line that word is on. A press that
+    /// landed outside the time or the box the machine reads a double click in begins the count
+    /// again (see `begin_text_selection`).
+    pub(super) click_run: Option<(Instant, (i32, i32), u8)>,
     /// Where the pointer last was while a drag was growing a selection, in the frame's own
     /// coordinates, or nothing while no drag is running. A drag carried past the edge of the box is
     /// one the page has to follow, and where the pointer is is the whole of what says so (see

@@ -610,7 +610,7 @@ pub(super) fn load_text_preview(
         selection: None,
         selecting: false,
         word_drag: None,
-        last_press: None,
+        click_run: None,
         drag_pointer: None,
     });
 

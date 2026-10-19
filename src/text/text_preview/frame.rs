@@ -234,6 +234,29 @@ pub fn word_in(lines: &[FrameLine], x: i32, y: i32) -> Selection {
     }
 }
 
+/// The line a point on painted lines is in, as the range a third press selects: the whole of the
+/// document line the painted line under the point belongs to, from its first character to the break
+/// at its end.
+///
+/// It is the document's line rather than the painted one, which is what a reader means by "the
+/// line": a line too long for the box is drawn as several painted lines, and they are one line all
+/// the way down (see `FrameLine::source`). The break at the end is taken with it — the end of a
+/// line is what makes it one, and a copy of the line pastes back as a line of its own — and it
+/// paints nothing, so the highlight still covers the text the line has and no more.
+pub fn line_in(lines: &[FrameLine], y: i32) -> Selection {
+    let Some((_, line)) = nearest_line(lines, y) else {
+        return Selection {
+            anchor: (0, 0),
+            caret: (0, 0),
+        };
+    };
+
+    Selection {
+        anchor: (line.source.0, 0),
+        caret: (line.source.0 + 1, 0),
+    }
+}
+
 /// The selection a drag that followed a double press makes: the word that press took, grown to the
 /// whole of the run of characters the hand has reached.
 ///

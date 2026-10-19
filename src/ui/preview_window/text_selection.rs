@@ -1,5 +1,5 @@
-//! A selection made in a text preview: the press, drag and double press that mark it, and the two
-//! ways it is taken out again - put on the clipboard, or all of it at once.
+//! A selection made in a text preview: the presses, the drag and the word or line they take, and
+//! the two ways it is taken out again - put on the clipboard, or all of it at once.
 
 use super::*;
 
@@ -18,35 +18,44 @@ pub(super) fn begin_text_selection(x: i32, y: i32) -> bool {
         return false;
     }
 
-    // A second press inside the time and box the machine reads a double click in takes the word
-    // under the hand; a press with no drag behind it is an empty selection, which is what clears
-    // whatever was selected before; and a press with Shift held moves the far end of what is
-    // already selected instead, so a range can be grown a click at a time.
+    // Presses of the same place climb the ladder a reader takes with the hand: the second press,
+    // inside the time and box the machine reads a double click in, takes the word under it, and the
+    // third takes the whole line that word is on. The count is kept for the press after it, so a
+    // hand that goes on pressing stays on the line rather than walking off the end of the ladder.
+    //
+    // A press with no drag behind it is an empty selection, which is what clears whatever was
+    // selected before; and a press with Shift held moves the far end of what is already selected
+    // instead, so a range can be grown a click at a time.
     let now = Instant::now();
-    let double = state
-        .last_press
-        .is_some_and(|(then, at)| within_double_click(then, at, now, (x, y)));
-    state.last_press = Some((now, (x, y)));
+    let run = state
+        .click_run
+        .filter(|(then, at, _)| within_double_click(*then, *at, now, (x, y)))
+        .map_or(1, |(_, _, presses)| presses.saturating_add(1));
+    state.click_run = Some((now, (x, y), run));
     state.drag_pointer = Some((x, y));
 
     // What a double click takes is kept for as long as the drag that follows it runs: the word
     // under the hand is what that drag is grown from, and it is grown by whole runs of characters
     // rather than by the one the hand has reached, so the first small move of a hand still on the
     // word leaves it whole (see `extend_word_selection`).
-    let word = double.then(|| text_preview::word_in(&state.lines, x, y));
+    let word = (run == 2).then(|| text_preview::word_in(&state.lines, x, y));
 
     let at = text_preview::position_in(&state.lines, x, y);
-    state.selection = Some(match word {
-        Some(word) => word,
-        None => text_preview::Selection {
+    state.selection = Some(match (run, word) {
+        // The third press of a run takes the whole line the word is on: the jump a reader makes
+        // with the hand when the word is not enough and the page is more than they want.
+        (3.., _) => text_preview::line_in(&state.lines, y),
+        (_, Some(word)) => word,
+        (_, None) => text_preview::Selection {
             anchor: anchor_for_press(state.selection, shift_is_down(), at),
             caret: at,
         },
     });
     state.word_drag = word;
-    // Every press arms a drag, a double click's included, and the word above is what that one is
-    // the drag of.
-    state.selecting = true;
+    // Every press but the third arms a drag, a double click's included, and the word above is what
+    // that one is the drag of. The third takes a line, which is whole already: arming a drag there
+    // would let the first small move of a hand on it cut the highlight back to a word.
+    state.selecting = run < 3;
     true
 }
 
