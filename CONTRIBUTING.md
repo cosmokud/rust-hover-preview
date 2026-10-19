@@ -55,11 +55,14 @@ have running is watching.
 To share one build cache between checkouts — and between worktrees — set
 `git config rhp.targetDir <path>`: the repo's `post-checkout` hook writes it into a git-ignored
 `.cargo/target-dir.local.toml`, which `.cargo/config.toml` includes, and `git worktree add` runs
-that hook, so a fresh worktree gets it with no manual step, and a worktree with no `target/` yet
-is seeded from the shared one — its dependencies hard-linked, this package's own artifacts left
-behind, so the crate still compiles from the sources of the worktree it is built in — rather than
-rebuilt from nothing. With nothing set, cargo uses the checkout's own `target/`. The hook only
-runs where the repo's hooks are the configured ones (`git config core.hooksPath .githooks`).
+that hook, so a fresh worktree gets it with no manual step. Every checkout then builds into that
+one directory, so a dependency is compiled and stored once. What a shared directory cannot share
+is this package: cargo's artifact and fingerprint names carry no part of a checkout's path, so a
+build in one checkout can be called fresh against another's recorded inputs and leave that tree's
+binary behind. The hook therefore writes the checkout's own path beside the directory
+(`RHP_WORKTREE`), which `build.rs` watches, so a build in a different checkout recompiles this
+package — and nothing else. With nothing set, cargo uses the checkout's own `target/`. The hook
+only runs where the repo's hooks are the configured ones (`git config core.hooksPath .githooks`).
 
 See [README.md](README.md) for app usage and [ARCHITECTURE.md](ARCHITECTURE.md)
 for a full system overview.
