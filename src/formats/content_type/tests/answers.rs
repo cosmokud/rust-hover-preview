@@ -371,6 +371,54 @@ fn what_has_no_signature_is_left_to_the_name_it_has() {
     );
 }
 
+/// The names a language and a format are both written under are settled the way every other
+/// question about a file is: by the file's own head where the two can be told apart there, and
+/// by the order the lists are asked in where they cannot (see `probe::GUARDS`).
+///
+/// They are the pair a hover used to get wrong. A `.vhd` that is VHDL source was read as a disk
+/// image and handed to the listing engine, and a `.dif` that is a spreadsheet as the DV stream
+/// the video list claims: neither is what the file is, and both are files a developer's folders
+/// are full of.
+#[test]
+fn a_name_a_language_and_a_format_share_is_settled_by_the_head() {
+    // VHDL source under the disk image's own name: the text lists' page.
+    assert_eq!(
+        classified("design.vhd", b"library ieee;\nuse ieee.std_logic_1164.all;\n"),
+        Content::Kind(PreviewType::Text),
+        "a VHDL source is the page of text it is written as"
+    );
+
+    // The disk images under that name keep the answer the order gives them: a dynamic image's
+    // head is the signature the table above answers, whose name is the file's own, so there is
+    // nothing for it to disagree with — and a fixed image's head is raw disk data, which is not
+    // the text a source is written in either.
+    assert_eq!(
+        classified("image.vhd", b"conectix\x00\x00\x00\x00"),
+        Content::Unknown,
+        "a dynamic image is the listing the name order gives it"
+    );
+    assert_eq!(
+        classified("image.vhd", b"\xEB\x52\x90NTFS    \x00\x02\x08\x00\x00\x00"),
+        Content::Unknown,
+        "and a fixed one's head is not text"
+    );
+
+    // A DIF spreadsheet, under the name the video list reads as a DV stream.
+    assert_eq!(
+        classified("sheet.dif", b"TABLE\n0,1\n\"sheet\"\nVECTORS\n"),
+        Content::Kind(PreviewType::Libre),
+        "a spreadsheet is the render engine's, whatever the video list says of the name"
+    );
+
+    // And a stream under it: the DV header the signature table answers, which is asked before
+    // any name is, so the video list's answer — the one the name order gives — still stands.
+    assert_eq!(
+        classified("tape.dif", &[0x1F, 0x07, 0x00, 0x3F]),
+        Content::Unknown,
+        "a stream is the video list's, which is what the order answers for the name"
+    );
+}
+
 /// What the tables make of the files in a folder, asked the way a hover asks it —
 /// through the reader, the setting and the cache rather than the rule alone. The
 /// fixtures are the caller's: `RHP_CONTENT_PROBE` names a folder of real files, one of

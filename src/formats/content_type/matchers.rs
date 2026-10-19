@@ -968,3 +968,51 @@ pub(super) fn is_djvu(probe: &[u8]) -> bool {
             Some([b'D', b'J', b'V', b'M' | b'U' | b'I'])
         )
 }
+
+// ------------------------------------------------- names a language and a format share
+
+/// Whether the front of a file reads as text rather than as a binary format.
+///
+/// It is what tells a name two formats share apart where one of the two is a text: a VHDL
+/// source from the disk image it is spelled like, a DIF spreadsheet from the DV stream. The
+/// test is a NUL byte in the window, which is what a binary head holds and a text one does
+/// not — a source written in UTF-16 would read as the binary it is not, and no name this is
+/// asked about is written that way.
+fn reads_as_text(probe: &[u8]) -> bool {
+    !probe.is_empty() && !probe.contains(&0)
+}
+
+/// The text half of a name two formats share: the kind `kind` where the bytes read as text,
+/// and no opinion where they do not — which leaves the answer to the name, and the name is
+/// the other format's by the order the lists are asked in (see [`reads_as_text`]).
+fn text_head_or(probe: &[u8], kind: PreviewType) -> Content {
+    if reads_as_text(probe) {
+        Content::Kind(kind)
+    } else {
+        Content::Unknown
+    }
+}
+
+/// What a `.vhd` is: Virtual PC's disk image to the listing engine, and VHDL source to the text
+/// lists.
+///
+/// The two lists are asked in an order that settles the name for a disk image, and nothing in
+/// the app had ever asked the file: a VHDL source is the reading the order gets wrong, and it is
+/// the one a developer's folders are full of. What comes back is a page of text where the head
+/// reads as text, and no opinion otherwise — a fixed VHD's head is raw disk data and a dynamic
+/// one's is the `conectix` signature the table above answers, so both keep the listing the name
+/// gives them (see `probe::GUARDS`).
+pub(super) fn vhdl_source_or_disk_image(probe: &[u8]) -> Content {
+    text_head_or(probe, PreviewType::Text)
+}
+
+/// What a `.dif` is: a DV stream to FFmpeg's own list, and a Data Interchange Format spreadsheet
+/// to the render engine's.
+///
+/// The video list is asked first, so the stream is the name's answer; the spreadsheet is the one
+/// the order gets wrong, and its own head is the text its records are written in — a stream's is
+/// the signature the table above answers, which is asked before any name is (see `is_dv_stream`
+/// and `probe::GUARDS`).
+pub(super) fn spreadsheet_or_dv_stream(probe: &[u8]) -> Content {
+    text_head_or(probe, PreviewType::Libre)
+}
