@@ -249,15 +249,17 @@ pub(in super::super) fn toggle_video_hw_accel() {
 /// Whether an explicitly chosen video engine falls through to the others when it cannot play a
 /// file, from the `Fallback` row at the top of `Engine → Video Engine`.
 ///
-/// Nothing on screen changes: the switch is read by the router on the next hover, and what the
-/// geometry probe holds is given up for the reason the choice moving gives it up — the answer
-/// the next hover wants may be another engine's (see `forget_video_geometry`).
+/// **Nothing on screen changes: the switch is half of the engine choice**, read with it where a
+/// preview is begun, so a film already playing keeps the fall-through it was started under —
+/// the switch was already *said* to apply on the next hover and was not, because the router
+/// asked it again on every question a resize, a gesture or a step put to it. It is one move on
+/// the choice of the file, and what the geometry probe holds is given up where that choice is
+/// read rather than here (see `engines_in_effect`, `forget_video_geometry`).
 pub(in super::super) fn toggle_video_engine_fallback() {
     if let Ok(mut config) = CONFIG.lock() {
         config.video_engine_fallback = !config.video_engine_fallback;
         config.save();
     }
-    crate::ui::preview_window::forget_video_geometry();
 }
 
 /// Whether a film's own subtitle tracks are probed for and copied out at all,

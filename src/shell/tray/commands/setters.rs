@@ -41,8 +41,8 @@ use crate::engines::document_cache;
 use crate::engines::office_render;
 use crate::formats::codecs;
 use crate::ui::preview_window::{
-    forget_video_geometry, publish_tray_volume, refresh_preview, refresh_preview_types,
-    trim_image_cache, trim_subtitle_cache,
+    publish_tray_volume, refresh_preview, refresh_preview_types, trim_image_cache,
+    trim_subtitle_cache,
 };
 use crate::{app::startup, CONFIG};
 use std::os::windows::ffi::OsStrExt;
@@ -292,16 +292,21 @@ pub(in super::super) fn set_office_engine_idle(index: u16) {
 
 /// Which engine Office documents are asked of, from `Engine → Office Engine`.
 ///
-/// Nothing is rebuilt here, and nothing has to be: the choice is read live by the side that
-/// asks an engine for a page and by the side that draws one (see `office_formats::page_engine`),
-/// so the setting a click leaves behind is the one the next hover is answered by. A preview
-/// that is already on screen belongs to the engine that drew it and is replaced the next time
-/// a hover is raised — and the pointer has left the file to reach the tray by then.
+/// Which engine draws an Office document's page, from `Engine → Office Engine`.
+///
+/// **Nothing on screen is rebuilt for it.** The choice is written here and read where a preview
+/// is begun, so a document already up belongs to the engine that drew it, and the next hover —
+/// and the next document a pinned window is shown — is the one drawn by the engine named here
+/// (see `engines_in_effect`). What the row said before that was that the choice *is read live
+/// by the side that asks an engine for a page*, which was true of the next hover and was not
+/// true of the document on screen: every box change and every step asked again, and a page
+/// keyed by the engine that drew it was asked of the other one.
 ///
 /// What is ended here is this app's own Office applications, at the moment the render engine
 /// becomes the one to ask: they were started for pages this choice now takes elsewhere, and
-/// the one thing this menu is not for is a process kept warm for work it will not be given.
-/// A user's own Word or Excel is not one of these and is never touched (see `office_render`).
+/// the document on screen keeps the page the engine it was begun with gave it rather than
+/// being asked for again (see `engines_in_effect`, `document_cache`). A user's own Word or
+/// Excel is not one of these and is never touched (see `office_render`).
 pub(in super::super) fn set_office_engine(engine: OfficeEngine) {
     if let Ok(mut config) = CONFIG.lock() {
         config.office_engine = engine;
@@ -315,17 +320,23 @@ pub(in super::super) fn set_office_engine(engine: OfficeEngine) {
 
 /// Which engine plays a video, from `Engine → Video Engine`.
 ///
-/// The choice is read live by the router on the next hover, so nothing on screen is rebuilt: a
-/// preview that is already up belongs to the engine playing it and is replaced the next time it
-/// is laid out. What is given up is the probe cache, because a geometry read by FFprobe is not
-/// the geometry a media-engine preview is placed by (or the reverse), so the next hover of a
-/// file measures it again (see `forget_video_geometry`).
+/// **Nothing on screen is rebuilt for it.** The choice is written here and read where a
+/// preview is begun, so a film already playing belongs to the player that started it, and the
+/// next hover — or the next file a pinned window is shown — is the one played by the engine
+/// named here (see `engines_in_effect`). What the row said before that was that a preview is
+/// *replaced the next time it is laid out*, which is true of the next preview and was not true
+/// of the one on screen: a resize, a maximize, a gesture and a step are each a question about
+/// the file that is up, and each of them came back with the engine of now.
+///
+/// What is given up is the probe cache, because a geometry read by FFprobe is not the
+/// geometry a media-engine preview is placed by (or the reverse) — given up with that read
+/// rather than here, since the preview on screen is still placed by the geometry it was built
+/// under (see `forget_video_geometry`).
 pub(in super::super) fn set_video_engine(engine: VideoEngine) {
     if let Ok(mut config) = CONFIG.lock() {
         config.video_engine = engine;
         config.save();
     }
-    forget_video_geometry();
 }
 
 /// Which `mpv.exe` a launch runs, from `Codecs → Videos → MPV`, by the position its install was

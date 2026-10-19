@@ -2802,6 +2802,22 @@ pub fn run_preview_window() {
                 &mut pin_walk,
                 pin_awaiting_box.is_some(),
             ) {
+                // A pinned window being shown a file it is not already showing is the other
+                // place a preview is built, so the engine choices are read here — before the
+                // box is measured, the probe started or the file loaded — and everything this
+                // pick is asked after this is answered with what is read here (see
+                // `latch_engines_for_the_preview`). A pick of the file the pin is already
+                // showing is not one: it is a step of a walk that landed back on it, or a pick
+                // this block holds for a window that has not come back yet, and nothing is
+                // built for either.
+                //
+                // shortcut: the read lands a tick before the window is given the file, so a
+                // box change in exactly that gap relaunches the outgoing film under the new
+                // choice; the read belongs in the install if that is ever seen.
+                if pinned_path().as_deref() != Some(path.as_path()) {
+                    latch_engines_for_the_preview();
+                }
+
                 pin_awaiting_box = None;
                 // Whatever was loading is a load for a file nobody is asking for any more, and
                 // the answer it lands with is dropped with it: what the pin shows next is
@@ -3071,11 +3087,22 @@ pub fn run_preview_window() {
                 // out at, which for a hover waiting on an engine is the corner of the
                 // display the spinner was put in (see `PendingLoad::room`).
                 let mut show_room: Option<(u32, u32)> = None;
-                let show_snapshot = matches!(
+                // A hover is a preview built from nothing — the file is about to be laid out,
+                // loaded and played, or the wait for it is — so this is where the engine
+                // choices are read, and every question this hover asks after this is answered
+                // with what is read here rather than with a row moved since (see
+                // `latch_engines_for_the_preview`). Nothing already showing a film comes
+                // through here: a hover is refused while a pin is up, and a pin is taken up
+                // over a hover that keeps the player it started (see `show_preview`).
+                let begins_a_hover = matches!(
                     preview_msg,
                     PreviewMessage::Show(..) | PreviewMessage::ShowKeyboard(..)
-                )
-                .then(|| preview_msg.clone());
+                );
+                if begins_a_hover {
+                    latch_engines_for_the_preview();
+                }
+
+                let show_snapshot = begins_a_hover.then(|| preview_msg.clone());
 
                 match preview_msg {
                     PreviewMessage::Show(path, x, y, avoid) => {

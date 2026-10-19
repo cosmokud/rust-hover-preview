@@ -502,8 +502,8 @@ pub(super) fn video_route(path: &Path) -> VideoRoute {
     }
 }
 
-/// The configured engine choice a route is read off: the setting's own in a run, and whatever a
-/// test stands in its place under one.
+/// The configured engine choice a route is read off: the choice the preview on screen was
+/// begun with, and whatever a test stands in its place under one.
 ///
 /// It is asked through here rather than inline for the same reason the machine's answers are
 /// (`ffplay_is_here`, `mpv_is_here`): `video_route` falls an engine the machine has not got back
@@ -511,16 +511,36 @@ pub(super) fn video_route(path: &Path) -> VideoRoute {
 /// engine that run's `config.ini` names — an explicit `Native`, `Ffmpeg` or `Hybrid` walks a
 /// fall-through that never reaches mpv, so an mpv arm standing its installs in would answer a
 /// route with the config file's rather than the road's (see `stand_video_engine_in`).
+///
+/// **The setting of *now* is deliberately not what is read here.** A row moved in the tray
+/// while a film plays is a row the *next* preview is built under, and this is the read that
+/// says so: everything a preview still asks about the file on screen — a box change, a
+/// maximize, a gesture, a seek, a step of the walk — comes back through here, and answering
+/// it with the new engine is that film ended and begun again in another player in the middle
+/// of its pass (see `latch_engines_for_the_preview`).
 fn engine_choice() -> (VideoEngine, bool) {
     #[cfg(test)]
     if let Some(stood) = video_engine_choice_stand_in() {
         return stood;
     }
 
-    CONFIG
-        .lock()
-        .map(|c| (c.video_engine, c.video_engine_fallback))
-        .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK))
+    crate::config::config::video_engine_in_effect()
+}
+
+/// Read both engine choices again, for the preview that is about to be built, and give up what
+/// a geometry probed under the engines that have just been left behind is worth.
+///
+/// It is called at the two places a file is built anew and nowhere else — a hover, and a pinned
+/// window being shown a file it is not already showing — because everything else the loop does
+/// is a question about the file that is already up (see `engines_in_effect`). A read that says
+/// the video choice moved is the one thing with work behind it: a geometry read by FFprobe is
+/// not the geometry a media-engine preview is placed by, so the cache is given up here rather
+/// than where the setting is written — the preview on screen is still placed by the answer it
+/// was built under (see `forget_video_geometry`).
+pub(super) fn latch_engines_for_the_preview() {
+    if crate::config::config::latch_engines() {
+        forget_video_geometry();
+    }
 }
 
 /// Stand a configured engine choice in place of the file's, or give the file's answer back with
