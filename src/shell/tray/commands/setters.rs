@@ -41,8 +41,8 @@ use crate::engines::document_cache;
 use crate::engines::office_render;
 use crate::formats::codecs;
 use crate::ui::preview_window::{
-    publish_tray_volume, refresh_preview, refresh_preview_types, trim_image_cache,
-    trim_subtitle_cache,
+    publish_text_font_size, publish_tray_volume, refresh_preview, refresh_preview_types,
+    trim_image_cache, trim_subtitle_cache,
 };
 use crate::{app::startup, CONFIG};
 use std::os::windows::ffi::OsStrExt;
@@ -519,10 +519,17 @@ pub(in super::super) fn set_decode_budget_gb(index: u16) {
 /// switch full mode on for every hover of a text file is gone, and pinning one with the pin key
 /// is what brings it up as something to work in (see `current_text_options`).
 pub(in super::super) fn set_text_font_scale(percent: u32) {
+    let percent = sanitize_text_font_scale_percent(percent);
     if let Ok(mut config) = CONFIG.lock() {
-        config.text_font_scale_percent = sanitize_text_font_scale_percent(percent);
+        config.text_font_scale_percent = percent;
         config.save();
     }
+    // A pin already showing a page is drawn on the preview thread and at a size of its own, so
+    // the size this row names is said to that thread rather than only written here: the row is
+    // the one thing that puts a page already up to another size. A page a reader has wheeled, or
+    // a size hand-edited into the file, is left alone by everything but this row (see
+    // `publish_text_font_size`).
+    publish_text_font_size(percent);
     refresh_preview();
 }
 

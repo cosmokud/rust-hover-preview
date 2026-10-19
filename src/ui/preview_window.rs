@@ -294,6 +294,7 @@ pub(crate) use requests::pinned;
 pub(crate) use requests::pinned_path;
 pub(crate) use requests::preview_screen_rect;
 pub(crate) use requests::preview_window_rect;
+pub(crate) use requests::publish_text_font_size;
 pub(crate) use requests::publish_tray_volume;
 pub(crate) use requests::refresh_pin;
 pub(crate) use requests::refresh_preview;

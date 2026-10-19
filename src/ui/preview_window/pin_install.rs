@@ -857,9 +857,11 @@ pub(super) fn pin_media_load(
 ///
 /// It is the size a pinned page is drawn at — the reader's own rather than the configuration's — and
 /// what a load asked for while that page is up is asked at too: the box it is being laid out again
-/// in, and the file the walk goes on to (see `step_pinned_text_size` and `keep_text_place`). A pin
-/// showing anything else has no page of its own to read a size off, and answers nothing at all.
-fn reader_text_size() -> Option<u32> {
+/// in, and the file the walk goes on to (see `step_pinned_text_size` and `keep_text_place`). It is
+/// also the size a page already up is stepped from by the wheel and given up by the tray's own
+/// `Font Size` row (see `redraw_pinned_page`). A pin showing anything else has no page of its own to
+/// read a size off, and answers nothing at all.
+pub(super) fn reader_text_size() -> Option<u32> {
     CURRENT_MEDIA.lock().ok().and_then(|media| {
         media
             .as_ref()
@@ -1576,7 +1578,8 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
 /// reading would put them back at the top of it. The two positions survive being carried because
 /// they are places in the document rather than points on the screen (see `Selection`), and the size
 /// is carried because it is the reader's own rather than the file's — the next file of a walk is
-/// drawn at it too, and only closing the pin gives it up (see `step_pinned_text_size`). The rest of
+/// drawn at it too, and only closing the pin or picking the tray's own `Font Size` row gives it up
+/// (see `step_pinned_text_size` and `redraw_pinned_page`). The rest of
 /// the state — the lines, the scrollbar, what can be reached — belongs to the box the new media was
 /// laid out in.
 ///

@@ -854,7 +854,37 @@ pub(super) fn text_size_after_notches(current: u32, notches: i32) -> u32 {
 /// resolution wheel reports less than a notch per message, and a count truncated to whole notches is
 /// most of its travel thrown away.
 pub(super) unsafe fn step_pinned_text_size(hwnd: HWND, notches: i32) {
-    let Some((path, options, dpi, width, height, first_line, selection)) =
+    let Some(size) = reader_text_size() else {
+        return;
+    };
+
+    let percent = text_size_after_notches(size, notches);
+    if percent != size {
+        redraw_pinned_page(hwnd, Some(percent));
+    }
+}
+
+/// Lay the page a pin is showing out again from the options the configuration now selects, keeping
+/// the line it is read at, what is selected in it and the size the reader put it to.
+///
+/// A page's glyphs and its Markdown are painted into its frame rather than composed into the
+/// window, so a theme or a `Markdown` switch is a page drawn again and not a repaint of the frame
+/// already in hand (see `set_theme`). Every other setting a tick is owed a repaint for is a page
+/// this says nothing about, and nothing is laid out where the options it already has are the
+/// options asked for.
+///
+/// The size the reader put the page to is the page's own, and it is kept across all of this. What
+/// overrides it is `font_scale`, which is the tray's own `Font Size` row and the one thing that puts
+/// a page already up to another size: the reader's own goes with the pick the way it goes when the
+/// pin is closed (see `keep_text_place` and `publish_text_font_size`).
+pub(super) unsafe fn redraw_pinned_page(hwnd: HWND, font_scale: Option<u32>) {
+    // A page is a pin's: a hover of the same file is rebuilt from its own load, at the size the
+    // configuration names, rather than drawn again under a frame a hover is composed from.
+    if !pinned() {
+        return;
+    }
+
+    let Some((path, before, dpi, width, height, first_line, selection)) =
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media.as_ref().and_then(|media| {
                 media.text_state.as_ref().map(|state| {
@@ -874,17 +904,21 @@ pub(super) unsafe fn step_pinned_text_size(hwnd: HWND, notches: i32) {
         return;
     };
 
-    let percent = text_size_after_notches(options.font_scale_percent, notches);
-    if percent == options.font_scale_percent {
+    let configured = current_text_options();
+    let options = TextPreviewOptions {
+        theme: configured.theme,
+        markdown_mode: configured.markdown_mode,
+        font_scale_percent: font_scale.unwrap_or(before.font_scale_percent),
+        // Whether the page is more than something to look at is the pin's own answer rather than
+        // a setting's (see `current_text_options`).
+        full_mode: before.full_mode,
+    };
+    if options == before {
         return;
     }
 
     // Nothing is laid out while the lock is held: the render is a screenful of text, and the lock is
     // the one a paint takes (see `scroll_text_preview`).
-    let options = TextPreviewOptions {
-        font_scale_percent: percent,
-        ..options
-    };
     let Some(frame) =
         text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
     else {
@@ -896,7 +930,7 @@ pub(super) unsafe fn step_pinned_text_size(hwnd: HWND, notches: i32) {
             return;
         };
 
-        // The hover may have moved on while this page was drawn.
+        // The pin may have moved on while this page was drawn.
         if media.text_state.as_ref().map(|state| &state.path) != Some(&path) {
             return;
         }

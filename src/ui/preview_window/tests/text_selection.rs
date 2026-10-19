@@ -1125,3 +1125,135 @@ fn a_page_laid_out_again_is_loaded_at_the_size_the_reader_put_it_to() {
         "a load with no page of the reader's own to carry the size off is the configuration's"
     );
 }
+
+/// The theme the configuration names, stood where a test wants it and put back when the guard is
+/// dropped — the house pattern for a setting a test has to move (see `CardFontSettings`).
+struct ThemeSetting(TextTheme);
+
+impl ThemeSetting {
+    fn stood_at(theme: TextTheme) -> Self {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = Self(config.theme);
+        config.theme = theme;
+        was
+    }
+}
+
+impl Drop for ThemeSetting {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.theme = self.0;
+        }
+    }
+}
+
+/// The settings a page's frame is painted from are in the frame — its theme and the Markdown it is
+/// laid out as — so a pinned page drawn again is laid out from what the configuration now names,
+/// keeping the line it is read at and the size the reader put it to, which is the page's own
+/// rather than one of the settings (see `redraw_pinned_page`).
+///
+/// The one thing that puts a page already up to another size is the tray's own `Font Size` row, and
+/// the reader's size goes with the pick the way it goes when the pin is closed.
+#[test]
+fn a_setting_draws_the_pinned_page_again_at_the_size_the_reader_put_it_to() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _pin = PinPutBack::take();
+    let _media = TextPagePutBack::put();
+    stand_pin(Some(PinnedPreview::for_test()));
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-text-selection");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a-page-under-a-setting.txt");
+    std::fs::write(
+        &path,
+        (0..40).map(|n| format!("line {n}\n")).collect::<String>(),
+    )
+    .expect("a written page");
+
+    // The page as the reader has it, at twice the size the configuration draws a page at.
+    let reader_size = 200;
+    let options = TextPreviewOptions {
+        font_scale_percent: reader_size,
+        ..current_text_options()
+    };
+    assert_ne!(
+        current_text_options().font_scale_percent,
+        reader_size,
+        "the configuration's own size has to be another one for this to say anything"
+    );
+    let Some(page) = load_text_preview(&path, 240, 120, 96, options) else {
+        panic!("a page of text was not loaded")
+    };
+    let sized_line = page
+        .text_state
+        .as_ref()
+        .expect("a pinned page keeps state")
+        .lines[0]
+        .height;
+    let drawn_with = options.theme;
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+
+    let page_of = || {
+        CURRENT_MEDIA.lock().ok().and_then(|slot| {
+            slot.as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| (state.options, state.lines[0].height))
+        })
+    };
+    assert_eq!(
+        page_of().map(|(options, _)| options.theme),
+        Some(drawn_with),
+        "the page on screen is drawn in the theme it was loaded with"
+    );
+
+    // A theme picked in the tray, and the page laid out again for it.
+    let wanted = match drawn_with {
+        TextTheme::Light => TextTheme::Dark,
+        _ => TextTheme::Light,
+    };
+    let _theme = ThemeSetting::stood_at(wanted);
+    let hwnd = HWND(0x1000 as *mut _);
+    unsafe { redraw_pinned_page(hwnd, None) };
+    assert_eq!(
+        page_of().map(|(options, _)| options.theme),
+        Some(wanted),
+        "a theme the configuration now names is a page painted again in it"
+    );
+    assert_eq!(
+        page_of().map(|(options, _)| options.font_scale_percent),
+        Some(reader_size),
+        "and the size the reader put it to is the page's own, so it is kept"
+    );
+    assert_eq!(
+        page_of().map(|(_, line)| line),
+        Some(sized_line),
+        "which is the reader's own letters, not the configuration's"
+    );
+
+    // The tray's own `Font Size` row, which is the one thing that puts a page already up to
+    // another size: the reader's goes with the pick the way it goes when the pin is closed.
+    unsafe { redraw_pinned_page(hwnd, Some(150)) };
+    assert_eq!(
+        page_of().map(|(options, _)| options.font_scale_percent),
+        Some(150),
+        "the size the row names is the page's new size"
+    );
+    assert!(
+        page_of().is_some_and(|(_, line)| line < sized_line),
+        "and the page is drawn at it rather than only saying so"
+    );
+
+    // A page a hover is drawing is not this: a hover is rebuilt from its own load at the
+    // configuration's size, so nothing is laid out under it (see `redraw_pinned_page`).
+    stand_pin(None);
+    unsafe { redraw_pinned_page(hwnd, Some(300)) };
+    assert_eq!(
+        page_of().map(|(options, _)| options.font_scale_percent),
+        Some(150),
+        "a page with no pin over it is left as the hover drew it"
+    );
+}
