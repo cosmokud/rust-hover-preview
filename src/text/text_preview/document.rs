@@ -40,6 +40,10 @@ const CHECKPOINT_MAX_ENTRIES: usize = 192;
 /// Styled windows kept per document. Scrolling a line at a time lands inside the
 /// window that is already built, and a repaint is free.
 const WINDOW_CACHE_MAX_ENTRIES: usize = 6;
+/// What syntect calls the syntax every file it cannot find one for is drawn with. A
+/// page of it is plain text however it is drawn, which is what tells a page that is
+/// read from one a reader cites by its line numbers (see `wants_line_numbers`).
+const PLAIN_TEXT_SYNTAX_NAME: &str = "Plain Text";
 
 /// Documents one thread keeps parse progress for. Small: it is there so a scroll
 /// can continue rather than to remember every file ever hovered.
@@ -81,6 +85,16 @@ impl TextDoc {
     /// walk an unbounded file.
     pub(super) fn scrollable_lines(&self) -> usize {
         self.total_lines().min(MAX_DOC_LINES)
+    }
+
+    /// Whether a page of this document is read by its line numbers: a file written in a language of
+    /// its own is cited by the line it was found on, where plain text, a listing and NFO art are
+    /// read rather than cited. It is the only thing the gutter is kept for (see `gutter_width`).
+    pub(super) fn wants_line_numbers(&self) -> bool {
+        matches!(
+            &self.producer,
+            Producer::Highlighted { syntax } if syntax.name != PLAIN_TEXT_SYNTAX_NAME
+        )
     }
 
     fn line(&self, index: usize) -> &str {
