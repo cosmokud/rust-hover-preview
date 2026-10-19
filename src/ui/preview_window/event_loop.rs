@@ -2044,6 +2044,11 @@ pub fn run_preview_window() {
                 scroll_text_preview(hwnd, first_line);
             }
 
+            // And a selection drag carried past the edge of the box keeps selecting: the page is
+            // taken a step the way the drag left by, and the selection grows to the line at the
+            // edge it came back with (see `step_text_drag_selection`).
+            step_text_drag_selection(hwnd);
+
             // And a notch over a pinned picture is the picture being zoomed: the same hook swallowed it
             // and left the count here. What the notches come to is written down as the size the picture
             // is *going* to rather than the size it is given the instant they are counted, and the

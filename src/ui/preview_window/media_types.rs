@@ -579,6 +579,11 @@ pub(super) struct TextPreviewState {
     /// When and where the pointer last pressed on the page, which is what the press after it is
     /// read against as a double click (see `begin_text_selection`).
     pub(super) last_press: Option<(Instant, (i32, i32))>,
+    /// Where the pointer last was while a drag was growing a selection, in the frame's own
+    /// coordinates, or nothing while no drag is running. A drag carried past the edge of the box is
+    /// one the page has to follow, and where the pointer is is the whole of what says so (see
+    /// `text_drag_step`).
+    pub(super) drag_pointer: Option<(i32, i32)>,
 }
 
 impl TextPreviewState {

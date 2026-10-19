@@ -27,6 +27,7 @@ pub(super) fn begin_text_selection(x: i32, y: i32) -> bool {
         .last_press
         .is_some_and(|(then, at)| within_double_click(then, at, now, (x, y)));
     state.last_press = Some((now, (x, y)));
+    state.drag_pointer = Some((x, y));
 
     let at = text_preview::position_in(&state.lines, x, y);
     state.selection = Some(if double {
@@ -77,6 +78,12 @@ pub(super) fn extend_text_selection(x: i32, y: i32) -> Option<bool> {
         return Some(false);
     }
 
+    // Where the pointer is is remembered on every move of a drag, whether or not the caret moves
+    // with it: a drag carried past the edge of the box is one the page has to follow, and a page
+    // that asks the pointer again a tick later would be asking about a hand that has moved on (see
+    // `text_drag_step`).
+    state.drag_pointer = Some((x, y));
+
     let at = text_preview::position_in(&state.lines, x, y);
     let changed = state
         .selection
@@ -103,7 +110,10 @@ pub(super) fn end_text_selection() -> bool {
     media
         .as_mut()
         .and_then(|media| media.text_state.as_mut())
-        .map(|state| std::mem::replace(&mut state.selecting, false))
+        .map(|state| {
+            state.drag_pointer = None;
+            std::mem::replace(&mut state.selecting, false)
+        })
         .unwrap_or(false)
 }
 
