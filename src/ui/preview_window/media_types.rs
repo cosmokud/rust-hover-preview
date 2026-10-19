@@ -584,6 +584,10 @@ pub(super) struct TextPreviewState {
     /// extending it.
     pub(super) selection: Option<text_preview::Selection>,
     pub(super) selecting: bool,
+    /// The word a double press took, kept for as long as the drag that followed it runs: a drag is
+    /// grown by whole runs of characters while this is set, and by the character under the hand
+    /// otherwise (see `begin_text_selection` and `extend_word_selection`).
+    pub(super) word_drag: Option<text_preview::Selection>,
     /// When and where the pointer last pressed on the page, which is what the press after it is
     /// read against as a double click (see `begin_text_selection`).
     pub(super) last_press: Option<(Instant, (i32, i32))>,

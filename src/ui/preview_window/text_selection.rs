@@ -29,19 +29,24 @@ pub(super) fn begin_text_selection(x: i32, y: i32) -> bool {
     state.last_press = Some((now, (x, y)));
     state.drag_pointer = Some((x, y));
 
+    // What a double click takes is kept for as long as the drag that follows it runs: the word
+    // under the hand is what that drag is grown from, and it is grown by whole runs of characters
+    // rather than by the one the hand has reached, so the first small move of a hand still on the
+    // word leaves it whole (see `extend_word_selection`).
+    let word = double.then(|| text_preview::word_in(&state.lines, x, y));
+
     let at = text_preview::position_in(&state.lines, x, y);
-    state.selection = Some(if double {
-        text_preview::word_in(&state.lines, x, y)
-    } else {
-        text_preview::Selection {
+    state.selection = Some(match word {
+        Some(word) => word,
+        None => text_preview::Selection {
             anchor: anchor_for_press(state.selection, shift_is_down(), at),
             caret: at,
-        }
+        },
     });
-    // What a double click took is the selection the hand asked for rather than the start of a
-    // drag: arming one would let the first small move of the hand cut the word down to the
-    // character it had reached.
-    state.selecting = !double;
+    state.word_drag = word;
+    // Every press arms a drag, a double click's included, and the word above is what that one is
+    // the drag of.
+    state.selecting = true;
     true
 }
 
@@ -85,20 +90,23 @@ pub(super) fn extend_text_selection(x: i32, y: i32) -> Option<bool> {
     state.drag_pointer = Some((x, y));
 
     let at = text_preview::position_in(&state.lines, x, y);
-    let changed = state
-        .selection
-        .map(|selection| selection.caret != at)
-        .unwrap_or(false);
+    // A drag that followed a double click grows from the word that press took, by whole runs of
+    // characters; a drag that began on a press of its own takes the place it has reached (see
+    // `extend_word_selection`).
+    let grown = match state.word_drag {
+        Some(word) => text_preview::extend_word_selection(&state.lines, word, x, y),
+        None => text_preview::Selection {
+            anchor: state.selection.map_or(at, |selection| selection.anchor),
+            caret: at,
+        },
+    };
+    let changed = state.selection != Some(grown);
 
     if changed {
-        if let Some(selection) = state.selection.as_mut() {
-            selection.caret = at;
-        }
-    } else {
-        return Some(false);
+        state.selection = Some(grown);
     }
 
-    Some(true)
+    Some(changed)
 }
 
 /// End a selection drag. Answers whether one was running.
@@ -112,6 +120,10 @@ pub(super) fn end_text_selection() -> bool {
         .and_then(|media| media.text_state.as_mut())
         .map(|state| {
             state.drag_pointer = None;
+            // The word a double click took goes with the drag it was a drag of: the next press is
+            // a press of its own, and a drag from one is grown by the character (see
+            // `begin_text_selection`).
+            state.word_drag = None;
             std::mem::replace(&mut state.selecting, false)
         })
         .unwrap_or(false)

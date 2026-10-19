@@ -234,6 +234,42 @@ pub fn word_in(lines: &[FrameLine], x: i32, y: i32) -> Selection {
     }
 }
 
+/// The selection a drag that followed a double press makes: the word that press took, grown to the
+/// whole of the run of characters the hand has reached.
+///
+/// A drag grown this way takes whole runs rather than single characters, which is what keeps the
+/// word a double press took whole: a hand that has not left it yet leaves it as it is, where a drag
+/// by the character would have cut it down to the character it reached. A hand that has left it
+/// takes the run it is over — a word is taken whole, and a gap is a run of its own, so a hand in
+/// the gap between two words takes the gap and stops where the word after it begins.
+///
+/// Which side of the word the hand has left decides which end of it stays put: past the word's own
+/// end the selection grows from its start, and back before it the word's end is what the hand is
+/// coming back from. A line with nothing on it has no word to take, and a drag from there begins
+/// where the hand has reached (see `word_in` and `position_in`).
+pub fn extend_word_selection(lines: &[FrameLine], word: Selection, x: i32, y: i32) -> Selection {
+    let (start, end) = word.ordered();
+    let (before, after) = word_in(lines, x, y).ordered();
+    let at = position_in(lines, x, y);
+
+    if at >= end {
+        Selection {
+            anchor: start,
+            caret: after.max(end),
+        }
+    } else if at <= start {
+        Selection {
+            anchor: end,
+            caret: before.min(start),
+        }
+    } else {
+        Selection {
+            anchor: start,
+            caret: end,
+        }
+    }
+}
+
 /// The size the preview of `path` wants inside `max_width` x `max_height`.
 ///
 /// The box hugs the content — a two-line file gets a two-line window — and is
