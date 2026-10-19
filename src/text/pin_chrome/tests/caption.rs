@@ -531,6 +531,7 @@ fn draws_the_caption_glyphs() {
             );
 
             let painted = surface.pixels();
+            let ink = |x: usize, y: usize| painted[(y * side as usize + x) * 4] < 128;
 
             // The external link is drawn in whole pixels, not stroked: a stroked diagonal
             // leaves a ramp of blended pixels down every row it crosses, and the mark is
@@ -544,9 +545,27 @@ fn draws_the_caption_glyphs() {
                         pixel[0]
                     );
                 }
-            }
 
-            let ink = |x: usize, y: usize| painted[(y * side as usize + x) * 4] < 128;
+                // And no pixel of it is an island. A one-pixel diagonal touches its own
+                // neighbours only at their corners, which is the dotted staircase the shaft
+                // is drawn a pixel thicker to avoid; every pixel of this mark has to share
+                // an edge with another.
+                for y in 0..height as usize {
+                    for x in 0..side as usize {
+                        if !ink(x, y) {
+                            continue;
+                        }
+                        let beside = (x > 0 && ink(x - 1, y))
+                            || (x + 1 < side as usize && ink(x + 1, y))
+                            || (y > 0 && ink(x, y - 1))
+                            || (y + 1 < height as usize && ink(x, y + 1));
+                        assert!(
+                            beside,
+                            "{tag} the external link has an island pixel at ({x}, {y})"
+                        );
+                    }
+                }
+            }
 
             // The mark's own bounds in the surface it was painted into, as the min and
             // max of every row and column that carries any ink at all.
