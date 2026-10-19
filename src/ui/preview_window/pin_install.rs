@@ -1577,3 +1577,74 @@ pub(super) fn keep_text_place(media: MediaData) -> MediaData {
     }
     media
 }
+
+/// Lay the pinned page of text out again for the box the hand has just dragged its window to,
+/// keeping where it is scrolled to and what is selected in it.
+///
+/// A page is the one kind of media a box is *laid out* for rather than a frame stretched into:
+/// half the box is half the lines at the same size, where the sample every other kind is given
+/// while an edge is under the hand draws a page squeezed sideways (see `compose_media_into_band`
+/// and `box_is_covered`). The document is parsed and cached already and a frame is a screenful of
+/// it, so this is cheap enough to ask on every pointer move — which is the whole of what keeps
+/// the page following the hand rather than the settled frame being the first sharp one.
+///
+/// Nothing is laid out for a media with no page in it, and a box the page is already drawn in is
+/// the same page: a pointer that has moved without the box changing owes no frame.
+pub(super) fn relayout_pinned_text(content: ScreenRegion, dpi: u32) {
+    let width = (content.2 - content.0).max(1) as u32;
+    let height = (content.3 - content.1).max(1) as u32;
+
+    // Read in one look and let go of before the frame is drawn, the way a scroll and the
+    // selection repaint both do: the drawing is a screenful of text, and the lock is the one a
+    // paint takes (see `repaint_text_preview`).
+    let Some((path, options, first_line, selection, drawn_at)) =
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media.as_ref().and_then(|media| {
+                media.text_state.as_ref().map(|state| {
+                    (
+                        state.path.clone(),
+                        state.options,
+                        state.first_line,
+                        state.selection,
+                        (state.width, state.height, state.dpi),
+                    )
+                })
+            })
+        })
+    else {
+        return;
+    };
+
+    if drawn_at == (width, height, dpi) {
+        return;
+    }
+
+    let Some(frame) =
+        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
+    else {
+        return;
+    };
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        let Some(media) = media.as_mut() else {
+            return;
+        };
+
+        // The page may have been swapped for another while this one was drawn.
+        if media.text_state.as_ref().map(|state| &state.path) != Some(&path) {
+            return;
+        }
+
+        media.frames[0] = Arc::new(ImageFrame::new(frame.pixels, frame.width, frame.height, 0));
+
+        if let Some(state) = media.text_state.as_mut() {
+            state.dpi = dpi;
+            state.width = frame.width;
+            state.height = frame.height;
+            state.first_line = frame.first_line;
+            state.visible_lines = frame.visible_lines;
+            state.scrollbar = frame.scrollbar;
+            state.lines = frame.lines;
+        }
+    }
+}

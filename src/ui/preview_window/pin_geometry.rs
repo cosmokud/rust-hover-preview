@@ -781,6 +781,11 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     // bottom-right one, where the origin does not move at all and there is nothing to jump (see
     // `render_layered_preview_at`).
     if matches!(drag.action, PinDragAction::Resize(_)) {
+        // A page of text is laid out again for the box the hand has pulled it to, at the size it
+        // is drawn: the sample the paint below gives every other kind of media is the same text
+        // squeezed sideways, which is the one thing a frame of glyphs may not be given (see
+        // `relayout_pinned_text`).
+        relayout_pinned_text(content, dpi);
         render_pinned_preview_at(hwnd, window.0, window.1);
 
         // The box is already the one the paint applied; what is re-asserted here is only the
