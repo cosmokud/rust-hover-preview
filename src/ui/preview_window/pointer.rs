@@ -682,6 +682,58 @@ pub(super) fn take_text_scroll() -> Option<usize> {
     }
 }
 
+/// Lines a tick of a selection drag carried past the edge of the box moves the page: a screenful
+/// every two seconds at the tick the preview loop runs at, which is a speed a hand can stop.
+const TEXT_DRAG_LINES_PER_TICK: i64 = 3;
+
+/// Where a selection drag that has left the box asks the page to go, and the point the selection is
+/// grown to afterwards — or nothing while the pointer is inside the box or no drag is running.
+///
+/// The point comes back past the edge the pointer left rather than where the pointer is: the frame
+/// that comes back is the page a few lines on (or back), and the nearest line to a point just
+/// outside it is the line at its edge. That is what makes the selection grow with the scroll —
+/// growing it to the pointer's own line first would leave the far end standing still while the text
+/// moved under it (see `position_in` and `step_text_drag_selection`).
+pub(super) fn text_drag_step() -> Option<(usize, (i32, i32))> {
+    let Ok(media) = CURRENT_MEDIA.lock() else {
+        return None;
+    };
+    let state = media.as_ref().and_then(|media| media.text_state.as_ref())?;
+    if !state.selecting {
+        return None;
+    }
+
+    let (x, y) = state.drag_pointer?;
+    let (step, edge) = if y < 0 {
+        (-TEXT_DRAG_LINES_PER_TICK, -1)
+    } else if y >= state.height as i32 {
+        (TEXT_DRAG_LINES_PER_TICK, state.height as i32 + 1)
+    } else {
+        return None;
+    };
+
+    Some((state.scrolled_by(step), (x, edge)))
+}
+
+/// Follow a selection drag that has been carried past the edge of the box: the page is taken a step
+/// in the direction the drag left by, and the selection is grown to the line at the edge it came
+/// back with, so a range longer than the box shows can be made with the pointer alone.
+///
+/// Nothing is drawn where the page cannot move any further: the scroll itself is a no-op at either
+/// end of the document, and a selection grown to the edge line of the frame that is already on
+/// screen has nowhere left to grow to.
+pub(super) unsafe fn step_text_drag_selection(hwnd: HWND) {
+    let Some((line, point)) = text_drag_step() else {
+        return;
+    };
+
+    scroll_text_preview(hwnd, line);
+
+    if extend_text_selection(point.0, point.1) == Some(true) {
+        repaint_text_preview(hwnd);
+    }
+}
+
 /// Repaint the text preview where it is, with whatever is selected in it now.
 ///
 /// A selection is painted into the frame rather than drawn over it, so changing

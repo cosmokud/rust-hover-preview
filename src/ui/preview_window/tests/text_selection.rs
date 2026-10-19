@@ -35,6 +35,7 @@ impl TextPagePutBack {
             selection: None,
             selecting: false,
             last_press: None,
+            drag_pointer: None,
         });
         if let Ok(mut slot) = CURRENT_MEDIA.lock() {
             *slot = Some(media);
@@ -322,5 +323,85 @@ fn a_press_on_select_all_selects_the_page_and_puts_the_menu_away() {
     assert!(
         pinned_menu_geometry().is_none(),
         "and the menu goes away with the command"
+    );
+}
+
+/// A selection drag carried past the edge of the box is followed by the page: the page is taken a
+/// step the way the drag left by, and the selection is grown to the line at the edge the page came
+/// back with, so a range longer than the box shows can be made with the pointer alone (see
+/// `text_drag_step`).
+#[test]
+fn a_drag_carried_past_the_edge_of_a_page_keeps_selecting() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _pin = PinPutBack::take();
+    let _media = TextPagePutBack::put();
+    stand_pin(Some(PinnedPreview::for_test()));
+
+    let lines: String = (0..40).map(|n| format!("line {n}\n")).collect();
+    let Some(page) = a_page_of(&lines, "a-page-of-forty-lines.txt", 240, 80) else {
+        panic!("a page of text was not loaded")
+    };
+    let (height, reachable) = page
+        .text_state
+        .as_ref()
+        .map(|state| (state.height as i32, state.max_first_line()))
+        .expect("a pinned page keeps state");
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+    assert!(
+        reachable > 0,
+        "the page is longer than the box, so there is somewhere for a drag to follow it to"
+    );
+
+    // The drag is put where a hand's own moves would have left it, through the state those moves
+    // write (see `extend_text_selection`).
+    let drag = |selecting: bool, pointer: Option<(i32, i32)>, first_line: usize| {
+        if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+            if let Some(state) = slot.as_mut().and_then(|media| media.text_state.as_mut()) {
+                state.selecting = selecting;
+                state.drag_pointer = pointer;
+                state.first_line = first_line;
+            }
+        }
+    };
+
+    drag(false, Some((10, height + 5)), 0);
+    assert_eq!(
+        text_drag_step(),
+        None,
+        "nothing is following a pointer that is not dragging"
+    );
+
+    drag(true, Some((10, height / 2)), 0);
+    assert_eq!(
+        text_drag_step(),
+        None,
+        "and a pointer inside the box is a place the page is already showing"
+    );
+
+    drag(true, Some((10, height + 5)), 0);
+    assert_eq!(
+        text_drag_step(),
+        Some((3, (10, height + 1))),
+        "a drag below the box takes the page three lines on and grows the selection to the line \
+         that comes back at the bottom"
+    );
+
+    drag(true, Some((10, -5)), 6);
+    assert_eq!(
+        text_drag_step(),
+        Some((3, (10, -1))),
+        "one above it takes the page three lines back from where it stands, to the line at the top"
+    );
+
+    drag(true, Some((10, -5)), 1);
+    assert_eq!(
+        text_drag_step(),
+        Some((0, (10, -1))),
+        "and a drag past the top of the document asks for the line it is already on, so only the \
+         selection grows"
     );
 }
