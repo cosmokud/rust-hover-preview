@@ -88,9 +88,18 @@ pub(super) fn engine_kind_of(path: &Path) -> Option<PreviewType> {
         // A file the bytes named as another kind is that kind, whatever the name says, and a
         // kind that is not one of the browser's three is none of this app's business: a picture
         // under a font's name is the picture it is, and nothing is handed to the engine for it.
+        //
+        // The kind is not the whole of the answer for the two of the three the drawing layer
+        // draws as well: a metafile or a PostScript program under a name no vector list claims is
+        // a drawing this app replays, and a machine whose engine has stood down draws none of
+        // them (see `HoverFacts::svg_document`, `webview_preview::draws`). The font probe the
+        // loader puts before `draws` is left to the loader: it reads the file, and a file that
+        // will not parse as a font is measured no box and never reaches a pin.
         crate::formats::content_type::Content::Kind(_) => match hover.routed_kind() {
-            Some(PreviewType::Vector) => Some(PreviewType::Vector),
-            Some(PreviewType::Fonts) => Some(PreviewType::Fonts),
+            Some(PreviewType::Vector) if hover.svg_document() && webview_preview::draws(path) => {
+                Some(PreviewType::Vector)
+            }
+            Some(PreviewType::Fonts) if webview_preview::draws(path) => Some(PreviewType::Fonts),
             // A page of HTML is a text file, so the kind it answers with is the text kind's: the
             // gate over it is the one a text preview is switched by, and the loader reaches the
             // engine through that same arm (see `load_media_of_kind`).
@@ -106,13 +115,17 @@ pub(super) fn engine_kind_of(path: &Path) -> Option<PreviewType> {
         // the engine's — with it off the file is this app's own text preview, and the pin it was
         // taken up into keeps the frame that preview laid out.
         crate::formats::content_type::Content::Unknown => match hover.route.drawn_by {
-            crate::formats::routing::DrawnBy::WebView(web) => match web {
-                crate::formats::routing::WebPage::Svg => Some(PreviewType::Vector),
-                crate::formats::routing::WebPage::FontSpecimen => Some(PreviewType::Fonts),
-                crate::formats::routing::WebPage::Html => hover
-                    .html_drawn_by_the_engine()
-                    .then_some(PreviewType::Text),
-            },
+            // The name is the browser's, and the engine is what has to be behind it: a machine
+            // with no engine to draw a document, a specimen or a page has none of them on screen,
+            // and the loader hands none of them over — `draws` is where the switch over a page is
+            // asked as well (see `webview_preview::page_runs`).
+            crate::formats::routing::DrawnBy::WebView(web) if webview_preview::draws(path) => {
+                match web {
+                    crate::formats::routing::WebPage::Svg => Some(PreviewType::Vector),
+                    crate::formats::routing::WebPage::FontSpecimen => Some(PreviewType::Fonts),
+                    crate::formats::routing::WebPage::Html => Some(PreviewType::Text),
+                }
+            }
             _ => None,
         },
 
