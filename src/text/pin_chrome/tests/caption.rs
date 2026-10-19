@@ -467,11 +467,11 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
     );
 }
 
-/// The pictures this test writes are the design under review: the six marks the caption's
-/// own buttons carry, at both scales, side by side in one strip. A row of marks is judged
-/// as a row — one of them twice the size of the rest, or a third the size, or sitting a
-/// pixel or two off the middle of its own button, is what a strip shows and a test on one
-/// mark at a time cannot.
+/// The pictures this test writes are the design under review: the marks the caption's own
+/// buttons carry, at both scales, side by side in one strip. A row of marks is judged as a
+/// row — one of them twice the size of the rest, or a third the size, or sitting a pixel or
+/// two off the middle of its own button, is what a strip shows and a test on one mark at a
+/// time cannot.
 #[test]
 fn draws_the_caption_glyphs() {
     let dir = scratch("caption-glyphs");
@@ -483,6 +483,7 @@ fn draws_the_caption_glyphs() {
         ("next", CaptionButton::Next, false),
         ("open-with", CaptionButton::OpenWith, false),
         ("open-with-list", CaptionButton::OpenWithList, false),
+        ("always-on-top", CaptionButton::AlwaysOnTop, false),
         ("minimize", CaptionButton::Minimize, false),
         ("maximize", CaptionButton::Maximize, false),
         ("restore", CaptionButton::Maximize, true),
@@ -495,7 +496,7 @@ fn draws_the_caption_glyphs() {
         let height = side as u32;
         let width = (side * marks.len() as i32) as u32;
         let mut out = image_buffer(width, height);
-        let mut sizes: Vec<(&str, i32, i32)> = Vec::new();
+        let mut sizes: Vec<(&str, i32, i32, i32, i32)> = Vec::new();
 
         for (index, (name, kind, maximized)) in marks.iter().enumerate() {
             let surface = DibSurface::create(side as u32, height).expect("a surface");
@@ -565,7 +566,7 @@ fn draws_the_caption_glyphs() {
             // either side of the middle row, twice every other mark's height. The
             // minimize bar is a bar, so it is not held to the height of the rest.
             let (tall, wide) = (high.1 - low.1 + 1, high.0 - low.0 + 1);
-            sizes.push((*name, tall, wide));
+            sizes.push((*name, tall, wide, low.1, high.1));
 
             println!(
                 "{tag:>6} {name:<9} x {}..={} y {}..={} ({}x{})",
@@ -593,7 +594,7 @@ fn draws_the_caption_glyphs() {
         // chevron to the cross's overhang rather than to the size a glyph is asked for.
         let glyph = text_paint::scaled(GLYPH_PIXELS as i32, scale).max(6);
         let square = glyph + 1;
-        for (name, tall, wide) in &sizes {
+        for (name, tall, wide, ..) in &sizes {
             if *name != "previous" && *name != "next" {
                 continue;
             }
@@ -610,13 +611,35 @@ fn draws_the_caption_glyphs() {
         let heights = sizes
             .iter()
             .filter(|(name, ..)| *name != "minimize")
-            .map(|(_, tall, _)| *tall);
+            .map(|(_, tall, ..)| *tall);
         let tallest = heights.clone().max().unwrap_or_default();
         let smallest = heights.min().unwrap_or_default();
         assert!(
             tallest - smallest <= 2,
             "{tag} the row runs from {smallest} to {tallest} rows tall"
         );
+
+        // The always-on-top pin is the height of the window's own marks, which is what a hand
+        // reads before it reads any of their shapes: its ceiling on the row a maximize's top
+        // edge is on, and its stem's end on the row that box's bottom edge is on. A pin drawn
+        // to a smaller square inside its button is the mark a row of them shows as the odd one
+        // out, whatever its arms and its stem are drawn like.
+        let rows = |name: &str| {
+            let (_, _, _, top, bottom) = sizes
+                .iter()
+                .find(|(each, ..)| *each == name)
+                .unwrap_or_else(|| panic!("{tag} has no {name}"));
+            (*top, *bottom)
+        };
+        let pin = rows("always-on-top");
+        for beside in ["maximize", "close"] {
+            assert_eq!(
+                pin,
+                rows(beside),
+                "{tag} the pin runs {pin:?} beside {beside}'s {:?}",
+                rows(beside)
+            );
+        }
 
         let path = dir.join(format!("caption-glyphs-{tag}.png"));
         write_png(path.clone(), &out, width, height);
