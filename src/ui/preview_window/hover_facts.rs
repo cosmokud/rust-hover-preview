@@ -367,11 +367,13 @@ pub(super) struct HoverFacts {
     /// [`crate::formats::routing::resolve`]'s answer, and the predicates below are its fields —
     /// which is what turns twelve scattered answers to one question into lookups.
     pub(super) route: crate::formats::routing::Route,
-    /// The four list answers the eleven predicates used to each go and take the configuration's
+    /// The three list answers the eleven predicates used to each go and take the configuration's
     /// lock for. They are asked here rather than where they are used because they are cheap — a
     /// name compared against a list of extensions — and because a question asked twice for one
     /// hover is two locks where one was.
-    pub(super) video_named: bool,
+    ///
+    /// The video lists are not among them: the two names they share with the text lists are
+    /// settled by the file's own bytes, and that answer is the router's already (see `is_video`).
     pub(super) audio_named: bool,
     pub(super) archive_named: bool,
     pub(super) peazip_named: bool,
@@ -435,7 +437,6 @@ impl HoverFacts {
             return Self {
                 probe,
                 route,
-                video_named: false,
                 audio_named: false,
                 archive_named: false,
                 peazip_named: false,
@@ -456,7 +457,7 @@ impl HoverFacts {
         // first, with nothing held, and the lists are consulted after.
         let route = crate::formats::routing::resolve(path, &config, &probe);
 
-        // And the four answers this side has that routing does not: which of the lists' names the
+        // And the three answers this side has that routing does not: which of the lists' names the
         // file carries, which gates the tray has thrown, and the scales a hover is laid out by.
         let audio_named = crate::formats::lists::AUDIO.claims(path, &config);
         let archive_named = crate::formats::lists::ARCHIVE.claims(path, &config);
@@ -466,22 +467,7 @@ impl HoverFacts {
         let text_enabled = PreviewType::Text.enabled_in(&config);
         let scales = HoverScales::of(&config);
         let follow_cursor = config.follow_cursor;
-
-        // The video lists are the one exception to "consulted after, and only in memory": the two
-        // names they share with the text lists are settled by whether the file holds MPEG-TS
-        // packets, which is a `File::open` and a read. They were copied out under the guard for
-        // exactly that reason, and this line is the second half of a fix whose first half is
-        // `media_engine_plays` doing the same: a guard held across a read is a guard every thread
-        // of the app waits on for as long as the volume takes, and this one is taken on the thread
-        // that pumps this window's own messages.
-        let video_lists = (
-            config.video_extensions.clone(),
-            config.ffmpeg_extensions.clone(),
-        );
         drop(config);
-
-        let video_named =
-            video_formats::claims_any_video_name_in(path, &video_lists.0, &video_lists.1);
 
         // And last, with the guard gone: which of this app's own readers does the work. That is
         // the one question here that still opens the file — a book's is settled by what an `.ai`
@@ -501,7 +487,6 @@ impl HoverFacts {
         Self {
             probe,
             route,
-            video_named,
             audio_named,
             archive_named,
             peazip_named,
@@ -647,14 +632,19 @@ impl HoverFacts {
         self.is_text() || self.archive_named || self.engine_archive() || self.is_audio()
     }
 
-    /// Whether this file is drawn as a video: the name the video list carries, or the bytes
-    /// of a video under a name that list does not have.
+    /// Whether this file is drawn as a video: the kind the router claims for it, and where the
+    /// bytes named one, the bytes' own answer ahead of that.
     ///
     /// Every question about a video goes through this one answer — whether its shape has to
     /// be probed, whether the wait for it is shown, and whether the player takes over the
     /// window rather than this app drawing its frames — because the loader plays the file its
     /// bytes name, and a hover whose picture is played but whose frames are awaited would sit
     /// on a first frame that nothing ever replaces.
+    ///
+    /// The router is what settles the two names the video lists share with the text lists: asked
+    /// of the name alone, a `.ts` is a film because both lists carry it, and a source laid out as
+    /// one is a probe that never answers over a wait that never ends — in a hover and in a pin
+    /// both (see `routing::claim_video`).
     pub(super) fn is_video(&self) -> bool {
         // It was asked from four places in one hover — the probe's due question, both
         // dimension questions and the `Show` arm — and each of those used to read the file and
@@ -663,7 +653,7 @@ impl HoverFacts {
         // at all (see `HoverFacts`).
         let named = match self.route.content {
             crate::formats::content_type::Content::Kind(PreviewType::Videos) => true,
-            _ => self.video_named,
+            _ => self.route.named == Some(PreviewType::Videos),
         };
 
         named && self.video_enabled

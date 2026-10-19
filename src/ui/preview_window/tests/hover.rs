@@ -331,6 +331,58 @@ fn a_box_follows_the_content_rather_than_the_name() {
     let _ = std::fs::remove_dir_all(&folder);
 }
 
+/// The two names `.ts` and `.mts` carry are settled by the file rather than by the lists, and a
+/// hover asks that question of the same answer the router does: a TypeScript source is a page of
+/// text — not a film whose shape nothing will ever measure — while the transport stream beside it
+/// is still the video it is.
+///
+/// The name is the one answer a hover may not take from the lists here: both lists carry `ts`, so
+/// a hover that read the name alone laid a source out as a video waiting on a probe — a wait that
+/// never ends, and a box nothing is drawn into, in a hover and in a pin both (see
+/// `HoverFacts::is_video` and `pin_swap_awaits`). What settles it is the file's own bytes, which
+/// is the answer the router already carries.
+#[test]
+fn a_shared_name_is_the_page_or_the_film_its_own_bytes_say() {
+    let folder = std::env::temp_dir().join("rust-hover-preview-ts-shared-name");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    // A TypeScript source, under the transport stream's own name.
+    let source = folder.join("app.ts");
+    std::fs::write(&source, b"export const answer: number = 42;\n").expect("a source");
+
+    let hover = HoverFacts::read(&source);
+    assert_eq!(hover.routed_kind(), Some(PreviewType::Text));
+    assert!(hover.is_text(), "a TypeScript source is a page");
+    assert!(!hover.is_video(), "and not a film");
+    assert!(
+        !video_probe_due(&hover),
+        "so no shape is probed for, and no wait is shown for one"
+    );
+
+    // Which is the pin's own wait too: a swap onto the source is not held for a shape that
+    // would never answer (see `pin_swap_awaits`).
+    let wait = (office_preview::WAITING_BOX, office_preview::WAITING_BOX);
+    assert!(
+        !pin_swap_awaits(&source, wait),
+        "and a pin is not held on a video's shape either"
+    );
+
+    // And a transport stream under that name: four sync bytes one packet apart.
+    let stream = folder.join("clip.ts");
+    let mut bytes = vec![0u8; 188 * 4];
+    for packet in 0..4 {
+        bytes[packet * 188] = 0x47;
+    }
+    std::fs::write(&stream, &bytes).expect("a stream");
+
+    let hover = HoverFacts::read(&stream);
+    assert_eq!(hover.routed_kind(), Some(PreviewType::Videos));
+    assert!(hover.is_video(), "a transport stream is still a film");
+    assert!(!hover.is_text());
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 /// A page is painted into the box the layout planned for it, and an archive an engine listed is
 /// one of those pages rather than a size to fit the room it was given. It is the one question
 /// the share a kind is drawn at and the box the loader is handed both ask, and a kind left out
