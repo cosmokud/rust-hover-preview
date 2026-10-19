@@ -652,8 +652,9 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
     render_layered_preview(hwnd);
 }
 
-/// Lay a pinned page of text out again in the box its window has just been dragged to, keeping the
-/// line it is scrolled to, what is selected in it and the size the reader put it to.
+/// Lay a pinned page of text out again in the box its window has just been given — one a hand has
+/// dragged it to, a maximize or a restore, or a display that changed — keeping the line it is
+/// scrolled to, what is selected in it and the size the reader put it to.
 ///
 /// A box decides what a page of text shows rather than how large it is: the font is a fixed,
 /// display-scaled size, and the box decides how many lines it holds and how long each of them may

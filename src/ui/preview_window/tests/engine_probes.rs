@@ -101,6 +101,8 @@ fn office_hover_probe() {
             layout.max_height,
             scale,
             dpi,
+            // A probe's own load, with no reader's size to carry (see `load_media`).
+            None,
             Arc::clone(&cancel),
         ) {
             Some(media) => println!(
@@ -265,6 +267,8 @@ fn libre_hover_probe() {
             layout.max_height,
             scale,
             dpi,
+            // A probe's own load, with no reader's size to carry (see `load_media`).
+            None,
             Arc::clone(&cancel),
         ) {
             Some(media) => println!(
@@ -434,6 +438,8 @@ fn peazip_hover_probe() {
             layout.max_height,
             scale,
             dpi,
+            // A probe's own load, with no reader's size to carry (see `load_media`).
+            None,
             Arc::clone(&cancel),
         ) {
             Some(media) => println!(
@@ -563,6 +569,8 @@ fn comic_hover_probe() {
             layout.max_height,
             scale,
             dpi,
+            // A probe's own load, with no reader's size to carry (see `load_media`).
+            None,
             Arc::clone(&cancel),
         ) {
             Some(media) => println!(
@@ -733,6 +741,8 @@ fn calibre_hover_probe() {
             layout.max_height,
             scale,
             dpi,
+            // A probe's own load, with no reader's size to carry (see `load_media`).
+            None,
             Arc::clone(&cancel),
         ) {
             Some(media) => println!(
