@@ -4,8 +4,8 @@
 //! A sound's card holds a menu of its own — the two ways out of the pin,
 //! the playback of the file in it, and the settings it plays by, two of them
 //! behind flyouts — while every other kind holds the same rows a bubble's
-//! menu holds, down to the two places a minimize can put the pin (see
-//! `bubble_menu_rows`). Both are the window's own rather than the tray's, so
+//! menu holds, down to the three ways out a pin still standing in its own
+//! window has (see `bubble_menu_rows`). Both are the window's own rather than the tray's, so
 //! their rows are read out of the same settings the tray's own `Pin Mode`
 //! submenus write, and their panels are drawn by `pin_chrome` rather than by
 //! the menu the shell draws: a menu that floats over the media is a panel
@@ -527,6 +527,9 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> PinMenuPaint {
             rows.extend(bubble_menu_chrome_rows(
                 current_media_type(),
                 pin_media_is_playing(pin),
+                // The window's own menu is a pin still standing in it, so it holds the way out
+                // into the bubble a bubble's own menu has none of (see `bubble_menu_rows`).
+                true,
             ));
             rows
         }
@@ -916,7 +919,11 @@ unsafe fn shared_menu_press(hwnd: HWND, paint: &PinMenuPaint, x: i32, y: i32) ->
     // rows (see `bubble_menu_rows`).
     let pressed = pressed_row
         .and_then(|index| index.checked_sub(page.own_rows()))
-        .and_then(|index| bubble_menu_rows(current_media_type()).get(index).copied());
+        .and_then(|index| {
+            bubble_menu_rows(current_media_type(), true)
+                .get(index)
+                .copied()
+        });
 
     match pressed {
         Some(row) => shared_menu_row_press(row, || {
