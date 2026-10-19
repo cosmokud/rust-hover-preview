@@ -477,6 +477,7 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
             "Minimize to Bubble",
             "Minimize to Taskbar",
             "",
+            "To Bubble",
             "To Taskbar",
             "Close",
         ],
@@ -611,6 +612,7 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
             "Minimize to Bubble",
             "Minimize to Taskbar",
             "",
+            "To Bubble",
             "To Taskbar",
             "Close",
         ],
@@ -627,9 +629,11 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
 }
 
 /// A press on a row a pinned window's menu shares with the bubble's leaves the ask that row
-/// leaves there: the two walks and the close the same, and the one row the two walk differently
-/// — `To Taskbar` — putting this pin away into the app's own place in the taskbar from the
-/// window it is standing in (see `shared_menu_row_press` and `PinCommand::MinimizeTo`).
+/// leaves there: the two walks and the close the same; `To Bubble`, which only a pin still
+/// standing has, putting this pin away into the bubble it leaves on the desktop; and `To Taskbar`
+/// — the row the two menus walk differently — putting it away into the app's own place in the
+/// taskbar from the window it is standing in (see `shared_menu_row_press` and
+/// `PinCommand::MinimizeTo`).
 #[test]
 fn a_press_on_a_row_a_pin_shares_with_a_bubble_leaves_its_ask() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -645,6 +649,7 @@ fn a_press_on_a_row_a_pin_shares_with_a_bubble_leaves_its_ask() {
         ("Next File", PinCommand::Next),
         ("Previous File", PinCommand::Previous),
         ("Close", PinCommand::Close),
+        ("To Bubble", PinCommand::MinimizeTo(PinMinimizeTo::Bubble)),
         ("To Taskbar", PinCommand::MinimizeTo(PinMinimizeTo::Taskbar)),
     ];
 
@@ -1959,7 +1964,7 @@ fn the_same_ask_puts_the_bubbles_menu_away() {
     // in the slot the loop's tick reads it from — a window nobody has to put on a screen
     // for a menu to be stood up in a slot (see `open_bubble_menu`).
     let _bubble = BubblePutBack::put(HWND(0x2000 as *mut _));
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false);
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
         *menu = Some(BubbleMenu {
@@ -2010,7 +2015,7 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
     // tick reads it from, the way the dismiss test above stands it (see `open_bubble_menu`).
     let hwnd = HWND(0x2000 as *mut _);
     let _bubble = BubblePutBack::put(hwnd);
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false);
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
         *menu = Some(BubbleMenu {
@@ -2024,7 +2029,7 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
     // The middle of the switch's own band, named by what the row says rather than by the number
     // it happens to sit at.
     let index = row_at(
-        &bubble_menu_chrome_rows(Some(MediaType::Audio), true),
+        &bubble_menu_chrome_rows(Some(MediaType::Audio), true, false),
         "Pause on Minimize",
     );
     let (x, y) = bubble_row_point(index);
@@ -2079,7 +2084,7 @@ fn a_press_on_the_bubbles_minimize_pick_writes_the_setting() {
     // stands it (see `open_bubble_menu`).
     let hwnd = HWND(0x2000 as *mut _);
     let _bubble = BubblePutBack::put(hwnd);
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false);
     let index = row_at(&rows, "Minimize to Taskbar");
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
