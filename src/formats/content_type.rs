@@ -42,15 +42,21 @@
 //! A table of names is a weaker answer than a table of signatures, and it is asked where
 //! the strong ones have nothing to say. What it can answer is only what a name says, so a
 //! file that carries one of its names and is not the format that name is written for would
-//! be routed by it wrongly — which is why a name whose format is *two* formats, with the
-//! engine reading one of them and nothing here previewing the other, is asked a question
-//! of its own before it is answered: `.pdb` is a Palm OS database, which the render
+//! be routed by it wrongly — which is why a name whose format is *two* formats is asked a
+//! question of its own before it is answered: `.pdb` is a Palm OS database, which the render
 //! engine's filters read as an ebook, and it is also the Microsoft program database a
 //! compiler writes beside its binaries, which is no document at all — see
 //! `palm_ebook_or_program_database` for what is asked of the bytes there. **An engine is
 //! handed a file of such a name only where its own header says it is the format that
 //! engine reads**, and a file that is the other one shows nothing rather than starting an
 //! engine it is not for.
+//!
+//! The other format a shared name is written for may also be one this app does preview, in
+//! which case there is a kind to answer with rather than nothing: a `.vhd` is a disk image to
+//! the listing engine and VHDL source to the text lists, a `.dif` a DV stream to FFmpeg's list
+//! and a spreadsheet to the render engine's, and for both it is the file's own head that says
+//! which — the text half of the name where the bytes read as text, and the list's own order
+//! where they do not (see `probe::GUARDS` and the questions beside the one above).
 //!
 //! What is deliberately in none of the tables matters as much as what is. **A container
 //! is not a kind**, so nothing here answers with a box: a zip is what an OpenDocument, an

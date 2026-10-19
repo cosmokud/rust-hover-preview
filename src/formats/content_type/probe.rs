@@ -5,7 +5,10 @@
 //! is written with is in [`super::matchers`]. Both are asked through here, and both are
 //! asked of the same four kilobytes.
 
-use super::matchers::{names_the_container_of_a_raw, palm_ebook_or_program_database};
+use super::matchers::{
+    names_the_container_of_a_raw, palm_ebook_or_program_database, spreadsheet_or_dv_stream,
+    vhdl_source_or_disk_image,
+};
 use super::signatures::SIGNATURES;
 use crate::config::config::{AppConfig, PreviewType};
 use infer::{MatcherType, Type};
@@ -555,12 +558,17 @@ pub(super) static KIND_BY_NAME: &[(&str, PreviewType)] = &[
 /// The names in the table above that are more than one format's, and the question asked of
 /// the bytes before any of them is answered.
 ///
-/// A name is here where the format its engine reads shares its spelling with a format
-/// nothing here previews, and where the two can be told apart from the front of the file.
-/// What such a name answers is the format the engine reads, or nothing at all: a file that
-/// is the other format is a file no kind of this app previews, and starting an engine that
-/// can only turn it down is the one thing this is for.
-pub(super) static GUARDS: &[(&str, Guard)] = &[("pdb", palm_ebook_or_program_database)];
+/// A name is here where the format one list reads shares its spelling with another format, and
+/// where the two can be told apart from the front of the file. What such a name answers is the
+/// format the file's own head names — the kind that previews it, whether that is the format the
+/// list the name is filed under reads or the kind another list claims, as a `.vhd` of VHDL source
+/// is a page of text — or nothing at all, where no kind of this app previews the other format: a
+/// `.pdb` that is a Microsoft program database is a file no engine here is started for.
+pub(super) static GUARDS: &[(&str, Guard)] = &[
+    ("pdb", palm_ebook_or_program_database),
+    ("vhd", vhdl_source_or_disk_image),
+    ("dif", spreadsheet_or_dv_stream),
+];
 
 /// The question a name in [`GUARDS`] is asked of the front of a file, answered in the same
 /// three terms the tables answer in: the kind that previews what the bytes hold, nothing
