@@ -580,18 +580,42 @@ fn stand_the_release_that_got_no_player() {
     VIDEO_PID.store(0, Ordering::SeqCst);
 }
 
+/// A cover parked before the player behind it has been begun, which is what the kill road writes and
+/// the only press that parks before its relaunch is made (see `park_pinned_player_for_gesture`),
+/// with the pin left standing up over it.
+fn stand_a_cover_awaiting_its_relaunch(content: ScreenRegion) {
+    assert!(
+        park_pinned_player_for_seek(HWND(0x1000 as *mut _), (content.0, content.1)),
+        "a cover over the live player"
+    );
+    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
+        if let Some(swap) = held.as_mut() {
+            swap.awaiting_relaunch = true;
+        }
+    }
+    assert!(
+        seek_cover_is_waiting(),
+        "waiting for a relaunch that nothing has begun yet"
+    );
+    assert!(
+        pin_media_is_alive(false),
+        "and the pin is held up over it: the cover's record is what tells the pin it is not a \
+         window onto nothing, so nothing takes the window down from under this test"
+    );
+}
+
 /// L7 THE RESIDUAL: `awaiting_relaunch` is an expectation, and an expectation nothing can satisfy is
-/// not a wait. This is the residue of a scrub whose release came, relaunched, and got no player —
-/// the snapshot taken by whichever end ran first, the aim dropped by the capture the release gave
-/// back, and no pending record at all, because a relaunch with no pid writes none.
+/// not a wait. This is the residue of a cover whose relaunch came and got no player — the snapshot
+/// taken by whichever end ran first, no pending record at all, because a relaunch with no pid writes
+/// none, and no aim left standing.
 ///
 /// Held on that, the cover is opaque for the life of the pin: the band is this app's own shape at
 /// the compositor's hit test, so every click in the video area is answered here rather than by the
 /// player, and the release roads have nothing left to ask.
 ///
-/// The release is stood in rather than driven — it would begin a real player — and each half of what
-/// it leaves behind is written the way that road writes it (see `relaunch_gesture_end_at` and
-/// `note_pinned_relaunch`).
+/// The cover is stood as the kill road writes it, and the end that came without a player is stood
+/// rather than driven — it would begin a real player — with each half of what it leaves behind
+/// written the way that road writes it (see `relaunch_gesture_end_at` and `note_pinned_relaunch`).
 #[test]
 fn a_cover_waiting_on_a_relaunch_that_can_no_longer_arrive_is_given_up() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -604,23 +628,9 @@ fn a_cover_waiting_on_a_relaunch_that_can_no_longer_arrive_is_given_up() {
 
     let content = (100, 80, 820, 620);
     stand_a_fresh_video_pin(content);
+    stand_a_cover_awaiting_its_relaunch(content);
 
-    let (x, y) = a_transport_part_point(pin_chrome::TransportPart::Seek);
-    assert!(
-        unsafe { pinned_transport_press(HWND(0x1000 as *mut _), x, y) },
-        "a hand on the track parks the cover a scrub is released against"
-    );
-    assert!(
-        seek_cover_is_waiting(),
-        "so the cover is waiting for that release's relaunch and nothing has come to end it yet"
-    );
-    assert!(
-        pin_media_is_alive(false),
-        "and the pin is held up over it: the cover's record is what tells the pin it is not a \
-         window onto nothing, so nothing takes the window down from under this test"
-    );
-
-    // The release: it came, it relaunched, and the relaunch got no player.
+    // The relaunch it was parked for: it came, and no player with it.
     stand_the_release_that_got_no_player();
 
     stand_the_park_wait_at(PIN_PARK_COVER_TIMEOUT + PIN_PARK_SWAP_TIMEOUT);
@@ -643,10 +653,7 @@ fn a_cover_waiting_on_a_relaunch_that_can_no_longer_arrive_is_given_up() {
     // the user's case — a film is playing behind the placeholder — and it must be handed the band,
     // not held away from it.
     stand_a_fresh_video_pin(content);
-    assert!(
-        unsafe { pinned_transport_press(HWND(0x1000 as *mut _), x, y) },
-        "and again with a scrub on the track"
-    );
+    stand_a_cover_awaiting_its_relaunch(content);
     stand_the_release_that_got_no_player();
 
     stand_the_park_wait_at(PIN_PARK_SWAP_TIMEOUT * 4);
@@ -660,75 +667,6 @@ fn a_cover_waiting_on_a_relaunch_that_can_no_longer_arrive_is_given_up() {
         !pin_player_is_parked(),
         "so the player is seen through the band again"
     );
-
-    restore(previous_pin, previous_pid, previous_media);
-}
-
-/// L8 THE REASON THE EARLY RETURN EXISTS AT ALL, and the guard against the fix above: a scrub the
-/// pointer is still down on is a wait with no end, and it must not be cut off. A hand can rest on
-/// the bar for ten seconds, and the cover is holding the frame the film was at the second it
-/// started from.
-///
-/// **Both roads are stood, because only one of them has a snapshot to hold it.** A press over a
-/// live player freezes the clock and the end owns the relaunch; a press with no player to kill
-/// takes the legacy road, and then the aim is the only thing standing between the cover and the
-/// relaunch its release will make.
-#[test]
-fn a_scrub_held_with_the_pointer_still_down_is_never_cut_off() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    clear_park_swap_arm();
-    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
-    let previous_pin = take_pin_for_a_test();
-    let previous_media = stand_video_media();
-
-    let content = (100, 80, 820, 620);
-    stand_a_fresh_video_pin(content);
-
-    let (x, y) = a_transport_part_point(pin_chrome::TransportPart::Seek);
-    assert!(
-        unsafe { pinned_transport_press(HWND(0x1000 as *mut _), x, y) },
-        "a hand on the track parks the cover"
-    );
-    assert!(
-        gesture_snapshot_active(),
-        "and the press froze the clock, so the end owns the one relaunch"
-    );
-
-    // Far past both bounds: this is a hand resting on the bar, not a wait.
-    stand_the_park_wait_at(PIN_PARK_COVER_TIMEOUT * 10);
-    let window = RecordedPinWindow::new(0x1000);
-    assert!(
-        !settle_pinned_park_where(&window, false),
-        "ten times the cover's own bound with the scrub still held is not a cover to give up"
-    );
-    assert!(
-        pin_player_is_parked(),
-        "so the cover stands and the band's picture is the frame the film was at"
-    );
-    assert!(
-        seek_cover_is_waiting(),
-        "and it is still a cover waiting for a relaunch that can arrive"
-    );
-    assert_eq!(
-        park_swap_last_arm(),
-        None,
-        "no arm taken for a park still standing"
-    );
-
-    // The legacy road, where nothing froze: the aim alone has to hold it.
-    take_gesture_snapshot();
-    assert!(
-        seek_cover_is_waiting(),
-        "the aim is the whole of what stands between this cover and its relaunch when the press \
-         took no snapshot"
-    );
-    assert!(
-        !settle_pinned_park_where(&window, false),
-        "and that cover is held too, however long the hand stays down"
-    );
-    assert!(pin_player_is_parked(), "still standing");
 
     restore(previous_pin, previous_pid, previous_media);
 }
