@@ -11,7 +11,7 @@
 //! the Markdown renderer in [`super::markdown`], or plain and ANSI text read by
 //! [`super::source`].
 
-use super::frame::TextPreviewOptions;
+use super::frame::{Selection, TextPreviewOptions};
 use super::markdown::{rendered_line_count, window_markdown};
 use super::source::{push_ansi_spans, read_source, strip_rtf, AnsiPalette};
 use crate::config::config::{MarkdownMode, TextTheme};
@@ -277,6 +277,82 @@ pub(super) fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<C
     }
 
     Some(document)
+}
+
+/// Lines a copy styles at once. A selection can span a whole document, and styling that in one
+/// window is every line of it held at once: the walk is taken a window at a time, and the windows
+/// it leaves are the ones a scroll already keeps.
+const COPY_WINDOW_LINES: usize = 512;
+
+/// What a selection takes out of the document of `path`: the lines it covers as they are drawn,
+/// the two ends cut to the characters it names, joined the way Windows joins lines.
+///
+/// It is read of the document rather than of the frame that is showing it, which is what makes a
+/// copy the text itself: a line too long for the box is copied whole and unbroken, a selection
+/// reaching past the frame reaches past it here too, and a rendered Markdown document gives the
+/// text it was rendered to rather than the source it was rendered from (see `Selection`).
+///
+/// `shortcut:` a copy styles every line it covers, one window at a time, so copying a document far
+/// larger than a frame costs the styling of everything between its ends; upgrade if that is ever
+/// asked of files where it is felt, by reading the source text directly for the producers whose
+/// drawn lines are the file's own.
+pub fn text_of(path: &Path, options: TextPreviewOptions, selection: Selection) -> Option<String> {
+    let document = document(path, options)?;
+    let theme = text_theme::loaded(options.theme)?;
+
+    Some(text_of_document(&document, theme, selection))
+}
+
+/// The lines `selection` covers, taken from the styled windows the frame is drawn from.
+fn text_of_document(
+    document: &CachedDocument,
+    theme: &LoadedTheme,
+    selection: Selection,
+) -> String {
+    let doc = &document.doc;
+    let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
+    let last = doc.total_lines().saturating_sub(1);
+    let start_line = start_line.min(last);
+    let end_line = end_line.min(last);
+
+    let mut taken: Vec<String> = Vec::new();
+    let mut index = start_line;
+    while index <= end_line {
+        let count = (end_line - index + 1).min(COPY_WINDOW_LINES);
+        let Some(window) = styled_window(&document.key, document, theme, index, count) else {
+            break;
+        };
+
+        let mut line_index = index;
+        while line_index < index + count {
+            let Some(line) = window.line(line_index) else {
+                break;
+            };
+
+            let text: String = line.spans.iter().map(|span| span.text.as_str()).collect();
+            let from = if line_index == start_line {
+                start_char
+            } else {
+                0
+            };
+            let to = if line_index == end_line {
+                end_char
+            } else {
+                usize::MAX
+            };
+            taken.push(
+                text.chars()
+                    .skip(from)
+                    .take(to.saturating_sub(from))
+                    .collect(),
+            );
+            line_index += 1;
+        }
+
+        index += count;
+    }
+
+    taken.join("\r\n")
 }
 
 /// Styled lines covering `[first, first + count)` of the document, built on

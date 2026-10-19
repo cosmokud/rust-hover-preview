@@ -62,10 +62,20 @@ pub struct FrameLine {
     pub top: i32,
     pub height: i32,
     pub runs: Vec<FrameRun>,
+    /// The document line this painted line belongs to, and the character of that
+    /// line its first run starts at: what a point on the frame is turned back into,
+    /// and what a selection is measured against (see `Selection`).
+    pub source: (usize, usize),
 }
 
 /// A range of a text preview a reader has selected: where the drag started and
-/// where it is now, both as (frame line, character).
+/// where it is now, both as (document line, character).
+///
+/// The place is the document's own rather than the frame's, which is what makes a
+/// selection outlive the box it was made in: a page drawn again — scrolled, resized,
+/// wrapped at another width — draws the same text somewhere else, and a selection
+/// that named a line of the frame would name whatever moved into that line instead
+/// (see `keep_text_place`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Selection {
     pub anchor: (usize, usize),
@@ -148,18 +158,20 @@ fn point_in_line(line: &FrameLine, x: i32) -> (usize, usize) {
     (caret, character)
 }
 
-/// Where a point falls in painted lines: the line under it and the character
-/// within that line.
+/// Where a point falls in a text preview: the document line under it and the
+/// character within that line.
 ///
 /// A point between two lines takes the nearer one, and a point past the end of a
 /// line takes the nearest end of it, so a drag that runs off the text still selects
-/// the line it was on rather than losing it.
+/// the line it was on rather than losing it. What comes back is a place in the
+/// document, so a point on a wrapped tail names the character it is drawn under
+/// rather than the line of the frame it happens to be (see `FrameLine::source`).
 pub fn position_in(lines: &[FrameLine], x: i32, y: i32) -> (usize, usize) {
-    let Some((line_index, line)) = nearest_line(lines, y) else {
+    let Some((_, line)) = nearest_line(lines, y) else {
         return (0, 0);
     };
 
-    (line_index, point_in_line(line, x).0)
+    (line.source.0, line.source.1 + point_in_line(line, x).0)
 }
 
 /// The kind of character a double click takes a run of: a word is letters, digits and the
@@ -189,7 +201,7 @@ fn run_kind(character: char) -> RunKind {
 ///
 /// A line with nothing on it has no word to take, and the range comes back empty there.
 pub fn word_in(lines: &[FrameLine], x: i32, y: i32) -> Selection {
-    let Some((line_index, line)) = nearest_line(lines, y) else {
+    let Some((_, line)) = nearest_line(lines, y) else {
         return Selection {
             anchor: (0, 0),
             caret: (0, 0),
@@ -200,8 +212,8 @@ pub fn word_in(lines: &[FrameLine], x: i32, y: i32) -> Selection {
     let characters: Vec<char> = line.runs.iter().flat_map(|run| run.text.chars()).collect();
     let Some(&character) = characters.get(at) else {
         return Selection {
-            anchor: (line_index, 0),
-            caret: (line_index, 0),
+            anchor: line.source,
+            caret: line.source,
         };
     };
 
@@ -217,60 +229,9 @@ pub fn word_in(lines: &[FrameLine], x: i32, y: i32) -> Selection {
         .count();
 
     Selection {
-        anchor: (line_index, at - before),
-        caret: (line_index, at + 1 + after),
+        anchor: (line.source.0, line.source.1 + at - before),
+        caret: (line.source.0, line.source.1 + at + 1 + after),
     }
-}
-
-/// The text of painted lines, either everything they show or the part a selection
-/// covers, as it will be pasted: the lines it touches, each cut to the part that
-/// was selected, joined with Windows line endings.
-///
-/// What painted lines hold is what the frame shows, so a copy is the part of the
-/// file that was on screen — a line that wrapped is copied as the lines it took.
-pub fn text_in(lines: &[FrameLine], selection: Selection) -> String {
-    let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
-    let mut selected: Vec<String> = Vec::new();
-
-    for (index, line) in lines.iter().enumerate() {
-        if index < start_line || index > end_line {
-            continue;
-        }
-
-        let from = if index == start_line { start_char } else { 0 };
-        let to = if index == end_line {
-            end_char
-        } else {
-            usize::MAX
-        };
-        let mut characters = String::new();
-        let mut position = 0usize;
-
-        for run in &line.runs {
-            for character in run.text.chars() {
-                if position >= from && position < to {
-                    characters.push(character);
-                }
-                position += 1;
-            }
-        }
-
-        selected.push(characters);
-    }
-
-    selected.join("\r\n")
-}
-
-/// Everything the painted lines show, which is what a Copy with nothing selected
-/// takes.
-pub fn frame_text(lines: &[FrameLine]) -> String {
-    text_in(
-        lines,
-        Selection {
-            anchor: (0, 0),
-            caret: (usize::MAX, usize::MAX),
-        },
-    )
 }
 
 /// The size the preview of `path` wants inside `max_width` x `max_height`.
@@ -406,6 +367,7 @@ pub fn render_scrolled(
         .map(|line| FrameLine {
             top: line.top,
             height: line.height,
+            source: line.source,
             runs: line
                 .runs
                 .iter()

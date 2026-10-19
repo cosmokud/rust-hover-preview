@@ -19,9 +19,10 @@ mod layout;
 mod markdown;
 mod source;
 
+pub use document::text_of;
 pub use frame::{
-    frame_text, measure, position_in, render_scrolled, text_in, word_in, FrameLine, ScrollBar,
-    Selection, TextPreviewOptions,
+    measure, position_in, render_scrolled, word_in, FrameLine, ScrollBar, Selection,
+    TextPreviewOptions,
 };
 // A run is what a line is made of, and it is named only by the tests that build lines of their
 // own rather than painting a document.

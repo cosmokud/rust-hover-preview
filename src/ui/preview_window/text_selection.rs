@@ -123,11 +123,11 @@ pub(super) fn has_text_selection() -> bool {
         .unwrap_or(false)
 }
 
-/// Select everything the frame shows: the whole of a document that fits on one
-/// page, and the screenful a longer one is showing.
+/// Select everything: the whole of the document, which is what a Copy of it takes.
 ///
-/// The range is the one a Copy with nothing selected already takes, so what the
-/// highlight covers is what that Copy puts on the clipboard.
+/// The frame draws only the part of it that fits, so what the highlight covers is what the box
+/// shows of the selection — the selection itself reaches past it, and a copy of it does too (see
+/// `text_preview::text_of`).
 pub(super) unsafe fn select_all_text_preview(hwnd: HWND) {
     let Ok(mut media) = CURRENT_MEDIA.lock() else {
         return;
@@ -153,19 +153,27 @@ pub(super) unsafe fn select_all_text_preview(hwnd: HWND) {
 }
 
 /// What a Copy takes from the preview on screen: what is selected, or — with
-/// nothing selected — everything the frame shows.
+/// nothing selected — the whole of the page's document.
 pub(super) fn text_preview_clipboard_text() -> Option<String> {
-    CURRENT_MEDIA.lock().ok().and_then(|media| {
+    let (path, options, selection) = CURRENT_MEDIA.lock().ok().and_then(|media| {
         let media = media.as_ref()?;
         let state = media.text_state.as_ref()?;
 
-        Some(match state.selection {
-            Some(selection) if !selection.is_empty() => {
-                text_preview::text_in(&state.lines, selection)
-            }
-            _ => text_preview::frame_text(&state.lines),
-        })
-    })
+        Some((state.path.clone(), state.options, state.selection))
+    })?;
+
+    // Nothing selected is the whole document: a copy with nothing selected is a copy of the page
+    // the user is looking at — the same thing `Select All` reaches — and it is the one thing a
+    // page whose window is a window nobody may type in can be asked for by a click alone (see
+    // `copy_text_preview`).
+    let selection = selection
+        .filter(|selection| !selection.is_empty())
+        .unwrap_or(text_preview::Selection {
+            anchor: (0, 0),
+            caret: (usize::MAX, usize::MAX),
+        });
+
+    text_preview::text_of(&path, options, selection)
 }
 
 /// Copy the text preview to the clipboard, answering whether there was anything to
