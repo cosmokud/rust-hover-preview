@@ -383,6 +383,114 @@ fn a_shared_name_is_the_page_or_the_film_its_own_bytes_say() {
     let _ = std::fs::remove_dir_all(&folder);
 }
 
+/// The names a language and a format are both written under are the same question the `.ts` pair
+/// is, and a hover asks it of the same answer: what the file's own head says, rather than what
+/// either list says of its name.
+///
+/// Both halves are what used to be drawn wrong. A `.vhd` of VHDL source was an engine's listing
+/// — a page the engine would be started for and turn down, in a hover and in a pin both — and a
+/// `.dif` that is a spreadsheet was a film the probe would never measure (see
+/// `probe::GUARDS` and `HoverFacts::is_video`).
+#[test]
+fn a_name_a_language_and_a_format_share_is_the_page_the_file_is() {
+    let folder = std::env::temp_dir().join("rust-hover-preview-vhd-dif-shared-names");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    // A VHDL source, under the name a disk image is also written with.
+    let source = folder.join("design.vhd");
+    std::fs::write(&source, b"library ieee;\nuse ieee.std_logic_1164.all;\n").expect("a source");
+
+    let hover = HoverFacts::read(&source);
+    assert_eq!(hover.routed_kind(), Some(PreviewType::Text));
+    assert!(hover.is_text(), "a VHDL source is a page of text");
+    assert!(
+        !hover.engine_archive(),
+        "and not a listing an engine would be asked for"
+    );
+    assert!(
+        hover.is_painted_page(),
+        "so it is painted into its box rather than scaled"
+    );
+    assert!(!hover.is_video());
+
+    // Which is the pin's own wait too: a swap onto the source is not held for a listing that
+    // would never come back (see `pin_swap_awaits`).
+    let wait = (office_preview::WAITING_BOX, office_preview::WAITING_BOX);
+    assert!(
+        !pin_swap_awaits(&source, wait),
+        "and a pin is not held on a listing either"
+    );
+
+    // A disk image under that name keeps the listing the name order gives it.
+    let image = folder.join("disk.vhd");
+    std::fs::write(&image, b"conectix\x00\x00\x00\x00").expect("an image");
+
+    let hover = HoverFacts::read(&image);
+    assert_eq!(hover.routed_kind(), Some(PreviewType::Peazip));
+    assert!(hover.engine_archive(), "a disk image is the engine's");
+    assert!(!hover.is_text(), "and not a page of the source it is named with");
+
+    // A DIF spreadsheet, under the name the video list reads as a DV stream.
+    let sheet = folder.join("sheet.dif");
+    std::fs::write(&sheet, b"TABLE\n0,1\n\"sheet\"\nVECTORS\n").expect("a spreadsheet");
+
+    let hover = HoverFacts::read(&sheet);
+    assert_eq!(hover.routed_kind(), Some(PreviewType::Libre));
+    assert!(!hover.is_video(), "a spreadsheet is not the film of that name");
+    assert!(
+        !video_probe_due(&hover),
+        "so no shape is probed for, and no wait is shown for one"
+    );
+
+    // And a stream under it is still the film the video list claims.
+    let tape = folder.join("tape.dif");
+    std::fs::write(&tape, [0x1F, 0x07, 0x00, 0x3F]).expect("a stream");
+
+    let hover = HoverFacts::read(&tape);
+    assert_eq!(hover.routed_kind(), Some(PreviewType::Videos));
+    assert!(hover.is_video());
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// The sound list's answer is asked the way the video list's is, and for the same reason: a file
+/// whose own head named the kind that previews it is that kind, though a sound list carries the
+/// name as well. A `.mpc` is the pair — a Musepack sound and the persistent cache ImageMagick
+/// keeps for itself — and the cache was drawn as a card the sound engine would have been asked
+/// for, which is a wait that never ends over a picture (see `HoverFacts::is_audio`).
+#[test]
+fn a_name_a_sound_and_a_picture_share_is_the_sound_or_the_picture_its_bytes_are() {
+    let folder = std::env::temp_dir().join("rust-hover-preview-mpc-shared-name");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    // The cache the image converter keeps under a sound's own name.
+    let cache = folder.join("cache.mpc");
+    std::fs::write(&cache, b"id=ImageMagick  version=1.0\n").expect("a cache");
+
+    let hover = HoverFacts::read(&cache);
+    assert_eq!(hover.routed_kind(), Some(PreviewType::Magick));
+    assert!(
+        !hover.is_audio(),
+        "a picture is not the sound its own name list would play"
+    );
+
+    // And a Musepack file under that name is still the sound it is, in either of the two shapes
+    // the format is written in.
+    for (name, opening) in [
+        ("song.mpc", b"MPCK\x00\x00".as_slice()),
+        ("old.mpc", b"MP+\x00\x00\x00".as_slice()),
+    ] {
+        let sound = folder.join(name);
+        std::fs::write(&sound, opening).expect("a sound");
+
+        let hover = HoverFacts::read(&sound);
+        assert_eq!(hover.routed_kind(), Some(PreviewType::Audio));
+        assert!(hover.is_audio(), "{name} is the sound it opens as");
+    }
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 /// A page is painted into the box the layout planned for it, and an archive an engine listed is
 /// one of those pages rather than a size to fit the room it was given. It is the one question
 /// the share a kind is drawn at and the box the loader is handed both ask, and a kind left out

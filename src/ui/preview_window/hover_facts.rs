@@ -645,6 +645,11 @@ impl HoverFacts {
     /// of the name alone, a `.ts` is a film because both lists carry it, and a source laid out as
     /// one is a probe that never answers over a wait that never ends — in a hover and in a pin
     /// both (see `routing::claim_video`).
+    ///
+    /// A kind the file's own bytes name outright is that kind and not this one, whatever the
+    /// lists also say: a `.dif` that is the spreadsheet its name is written for as well as for a
+    /// stream is not a film, and a name whose bytes named nothing — the `.ts` source, whose
+    /// content tier has no opinion of it — is left to the route as before.
     pub(super) fn is_video(&self) -> bool {
         // It was asked from four places in one hover — the probe's due question, both
         // dimension questions and the `Show` arm — and each of those used to read the file and
@@ -653,7 +658,13 @@ impl HoverFacts {
         // at all (see `HoverFacts`).
         let named = match self.route.content {
             crate::formats::content_type::Content::Kind(PreviewType::Videos) => true,
-            _ => self.route.named == Some(PreviewType::Videos),
+            // Another kind, or a format no kind here previews at all: neither is played as a
+            // film, and the second is played as nothing.
+            crate::formats::content_type::Content::Kind(_)
+            | crate::formats::content_type::Content::Foreign => false,
+            crate::formats::content_type::Content::Unknown => {
+                self.route.named == Some(PreviewType::Videos)
+            }
         };
 
         named && self.video_enabled
@@ -666,6 +677,10 @@ impl HoverFacts {
     /// card by this app rather than by a player, so the layout has to know one when it sees
     /// one — which for a renamed file, or for a container whose streams hold only a song, is a
     /// question about the content rather than about the name.
+    ///
+    /// And, as there, a kind the bytes named is that kind rather than this one: a `.mpc` the
+    /// image converter answered for is the picture its cache is, though the sound list carries
+    /// the name too, and a file whose bytes named nothing is left to the list as before.
     pub(super) fn is_audio(&self) -> bool {
         if !self.audio_enabled {
             return false;
@@ -673,7 +688,11 @@ impl HoverFacts {
 
         match self.route.content {
             crate::formats::content_type::Content::Kind(PreviewType::Audio) => true,
-            _ => self.audio_named,
+            // Another kind, or a format no kind here previews at all: neither is drawn as a
+            // card, and the second is drawn as nothing.
+            crate::formats::content_type::Content::Kind(_)
+            | crate::formats::content_type::Content::Foreign => false,
+            crate::formats::content_type::Content::Unknown => self.audio_named,
         }
     }
 }
