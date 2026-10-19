@@ -810,6 +810,11 @@ fn the_box_a_swap_measures_is_the_box_the_take_up_installs() {
     let next = folder.join("ws-m-frame-truth-next.png");
     write_a_png_of_size(&first, 700, 300);
     write_a_png_of_size(&next, 700, 700);
+    // And their boxes, held where a measure read off the preview thread would leave them (see
+    // `picture_box`).
+    for (path, size) in [(&first, (700, 300)), (&next, (700, 700))] {
+        hold_box(path, &file_version(path), &MeasureScope::File, Some(size));
+    }
 
     // The display this runs on, and a pin standing at the bottom of it — which
     // is where a file of another shape overhangs, and where the window has to be
@@ -889,6 +894,11 @@ fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
     let next = folder.join("ws-m-card-maximize-next.png");
     write_a_png_of_size(&first, 700, 300);
     write_a_png_of_size(&next, 4000, 3000);
+    // The two pictures' own boxes, held where a measure read off the preview thread would leave
+    // them: a swap lays out an answer rather than the wait for one (see `picture_box`).
+    for (path, size) in [(&first, (700, 300)), (&next, (4000, 3000))] {
+        hold_box(path, &file_version(path), &MeasureScope::File, Some(size));
+    }
     let left = bounds.left + 40;
     let top = bounds.top;
     stand_a_kind(700, 300, MediaType::StaticImage);

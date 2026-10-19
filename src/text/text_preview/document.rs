@@ -500,6 +500,11 @@ pub(super) fn styled_window(
     first: usize,
     count: usize,
 ) -> Option<Arc<TextWindow>> {
+    // A window is only ever as long as the document is: what the parser can produce past its
+    // last line is nothing, and a request kept at its own length is a window the table can
+    // never answer for (see `covers`).
+    let count = count.min(document.doc.total_lines().saturating_sub(first));
+
     if count == 0 {
         return Some(Arc::new(TextWindow {
             first,
