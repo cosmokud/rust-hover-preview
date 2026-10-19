@@ -11,7 +11,7 @@ Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. 
 ## Highlights
 
 - Mouse-hover and keyboard-navigation previews in Explorer, beside the cursor or the focused item and kept on screen.
-- Press a key (SPACE by default) and a preview becomes a window of its own — captioned, movable, resizable, always on top, where it stays until you close it. A pinned picture zooms under the wheel, and a sound's card beats with the bass.
+- Press a key (SPACE by default) and a preview becomes a window of its own — captioned, movable, resizable, and there until you close it, always on top unless `Pin Mode → Always On Top` is turned off. 
 - Supports images, videos, audios, ebooks, Office documents, design documents, text/code, archives, camera raw, vector drawings, fonts, and more.
 - Granular display scaling: Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.
 - Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
@@ -261,9 +261,13 @@ Or download the official installer from [https://calibre-ebook.com/download_wind
 5. Right-click the tray icon to configure behavior.
 
 Pin mode works like Quick Look: pressing `Space` (`pin_key`, watched while `pin_enabled`)
-turns the settled preview into an always-on-top window. `Space` in a focused pin pauses and
-resumes a sound; a minimized pin sits in a draggable bubble that `Space` in Explorer brings
-back. Arrow keys walk siblings, `Escape` closes.
+turns the settled preview into a window of its own — always on top unless **Pin Mode → Always
+On Top** is off, in which case it is an ordinary window that also wears this app's own taskbar
+button while it is up. `Space` in a focused pin pauses and resumes a sound; a minimized pin
+sits in a draggable bubble — or in that taskbar button — that `Space` in Explorer brings back.
+Arrow keys walk siblings, `Escape` closes. A right-click on a pinned window opens its own menu,
+and a pinned page of text takes the keyboard: the arrows and page keys scroll it, `F3` finds
+the next place the selection appears, and `Ctrl` and a wheel sizes it.
 
 ## System Tray Menu
 
@@ -272,12 +276,13 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
 - **Enable Preview** — Turn previews on or off.
 - **Pin Mode** — Everything about pinning, in one place.
   - **Enable (Space)** — Turn pinning on or off.
-    - Pressing the key while a preview is up turns it into a window of its own: captioned, movable, resizable, always on top, and still there when the pointer leaves.
+    - Pressing the key while a preview is up turns it into a window of its own: captioned, movable, resizable, always on top unless **Always On Top** is off, and still there when the pointer leaves.
     - The caption carries **Previous**, **Next**, **Open With**, and **Open With...**.
       - **Previous** / **Next** — Step the pin through the sibling files in the folder it was taken up in, in the order the listing is showing them; step over any one that will not open rather than stopping there.
       - **Open With** — Opens the file in whatever program Windows has registered for it.
       - **Open With...** — Asks you to pick one from the list Windows keeps of the programs that could.
       - The two hand-off buttons name themselves while the pointer rests on them; **Open With** names the program it would use.
+    - A **right-click** on a pinned window opens the pin's own menu — the panel a collapsed pin's bubble opens: the hold, **Next File**, **Previous File**, **Pause on Minimize** where the kind plays something, the two picks of where a minimize sends the pin, **To Bubble** / **To Taskbar** to put it away at once, then **Close**. A pinned page carries **Select All**, **Copy** and **Find Next** above them, and a sound's card keeps its own menu. A film's title bar is the way to it, since the player's own band takes the clicks in the picture.
     - A caption the hand has narrowed past the point of saying the file's name leaves the name out, and one narrowed past ten pixels leaves the strip out altogether — a row of window buttons over the top of somebody's picture is not what the strip is for. Both come back as the window is widened.
     - Its edges resize it; what that does depends on what is inside.
       - A picture, video, or rendered page keeps its own shape.
@@ -293,7 +298,11 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - A click on a sound's bar takes the file to that second.
       - A right-click on the card opens the card's own menu in a panel of its own over the screen: the whole of what a pin does — the two ways out, the file's own playback, then **Shuffle**, **End of File** and **Seek**.
     - A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied.
-      - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected.
+      - `Up`, `Down`, `Page Up` and `Page Down` move a screenful at a time, and `Home` and `End` take the page to its top and its last screenful.
+      - `Ctrl+A` selects all of it; `Ctrl+C` copies what is selected; `F3` takes the page to the next place what is selected appears.
+      - `Ctrl` and a wheel steps the page's own text size through the sizes **Text → Font Size** offers; the size rides across a resize and the next file of a walk, and closing the pin gives it up.
+      - A press begins a selection, `Shift` grows it, and a second press takes the word under the pointer; a drag carried past the page's edge scrolls it three lines a tick, a wrapped line copies whole, and **Select All** means the page rather than the screenful.
+      - A page of code keeps a column of line numbers down its left.
     - A pinned video has a transport bar with a volume of its own, set on the window; it does not change **Volume → Video**.
     - **Maximize** fits the window to the screen.
     - A **double-click** puts the window back to the size its kind's scaling setting names and in the middle of the screen it stands on (both halves are switches in `config.ini`: `pin_double_click_reset_size` and `pin_double_click_center`, both on).
@@ -301,6 +310,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - Clicking the window gives it the keyboard; then the arrow keys step it and `Escape` closes it.
     - The pin key itself only ever puts a pin up and brings back a bubble; it never hides one.
     - The key is named in the item and can be changed in `config.ini` (`pin_key`).
+  - **Always On Top** — On by default: a pin stays above every other window. Off, the pin is an ordinary window that other programs can cover — it keeps the place your own clicks gave it, and it wears this app's own taskbar button while it is up. The mark left of the window buttons is the same switch, and the wheel over such a pin is the pin's only while the pin is the window you are in.
   - **Update Preview** — Whether a pin that is up is shown the file you pick next.
     - **Follow Selection** — On by default.
       - A file you click, or one the keyboard selects, is shown where the window already stands, rather than as a second preview beside it.
@@ -313,7 +323,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - Greyed while **Follow Selection** is off.
   - **Minimize** — Where a window put away by its **Minimize** button goes, and what it does with what it was playing while it is away.
     - **To Bubble** (Default) — The window collapses into the round bubble on the desktop, and this app never appears in the taskbar.
-    - **To Taskbar** — The window leaves the screen and the app appears in the taskbar as its own button, titled **Rust Preview**; clicking the button brings the pinned window back where it stood, and a right-click on the button closes the window.
+    - **To Taskbar** — The window leaves the screen and the app appears in the taskbar as its own button, named for the pinned file and wearing this app's icon; its hover holds the pin — the live picture while the window is up, the frame it went down on once it is away, and **Previous**, **Play/Pause** and **Next** for a film or a sound. Clicking the button brings the pinned window back where it stood, and a right-click closes the window. A pin that is not **Always On Top** wears this button while it is up as well.
     - A window is away either way, so previews stay held back until it is brought back, whichever place the setting names.
     - What a window put away holds where it is is **Pause on Minimize** at the top of each kind's own **Pin Mode** — one under **Preview Settings → Video**, one under **Preview Settings → Audio** — because what should go quiet while a pin is away is a question about one kind of file.
   - **Navigation** — What **Previous** and **Next** on the caption step through: three anchors — **Video**, **Audio**, **Others** — each with **All Files** / **Same Category**. The walk is anchored on the first file pinned, so a video walks videos while a document walks end to end.
@@ -442,11 +452,12 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Video Engine** — Which engine plays a video.
     - **Best** (`default`) — The machine's own answer: mpv for every video where it is installed, and otherwise the media engine for a film at or under 3.2 megapixels and FFmpeg's player for a larger one or one it could not measure.
     - **MPV** — mpv alone.
-    - **Native** — The media engine alone.
     - **FFmpeg** — `ffplay` alone.
+    - **Native** — The media engine alone.
     - **Native (FFmpeg above 3.2MP)** — That size rule stated plainly.
     - A **Fallback** switch at the top (`default` on) lets a chosen engine that cannot play a given file fall through to the engines it may: **MPV** reaches both of the others, while **Native** and **FFmpeg** still only reach each other. Off, the engine you chose stands alone.
     - **MPV** is greyed out where `mpv` is not installed; **FFmpeg** and **Native (FFmpeg above 3.2MP)** where `ffplay` is not.
+    - A choice is read where a preview begins, so a film already playing or a document already drawn keeps the engine it was built under; a change reaches the next hover, or a pin's next file.
   - **Office Engine** — Which engine draws Office documents.
     - **Microsoft Office** (`default`) — Uses the format's own app and falls back to LibreOffice.
     - **LibreOffice** — Draws every Office document.
@@ -489,6 +500,7 @@ Example, trimmed:
 [settings]
 ; General
 check_for_updates=true
+pin_always_on_top=true
 pin_double_click_center=true
 pin_double_click_reset_size=true
 pin_enabled=true
@@ -663,11 +675,13 @@ spinner_delay_ms=250
 - `spinner_delay_ms`: wait before showing the loading spinner. Default `250`; `0` shows it immediately.
   - One delay covers all preview types, and a pinned window being shown another file with it.
   - A pin that has to wait shows a spinner of its own in the middle of itself, drawn over the file it is still showing rather than in place of it, and the window is never hidden while it waits.
-- `office_engine`: `microsoft_office` default, falls back to LibreOffice when needed; or `libreoffice`, which always uses LibreOffice. If LibreOffice is missing, it falls back and the tray row is greyed out.
-- `video_engine`: which engine plays a video: `best` (default), `mpv`, `native`, `ffmpeg`, or `hybrid`.
+  - A hover whose wait ends with nothing to show ends as the cross a pinned window shows for the same failure, in the box the wait had, and comes down three seconds later.
+- `office_engine`: `microsoft_office` default, falls back to LibreOffice when needed; or `libreoffice`, which always uses LibreOffice. If LibreOffice is missing, it falls back and the tray row is greyed out. Read where a preview begins, the way `video_engine` is.
+- `video_engine`: which engine plays a video: `best` (default), `mpv`, `ffmpeg`, `native`, or `hybrid`.
   - **Best** is the machine's own answer — mpv where it is installed, and otherwise `hybrid` where FFmpeg is installed (the media engine draws a film at or under 3.2 megapixels, FFmpeg's player takes a larger one or one it could not measure) and `native` where neither is.
   - `mpv` names mpv alone, `native` names the media engine alone, `ffmpeg` names `ffplay` alone, and `hybrid` states that size rule plainly.
   - A choice this machine cannot supply is read as `best`.
+  - Read where a preview begins, so a film already playing keeps the player it was begun under; a change reaches the next hover, or a pin's next file.
 - `mpv_path`: which `mpv.exe` plays, written by **Codecs → Videos → MPV** where the machine has more than one. Empty, the default, means the first one found — beside the app, then the `PATH`, then `MPV Player` under Program Files, then SVP's `mpv64`. The only setting that holds a path.
 - `video_engine_fallback`: `true` (default) lets a chosen engine that cannot play a given file fall through to the engines it may — a chosen `mpv` to both of the others, `native` and `ffmpeg` to each other — and `false` makes the engine you chose stand alone. Read only where `video_engine` names an engine; **Best** is its own walk either way.
 - `libreoffice_idle` / `office_engine_idle`: seconds the engine is kept after its last page, or `indefinitely`. Default `600`; `0` launches it per document.
@@ -679,6 +693,7 @@ spinner_delay_ms=250
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.
 - `trigger_key_affect_pin_mode`: whether the trigger key reaches a pinned preview. Default `false` — the key is not read while a preview is pinned, up or collapsed into its bubble, since a pin is a window you put there rather than a hover for the key to hold back. `true` lets holding the key bring the pin down with the previews it stops. It speaks for `disable`; the `enable` mode is left as it is.
 - `pin_key` / `pin_enabled`: the key that pins the preview on screen (`space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. See **Pin Mode** above for what a pin does.
+- `pin_always_on_top`: whether a pin stays above every other window. `true` (default) keeps it topmost; `false` makes it an ordinary window that other programs can cover and that wears this app's own taskbar button while it is up. The caption's own mark toggles the same setting, a film mpv plays is put in the same band, and the wheel over such a pin is the pin's only while the pin is the window you are in.
 - `pin_double_click_center` / `pin_double_click_reset_size`: what a double-click on a pinned window does. Both default `true`: the window is put back to the size its kind's scaling setting asks for, and in the middle of the screen it stands on. Off, either half is left out — with the size reset off, a hand's own size stands and the double-click is the move alone.
 - `pin_update_enabled`: whether a pin that is up is shown the file picked next, by click or by keyboard, without moving the window. Default `true`.
   - Off, the pin keeps the file it was taken up on until it is closed — a pin is also a window to read in, and one that swapped its file out from under the hand on every keystroke would be unreadable.
@@ -691,7 +706,7 @@ spinner_delay_ms=250
   - A file it reaches that the window cannot show is stepped over, and the walk is bounded by the folder: each other file is offered at most once, so a folder of nothing this build can read ends the walk instead of going round for ever.
   - A file holding only the old `pin_nav_file_types` seeds all three with it; a file written before any of them existed walks as the fresh defaults do.
 - `pin_zoom_bounce_ms` / `pin_zoom_bounce_gate` / `pin_zoom_bounce_speed_ms` / `pin_zoom_bounce_power`: the landing a wheel zoom out ends with — how long the image takes to swing back to its place (`100` default), whether the swing past its place is on (`true` default), how fast it snaps back (`0` default), and how far past it drifts as a share of the offset it is coming home from (`0.04` default). A hand-edited value past the ceiling is reduced to it.
-- `pin_minimize_to`: where a pin put away by the window's own **Minimize** button goes. `bubble` (default) leaves the round bubble on the desktop and keeps this app out of the taskbar; `taskbar` takes the window off the screen and shows this app's own taskbar button (titled **Rust Preview**), which brings the pin back where it stood when clicked and closes it on a right-click. Read when the button is pressed, so a change reaches the next minimize; a file written before this setting existed is read as `bubble`.
+- `pin_minimize_to`: where a pin put away by the window's own **Minimize** button goes. `bubble` (default) leaves the round bubble on the desktop and keeps this app out of the taskbar; `taskbar` takes the window off the screen and shows this app's own taskbar button — named for the pinned file and wearing this app's icon, its hover holding the pin with **Previous**, **Play/Pause** and **Next** for a film or a sound — which brings the pin back where it stood when clicked and closes it on a right-click. Read when the button is pressed, so a change reaches the next minimize; a file written before this setting existed is read as `bubble`.
 - `pin_pause_video` / `pin_pause_audio`: whether a pin put away into its bubble or the taskbar holds what it was playing where it stands, and starts it again at the second it stopped at when the window comes back up. Both default `true`. They are two switches because a video and a sound are two different things to want quiet.
 - `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.
 - `avoid_mode`: `filename` default, `filename_column`, `details`, or `off` — what the preview avoids.
@@ -752,7 +767,7 @@ The release binary is written to `target/release/rust-hover-preview.exe`. A rele
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, and GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, and runs HTML pages where Render HTML is switched on, camera raw and the pictures beside it are developed by ImageMagick, and video is played by mpv where installed, and otherwise by Windows' own media engine for small films and FFmpeg's player for large ones. Pressing Space pins the preview into a captioned, always-on-top window of its own.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, and GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, and runs HTML pages where Render HTML is switched on, camera raw and the pictures beside it are developed by ImageMagick, and video is played by mpv where installed, and otherwise by Windows' own media engine for small films and FFmpeg's player for large ones. Pressing Space pins the preview into a captioned window of its own — always on top unless you turn that off, in which case it wears a taskbar button of its own.
 
 ## TODO
 
