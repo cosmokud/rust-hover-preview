@@ -1,21 +1,16 @@
 use super::*;
 
-// WS-G Phase 1: a seeking player is a held player — silent, covered, swapped
-// once, restored to its prior transport state.
+// WS-G: what a hand on the seekbar does to the film it is aimed at.
 //
-// H1 (S1): seek takes no hold, so audio plays through the scrub. Red below is
-// the swap leaving a seek's hold standing (T3) and the missing re-arm/gate
-// helpers failing to compile (T5, T8).
-// H2 (S2): release bypasses the hold (unheld relaunch) — T2 pins the carry;
-// the cover itself stands, T9 pins it.
-// H3 (S2 alt): the swap bound is spent during the scrub, so the first tick
-// after release swaps onto a window that merely exists — T5 re-arms it.
+// mpv's film is told nothing by the press and taken to a second at the release, and draws all the
+// way through (see the mpv test below). FFmpeg's player cannot be told anything, so its seek is a
+// player ended and begun again — at the release, where the second is known, behind a cover raised
+// there, over a film that was playing until then. A hold a gesture took is ended by the swap.
 
-/// A seek press is a drag-hold decision: a playing film holds, a paused one is
-/// left alone. No key is posted for a film with nothing playing to stop, and
-/// none for a hold this app already owns (re-press mid-aim).
+/// The hold decision itself, which is the drag's now that a hand on the bar takes none: a playing
+/// film holds, a paused one is left alone, and a hold this app already owns is not taken twice.
 #[test]
-fn seek_press_holds_a_playing_film_and_leaves_a_paused_one() {
+fn a_hold_is_taken_for_a_playing_film_and_left_alone_for_a_paused_one() {
     assert_eq!(
         video_drag_hold_decision(true, true, false),
         VideoDragHold::Hold,
@@ -35,11 +30,10 @@ fn seek_press_holds_a_playing_film_and_leaves_a_paused_one() {
     );
 }
 
-/// The hold a seek press takes survives the release relaunch as owed, and the
-/// owed hold defers while the aim is still the gesture's — so scrub steps and
-/// the swap wait post no key at all.
+/// A hold a gesture takes survives its release relaunch as owed, and the owed hold defers while the
+/// aim is still the gesture's — so scrub steps and the swap wait post no key at all.
 #[test]
-fn a_seek_hold_survives_its_release_relaunch_and_owes_while_aiming() {
+fn a_gesture_hold_survives_its_release_relaunch_and_owes_while_aiming() {
     let mut transport = PinTransport::default();
     transport.begun(0.0, true, false);
     assert!(
@@ -117,12 +111,11 @@ fn scrub_aiming_moves_nothing_but_the_aim() {
     stand_pin(previous_pin);
 }
 
-/// The swap ends a seek's hold without a key: the replacement has been playing
-/// since the release relaunched it, so posting one would pause the film the
-/// swap just uncovered. The owed hold is taken back, the claim dropped, and a
-/// playing film is playing after.
+/// The swap ends a gesture's hold without a key: the replacement has been playing since the release
+/// relaunched it, so posting one would pause the film the swap just uncovered. The owed hold is
+/// taken back, the claim dropped, and a playing film is playing after.
 #[test]
-fn the_swap_ends_the_seek_hold_without_a_key() {
+fn the_swap_ends_a_gestures_hold_without_a_key() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -137,10 +130,10 @@ fn the_swap_ends_the_seek_hold_without_a_key() {
     forget_video_frame();
     forget_resume_frame();
 
-    // The press: cover over the live player, hold with the gesture's claim.
+    // The park: cover over the live player, hold with the gesture's claim.
     assert!(
         park_pinned_player_for_seek(HWND(0x1000 as *mut _), (100, 80)),
-        "the press parks: the cover stands before anything relaunches"
+        "the release parks: the cover stands before anything relaunches"
     );
     update_pin_transport(|transport| {
         transport.begun(0.0, true, false);
@@ -153,8 +146,8 @@ fn the_swap_ends_the_seek_hold_without_a_key() {
     update_pin_transport(|transport| transport.begun(90.0, true, true));
     VIDEO_PID.store(200, Ordering::SeqCst);
 
-    // The bound spent from the release, which is what the re-arm buys: the
-    // swap waits on the new player rather than on a window that merely exists.
+    // The bound runs from the relaunch: the park leaves the stamp unspent, the first tick after it
+    // takes one, and the swap is the tick that finds it spent. Here it is spent outright.
     if let Ok(mut held) = PIN_PARK_SWAP.lock() {
         if let Some(swap) = held.as_mut() {
             swap.since = Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT);
@@ -225,10 +218,10 @@ fn a_paused_film_stays_paused_across_the_seek_swap() {
 
     assert!(
         park_pinned_player_for_seek(HWND(0x1000 as *mut _), (100, 80)),
-        "the press parks, held film or not: the cover is about the relaunch \
+        "the release parks, held film or not: the cover is about the relaunch \
          behind it either way"
     );
-    // Was-paused: the press holds nothing, the release carries the pause.
+    // Was-paused: nothing held it, and the relaunch carries the pause.
     update_pin_transport(|transport| {
         transport.begun(0.0, true, false);
         transport.held(30.0);
@@ -271,49 +264,6 @@ fn a_paused_film_stays_paused_across_the_seek_swap() {
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
 }
 
-/// The release relaunch re-arms the swap bound: the stamp the scrub's ticks
-/// kept is spent, so the 600 ms runs from the new player rather than from the
-/// press. Without this the first tick after release swaps onto whatever
-/// window merely exists — published in milliseconds, empty for hundreds.
-#[test]
-fn the_release_relaunch_re_arms_the_swap_bound() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pin = take_pin_for_a_test();
-
-    let pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
-    stand_pin(Some(pin));
-    forget_pin_park_swap();
-
-    // A long scrub: the stamp below is where a real one would have put it,
-    // and the whole bound is spent before anything relaunches.
-    if let Ok(mut held) = PIN_PARK_SWAP.lock() {
-        *held = Some(PinParkSwap {
-            player: 100,
-            replacing: true,
-            awaiting_relaunch: true,
-            owner: ParkArm::Seek,
-            since: Some(Instant::now() - PIN_PARK_SWAP_TIMEOUT * 4),
-        });
-    }
-
-    rearm_seek_cover_for_relaunch();
-
-    let rearmed = PIN_PARK_SWAP.lock().ok().and_then(|held| *held);
-    assert!(
-        rearmed.is_some_and(|swap| swap.since.is_none()
-            && swap.awaiting_relaunch
-            && swap.player == 100
-            && swap.replacing),
-        "the re-arm spends the stamp and keeps the cover: the wait runs from \
-         the relaunch, over the player it replaces"
-    );
-
-    forget_pin_park_swap();
-    stand_pin(previous_pin);
-}
-
 /// A seek cover with no window behind it, and nothing in flight that can put
 /// one there, holds while it is still inside the cover's own bound and is
 /// given up once it is not.
@@ -323,8 +273,9 @@ fn the_release_relaunch_re_arms_the_swap_bound() {
 /// had already come, and if its relaunch got no player there was nothing left to satisfy it. An
 /// opaque band is not a picture that is merely stale — its pixels are claimed by this app's own
 /// window at the compositor's hit test, so every click in the video area was answered here rather
-/// than by the player. A cover with a scrub still held is a different thing entirely and is held
-/// for as long as the hand stays down (see `cover_relaunch_is_still_possible`).
+/// than by the player. A cover whose wait can still be satisfied is a different thing entirely
+/// and is held while it can (see `cover_relaunch_is_still_possible` and
+/// `a_cover_whose_relaunch_has_not_begun_waits_rather_than_spending_its_bound`).
 #[test]
 fn a_seek_cover_with_nothing_in_flight_is_given_up_by_the_cover_bound() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -343,7 +294,7 @@ fn a_seek_cover_with_nothing_in_flight_is_given_up_by_the_cover_bound() {
 
     assert!(
         park_pinned_player_for_seek(HWND(0x1000 as *mut _), (100, 80)),
-        "the press parks"
+        "the release parks"
     );
     if let Ok(mut held) = PIN_PARK_SWAP.lock() {
         if let Some(swap) = held.as_mut() {
@@ -449,8 +400,8 @@ fn the_seek_line(seconds: f64) -> String {
 /// **The key is counted rather than read off the film, because where it lands is nowhere a test
 /// can see** (see `ffplay_window::pause_posts`): there is no player's window here to post one
 /// through, so a key posted and a key never posted leave the same trace — and the trace the
-/// transport keeps is written only where that post is believed to have landed (see
-/// `seek_press_hold`). mpv reads the posted `p` as `cycle pause`, so the user's report is the key:
+/// transport keeps is written only where a key is believed to have landed (see
+/// `video_drag_hold_apply`). mpv reads the posted `p` as `cycle pause`, so the user's report is the key:
 /// a playing film is stopped by the press and a paused one is *started* by it, and both are what a
 /// seek must not be.
 #[test]
@@ -505,10 +456,10 @@ fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state
         );
 
         // Nothing of an mpv seek ends its player, so there is no hole for a cover to stand in and
-        // no replacement for one to wait for: the cover a seek press parks would hide the film's
-        // window and paint the still over the band for the whole gesture, over {what} that is
-        // still playing behind it. The route's press parks nothing at all (see
-        // `pinned_transport_press`).
+        // no replacement for one to wait for: the cover a park would raise hides the film's window
+        // and paints the still over the band for as long as it stands, over {what} that is playing
+        // behind it. Neither end of the gesture is a park on this route (see
+        // `pinned_transport_press` and `pinned_transport_release`).
         assert!(
             !pin_player_is_parked(),
             "an mpv seek press leaves the film where it is drawing ({what})"
@@ -597,9 +548,10 @@ fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state
         }
     }
 
-    // FFmpeg's player on the same press: it can be told nothing, so a seek is a player ended and
-    // begun again at the aimed second, and it is left exactly as it was (see
-    // `seek_pinned_playback`).
+    // FFmpeg's player on the same hand: it can be told nothing, so a seek is a player ended and
+    // begun again at the aimed second — and the end waits for the release, where that second is
+    // known, rather than landing on the press and pausing the film for the whole of the scrub (see
+    // `pinned_transport_release` and `seek_pinned_playback`).
     mpv_ipc::clear_noted();
     clear_restart_count();
     stand_pin(Some(a_banded_video_pin(&film, content)));
@@ -614,6 +566,29 @@ fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state
         unsafe { pinned_transport_press(HWND(0x1000 as *mut _), x, y) },
         "FFmpeg's press is the bar's to act on"
     );
+    let press_aim = the_seek_aim().expect("an aimed second for the scrub to move");
+    assert_eq!(
+        restart_count(),
+        0,
+        "and the film plays on under the hand: the player is ended at the release, not here"
+    );
+    assert!(
+        !pin_player_is_parked() && park_record_owner().is_none(),
+        "with no cover over it, since nothing has ended for one to hide"
+    );
+
+    assert!(
+        unsafe { pinned_transport_drag(HWND(0x1000 as *mut _), bar.width / 4) },
+        "a step along the bar is the track's while an aim stands"
+    );
+    let aim = the_seek_aim().expect("the second the step moved the aim to");
+    assert_ne!(aim, press_aim, "the step moves the aim under the hand");
+    assert_eq!(
+        restart_count(),
+        0,
+        "and the scrub ends no player at all: it moves an aim and nothing else"
+    );
+
     assert!(
         unsafe { pinned_transport_release(HWND(0x1000 as *mut _), x, y, &window) },
         "and so is its release"
@@ -623,12 +598,99 @@ fn a_seek_press_and_release_on_an_mpv_pin_posts_no_key_and_leaves_the_play_state
         1,
         "FFmpeg's player is still ended and begun again at the aimed second"
     );
+    assert_eq!(
+        the_seek_aim(),
+        None,
+        "the aim the press stored is the one the release spent, or there is no relaunch at all"
+    );
+    assert!(
+        pin_player_is_parked() && park_record_owner() == Some(ParkArm::Seek),
+        "and the release raised a seek's cover over the frame the hand let go on, which stands \
+         until the player replacing the ended one has decoded a frame"
+    );
     assert!(
         mpv_ipc::noted_lines().is_empty(),
         "and nothing of that road reaches an mpv pipe: FFmpeg's player listens on none"
     );
 
     mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// An mpv seek this app cannot hand to the player falls back to the relaunch every other road takes,
+/// and that relaunch is covered like every other one: a player ended with no cover over the band is a
+/// hole in the desktop shaped like a film, for as long as the file takes to open and to decode.
+#[test]
+fn an_mpv_seek_whose_pipe_is_gone_raises_the_cover_before_it_ends_the_player() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("mpv-seek-with-no-pipe.mkv");
+    stand_mpv_in(Some(true));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    stand_video_engine_in(Some((VideoEngine::Mpv, true)));
+    stand_ffplay_in(Some(false));
+    // No pipe is remembered for this player, so the live seek has nowhere to go.
+    mpv_ipc::forget_pipe(101);
+    mpv_ipc::clear_noted();
+    clear_restart_count();
+
+    for (was_paused, what) in [
+        (false, "a playing film"),
+        (true, "a film the user had paused"),
+    ] {
+        let mut pin = a_banded_video_pin(&film, content);
+        if was_paused {
+            pin.transport.held(30.0);
+        }
+        stand_pin(Some(pin));
+        forget_pin_park_swap();
+        clear_restart_count();
+
+        let bar = pinned_transport_geometry().expect("a banded video pin carries a bar");
+        let (x, y) = (bar.width / 2, bar.top + bar.height / 2);
+        let window = RecordedPinWindow::new(0x1000);
+        assert!(
+            unsafe { pinned_transport_press(HWND(0x1000 as *mut _), x, y) },
+            "the track is the bar's to act on ({what})"
+        );
+        assert!(
+            unsafe { pinned_transport_release(HWND(0x1000 as *mut _), x, y, &window) },
+            "and the release is the bar's own ({what})"
+        );
+
+        assert_eq!(
+            restart_count(),
+            1,
+            "a seek the pipe cannot take is a player ended and begun again ({what})"
+        );
+        assert!(
+            pin_player_is_parked() && park_record_owner() == Some(ParkArm::Seek),
+            "and the cover stands over the hole that relaunch leaves, raised where the end was \
+             decided rather than over a film that was still playing ({what})"
+        );
+        assert!(
+            mpv_ipc::noted_lines().is_empty(),
+            "nothing is written down a pipe that is not there ({what})"
+        );
+    }
+
+    forget_pin_park_swap();
     mpv_ipc::clear_noted();
     clear_restart_count();
     stand_mpv_in(None);
@@ -657,119 +719,4 @@ fn a_press_with_no_second_to_seek_to_arms_nothing() {
         "and an aimed second arms the whole gesture: cover, hold and the one \
          relaunch the release makes"
     );
-}
-
-/// Press→scrub→release down the real road: the aim the press stores survives
-/// the hold its key posts, so a scrub moves it and the release has both a
-/// second to take the file to and a hold to carry onto the relaunch.
-///
-/// The earlier tests set `seeking` and `drag_held` by hand, which is why the
-/// wipe went uncaught: `held` clears `seeking`, so the hold the press took
-/// refused every scrub step at the drag's own guard and left the release
-/// with nothing to relaunch — the press's cover stranded over a held film.
-#[test]
-fn press_scrub_release_keeps_the_aim_and_the_hold() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous_pin = take_pin_for_a_test();
-
-    // A playing film with a known length, as the press finds it.
-    let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
-    pin.transport.begun(0.0, true, false);
-    pin.transport.duration = Some(200.0);
-    stand_pin(Some(pin));
-
-    // The press: an aimed second stored the way `pinned_transport_press`
-    // stores it, then the hold its key posts recorded the way
-    // `seek_press_hold` records it — one key for the whole gesture.
-    let aimed = pin_state()
-        .and_then(|pinned| {
-            pinned
-                .pin()
-                .and_then(|pin| pin_seconds_at(&pin.transport, 0.15))
-        })
-        .expect("a known length aims the press");
-    update_pin_transport(|transport| transport.seeking = Some(aimed));
-    seek_press_hold_apply(30.0);
-
-    let after_press = pin_state().and_then(|pinned| {
-        pinned.pin().map(|pin| {
-            (
-                pin.transport.seeking,
-                pin.transport.paused_at,
-                pin.transport.drag_held,
-            )
-        })
-    });
-    assert_eq!(
-        after_press,
-        Some((Some(aimed), Some(30.0), true)),
-        "the hold silences the film with the gesture's claim on it and leaves \
-         the aim standing, or the scrub has nothing to move and the release \
-         nothing to relaunch"
-    );
-
-    // The scrub: steps move the aim the way `pinned_transport_drag` moves
-    // it, and nothing else.
-    for share in [0.25, 0.5] {
-        update_pin_transport(|transport| {
-            transport.seeking = pin_seconds_at(transport, share);
-        });
-    }
-
-    let after_scrub = pin_state().and_then(|pinned| {
-        pinned.pin().map(|pin| {
-            (
-                pin.transport.seeking,
-                pin.transport.paused_at,
-                pin.transport.pending_hold,
-                pin.transport.drag_held,
-            )
-        })
-    });
-    assert_eq!(
-        after_scrub,
-        Some((Some(100.0), Some(30.0), false, true)),
-        "a scrub moves the aimed second and leaves the hold, the owed flag \
-         and the claim where the press put them"
-    );
-
-    // The release: reads the aim the way `pinned_transport_release` reads
-    // it, and the relaunch carries the hold the way `seek_pinned_playback`
-    // carries it.
-    let aim = pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.transport.seeking));
-    assert_eq!(
-        aim,
-        Some(100.0),
-        "the release has a second to take the file to, or there is no \
-         relaunch and the press's cover stands over a held film"
-    );
-    assert!(
-        pinned_is_held(),
-        "and a hold to carry onto it, or the new player plays audibly over \
-         a bar drawn paused"
-    );
-    let holding = pinned_is_held();
-    update_pin_transport(|transport| transport.begun(100.0, true, holding));
-
-    let after_release = pin_state().and_then(|pinned| {
-        pinned.pin().map(|pin| {
-            (
-                pin.transport.seeking,
-                pin.transport.paused_at,
-                pin.transport.pending_hold,
-                pin.transport.drag_held,
-            )
-        })
-    });
-    assert_eq!(
-        after_release,
-        Some((None, Some(100.0), true, true)),
-        "the release relaunches once at the aimed second carrying the hold: \
-         the aim spent, the hold written down as owing with the gesture's \
-         claim on it"
-    );
-
-    stand_pin(previous_pin);
 }
