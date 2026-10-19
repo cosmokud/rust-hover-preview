@@ -15,6 +15,14 @@ use super::*;
 /// destination is in DIPs and comes back scaled by the display — has to be drawn back
 /// into the box it was given; see `pdf_preview::fit_drawn_page`.
 ///
+/// The size a page of text is drawn at is not the box's to say: it is what the configuration's Text
+/// Size names, or — where the load is a pin's own — the size the reader has put the page on screen
+/// to. `text_font_scale_percent` is that second one, and it is asked of the caller rather than read
+/// from the configuration in the loader because a page's size is the pin's own and not the app's: it
+/// is the size the page on screen is drawn at, and the size the file that follows it in a walk is
+/// drawn at (see `step_pinned_text_size`). Every other load answers `None` and is drawn at the
+/// configuration's.
+///
 /// The one source with no frame to draw is an SVG document, which is the engine's: what
 /// comes back for one is the kind alone, and the install path hands the hover over
 /// rather than putting anything of this app's up (see `MediaType::EngineSvg`).
@@ -24,6 +32,7 @@ pub(super) fn load_media(
     max_height: u32,
     preview_scale: PreviewScale,
     dpi: u32,
+    text_font_scale_percent: Option<u32>,
     cancel: Arc<AtomicBool>,
 ) -> Option<MediaData> {
     if cancel.load(Ordering::Acquire) {
@@ -78,6 +87,7 @@ pub(super) fn load_media(
         max_height,
         preview_scale,
         dpi,
+        text_font_scale_percent,
         cancel,
     )
 }
@@ -91,6 +101,7 @@ pub(super) fn load_media(
 ///
 /// The gates are not asked here, exactly as they are not asked by the chain: the hook
 /// asked them before a hover could reach this path at all.
+#[allow(clippy::too_many_arguments)] // Each one is a fact about the load, and the reader's own size is one of them.
 pub(super) fn load_media_of_kind(
     hover: &HoverFacts,
     path: &PathBuf,
@@ -98,6 +109,7 @@ pub(super) fn load_media_of_kind(
     max_height: u32,
     preview_scale: PreviewScale,
     dpi: u32,
+    text_font_scale_percent: Option<u32>,
     cancel: Arc<AtomicBool>,
 ) -> Option<MediaData> {
     match hover.routed_kind() {
@@ -175,7 +187,18 @@ pub(super) fn load_media_of_kind(
             if hover.html_drawn_by_the_engine() {
                 Some(engine_svg_media())
             } else {
-                load_text_preview(path, max_width, max_height, dpi, current_text_options())
+                // A page is drawn at the size its reader has put it to, where there is a reader to
+                // have put it to one: the configuration's size is what a page nobody has sized is
+                // drawn at (see `load_media`).
+                let options = match text_font_scale_percent {
+                    Some(percent) => TextPreviewOptions {
+                        font_scale_percent: percent,
+                        ..current_text_options()
+                    },
+                    None => current_text_options(),
+                };
+
+                load_text_preview(path, max_width, max_height, dpi, options)
             }
         }
         // A sound: a card of what the file holds, painted like an archive's page. The facts are
@@ -397,6 +420,9 @@ pub(super) fn spawn_load_worker(
                     request.max_height,
                     request.preview_scale,
                     request.dpi,
+                    // No reader has sized the file this worker is loading, so it is drawn at what the
+                    // configuration says (see `load_media`).
+                    None,
                     Arc::clone(&request.cancel),
                 )
             }))

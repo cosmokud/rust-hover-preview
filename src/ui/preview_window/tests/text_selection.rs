@@ -972,3 +972,107 @@ fn a_page_is_drawn_again_for_the_box_the_hand_took_it_to_and_a_picture_is_not() 
         "a picture under a hand is the frame it was decoded as, and only a page is drawn again"
     );
 }
+
+/// A page the reader has put to a size of their own is *loaded* at that size, so the page a box
+/// change ends on is drawn at it rather than at the configuration's: the size carried onto the
+/// page laid out again is the size it was asked for as well, and a page that came back at the
+/// configuration's would be a reader's own size that the next resize undoes on screen while the
+/// state still claims it (see `pin_media_load`, `reader_text_size` and `keep_text_place`).
+///
+/// A pin's own load is the one that carries a reader's size, and it is the only one: the size is
+/// what the page *on screen* is drawn at, so a hover's load has none and a pin showing anything
+/// but a page has none either.
+#[test]
+fn a_page_laid_out_again_is_loaded_at_the_size_the_reader_put_it_to() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _pin = PinPutBack::take();
+    let _media = TextPagePutBack::put();
+    stand_pin(Some(PinnedPreview::for_test()));
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-text-selection");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("a-page-laid-out-again.txt");
+    std::fs::write(
+        &path,
+        (0..120).map(|n| format!("line {n}\n")).collect::<String>(),
+    )
+    .expect("a written page");
+
+    // The page as the reader has it, at twice the size the configuration draws a page at: what a
+    // load for the pin is asked at, and what a load for a hover is not.
+    let reader_size = 200;
+    let options = TextPreviewOptions {
+        font_scale_percent: reader_size,
+        ..current_text_options()
+    };
+    assert_ne!(
+        current_text_options().font_scale_percent,
+        reader_size,
+        "the configuration's own size has to be another one for this to say anything"
+    );
+    let Some(page) = load_text_preview(&path, 240, 120, 96, options) else {
+        panic!("a page of text was not loaded")
+    };
+    let sized_line = page
+        .text_state
+        .as_ref()
+        .expect("a pinned page keeps state")
+        .lines[0]
+        .height;
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+
+    // The box change a maximize asks for, on the road the pin's own load runs on.
+    let answer = pin_media_load(&path, 400, 300, 96, PreviewScale::FitToScreen);
+    let Some(relaid) = answer
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the load answered")
+    else {
+        panic!("the page was not laid out again")
+    };
+
+    let state = relaid
+        .text_state
+        .as_ref()
+        .expect("a pinned page keeps state");
+    assert_eq!(
+        state.options.font_scale_percent, reader_size,
+        "the page is loaded at the size the reader put it to rather than at the configuration's"
+    );
+    assert_eq!(
+        (state.width, state.height),
+        (400, 300),
+        "and at the box it was asked for, which is the one the window has"
+    );
+    assert_eq!(
+        state.lines[0].height, sized_line,
+        "so what it is drawn with is the reader's own letters: a page loaded at the configuration's \
+         size would have come back at half this line height"
+    );
+
+    // And a load with no page in the pin to read a size off is the configuration's, which is what
+    // every hover is and what a pin showing a picture walking on to a file is too.
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = None;
+    }
+    let answer = pin_media_load(&path, 400, 300, 96, PreviewScale::FitToScreen);
+    let Some(plain) = answer
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the load answered")
+    else {
+        panic!("the page was not laid out again")
+    };
+    assert_eq!(
+        plain
+            .text_state
+            .as_ref()
+            .expect("a pinned page keeps state")
+            .options
+            .font_scale_percent,
+        current_text_options().font_scale_percent,
+        "a load with no page of the reader's own to carry the size off is the configuration's"
+    );
+}

@@ -817,6 +817,12 @@ pub(super) fn pin_media_load(
 ) -> Receiver<Option<MediaData>> {
     let (answer, answers) = channel();
     let path = path.to_path_buf();
+    // The size the reader has put the page on screen to, where what is on screen is a page: a page's
+    // size is the pin's own rather than the configuration's, so a load asked for while one is up is
+    // asked at that size — the file that follows it in a walk as much as the box it is laid out again
+    // in. Read here rather than on the thread below, because the page it is read off is the one on
+    // screen now.
+    let reader_size = reader_text_size();
 
     std::thread::spawn(move || {
         // The same apartment a hover's loader takes before its first load: a PDF page is
@@ -835,6 +841,7 @@ pub(super) fn pin_media_load(
                 height,
                 scale,
                 dpi,
+                reader_size,
                 Arc::new(AtomicBool::new(false)),
             )
         }))
@@ -844,6 +851,21 @@ pub(super) fn pin_media_load(
     });
 
     answers
+}
+
+/// The font size the reader has put the page on screen to, where the pin is showing one.
+///
+/// It is the size a pinned page is drawn at — the reader's own rather than the configuration's — and
+/// what a load asked for while that page is up is asked at too: the box it is being laid out again
+/// in, and the file the walk goes on to (see `step_pinned_text_size` and `keep_text_place`). A pin
+/// showing anything else has no page of its own to read a size off, and answers nothing at all.
+fn reader_text_size() -> Option<u32> {
+    CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.text_state.as_ref())
+            .map(|state| state.options.font_scale_percent)
+    })
 }
 
 /// A pinned window's load, answered: the file, the plan it was loaded for, the frame, and the

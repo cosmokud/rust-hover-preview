@@ -3534,6 +3534,15 @@ pub fn run_preview_window() {
                                 PinRelayoutRoad::BoxChange,
                             );
                         }
+                        // A page is the one kind a box is *laid out* for rather than scaled into, so
+                        // the box it has just been given is the box it is drawn for now — before the
+                        // window is put up around it, and ahead of the answer the load above will
+                        // bring (see `relayout_text_for_the_box`). Nothing at all happens here for any
+                        // other kind: what every one of them has is the frame it was decoded with,
+                        // which the paint below draws scaled into the new box, and that is the
+                        // softness its kind settles by being drawn again rather than a page's
+                        // reflow.
+                        relayout_text_for_the_box(content);
                         show_pinned_window(hwnd);
                         place_pinned_siblings();
                         publish_pointer_hold(hwnd);
@@ -3744,6 +3753,9 @@ pub fn run_preview_window() {
                             load_height,
                             preview_scale,
                             show_dpi,
+                            // A hover's own load: no page's reader has sized this one, so what it is
+                            // drawn at is what the configuration says (see `load_media`).
+                            None,
                             no_cancel,
                         ) {
                             // Nothing of this app's is on screen for a video — the
