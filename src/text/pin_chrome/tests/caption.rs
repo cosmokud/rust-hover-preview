@@ -478,6 +478,7 @@ fn draws_the_caption_glyphs() {
     // The marks on the bar's own background: the glyphs are ink, so a picture that is not
     // the colour behind them shows nothing, which is what a black buffer and black ink do.
     let bar = [250u8, 250, 250];
+    let glyph_ink = [56u8, 58, 66];
     let marks = [
         ("previous", CaptionButton::Previous, false),
         ("next", CaptionButton::Next, false),
@@ -525,11 +526,26 @@ fn draws_the_caption_glyphs() {
                     },
                 },
                 *maximized,
-                [56u8, 58, 66],
+                glyph_ink,
                 scale,
             );
 
             let painted = surface.pixels();
+
+            // The external link is drawn in whole pixels, not stroked: a stroked diagonal
+            // leaves a ramp of blended pixels down every row it crosses, and the mark is
+            // asked to be sharp. Sharp here means every pixel is either the bar or the ink,
+            // with nothing in between.
+            if *name == "open-with" {
+                for (index, pixel) in painted.as_chunks::<4>().0.iter().enumerate() {
+                    assert!(
+                        pixel[0] == bar[2] || pixel[0] == glyph_ink[2],
+                        "{tag} the external link is not sharp at pixel {index}: {}",
+                        pixel[0]
+                    );
+                }
+            }
+
             let ink = |x: usize, y: usize| painted[(y * side as usize + x) * 4] < 128;
 
             // The mark's own bounds in the surface it was painted into, as the min and

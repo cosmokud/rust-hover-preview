@@ -677,19 +677,15 @@ pub(super) fn draw_chevron(
 /// An arrow leaving a box: the file handed to whatever the machine has filed it under.
 ///
 /// Drawn as the box and the arrow together rather than as a box with a mark in it, because the
-/// button's whole meaning is the leaving. The box is drawn in every side but the top right
-/// corner, which is the one the arrow goes out of, and the reading it has to carry is *leaving
-/// this thing* — a box drawn too small to read as a box with a big arrow on top of it is the
-/// upload mark, and a button that means "hand this to another program" must not be drawn as a
-/// button that means "send this away".
+/// button's whole meaning is the leaving. The box stands on the glyph square's own left, top
+/// and bottom edges, so it is as tall as the maximize box and the close cross beside it, and
+/// only its top right corner is left off — that is the corner the arrow goes out of. A box
+/// drawn inside a square of its own reads as the smaller mark in a row of them, however far its
+/// arrow reaches.
 ///
-/// The tail starts inside the box and runs out through the open corner, and the two lines that
-/// corner is made of are the arrow's head: the external-link mark rather than an arrowhead laid
-/// over a closed box. It is laid on the same glyph square as the window's own marks, its corner
-/// on the square's top row and the box's bottom on its bottom row, so the mark stands as tall as
-/// the maximize box and the close cross at any display scale. The numbers below are Lucide's
-/// external-link on a 24-unit square, whose centrelines run from 3 to 21 and whose stroke reaches
-/// from 2 to 22: that is the square fitted inside this one, a stroke's half either way.
+/// The lines are laid down in whole pixels rather than stroked, so an edge is the edge it is
+/// asked for and not a ramp either side of it: a stroked diagonal leaves a blended pixel down
+/// every row it crosses, and this mark is asked to be sharp at every display scale.
 pub(super) fn draw_open_with(
     buffer: &mut [u8],
     width: i32,
@@ -699,45 +695,91 @@ pub(super) fn draw_open_with(
     thickness: f32,
     color: [u8; 3],
 ) {
-    let edge = thickness.round().max(1.0);
+    let thick = thickness.round().max(1.0) as i32;
     let half = (span / 2).max(1);
-    let reach = (2 * half + 1) as f32 - edge;
-    let scale = reach / 18.0;
-    let left = center_x as f32 - half as f32 + edge / 2.0;
-    let top = center_y as f32 - half as f32 + edge / 2.0;
-    let at = |x: f32, y: f32| (left + (x - 3.0) * scale, top + (y - 3.0) * scale);
+    let side = 2 * half + 1;
+    let left = center_x - half;
+    let top = center_y - half;
+    let right = left + side;
+    let bottom = top + side;
 
-    // The box: every side but the top right corner, which is the one the arrow leaves by. The
-    // corner arcs are the chords between their ends: a glyph this size has a pixel or two to
-    // round a corner in, and a chord is the same pixel or two.
-    let corners = [
-        (18.0, 13.0),
-        (18.0, 19.0),
-        (16.0, 21.0),
-        (5.0, 21.0),
-        (3.0, 19.0),
-        (3.0, 8.0),
-        (5.0, 6.0),
-        (11.0, 6.0),
-    ];
-    for pair in corners.windows(2) {
-        stroke_segment(
+    // The box's right side is inset by the head's own stroke, which is the room the head
+    // needs at the corner, and its top stops short of the head, so the arrow leaves through
+    // a corner that is open and not a corner with a line across it.
+    let box_right = right - 1 - thick;
+    let right_start = top + side / 2;
+    let head_start = left + side * 3 / 4;
+    let top_end = head_start - 3;
+    let head_end = right_start - 1;
+
+    // The box, as the rows and columns it takes: left, bottom, right and top.
+    let box_left = RECT {
+        left,
+        top,
+        right: left + thick,
+        bottom,
+    };
+    let box_bottom = RECT {
+        left,
+        top: bottom - thick,
+        right: box_right + 1,
+        bottom,
+    };
+    let box_side = RECT {
+        left: box_right + 1 - thick,
+        top: right_start,
+        right: box_right + 1,
+        bottom,
+    };
+    let box_top = RECT {
+        left,
+        top,
+        right: top_end + 1,
+        bottom: top + thick,
+    };
+    for rect in [box_left, box_bottom, box_side, box_top] {
+        fill_box(buffer, width, rect, color, 1.0);
+    }
+
+    // The head: the corner the arrow ends in, at the square's top right.
+    let head_top = RECT {
+        left: head_start,
+        top,
+        right,
+        bottom: top + thick,
+    };
+    let head_side = RECT {
+        left: right - thick,
+        top,
+        right,
+        bottom: head_end + 1,
+    };
+    for rect in [head_top, head_side] {
+        fill_box(buffer, width, rect, color, 1.0);
+    }
+
+    // The shaft: a whole-pixel diagonal out of the box to the head's corner, drawn as the
+    // run of pixels its row takes rather than as a stroked line, so it neither ramps nor
+    // carries a round cap at either end.
+    let tip_x = right - 1;
+    let start_y = top + side / 2 + 1;
+    for y in top..=start_y {
+        let x = tip_x - (y - top);
+        let from = (x - (thick - 1) / 2).max(left);
+        let to = (from + thick).min(right);
+        fill_box(
             buffer,
             width,
-            at(pair[0].0, pair[0].1),
-            at(pair[1].0, pair[1].1),
-            edge,
+            RECT {
+                left: from,
+                top: y,
+                right: to,
+                bottom: y + 1,
+            },
             color,
             1.0,
         );
     }
-
-    // The hand-off: the tail from inside the box out through the open corner, and the corner it
-    // ends in — the same two lines a browser's own external-link is drawn from.
-    let tip = at(21.0, 3.0);
-    stroke_segment(buffer, width, at(10.0, 14.0), tip, edge, color, 1.0);
-    stroke_segment(buffer, width, at(15.0, 3.0), tip, edge, color, 1.0);
-    stroke_segment(buffer, width, tip, at(21.0, 9.0), edge, color, 1.0);
 }
 
 /// A ceiling bar and an upward-pointing arrow: always on top mark.
