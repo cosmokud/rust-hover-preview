@@ -34,6 +34,7 @@ impl TextPagePutBack {
             }],
             selection: None,
             selecting: false,
+            word_drag: None,
             last_press: None,
             drag_pointer: None,
         });
@@ -79,6 +80,16 @@ fn selection_now() -> Option<text_preview::Selection> {
     })
 }
 
+/// The word a double click took, if the page is still holding one for the drag that followed it.
+fn word_drag_now() -> Option<text_preview::Selection> {
+    CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.text_state.as_ref())
+            .and_then(|state| state.word_drag)
+    })
+}
+
 /// Whether the page's text state is holding a drag open now.
 fn selecting_now() -> bool {
     CURRENT_MEDIA
@@ -101,17 +112,10 @@ fn a_pin_whose_menu_fits_the_screen() -> PinnedPreview {
     pin
 }
 
-/// A second press on the page, inside the time and box the machine reads a double click in, takes
-/// the word under the hand rather than leaving the empty selection a single press makes — and the
-/// word stays whole, because what a double click took is not the far end of a drag (see
-/// `begin_text_selection`).
-#[test]
-fn a_second_press_on_a_word_takes_the_whole_of_it() {
-    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let _media = TextPagePutBack::put();
-
+/// A page of a test's own with one painted line on it and nothing done to it yet: every character
+/// is ten pixels wide, so a point can be put on a character's cell by counting them, and no press,
+/// no word and no selection is left over from an earlier one (see `TextPagePutBack`).
+fn put_painted_line(text: &str) {
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         if let Some(state) = media.as_mut().and_then(|media| media.text_state.as_mut()) {
             state.lines = vec![text_preview::FrameLine {
@@ -119,13 +123,32 @@ fn a_second_press_on_a_word_takes_the_whole_of_it() {
                 height: 20,
                 runs: vec![text_preview::FrameRun {
                     x: 0,
-                    width: 110,
-                    text: "hello world".to_string(),
+                    width: text.chars().count() as i32 * 10,
+                    text: text.to_string(),
                 }],
                 source: (0, 0),
             }];
+            state.selection = None;
+            state.word_drag = None;
+            state.selecting = false;
+            state.drag_pointer = None;
+            state.last_press = None;
         }
     }
+}
+
+/// A second press on the page, inside the time and box the machine reads a double click in, takes
+/// the word under the hand rather than leaving the empty selection a single press makes — and the
+/// word stays whole, because the drag a second press arms is grown by whole runs of characters
+/// (see `begin_text_selection` and `extend_word_selection`).
+#[test]
+fn a_second_press_on_a_word_takes_the_whole_of_it() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _media = TextPagePutBack::put();
+
+    put_painted_line("hello world");
 
     // The middle of the `l` at index 2, which is the third ten-pixel cell of the run.
     assert!(
@@ -155,8 +178,88 @@ fn a_second_press_on_a_word_takes_the_whole_of_it() {
         "and the second of the pair takes the word under the hand"
     );
     assert!(
-        !selecting_now(),
-        "the word is the selection the hand asked for rather than the start of a drag"
+        selecting_now(),
+        "the word is the selection the hand asked for, and the drag after it is armed to grow it \
+         by whole words"
+    );
+}
+
+/// What the word a double click took is kept for is the drag that follows it, and that drag is
+/// grown by whole runs of characters: the hand that has reached another word takes all of it, one
+/// that has come back over the word the press took leaves it whole, and the release is what gives
+/// the word up — a press of its own begins a drag grown by the character. That is the gesture every
+/// editor has, and what makes a word taken on its last letter survive the first small move of the
+/// hand (see `extend_word_selection`).
+#[test]
+fn a_drag_after_a_double_click_grows_the_highlight_by_whole_words() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _media = TextPagePutBack::put();
+    put_painted_line("hello world");
+
+    // A double click on the `l` at index 2 takes `hello` and arms the drag that follows it.
+    assert!(
+        begin_text_selection(25, 10) && begin_text_selection(25, 10),
+        "the pair of presses is the page's"
+    );
+
+    // The middle of the `r` of `world`, which a drag grown by the character would have stopped
+    // inside.
+    assert_eq!(
+        extend_text_selection(85, 10),
+        Some(true),
+        "a drag that has left the word the press took is the page's"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(text_preview::Selection {
+            anchor: (0, 0),
+            caret: (0, 11),
+        }),
+        "the word the hand has reached is taken whole, the gap before it with it"
+    );
+
+    assert_eq!(
+        extend_text_selection(15, 10),
+        Some(true),
+        "and a hand coming back over the word is the page's too"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(text_preview::Selection {
+            anchor: (0, 0),
+            caret: (0, 5),
+        }),
+        "a hand back on the word the press took leaves it whole rather than cutting it down"
+    );
+
+    assert!(end_text_selection(), "the release ends the drag");
+    assert_eq!(
+        word_drag_now(),
+        None,
+        "and the word a double click took goes with the drag it was a drag of"
+    );
+
+    // The next press is a press of its own: nothing of the pair is left in the page, so the drag
+    // after it is grown the way every other drag is, by the character under the hand.
+    put_painted_line("hello world");
+    assert!(
+        begin_text_selection(85, 10),
+        "a press on the page is the page's"
+    );
+    assert_eq!(
+        extend_text_selection(95, 10),
+        Some(true),
+        "and the drag from it takes the character it has reached"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(text_preview::Selection {
+            anchor: (0, 9),
+            caret: (0, 10),
+        }),
+        "which is one character wide rather than the whole word it is in"
     );
 }
 

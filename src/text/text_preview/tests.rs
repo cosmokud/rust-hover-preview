@@ -255,6 +255,79 @@ fn a_double_click_takes_the_run_of_the_character_under_the_hand() {
     );
 }
 
+/// A drag that follows a double press is grown by whole runs of characters rather than by single
+/// ones: the hand takes the word it has reached whole, the gap it is over and nothing of the word
+/// after it, and a hand that has not left the word the press took leaves that word as it was — all
+/// of it, since a press on the last letter of a word still takes the word (see
+/// `extend_word_selection`).
+#[test]
+fn a_drag_after_a_double_click_takes_the_runs_it_reaches_whole() {
+    let lines = a_line("one two three");
+    // `two`, the way a double press on it takes it.
+    let two = word_in(&lines, 55, 10);
+    let grown =
+        |character: i32| extend_word_selection(&lines, two, character * 10 + 5, 10).ordered();
+
+    assert_eq!(
+        grown(5),
+        ((0, 4), (0, 7)),
+        "a hand still on the word the press took leaves it whole"
+    );
+    assert_eq!(
+        grown(6),
+        ((0, 4), (0, 7)),
+        "and one on its last letter, where a drag by the character would have cut it down"
+    );
+    assert_eq!(
+        grown(10),
+        ((0, 4), (0, 13)),
+        "a hand that has reached another word takes the whole of it"
+    );
+    assert_eq!(
+        grown(1),
+        ((0, 0), (0, 7)),
+        "and one that has gone back before the word takes the word before it whole"
+    );
+    assert_eq!(
+        grown(7),
+        ((0, 4), (0, 8)),
+        "the gap after the word is taken whole, and the word after it is not"
+    );
+    assert_eq!(
+        extend_word_selection(&lines, two, 400, 10).ordered(),
+        ((0, 4), (0, 13)),
+        "a hand past the end of the line takes the run at that end"
+    );
+    assert_eq!(
+        extend_word_selection(&lines, two, -50, 10).ordered(),
+        ((0, 0), (0, 7)),
+        "and one before its start takes the run at that end"
+    );
+
+    // A hand that has left the line altogether takes the run it finds on the line it has reached,
+    // which is what wants the places of a selection to compare in reading order rather than line by
+    // line.
+    let mut page = a_line("two");
+    let mut below = a_line("three");
+    below[0].top = 20;
+    below[0].source = (1, 0);
+    page.extend(below);
+    assert_eq!(
+        extend_word_selection(&page, word_in(&page, 5, 10), 15, 30).ordered(),
+        ((0, 0), (1, 5)),
+        "a drag onto the line below takes the whole of the word it finds there"
+    );
+
+    // A line with nothing on it has no run to take, and a drag from one begins and ends at the
+    // empty place the hand started from.
+    let blank = a_line("");
+    assert_eq!(
+        extend_word_selection(&blank, word_in(&blank, 5, 10), 5, 10).ordered(),
+        ((0, 0), (0, 0)),
+        "a drag from a line with nothing on it has nothing to take"
+    );
+}
+
 /// A find is read of the document rather than of the frame, and it searches from just after what is
 /// selected to the end of the document and then from the beginning back to where it started: the
 /// next occurrence is found wherever it is, the occurrence the selection already names is not the

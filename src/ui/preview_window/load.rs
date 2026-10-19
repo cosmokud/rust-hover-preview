@@ -609,6 +609,7 @@ pub(super) fn load_text_preview(
         lines: frame.lines,
         selection: None,
         selecting: false,
+        word_drag: None,
         last_press: None,
         drag_pointer: None,
     });

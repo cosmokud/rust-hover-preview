@@ -21,8 +21,8 @@ mod source;
 
 pub use document::{find_next, text_of};
 pub use frame::{
-    measure, position_in, render_scrolled, word_in, FrameLine, ScrollBar, Selection,
-    TextPreviewOptions,
+    extend_word_selection, measure, position_in, render_scrolled, word_in, FrameLine, ScrollBar,
+    Selection, TextPreviewOptions,
 };
 // A run is what a line is made of, and it is named only by the tests that build lines of their
 // own rather than painting a document.
