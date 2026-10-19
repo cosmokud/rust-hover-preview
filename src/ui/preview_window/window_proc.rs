@@ -84,6 +84,12 @@ pub(super) fn pinned_key_command(vk: i32) -> Option<PinCommand> {
         return Some(PinCommand::PageBottom);
     }
 
+    // `F3` is the key the system has used for "find the next one" since before this app: a user who
+    // has looked for a word in anything else presses the key they already know (see `PinCommand::FindNext`).
+    if vk == VK_F3.0 as i32 {
+        return Some(PinCommand::FindNext);
+    }
+
     if vk == VK_ESCAPE.0 as i32 {
         return Some(PinCommand::Close);
     }
@@ -126,6 +132,7 @@ pub(super) fn hook_pin_key_command(command: u8) -> Option<PinCommand> {
         6 => Some(PinCommand::PageOn),
         7 => Some(PinCommand::PageTop),
         8 => Some(PinCommand::PageBottom),
+        9 => Some(PinCommand::FindNext),
         _ => None,
     }
 }

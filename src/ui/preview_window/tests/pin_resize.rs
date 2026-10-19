@@ -416,15 +416,18 @@ fn a_window_the_hand_sized_is_put_back_to_the_size_the_setting_asks_for() {
         let mut offset = 0.0;
         let mut paused = None;
         ask_pin(PinCommand::ResetSize);
-        pin_command_request(
-            &mut request,
-            &mut wait,
-            &mut started,
-            &mut offset,
-            &mut paused,
-            false,
-            None,
-        );
+        unsafe {
+            pin_command_request(
+                HWND(0x1000 as *mut _),
+                &mut request,
+                &mut wait,
+                &mut started,
+                &mut offset,
+                &mut paused,
+                false,
+                None,
+            );
+        }
         request
     };
 
@@ -526,15 +529,18 @@ fn a_card_is_given_the_middle_and_keeps_the_size_it_is_drawn_at() {
     let mut offset = 0.0;
     let mut paused = None;
     ask_pin(PinCommand::ResetSize);
-    pin_command_request(
-        &mut request,
-        &mut wait,
-        &mut started,
-        &mut offset,
-        &mut paused,
-        false,
-        None,
-    );
+    unsafe {
+        pin_command_request(
+            HWND(0x1000 as *mut _),
+            &mut request,
+            &mut wait,
+            &mut started,
+            &mut offset,
+            &mut paused,
+            false,
+            None,
+        );
+    }
 
     let Some(PreviewMessage::PinBox(reset_box)) = request else {
         panic!("a reset of a card asked for no box");

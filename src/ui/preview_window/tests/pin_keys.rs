@@ -955,15 +955,13 @@ impl Drop for PagePutBack {
             *slot = self.media.take();
         }
         TEXT_PREVIEW_HOLDING.store(self.holding, Ordering::Release);
-        // A page a test asked for is not left for the loop to draw.
-        let _ = take_text_scroll();
     }
 }
 
 /// A page of text answers the keys its own window maps to it, a page's size is what a screenful of
 /// it is, and the same keys are the folder's walk to a pin that holds no page: what an up arrow
 /// means is the file in the window's answer rather than the key's, the way a Space is (see
-/// `pinned_key_command`, `scroll_pinned_text` and `pin_command_request`).
+/// `pinned_key_command`, `text_scroll_line` and `pin_command_request`).
 #[test]
 fn a_pin_holding_a_page_scrolls_for_the_keys_the_page_owns() {
     let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
@@ -1042,21 +1040,19 @@ fn a_pin_holding_a_page_scrolls_for_the_keys_the_page_owns() {
         "the page is longer than the box, so there is somewhere for its keys to take it"
     );
 
-    assert!(
-        scroll_pinned_text(PinCommand::PageOn),
-        "a page answers a page key itself"
-    );
     assert_eq!(
-        take_text_scroll(),
+        text_scroll_line(PinCommand::PageOn),
         Some(box_lines - 1),
-        "and asks for a screenful, less the line a reader keeps their place by"
+        "a page answers a page key with a screenful, less the line a reader keeps their place by"
     );
 
-    assert!(scroll_pinned_text(PinCommand::PageTop));
-    assert_eq!(take_text_scroll(), Some(0), "`Home` is the top of it");
-    assert!(scroll_pinned_text(PinCommand::PageBottom));
     assert_eq!(
-        take_text_scroll(),
+        text_scroll_line(PinCommand::PageTop),
+        Some(0),
+        "`Home` is the top of it"
+    );
+    assert_eq!(
+        text_scroll_line(PinCommand::PageBottom),
         Some(reachable),
         "and `End` is the last screenful of it, not the line past it"
     );
@@ -1068,9 +1064,8 @@ fn a_pin_holding_a_page_scrolls_for_the_keys_the_page_owns() {
             state.first_line = reachable;
         }
     }
-    assert!(scroll_pinned_text(PinCommand::PageBack));
     assert_eq!(
-        take_text_scroll(),
+        text_scroll_line(PinCommand::PageBack),
         Some(reachable - (box_lines - 1)),
         "a page back from the end is a screenful up from where it stands"
     );
@@ -1082,14 +1077,10 @@ fn a_pin_holding_a_page_scrolls_for_the_keys_the_page_owns() {
             media.text_state = None;
         }
     }
-    assert!(
-        !scroll_pinned_text(PinCommand::PageOn),
-        "a pin with no page in it has nothing for a page key to move"
-    );
     assert_eq!(
-        take_text_scroll(),
+        text_scroll_line(PinCommand::PageOn),
         None,
-        "and asks for nothing at all rather than for the top of a page it does not have"
+        "a pin with no page in it has nothing for a page key to move"
     );
 
     stand_pin(None);

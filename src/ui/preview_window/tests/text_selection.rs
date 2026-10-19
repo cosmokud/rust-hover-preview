@@ -405,3 +405,162 @@ fn a_drag_carried_past_the_edge_of_a_page_keeps_selecting() {
          selection grows"
     );
 }
+
+/// A find takes the page to the next place the selection appears and selects it, wherever in the
+/// document that is and whether or not the box was already showing it; and a find with nowhere to
+/// go leaves the page exactly as it was, because the reader asked for the one after this rather
+/// than for the top of the document (see `find_next_in_text_preview`).
+#[test]
+fn a_find_takes_the_page_to_the_next_place_its_selection_appears() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _pin = PinPutBack::take();
+    let _media = TextPagePutBack::put();
+    stand_pin(Some(PinnedPreview::for_test()));
+
+    // Forty lines with the word on two of them, so the occurrence that is found is one the box is
+    // not already showing and the page has to move to it.
+    let text: String = (0..40)
+        .map(|n| {
+            format!(
+                "line {n}{}\n",
+                if n == 5 || n == 12 {
+                    " needle here"
+                } else {
+                    ""
+                }
+            )
+        })
+        .collect();
+    let Some(page) = a_page_of(&text, "a-page-with-needles.txt", 240, 60) else {
+        panic!("a page of text was not loaded")
+    };
+    let reachable = page
+        .text_state
+        .as_ref()
+        .map(|state| state.max_first_line())
+        .expect("a pinned page keeps state");
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+    assert!(
+        reachable > 0,
+        "the page is longer than the box, so a find has a page to take somewhere"
+    );
+
+    let hwnd = HWND(0x1000 as *mut _);
+    let needle = |line: usize, from: usize| text_preview::Selection {
+        anchor: (line, from),
+        caret: (line, from + 6),
+    };
+    let select = |selection: text_preview::Selection| {
+        if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+            if let Some(state) = slot.as_mut().and_then(|media| media.text_state.as_mut()) {
+                state.selection = Some(selection);
+            }
+        }
+    };
+    let page_now = || {
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| (state.selection, state.first_line, state.visible_lines))
+        })
+    };
+
+    // The first needle, selected where a reader's own double press would have left it.
+    select(needle(5, 7));
+
+    unsafe { find_next_in_text_preview(hwnd) };
+    let (selection, first_line, visible) = page_now().expect("a pinned page keeps state");
+    assert_eq!(
+        selection,
+        Some(needle(12, 8)),
+        "the next needle is the one twelve lines down"
+    );
+    assert!(
+        (first_line..first_line + visible).contains(&12),
+        "and the page was taken to a box that shows it, which is re-laid out for the width it was \
+         found at"
+    );
+
+    unsafe { find_next_in_text_preview(hwnd) };
+    assert_eq!(
+        page_now().and_then(|page| page.0),
+        Some(needle(5, 7)),
+        "and from the last of them the search wraps round to the first"
+    );
+
+    // A selection the document holds once has no next one, and asking for it leaves the page where
+    // it is rather than taking it back to the top.
+    select(text_preview::Selection {
+        anchor: (0, 0),
+        caret: (0, 6),
+    });
+    let before = page_now();
+    unsafe { find_next_in_text_preview(hwnd) };
+    assert_eq!(
+        page_now(),
+        before,
+        "a fruitless find leaves the page exactly as it was"
+    );
+}
+
+/// The page's own menu holds the same find the key does: `Find Next` is a command the page answers
+/// on the spot, and the panel goes away with it the way a menu a command was chosen in does (see
+/// `text_menu_row_press`).
+#[test]
+fn a_press_on_the_pages_find_next_row_takes_the_page_to_the_next_place() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _pin = PinPutBack::take();
+    let _media = TextPagePutBack::put();
+    stand_pin(Some(a_pin_whose_menu_fits_the_screen()));
+
+    let text = "needle here\nnothing\na needle again\n";
+    let Some(page) = a_page_of(text, "a-page-with-two-needles.txt", 240, 80) else {
+        panic!("a page of text was not loaded")
+    };
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = Some(page);
+    }
+    let needle = |line: usize, from: usize| text_preview::Selection {
+        anchor: (line, from),
+        caret: (line, from + 6),
+    };
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        if let Some(state) = slot.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.selection = Some(needle(0, 0));
+        }
+    }
+
+    let hwnd = HWND(0x1000 as *mut _);
+    unsafe { open_pin_menu(hwnd, 20, 20, PinMenuPage::Text) };
+    let Some(paint) = pinned_menu_geometry() else {
+        panic!("the page's own menu is up")
+    };
+
+    // The third of the page's own rows: `Select All` and `Copy` are above it (see `TEXT_MENU_ROWS`).
+    let (x, y) = (
+        (paint.popup.panel.left + paint.popup.panel.right) / 2,
+        paint.popup.rows_top + paint.popup.row_height * 2 + paint.popup.row_height / 2,
+    );
+    assert_eq!(
+        pin_chrome::menu_row_at(&paint.popup, x, y),
+        Some(2),
+        "the point this test presses is on the third of the page's own rows"
+    );
+
+    assert!(
+        unsafe { pinned_menu_press(hwnd, x, y) },
+        "a hand on the page's own command is the menu's"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(needle(2, 2)),
+        "the command found the next place the selection appears"
+    );
+}

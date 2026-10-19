@@ -230,6 +230,11 @@ pub(crate) enum PinCommand {
     PageTop,
     /// The last screenful of it, the same way.
     PageBottom,
+    /// Take a pinned page to the next place its own selection appears, and select it: what a
+    /// reader does with a word they are looking for again (see `find_next`).
+    ///
+    /// Nothing at all to a pin that holds no page, or that holds one with nothing selected.
+    FindNext,
 }
 
 // The commands the window procedure has left for the preview loop are a field of the pin's own

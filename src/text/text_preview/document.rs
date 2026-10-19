@@ -284,6 +284,54 @@ pub(super) fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<C
 /// it leaves are the ones a scroll already keeps.
 const COPY_WINDOW_LINES: usize = 512;
 
+/// Walk the drawn lines of `[first, last]` in windows, handing each line's own text to `visit`
+/// until it answers false.
+///
+/// What a line is drawn as is not always what the file holds — a rendered Markdown document has
+/// lines the file does not — so both the copy and the search are read from here, the way the frame
+/// itself is (see `styled_window`).
+fn walk_drawn_lines(
+    document: &CachedDocument,
+    theme: &LoadedTheme,
+    first: usize,
+    last: usize,
+    mut visit: impl FnMut(usize, String) -> bool,
+) {
+    let mut index = first;
+    while index <= last {
+        let count = (last - index + 1).min(COPY_WINDOW_LINES);
+        let Some(window) = styled_window(&document.key, document, theme, index, count) else {
+            return;
+        };
+
+        let mut line_index = index;
+        while line_index < index + count {
+            let Some(line) = window.line(line_index) else {
+                return;
+            };
+
+            let text: String = line.spans.iter().map(|span| span.text.as_str()).collect();
+            if !visit(line_index, text) {
+                return;
+            }
+            line_index += 1;
+        }
+
+        index += count;
+    }
+}
+
+/// The drawn line `index` is drawn as, or nothing where the document has no such line.
+fn drawn_line(document: &CachedDocument, theme: &LoadedTheme, index: usize) -> Option<String> {
+    let mut text = None;
+    walk_drawn_lines(document, theme, index, index, |_, line| {
+        text = Some(line);
+        false
+    });
+
+    text
+}
+
 /// What a selection takes out of the document of `path`: the lines it covers as they are drawn,
 /// the two ends cut to the characters it names, joined the way Windows joins lines.
 ///
@@ -309,50 +357,121 @@ fn text_of_document(
     theme: &LoadedTheme,
     selection: Selection,
 ) -> String {
-    let doc = &document.doc;
     let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
-    let last = doc.total_lines().saturating_sub(1);
+    let last = document.doc.total_lines().saturating_sub(1);
     let start_line = start_line.min(last);
     let end_line = end_line.min(last);
 
     let mut taken: Vec<String> = Vec::new();
-    let mut index = start_line;
-    while index <= end_line {
-        let count = (end_line - index + 1).min(COPY_WINDOW_LINES);
-        let Some(window) = styled_window(&document.key, document, theme, index, count) else {
-            break;
+    walk_drawn_lines(document, theme, start_line, end_line, |index, text| {
+        let from = if index == start_line { start_char } else { 0 };
+        let to = if index == end_line {
+            end_char
+        } else {
+            usize::MAX
         };
+        taken.push(
+            text.chars()
+                .skip(from)
+                .take(to.saturating_sub(from))
+                .collect(),
+        );
+        true
+    });
 
-        let mut line_index = index;
-        while line_index < index + count {
-            let Some(line) = window.line(line_index) else {
-                break;
-            };
+    taken.join("\r\n")
+}
 
-            let text: String = line.spans.iter().map(|span| span.text.as_str()).collect();
-            let from = if line_index == start_line {
+/// Where the next occurrence of what `selection` names is, as a selection of its own: the line it
+/// was found on and the characters it covers, or nothing where the document holds no other one.
+///
+/// The document is searched from just after the selection to its own end and then from its
+/// beginning back to where the search started, so a word with one occurrence in it is found once
+/// rather than for ever, and nothing behind the selection is stepped over.
+///
+/// `shortcut:` what is searched for is the first line of the selection, so a range spanning several
+/// lines is searched for by the line it starts on — which is what a double press takes, and what a
+/// reader has when they ask. The search is exact and case-sensitive; upgrade when a case-blind or a
+/// wrapped search is asked for.
+pub fn find_next(
+    path: &Path,
+    options: TextPreviewOptions,
+    selection: Selection,
+) -> Option<Selection> {
+    let document = document(path, options)?;
+    let theme = text_theme::loaded(options.theme)?;
+    let doc = &document.doc;
+    let total = doc.total_lines();
+    if total == 0 {
+        return None;
+    }
+
+    let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
+    let start_line = start_line.min(total - 1);
+    let to = if start_line == end_line {
+        end_char
+    } else {
+        usize::MAX
+    };
+    let needle: Vec<char> = drawn_line(&document, theme, start_line)?
+        .chars()
+        .skip(start_char)
+        .take(to.saturating_sub(start_char))
+        .collect();
+    if needle.is_empty() {
+        return None;
+    }
+
+    // The character the search picks the document up at: just past the occurrence the selection
+    // already names, so a wrap around the start line does not find it a second time.
+    let resumed_at = start_char + needle.len();
+    let mut found = None;
+
+    walk_drawn_lines(&document, theme, start_line, total - 1, |index, text| {
+        let from = if index == start_line { resumed_at } else { 0 };
+        match find_in(&text, from, usize::MAX, &needle) {
+            Some(at) => {
+                found = Some((index, at));
+                false
+            }
+            None => true,
+        }
+    });
+
+    if found.is_none() {
+        walk_drawn_lines(&document, theme, 0, start_line, |index, text| {
+            let to = if index == start_line {
                 start_char
-            } else {
-                0
-            };
-            let to = if line_index == end_line {
-                end_char
             } else {
                 usize::MAX
             };
-            taken.push(
-                text.chars()
-                    .skip(from)
-                    .take(to.saturating_sub(from))
-                    .collect(),
-            );
-            line_index += 1;
-        }
-
-        index += count;
+            match find_in(&text, 0, to, &needle) {
+                Some(at) => {
+                    found = Some((index, at));
+                    false
+                }
+                None => true,
+            }
+        });
     }
 
-    taken.join("\r\n")
+    let (line, at) = found?;
+    Some(Selection {
+        anchor: (line, at),
+        caret: (line, at + needle.len()),
+    })
+}
+
+/// Where `needle` sits in one drawn line, between the two character bounds, if it does.
+fn find_in(text: &str, from: usize, to: usize, needle: &[char]) -> Option<usize> {
+    let characters: Vec<char> = text.chars().collect();
+    let from = from.min(characters.len());
+    let to = to.min(characters.len()).max(from);
+
+    characters[from..to]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|at| from + at)
 }
 
 /// Styled lines covering `[first, first + count)` of the document, built on

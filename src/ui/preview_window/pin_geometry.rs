@@ -538,7 +538,9 @@ pub(super) fn centred_pin_box(
 /// is a player ended and another begun rather than a state this window can set (see
 /// `toggle_pinned_by_key`). The card is asked for at once rather than at the cadence it watches
 /// the clock at, so that what the key did is on screen in the frame the key was pressed in.
-pub(super) fn pin_command_request(
+#[allow(clippy::too_many_arguments)] // The window is one more thing the answer is drawn in.
+pub(super) unsafe fn pin_command_request(
+    hwnd: HWND,
     request: &mut Option<PreviewMessage>,
     wait: &mut Option<PinWait>,
     audio_started: &mut Option<Instant>,
@@ -577,24 +579,37 @@ pub(super) fn pin_command_request(
         // An up arrow, a down arrow, and the two page keys are the page's own where the pin holds
         // one, and the walk they have always been where it does not: which of the two a key is is
         // the file in the window's answer, read here rather than where the key was mapped (see
-        // `pinned_key_command` and `scroll_pinned_text`).
+        // `pinned_key_command` and `text_scroll_line`).
         Some(command @ (PinCommand::PageBack | PinCommand::PageOn)) => {
-            if scroll_pinned_text(command) {
-                None
-            } else {
-                let step = if matches!(command, PinCommand::PageBack) {
-                    -1
-                } else {
-                    1
-                };
-                step_pinned_file(step, wait, anchor)
+            match text_scroll_line(command) {
+                Some(line) => {
+                    scroll_text_preview(hwnd, line);
+                    None
+                }
+                None => {
+                    let step = if matches!(command, PinCommand::PageBack) {
+                        -1
+                    } else {
+                        1
+                    };
+                    step_pinned_file(step, wait, anchor)
+                }
             }
         }
         // And the two ends of the page, which are nothing at all to a pin that holds no page: a
         // picture has no beginning to go back to, so `Home` is swallowed rather than answered by a
         // walk the user did not ask for.
         Some(command @ (PinCommand::PageTop | PinCommand::PageBottom)) => {
-            scroll_pinned_text(command);
+            if let Some(line) = text_scroll_line(command) {
+                scroll_text_preview(hwnd, line);
+            }
+            None
+        }
+        // A find is the page's own as well: it looks for what the page has selected in the document
+        // behind it, and it is nothing at all to a window with no page or with nothing selected
+        // (see `find_next_in_text_preview`).
+        Some(PinCommand::FindNext) => {
+            find_next_in_text_preview(hwnd);
             None
         }
         Some(PinCommand::TogglePlayback) => {

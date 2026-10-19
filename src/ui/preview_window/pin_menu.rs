@@ -122,21 +122,25 @@ pub(super) struct PinMenuFlyout {
 }
 
 /// What a pinned page's own page of the menu offers above the window's rows: the whole frame
-/// selected, and what is selected put on the clipboard — the same two commands a hover's own text
-/// menu holds (see `show_text_preview_menu`).
+/// selected, what is selected put on the clipboard, and the next place it appears — the same three
+/// commands a hover's own text menu holds the first two of (see `show_text_preview_menu`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TextMenuRow {
     SelectAll,
     Copy,
-    /// The rule between the page's own two commands and the window's rows under them.
+    /// The page taken to the next place what is selected appears in it, which is the one find a
+    /// window nobody may type in can offer: the selection is the query (see `find_next`).
+    FindNext,
+    /// The rule between the page's own commands and the window's rows under them.
     Separator,
 }
 
 /// The rows a pinned page's own page of the menu holds, from the top of the panel down, above the
 /// rows the pin shares with the bubble.
-const TEXT_MENU_ROWS: [TextMenuRow; 3] = [
+const TEXT_MENU_ROWS: [TextMenuRow; 4] = [
     TextMenuRow::SelectAll,
     TextMenuRow::Copy,
+    TextMenuRow::FindNext,
     TextMenuRow::Separator,
 ];
 
@@ -146,6 +150,7 @@ impl TextMenuRow {
         match self {
             TextMenuRow::SelectAll => "Select All",
             TextMenuRow::Copy => "Copy",
+            TextMenuRow::FindNext => "Find Next",
             TextMenuRow::Separator => "",
         }
     }
@@ -155,7 +160,9 @@ impl TextMenuRow {
     fn mark(self) -> pin_chrome::MenuMark {
         match self {
             TextMenuRow::Separator => pin_chrome::MenuMark::Separator,
-            TextMenuRow::SelectAll | TextMenuRow::Copy => pin_chrome::MenuMark::None,
+            TextMenuRow::SelectAll | TextMenuRow::Copy | TextMenuRow::FindNext => {
+                pin_chrome::MenuMark::None
+            }
         }
     }
 }
@@ -173,7 +180,7 @@ fn text_menu_rows() -> Vec<pin_chrome::MenuRow> {
 }
 
 /// What a press on one of a pinned page's own rows asks, answering whether the panel stays up:
-/// both commands answer and go away the way a menu a command was chosen in does, while a rule is
+/// every command answers and goes away the way a menu a command was chosen in does, while a rule is
 /// not a row a hand answers at all.
 unsafe fn text_menu_row_press(hwnd: HWND, row: TextMenuRow) -> bool {
     match row {
@@ -181,6 +188,7 @@ unsafe fn text_menu_row_press(hwnd: HWND, row: TextMenuRow) -> bool {
         TextMenuRow::Copy => {
             copy_text_preview(hwnd);
         }
+        TextMenuRow::FindNext => find_next_in_text_preview(hwnd),
         TextMenuRow::Separator => return true,
     }
 
