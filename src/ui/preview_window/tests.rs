@@ -437,6 +437,7 @@ mod pin_volume;
 mod pin_zoom;
 mod placement;
 mod probes;
+mod text_selection;
 mod video_engine;
 mod video_hold;
 mod video_transport;

@@ -20,8 +20,8 @@ mod markdown;
 mod source;
 
 pub use frame::{
-    frame_text, measure, point_is_on_text, position_in, render_scrolled, text_in, FrameLine,
-    ScrollBar, Selection, TextPreviewOptions,
+    frame_text, measure, position_in, render_scrolled, text_in, FrameLine, ScrollBar, Selection,
+    TextPreviewOptions,
 };
 pub use layout::scroll_line_at_track_y;
 
