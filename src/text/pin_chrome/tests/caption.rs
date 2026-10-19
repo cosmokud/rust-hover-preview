@@ -619,11 +619,12 @@ fn draws_the_caption_glyphs() {
             "{tag} the row runs from {smallest} to {tallest} rows tall"
         );
 
-        // The always-on-top pin is the height of the window's own marks, which is what a hand
-        // reads before it reads any of their shapes: its ceiling on the row a maximize's top
-        // edge is on, and its stem's end on the row that box's bottom edge is on. A pin drawn
-        // to a smaller square inside its button is the mark a row of them shows as the odd one
-        // out, whatever its arms and its stem are drawn like.
+        // The always-on-top pin and the external-link mark are the height of the window's own
+        // marks beside them, which is what a hand reads before it reads any of their shapes:
+        // the pin's ceiling and the link's corner on the row a maximize's top edge is on, and
+        // the pin's stem and the link's box bottom on the row that box's bottom edge is on. A
+        // mark drawn to a smaller square inside its button is the one a row of them shows as
+        // the odd one out, whatever its own lines are drawn like.
         let rows = |name: &str| {
             let (_, _, _, top, bottom) = sizes
                 .iter()
@@ -631,14 +632,16 @@ fn draws_the_caption_glyphs() {
                 .unwrap_or_else(|| panic!("{tag} has no {name}"));
             (*top, *bottom)
         };
-        let pin = rows("always-on-top");
-        for beside in ["maximize", "close"] {
-            assert_eq!(
-                pin,
-                rows(beside),
-                "{tag} the pin runs {pin:?} beside {beside}'s {:?}",
-                rows(beside)
-            );
+        for mark in ["always-on-top", "open-with"] {
+            let mark_rows = rows(mark);
+            for beside in ["maximize", "close"] {
+                assert_eq!(
+                    mark_rows,
+                    rows(beside),
+                    "{tag} {mark} runs {mark_rows:?} beside {beside}'s {:?}",
+                    rows(beside)
+                );
+            }
         }
 
         let path = dir.join(format!("caption-glyphs-{tag}.png"));
