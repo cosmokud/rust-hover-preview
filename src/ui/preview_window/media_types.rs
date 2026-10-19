@@ -86,6 +86,14 @@ pub enum PreviewMessage {
     TrayVolume {
         audio: bool,
     },
+    /// The tray's `Text → Font Size` row was picked, and the size it names. A pin already showing a
+    /// page is put to that size on the thread the page is drawn on — the reader's own size on it
+    /// given up, the way closing the pin gives it up — while a hover of a page is rebuilt from its
+    /// own load at the new size and is owed nothing here (see `publish_text_font_size` and
+    /// `redraw_pinned_page`).
+    TrayTextSize {
+        percent: u32,
+    },
     /// The render tier is done with a document: a page is waiting in the cache,
     /// or there is no page. The generation is the hover that asked for it, so a
     /// render landing after the pointer has moved on is ignored — the page is

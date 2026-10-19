@@ -45,6 +45,17 @@ pub fn publish_tray_volume(audio: bool) {
     send_preview(PreviewMessage::TrayVolume { audio });
 }
 
+/// The tray's `Text → Font Size` row was picked, and the size it names.
+///
+/// A page a pin is showing is drawn at a size of its own — the configuration's at the take-up, and
+/// whatever a `Ctrl`+wheel has put it to since — so the row is a second road that has to reach past
+/// that and say the size out loud to a pin already up. It is said to the loop, which is where the
+/// page is drawn, and it is the row's own: a size hand-edited into the file, or the page a reader
+/// has wheeled, is read where it is rather than written over (see `redraw_pinned_page`).
+pub fn publish_text_font_size(percent: u32) {
+    send_preview(PreviewMessage::TrayTextSize { percent });
+}
+
 /// Whether a pin has been closed since this was last asked. The Explorer hook reads it once
 /// per tick to know that what is under the pointer is a hover it has not answered yet: the
 /// file it was on when the pin went up is not a file the pointer has left and come back to,

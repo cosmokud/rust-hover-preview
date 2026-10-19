@@ -2140,7 +2140,16 @@ pub fn run_preview_window() {
                                 // The record of what the pin is showing is a `Show` like a
                                 // hover's, and taken as one it would put a hover up where the
                                 // pin was (see the gate before the match below).
-                                (true, ..) => refresh_requested = true,
+                                //
+                                // A page of text is the one kind whose settings are in its own
+                                // frame — the theme its glyphs are painted with and the Markdown
+                                // it is laid out as — so it is drawn again rather than composed
+                                // again, at the size the reader put it to (see
+                                // `redraw_pinned_page`).
+                                (true, ..) => {
+                                    redraw_pinned_page(hwnd, None);
+                                    refresh_requested = true
+                                }
                                 (_, true, Some(show)) => latest_preview_msg = Some(show),
                                 // A page the engine was drawing is a window of the engine's
                                 // with no media of this app's behind it, so a switch that
@@ -2249,6 +2258,13 @@ pub fn run_preview_window() {
                     // pin's player is this thread's, so the level is given here rather than
                     // where the row was clicked (see `tray_volume_moved`).
                     PreviewMessage::TrayVolume { audio } => tray_volume_moved(audio),
+                    // The tray's `Text → Font Size` row was picked, and a pin already showing a
+                    // page is that page put to the size the row names: a page is laid out on this
+                    // thread, so the size is given here rather than where the row was clicked (see
+                    // `publish_text_font_size`).
+                    PreviewMessage::TrayTextSize { percent } => {
+                        redraw_pinned_page(hwnd, Some(percent))
+                    }
                     // The file the user picked while a preview was pinned, which the pin is to be
                     // shown instead of the one it has (see the tray's `Pin Mode → Update Preview`).
                     // It is held rather than handled here, the way a hover is: what the loop acts on
@@ -3335,6 +3351,10 @@ pub fn run_preview_window() {
                     // level is not a thing a layout is made for (see
                     // `PreviewMessage::TrayVolume`).
                     PreviewMessage::TrayVolume { .. } => {}
+                    // And a size picked in the tray's `Text → Font Size`, which is a page of text
+                    // laid out on the receive loop's own thread for the same reason (see
+                    // `PreviewMessage::TrayTextSize`).
+                    PreviewMessage::TrayTextSize { .. } => {}
                     // A preview that stopped being a hover: the media stays exactly where it
                     // is, and the window grows around it — the caption above it, and the
                     // transport bar below it where the kind has one. A kind whose chrome is
