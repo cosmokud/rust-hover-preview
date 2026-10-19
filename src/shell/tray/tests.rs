@@ -1500,8 +1500,8 @@ fn the_video_engine_rows_are_ids_of_their_own() {
         [
             "Best (Default)".to_string(),
             "MPV".to_string(),
-            "Native".to_string(),
             "FFmpeg".to_string(),
+            "Native".to_string(),
             "Native (FFmpeg above 3.2MP)".to_string(),
         ]
     );
