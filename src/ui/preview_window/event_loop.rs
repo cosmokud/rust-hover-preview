@@ -2036,6 +2036,14 @@ pub fn run_preview_window() {
                 }
             }
 
+            // And a key the pin's own window was given takes the page the same way, without a hand
+            // on it: which key asks for which line is answered where the file in the window is
+            // known, and the page is drawn here with the wheel's own scroll (see
+            // `scroll_pinned_text` and `take_text_scroll`).
+            if let Some(first_line) = take_text_scroll() {
+                scroll_text_preview(hwnd, first_line);
+            }
+
             // And a notch over a pinned picture is the picture being zoomed: the same hook swallowed it
             // and left the count here. What the notches come to is written down as the size the picture
             // is *going* to rather than the size it is given the instant they are counted, and the

@@ -574,6 +574,29 @@ pub(super) fn pin_command_request(
         }
         Some(PinCommand::Previous) => step_pinned_file(-1, wait, anchor),
         Some(PinCommand::Next) => step_pinned_file(1, wait, anchor),
+        // An up arrow, a down arrow, and the two page keys are the page's own where the pin holds
+        // one, and the walk they have always been where it does not: which of the two a key is is
+        // the file in the window's answer, read here rather than where the key was mapped (see
+        // `pinned_key_command` and `scroll_pinned_text`).
+        Some(command @ (PinCommand::PageBack | PinCommand::PageOn)) => {
+            if scroll_pinned_text(command) {
+                None
+            } else {
+                let step = if matches!(command, PinCommand::PageBack) {
+                    -1
+                } else {
+                    1
+                };
+                step_pinned_file(step, wait, anchor)
+            }
+        }
+        // And the two ends of the page, which are nothing at all to a pin that holds no page: a
+        // picture has no beginning to go back to, so `Home` is swallowed rather than answered by a
+        // walk the user did not ask for.
+        Some(command @ (PinCommand::PageTop | PinCommand::PageBottom)) => {
+            scroll_pinned_text(command);
+            None
+        }
         Some(PinCommand::TogglePlayback) => {
             toggle_pinned_by_key(audio_started, audio_start_offset, audio_paused);
             None

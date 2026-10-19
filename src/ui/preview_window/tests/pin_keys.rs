@@ -205,13 +205,21 @@ fn a_pinned_windows_bands_are_the_caption_above_it_and_the_bar_below_it() {
 /// because Windows routed them to the pin, and that is a thing Windows does and not a
 /// thing this app polls for. So the mapping is the whole of what decides which keys a pin
 /// answers, and a key it does not answer is a key the listing behind it is sent as usual.
+///
+/// The two arrows a page of text has somewhere to go with are the page's own commands rather than
+/// the folder's, and which of the two a window means is asked where the file in it is known (see
+/// `pin_command_request`).
 #[test]
 fn a_key_reaches_a_pin_by_being_the_one_the_keyboard_is_in() {
     for (vk, expected, name) in [
         (VK_LEFT.0 as i32, Some(PinCommand::Previous), "left"),
-        (VK_UP.0 as i32, Some(PinCommand::Previous), "up"),
+        (VK_UP.0 as i32, Some(PinCommand::PageBack), "up"),
         (VK_RIGHT.0 as i32, Some(PinCommand::Next), "right"),
-        (VK_DOWN.0 as i32, Some(PinCommand::Next), "down"),
+        (VK_DOWN.0 as i32, Some(PinCommand::PageOn), "down"),
+        (VK_PRIOR.0 as i32, Some(PinCommand::PageBack), "page up"),
+        (VK_NEXT.0 as i32, Some(PinCommand::PageOn), "page down"),
+        (VK_HOME.0 as i32, Some(PinCommand::PageTop), "home"),
+        (VK_END.0 as i32, Some(PinCommand::PageBottom), "end"),
         (VK_ESCAPE.0 as i32, Some(PinCommand::Close), "escape"),
         (VK_SPACE.0 as i32, Some(PinCommand::TogglePlayback), "space"),
     ] {
@@ -233,8 +241,8 @@ fn a_key_reaches_a_pin_by_being_the_one_the_keyboard_is_in() {
         0x0D,
         0x09,
         0x2E,
-        0x21,
-        0x22,
+        0x2D,
+        0x5B,
     ] {
         assert_eq!(
             pinned_key_command(vk),
@@ -910,4 +918,179 @@ fn what_is_on_screen_is_settled_by_the_engine_as_well_as_by_the_media() {
         pin_screen_is_settled(Some(MediaType::Loading), true),
         "the spinner left behind by a page that has landed does not un-settle it"
     );
+}
+
+/// A page of text put where the page's own keys are answered against it, with the flag the preview
+/// loop publishes about it stood up as well: which key takes the page is a question about the media
+/// the pin holds *and* about what the loop last said was on screen, so a test of it needs both (see
+/// `TEXT_PREVIEW_HOLDING`). Both are put back when the guard is dropped.
+struct PagePutBack {
+    media: Option<MediaData>,
+    holding: bool,
+}
+
+impl PagePutBack {
+    /// A real page written into the temp folder and loaded the way a pin loads one, because where a
+    /// page can be scrolled to is its own document's answer (see `page_lines`).
+    fn put(text: &str, name: &str, width: u32, height: u32) -> Self {
+        let media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+        let holding = TEXT_PREVIEW_HOLDING.swap(true, Ordering::AcqRel);
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-pin-keys");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+        let path = folder.join(name);
+        std::fs::write(&path, text).expect("a written page");
+
+        if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+            *slot = load_text_preview(&path, width, height, 96, current_text_options());
+        }
+
+        Self { media, holding }
+    }
+}
+
+impl Drop for PagePutBack {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+            *slot = self.media.take();
+        }
+        TEXT_PREVIEW_HOLDING.store(self.holding, Ordering::Release);
+        // A page a test asked for is not left for the loop to draw.
+        let _ = take_text_scroll();
+    }
+}
+
+/// A page of text answers the keys its own window maps to it, a page's size is what a screenful of
+/// it is, and the same keys are the folder's walk to a pin that holds no page: what an up arrow
+/// means is the file in the window's answer rather than the key's, the way a Space is (see
+/// `pinned_key_command`, `scroll_pinned_text` and `pin_command_request`).
+#[test]
+fn a_pin_holding_a_page_scrolls_for_the_keys_the_page_owns() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    a_pin_awaiting_a_press();
+
+    // The keys, as the pin's own window maps them: the two the folder shares with the page, the two
+    // page keys, and the two ends.
+    assert_eq!(
+        pinned_key_command(VK_UP.0 as i32),
+        Some(PinCommand::PageBack),
+        "an up arrow is the page's own"
+    );
+    assert_eq!(
+        pinned_key_command(VK_DOWN.0 as i32),
+        Some(PinCommand::PageOn),
+        "and so is a down arrow"
+    );
+    assert_eq!(
+        pinned_key_command(VK_PRIOR.0 as i32),
+        Some(PinCommand::PageBack)
+    );
+    assert_eq!(
+        pinned_key_command(VK_NEXT.0 as i32),
+        Some(PinCommand::PageOn)
+    );
+    assert_eq!(
+        pinned_key_command(VK_HOME.0 as i32),
+        Some(PinCommand::PageTop)
+    );
+    assert_eq!(
+        pinned_key_command(VK_END.0 as i32),
+        Some(PinCommand::PageBottom)
+    );
+    assert_eq!(
+        pinned_key_command(VK_LEFT.0 as i32),
+        Some(PinCommand::Previous),
+        "the two the page does not share still walk the folder"
+    );
+    assert_eq!(
+        pinned_key_command(VK_RIGHT.0 as i32),
+        Some(PinCommand::Next)
+    );
+    // And a page key is not the toggle: a hand resting on one keeps turning pages rather than being
+    // swallowed as a Space's repeat is (see `pinned_key_down_command`).
+    assert_eq!(
+        pinned_key_down_command(VK_NEXT.0 as i32, KEY_REPEAT),
+        Some(PinCommand::PageOn),
+        "a held page key keeps turning the page"
+    );
+
+    // A page whose lines wrap and whose box is small: a screenful is the box's own, and the ends are
+    // the document's.
+    let _page = PagePutBack::put(
+        &(0..40).map(|n| format!("line {n}\n")).collect::<String>(),
+        "a-page-of-forty-lines.txt",
+        240,
+        80,
+    );
+    let (box_lines, reachable) = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media.as_ref().and_then(|media| {
+                media
+                    .text_state
+                    .as_ref()
+                    .map(|state| (state.visible_lines, state.max_first_line()))
+            })
+        })
+        .expect("a pinned page keeps state");
+
+    assert!(
+        box_lines > 1 && reachable > box_lines,
+        "the page is longer than the box, so there is somewhere for its keys to take it"
+    );
+
+    assert!(
+        scroll_pinned_text(PinCommand::PageOn),
+        "a page answers a page key itself"
+    );
+    assert_eq!(
+        take_text_scroll(),
+        Some(box_lines - 1),
+        "and asks for a screenful, less the line a reader keeps their place by"
+    );
+
+    assert!(scroll_pinned_text(PinCommand::PageTop));
+    assert_eq!(take_text_scroll(), Some(0), "`Home` is the top of it");
+    assert!(scroll_pinned_text(PinCommand::PageBottom));
+    assert_eq!(
+        take_text_scroll(),
+        Some(reachable),
+        "and `End` is the last screenful of it, not the line past it"
+    );
+
+    // From there, a page back is a screenful up from where the page stands rather than from where
+    // the frame it was drawn in began.
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        if let Some(state) = slot.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.first_line = reachable;
+        }
+    }
+    assert!(scroll_pinned_text(PinCommand::PageBack));
+    assert_eq!(
+        take_text_scroll(),
+        Some(reachable - (box_lines - 1)),
+        "a page back from the end is a screenful up from where it stands"
+    );
+
+    // A pin that holds no page is a pin whose two arrows are the folder's: the answer is what
+    // `pin_command_request` reads to walk instead (see `pin_command_request`).
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        if let Some(media) = slot.as_mut() {
+            media.text_state = None;
+        }
+    }
+    assert!(
+        !scroll_pinned_text(PinCommand::PageOn),
+        "a pin with no page in it has nothing for a page key to move"
+    );
+    assert_eq!(
+        take_text_scroll(),
+        None,
+        "and asks for nothing at all rather than for the top of a page it does not have"
+    );
+
+    stand_pin(None);
 }

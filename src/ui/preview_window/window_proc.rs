@@ -54,13 +54,34 @@ pub(super) const KEY_REPEAT: isize = 1 << 30;
 pub(super) fn pinned_key_command(vk: i32) -> Option<PinCommand> {
     // The keys are the virtual-key codes of the message's `wParam`, which are constants
     // rather than patterns, so the two directions are told apart by guards rather than by
-    // arms: `VK_LEFT` and `VK_UP` both mean back, and `VK_RIGHT` and `VK_DOWN` both mean on.
-    if vk == VK_LEFT.0 as i32 || vk == VK_UP.0 as i32 {
+    // arms: `VK_LEFT` is back and `VK_RIGHT` is on, and the two the page shares with them are
+    // their own commands because a page has somewhere for them to go (see `PinCommand::PageBack`).
+    if vk == VK_LEFT.0 as i32 {
         return Some(PinCommand::Previous);
     }
 
-    if vk == VK_RIGHT.0 as i32 || vk == VK_DOWN.0 as i32 {
+    if vk == VK_RIGHT.0 as i32 {
         return Some(PinCommand::Next);
+    }
+
+    // An up arrow or a `PageUp` is a screenful back where the window holds a page of text and the
+    // previous file where it holds anything else, which is the same question a Space is: what the
+    // key means is the file in the window's answer rather than this mapping's (see
+    // `pin_command_request`).
+    if vk == VK_UP.0 as i32 || vk == VK_PRIOR.0 as i32 {
+        return Some(PinCommand::PageBack);
+    }
+
+    if vk == VK_DOWN.0 as i32 || vk == VK_NEXT.0 as i32 {
+        return Some(PinCommand::PageOn);
+    }
+
+    if vk == VK_HOME.0 as i32 {
+        return Some(PinCommand::PageTop);
+    }
+
+    if vk == VK_END.0 as i32 {
+        return Some(PinCommand::PageBottom);
     }
 
     if vk == VK_ESCAPE.0 as i32 {
@@ -101,6 +122,10 @@ pub(super) fn hook_pin_key_command(command: u8) -> Option<PinCommand> {
         2 => Some(PinCommand::Close),
         3 => Some(PinCommand::TogglePlayback),
         4 => Some(PinCommand::NextSubtitle),
+        5 => Some(PinCommand::PageBack),
+        6 => Some(PinCommand::PageOn),
+        7 => Some(PinCommand::PageTop),
+        8 => Some(PinCommand::PageBottom),
         _ => None,
     }
 }
