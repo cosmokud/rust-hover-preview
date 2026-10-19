@@ -35,7 +35,7 @@ impl TextPagePutBack {
             selection: None,
             selecting: false,
             word_drag: None,
-            last_press: None,
+            click_run: None,
             drag_pointer: None,
         });
         if let Ok(mut slot) = CURRENT_MEDIA.lock() {
@@ -132,7 +132,7 @@ fn put_painted_line(text: &str) {
             state.word_drag = None;
             state.selecting = false;
             state.drag_pointer = None;
-            state.last_press = None;
+            state.click_run = None;
         }
     }
 }
@@ -181,6 +181,74 @@ fn a_second_press_on_a_word_takes_the_whole_of_it() {
         selecting_now(),
         "the word is the selection the hand asked for, and the drag after it is armed to grow it \
          by whole words"
+    );
+}
+
+/// Pressing the same place again climbs the ladder a reader knows: the second press takes the word
+/// under the hand, and the third takes the whole line that word is on — the jump made when a word
+/// is not enough and the page is more than is wanted. A press after the third stays on the line
+/// rather than walking off the end of the ladder, and no drag is armed behind it: a line is whole
+/// already, and a hand that moved a little would cut the highlight back to a word (see
+/// `begin_text_selection` and `line_in`).
+#[test]
+fn a_third_press_on_a_word_takes_the_whole_of_the_line() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _media = TextPagePutBack::put();
+
+    put_painted_line("hello world");
+    let line = text_preview::Selection {
+        anchor: (0, 0),
+        caret: (1, 0),
+    };
+
+    assert!(
+        begin_text_selection(25, 10) && begin_text_selection(25, 10),
+        "the pair of presses is the page's"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(text_preview::Selection {
+            anchor: (0, 0),
+            caret: (0, 5),
+        }),
+        "the second of the pair takes the word under the hand"
+    );
+
+    assert!(
+        begin_text_selection(25, 10),
+        "the press after that is the page's too"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(line),
+        "and the third of the run takes the whole line the word is on"
+    );
+    assert!(
+        !selecting_now(),
+        "nothing is armed behind a line, which is whole already"
+    );
+
+    assert_eq!(
+        extend_text_selection(85, 10),
+        Some(false),
+        "so a hand that moves along the line is not a drag of the page's"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(line),
+        "and the line stays what the press took"
+    );
+
+    assert!(
+        begin_text_selection(25, 10),
+        "a press after the third is still the page's"
+    );
+    assert_eq!(
+        selection_now(),
+        Some(line),
+        "and stays on the line, the last rung of the ladder"
     );
 }
 

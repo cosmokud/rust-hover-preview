@@ -374,7 +374,15 @@ fn text_of_document(
     let ((start_line, start_char), (end_line, end_char)) = selection.ordered();
     let last = document.doc.total_lines().saturating_sub(1);
     let start_line = start_line.min(last);
-    let end_line = end_line.min(last);
+    // A selection that ends past the last line takes to the end of it. What ends a line selection
+    // is the break at the end of the line, and a file whose last line has no break after it has
+    // nowhere for a selection of that line to end but the end of the text it does have (see
+    // `line_in`).
+    let (end_line, end_char) = if end_line > last {
+        (last, usize::MAX)
+    } else {
+        (end_line, end_char)
+    };
 
     let mut taken: Vec<String> = Vec::new();
     walk_drawn_lines(document, theme, start_line, end_line, |index, text| {

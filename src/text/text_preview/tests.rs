@@ -186,6 +186,33 @@ fn a_copy_is_the_text_the_document_has() {
         "a selection across lines joins them the way Windows does"
     );
 
+    // A line selection is the line and the break at its end, so pasting it puts a line of its own
+    // back where it was taken from.
+    let line = Selection {
+        anchor: (0, 0),
+        caret: (1, 0),
+    };
+    assert_eq!(
+        text_of(&source, options(), line).as_deref(),
+        Some("one\r\n"),
+        "a line taken whole is the line and the break that ends it"
+    );
+
+    // The line after the one a selection took is where it ends, and the last line of a file whose
+    // text stops without a break has no line after it: what a press on it takes is the text the
+    // line does have (see `line_in`).
+    let unbroken = dir.join("unbroken.txt");
+    fs::write(&unbroken, "one\ntwo").expect("a written page");
+    let last = Selection {
+        anchor: (1, 0),
+        caret: (2, 0),
+    };
+    assert_eq!(
+        text_of(&unbroken, options(), last).as_deref(),
+        Some("two"),
+        "the last line of a file with no break at its end is taken to its own end"
+    );
+
     // The box this is copied out of does not hold the whole page: what a copy takes is the
     // document's, not the frame's.
     let frame = render_scrolled(&source, 0, 120, 40, 96, options(), None).expect("a page");
@@ -252,6 +279,59 @@ fn a_double_click_takes_the_run_of_the_character_under_the_hand() {
         word_in(&[], 5, 10).ordered(),
         ((0, 0), (0, 0)),
         "and neither has a page with no lines"
+    );
+}
+
+/// A third press takes the whole of the line the word under the hand is on, and it is the
+/// document's line rather than the painted one the point landed on: a line the box broke into
+/// several painted pieces is taken whole, all of them, and a point between two lines takes the
+/// nearer one (see `line_in`).
+#[test]
+fn a_third_press_takes_the_whole_of_the_line_under_the_hand() {
+    let painted = |top: i32, text: &str, source: (usize, usize)| FrameLine {
+        top,
+        height: 20,
+        runs: vec![FrameRun {
+            x: 0,
+            width: text.chars().count() as i32 * 10,
+            text: text.to_string(),
+        }],
+        source,
+    };
+
+    assert_eq!(
+        line_in(&a_line("hello world"), 10).ordered(),
+        ((0, 0), (1, 0)),
+        "the line is taken whole, from its first character to the break at its end"
+    );
+
+    // A long line the box drew as two painted pieces of the one document line, which is what a
+    // wrapped line is: a press on either piece takes the line, not the piece.
+    let wrapped = vec![
+        painted(0, "hello wor", (0, 0)),
+        painted(20, "ld there", (0, 9)),
+    ];
+    assert_eq!(
+        line_in(&wrapped, 30).ordered(),
+        ((0, 0), (1, 0)),
+        "a line too long for the box is taken whole, tail and all"
+    );
+
+    let page = vec![painted(0, "one", (0, 0)), painted(20, "two", (1, 0))];
+    assert_eq!(
+        line_in(&page, 25).ordered(),
+        ((1, 0), (2, 0)),
+        "a point between two lines takes the nearer one, which here is the later"
+    );
+    assert_eq!(
+        line_in(&page, 15).ordered(),
+        ((0, 0), (1, 0)),
+        "and a point nearer the line before takes that one"
+    );
+    assert_eq!(
+        line_in(&[], 10).ordered(),
+        ((0, 0), (0, 0)),
+        "a page with no lines has no line to take"
     );
 }
 
