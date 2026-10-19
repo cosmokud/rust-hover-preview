@@ -1,5 +1,9 @@
 use super::*;
 
+// The stand-in for the machine's own `ReleaseCapture` re-entrancy, shared with the tests about the
+// roads a release ends (see `pin_input`).
+use super::pin_input::CapturingWindow;
+
 // WS-G: what a hand on the seekbar does to the film it is aimed at.
 //
 // mpv's film is told nothing by the press and taken to a second at the release, and draws all the
@@ -697,6 +701,117 @@ fn an_mpv_seek_whose_pipe_is_gone_raises_the_cover_before_it_ends_the_player() {
     stand_ffplay_in(None);
     stand_video_engine_in(None);
     stand_video_engine_in(None);
+    stand_pin(previous_pin);
+    VIDEO_PID.store(previous_pid, Ordering::SeqCst);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// **The strip a seek's cover is painted with stands where the hand let go, and the bar is the only
+/// place that mistake can show.** The release gives the pointer back before it raises the cover,
+/// and the notice that comes back from doing that (`pin_capture_lost`) takes the aim with it —
+/// while the cover is painted *from* the transport. So the strip under the still was drawn at the
+/// second the *old* player's own clock had reached, which is the position the thumb stood at
+/// before the drag, and that strip is what the compositor is handed until the relaunch rebases the
+/// clock — the flash between the park's paint and the release's own, for as long as the kill and the
+/// spawn take. The film plays throughout, so nothing else about the gesture shows it.
+#[test]
+fn the_cover_a_seek_release_raises_draws_the_bar_where_the_hand_let_go() {
+    let _one = pin_window::PIN_TESTS_ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous_pid = VIDEO_PID.swap(101, Ordering::SeqCst);
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = stand_video_media();
+
+    let content = (100, 80, 420, 320);
+    let film = PathBuf::from("seek-cover-draws-the-aim.mkv");
+    stand_video_media();
+    // FFmpeg's route rather than the machine's, because the cover is the road only that player
+    // takes: a seek on mpv is a line down its pipe and a film nobody ends (see `mpv_ipc`).
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, false)));
+
+    take_gesture_snapshot();
+    clear_pending_pinned_relaunch();
+    stand_pin(Some(a_banded_video_pin(&film, content)));
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    clear_restart_count();
+
+    // The hand: a press on the track, a step along it, and a release where it stopped — through
+    // the machine's own re-entrancy, where the capture the press took is handed back and
+    // `pin_capture_lost` runs before the release's own arm has raised anything.
+    let hwnd = HWND(0x1000 as *mut _);
+    let bar = pinned_transport_geometry().expect("a banded video pin carries a bar");
+    let y = bar.top + bar.height / 2;
+    let let_go_at = (bar.width * 5) / 8;
+    let window = CapturingWindow::around(a_window_at(content));
+    assert!(
+        unsafe { pinned_transport_press(hwnd, bar.width / 2, y) },
+        "the track is the bar's to act on"
+    );
+    assert!(
+        unsafe { pinned_transport_drag(hwnd, let_go_at) },
+        "a step along the bar moves the aim under the hand"
+    );
+    let aim = the_seek_aim().expect("a second for the release to take the file to");
+    assert!(
+        unsafe { pinned_transport_release(hwnd, let_go_at, y, &window) },
+        "and the release is the bar's own"
+    );
+    assert_eq!(
+        restart_count(),
+        1,
+        "the release is one player ended and begun again at the aimed second, behind its cover"
+    );
+
+    // The surface a paint draws into is keyed by the window, so the very surface the park painted
+    // is the one read back here rather than a second paint of it.
+    let (width, height) = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_size()))
+        .expect("a pin to have a size");
+    let strip = |surface: *mut u8| -> Vec<u8> {
+        let all =
+            unsafe { std::slice::from_raw_parts(surface, width as usize * height as usize * 4) };
+        let rows = pinned_transport_height(96, true) as usize;
+        all[(height as usize - rows) * width as usize * 4..].to_vec()
+    };
+    let covered = strip(
+        ensure_layered_surface(hwnd.0 as isize, width as u32, height as u32)
+            .expect("the surface the park painted"),
+    );
+    assert!(
+        covered.iter().any(|channel| *channel != 0),
+        "the cover painted a strip at all: an unpainted one would make the comparison below say \
+         nothing"
+    );
+
+    // The same strip with the aim standing, which is what the cover is meant to be.
+    update_pin_transport(|transport| transport.seeking = Some(aim));
+    unsafe { render_pinned_preview_at(hwnd, content.0, content.1) };
+    let at_the_aim = strip(
+        ensure_layered_surface(hwnd.0 as isize, width as u32, height as u32)
+            .expect("the surface the paint drew into"),
+    );
+
+    assert!(
+        covered == at_the_aim,
+        "the strip the cover is painted with stands at {aim:.3} seconds, where the hand let go, \
+         rather than at the second the player it ended had reached"
+    );
+
+    stand_mpv_in(None);
+    stand_ffplay_in(None);
+    stand_video_engine_in(None);
+    take_gesture_snapshot();
+    forget_pin_park_swap();
+    forget_video_frame();
+    forget_resume_frame();
+    clear_pending_pinned_relaunch();
+    clear_park_swap_arm();
+    clear_restart_count();
     stand_pin(previous_pin);
     VIDEO_PID.store(previous_pid, Ordering::SeqCst);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
