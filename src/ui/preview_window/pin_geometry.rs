@@ -819,6 +819,15 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
     // bottom-right one, where the origin does not move at all and there is nothing to jump (see
     // `render_layered_preview_at`).
     if matches!(drag.action, PinDragAction::Resize(_)) {
+        // A page of text is the one kind of frame a box is *laid out* for rather than scaled into, so
+        // the box the hand has dragged the window to is the box the page is drawn for before it is
+        // painted, and the band below is exactly the frame's own size (see `relayout_text_for_the_box`).
+        // Every other kind keeps the frame it was decoded with, which is what the paint below scales
+        // into that band, exactly as it always did.
+        if current_media_type() == Some(MediaType::Text) {
+            relayout_text_for_the_box(content);
+        }
+
         render_pinned_preview_at(hwnd, window.0, window.1);
 
         // The box is already the one the paint applied; what is re-asserted here is only the

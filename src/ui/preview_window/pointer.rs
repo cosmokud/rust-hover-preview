@@ -652,6 +652,85 @@ pub(super) unsafe fn scroll_text_preview(hwnd: HWND, first_line: usize) {
     render_layered_preview(hwnd);
 }
 
+/// Lay a pinned page of text out again in the box its window has just been dragged to, keeping the
+/// line it is scrolled to, what is selected in it and the size the reader put it to.
+///
+/// A box decides what a page of text shows rather than how large it is: the font is a fixed,
+/// display-scaled size, and the box decides how many lines it holds and how long each of them may
+/// be before it wraps (see `render_scrolled`). So a window under a hand is a page with more lines in
+/// it and longer ones — and not the page it was drawn as, stretched — which is what a resize does to
+/// every other kind and the one thing it may not do to this one (see `compose_media_into_band`).
+///
+/// It is not a read and not a parse: the document is already read and the lines on screen already
+/// styled (see `DOCUMENTS` and `styled_window`), so what this costs is a screenful laid out and
+/// painted, which is the cost a wheel's own scroll pays (see `scroll_text_preview`).
+///
+/// The band the frame lands in is the box it is drawn for, so the paint that follows composes it row
+/// for row rather than sampling it.
+pub(super) fn relayout_text_for_the_box(content: ScreenRegion) {
+    let width = (content.2 - content.0).max(1) as u32;
+    let height = (content.3 - content.1).max(1) as u32;
+
+    // Read out of the media, so the lock is not held while the page is laid out and painted — and
+    // answered with nothing at all where the pin is showing a page of another kind, or no page at
+    // all, which is what keeps a resize of every other kind the paint it has always been.
+    let Some((path, options, dpi, drawn, first_line, selection)) =
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media
+                .as_ref()
+                .filter(|media| media.media_type == MediaType::Text)
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| {
+                    (
+                        state.path.clone(),
+                        state.options,
+                        state.dpi,
+                        (state.width, state.height),
+                        state.first_line,
+                        state.selection,
+                    )
+                })
+        })
+    else {
+        return;
+    };
+
+    // A box the page is already drawn for owes nothing: a drag that has met the room's edge brings
+    // the same size again, and a screenful laid out for it is the work below paid for nothing.
+    if drawn == (width, height) {
+        return;
+    }
+
+    let Some(frame) =
+        text_preview::render_scrolled(&path, first_line, width, height, dpi, options, selection)
+    else {
+        return;
+    };
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        let Some(media) = media.as_mut() else {
+            return;
+        };
+
+        // The pin may have been taken up on another file while this page was being laid out.
+        if media.text_state.as_ref().map(|state| &state.path) != Some(&path) {
+            return;
+        }
+
+        media.frames[0] = Arc::new(ImageFrame::new(frame.pixels, frame.width, frame.height, 0));
+
+        if let Some(state) = media.text_state.as_mut() {
+            state.width = frame.width;
+            state.height = frame.height;
+            state.first_line = frame.first_line;
+            state.visible_lines = frame.visible_lines;
+            state.scrollable_lines = frame.scrollable_lines;
+            state.scrollbar = frame.scrollbar;
+            state.lines = frame.lines;
+        }
+    }
+}
+
 /// The line one of the pin's own page keys asks the page on screen to be taken to, or nothing at
 /// all when the pin holds no page — which is what tells an up arrow meant for the page from one
 /// meant for the folder (see `pin_command_request`).
